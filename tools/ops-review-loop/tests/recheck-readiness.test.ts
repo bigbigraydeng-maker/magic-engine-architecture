@@ -37,9 +37,9 @@ function shaSampledAs(pr: number, wantSampled: boolean) {
 const OWNER_REPO = 'bigbigraydeng-maker/magic-engine'
 const BASE = 'b'.repeat(40)
 
-function eventFile(dir: string, checkRun: Record<string, unknown>) {
+function eventFile(dir: string, workflowRun: Record<string, unknown>) {
   const eventPath = join(dir, 'event.json')
-  writeFileSync(eventPath, JSON.stringify({ check_run: checkRun }))
+  writeFileSync(eventPath, JSON.stringify({ workflow_run: workflowRun }))
   return eventPath
 }
 
@@ -117,7 +117,7 @@ describe('recheck-readiness', () => {
 
   it('does nothing when the required check has not completed yet', async () => {
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'in_progress',
       pull_requests: [{ number: 5 }],
     })
@@ -130,7 +130,7 @@ describe('recheck-readiness', () => {
 
   it('does nothing when the PR does not qualify (wrong base branch)', async () => {
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'success',
       pull_requests: [{ number: 5 }],
@@ -145,7 +145,7 @@ describe('recheck-readiness', () => {
 
   it('skips when there is no current trusted risk rating yet', async () => {
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'success',
       pull_requests: [{ number: 5 }],
@@ -162,7 +162,7 @@ describe('recheck-readiness', () => {
   it('skips when a readiness decision is already on record for this head (dedup)', async () => {
     const pr = openPr()
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'success',
       pull_requests: [{ number: 5 }],
@@ -181,10 +181,37 @@ describe('recheck-readiness', () => {
     expect(createIssueComment).not.toHaveBeenCalled()
   })
 
+  it('skips (dedup) when an older rating-only marker sits ahead of the decision marker in comment history', async () => {
+    // Same shape a real PR always has: the rating (no `decision`) posts
+    // before the quality verdict. `.find()` picking the FIRST match would
+    // make the decision permanently invisible and re-post a verdict forever.
+    const pr = openPr()
+    const eventPath = eventFile(dir, {
+      name: 'ai-orchestrator CI',
+      status: 'completed',
+      conclusion: 'success',
+      pull_requests: [{ number: 5 }],
+    })
+    getPullRequest.mockResolvedValue(pr)
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
+      {
+        user: { login: 'github-actions[bot]' },
+        body: gateMarker({ head: pr.head.sha, risk: 'C', score: 90, decision: 'READY_FOR_PRODUCT_OWNER' }),
+      },
+    ])
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/recheck-readiness.mjs'),
+    )
+    expect(listCheckRunsForRef).not.toHaveBeenCalled()
+    expect(createIssueComment).not.toHaveBeenCalled()
+  })
+
   it('backs off an A-level PR — that belongs to the review-triggered leg', async () => {
     const pr = openPr()
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'success',
       pull_requests: [{ number: 5 }],
@@ -204,7 +231,7 @@ describe('recheck-readiness', () => {
   it('backs off a C-level PR that the stable sample selected for Codex review', async () => {
     const pr = openPr({ number: 30, head: { ref: 'claude/issue-30', sha: shaSampledAs(30, true), repo: { full_name: OWNER_REPO } } })
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'success',
       pull_requests: [{ number: 30 }],
@@ -223,7 +250,7 @@ describe('recheck-readiness', () => {
   it('waits (posts nothing) when the unsampled C-level PR is not green yet', async () => {
     const pr = openPr({ number: 31, head: { ref: 'claude/issue-31', sha: shaSampledAs(31, false), repo: { full_name: OWNER_REPO } } })
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'failure',
       pull_requests: [{ number: 31 }],
@@ -247,7 +274,7 @@ describe('recheck-readiness', () => {
       body: 'plain PR body with no evidence sections',
     })
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'success',
       pull_requests: [{ number: 32 }],
@@ -290,7 +317,7 @@ describe('recheck-readiness', () => {
       body: richBody,
     })
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'success',
       pull_requests: [{ number: 33 }],
@@ -320,7 +347,7 @@ describe('recheck-readiness', () => {
 
   it('evaluates every PR listed on the check run, independently', async () => {
     const eventPath = eventFile(dir, {
-      name: 'ai-orchestrator-tests',
+      name: 'ai-orchestrator CI',
       status: 'completed',
       conclusion: 'success',
       pull_requests: [{ number: 40 }, { number: 41 }],

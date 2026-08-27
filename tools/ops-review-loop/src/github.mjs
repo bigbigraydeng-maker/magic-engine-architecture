@@ -22,8 +22,62 @@ async function request(token, path, init = {}) {
   return res.status === 204 ? null : res.json()
 }
 
+/**
+ * Hard cap on pages fetched for any paginated list this tool reads. 300
+ * pages * 100 entries = 30,000 — far beyond anything this repo's PRs
+ * produce, so hitting it means pagination itself is broken, not that the
+ * list is unusually large. It throws rather than returning a silently
+ * truncated list.
+ */
+const MAX_LIST_PAGES = 300
+
+/**
+ * Fetch every page of a GitHub list endpoint, oldest-first (GitHub's own
+ * default order) — the order every marker-parsing caller relies on for
+ * "last match wins".
+ *
+ * 🔴 Why this now covers issue comments and review comments too, not just
+ * changed files: every dedup and "last trusted marker wins" decision in this
+ * tool (`gate-marker.mjs`'s `findGateFor`, `markers.mjs`'s stage checks) is a
+ * fold over exactly these two lists. A PR long enough to spill past the
+ * first 100-comment page used to see its rating/review-requested/decision
+ * markers on page 1 go invisible to every later run — since GitHub returns
+ * comments oldest-first, the newest, most-authoritative ones are the ones
+ * that fell off. That reproduces the marker itself, not a symptom of it: a
+ * rerun would rate again, request Codex again, and post a second verdict for
+ * a sha that already had one.
+ *
+ * @param {string} token
+ * @param {(page: number) => string} pathForPage
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ * @throws if a page request fails or pagination does not terminate within
+ *   {@link MAX_LIST_PAGES}
+ */
+async function paginateAll(token, pathForPage) {
+  const items = []
+  for (let page = 1; page <= MAX_LIST_PAGES; page++) {
+    const batch = await request(token, pathForPage(page))
+    items.push(...batch)
+    if (batch.length < 100) return items
+  }
+  throw new Error(
+    `${pathForPage(1)} did not terminate within ${MAX_LIST_PAGES} pages — refusing to return a possibly-truncated list`,
+  )
+}
+
+/**
+ * Every comment on the PR's Issues thread, fully paginated, oldest first
+ * (GitHub's own default order) — the order every marker-parsing caller
+ * relies on for "last match wins".
+ *
+ * @param {string} token
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number|string} issueNumber
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ */
 export function listIssueComments(token, owner, repo, issueNumber) {
-  return request(token, `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100`)
+  return paginateAll(token, (page) => `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`)
 }
 
 export function createIssueComment(token, owner, repo, issueNumber, body) {
@@ -34,8 +88,21 @@ export function createIssueComment(token, owner, repo, issueNumber, body) {
   })
 }
 
+/**
+ * Every inline comment on one Codex review, fully paginated.
+ *
+ * @param {string} token
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number|string} pullNumber
+ * @param {number|string} reviewId
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ */
 export function listReviewComments(token, owner, repo, pullNumber, reviewId) {
-  return request(token, `/repos/${owner}/${repo}/pulls/${pullNumber}/reviews/${reviewId}/comments?per_page=100`)
+  return paginateAll(
+    token,
+    (page) => `/repos/${owner}/${repo}/pulls/${pullNumber}/reviews/${reviewId}/comments?per_page=100&page=${page}`,
+  )
 }
 
 export function getPullRequest(token, owner, repo, pullNumber) {
@@ -48,16 +115,6 @@ export async function listCheckRunsForRef(token, owner, repo, ref) {
 }
 
 /**
- * Hard cap on pages fetched for one PR's changed-file list. 300 pages * 100
- * files = 30,000 changed files — far beyond anything this repo's PRs
- * produce, so hitting it means pagination itself is broken, not that the PR
- * is unusually large. It throws rather than returning a silently truncated
- * list: risk.mjs's whole "unreadable means A" rule depends on the caller
- * never handing it a partial file list dressed up as a complete one.
- */
-const MAX_FILE_PAGES = 300
-
-/**
  * Every file the PR changed, fully paginated. Each entry keeps whatever
  * GitHub returns — `filename`, `status`, `previous_filename` for renames —
  * so callers (risk.mjs's `classifyRisk`) can rate both ends of a rename.
@@ -68,16 +125,8 @@ const MAX_FILE_PAGES = 300
  * @param {number|string} pullNumber
  * @returns {Promise<Array<Record<string, unknown>>>}
  * @throws if a page request fails or pagination does not terminate within
- *   {@link MAX_FILE_PAGES}
+ *   {@link MAX_LIST_PAGES}
  */
 export async function listPullRequestFiles(token, owner, repo, pullNumber) {
-  const files = []
-  for (let page = 1; page <= MAX_FILE_PAGES; page++) {
-    const batch = await request(token, `/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`)
-    files.push(...batch)
-    if (batch.length < 100) return files
-  }
-  throw new Error(
-    `pulls/${pullNumber}/files did not terminate within ${MAX_FILE_PAGES} pages — refusing to return a possibly-truncated list`,
-  )
+  return paginateAll(token, (page) => `/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`)
 }

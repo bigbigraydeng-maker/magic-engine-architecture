@@ -42,7 +42,7 @@ import { buildFixPrompt } from './prompt.mjs'
 import { waitForRequiredCheck } from './poll.mjs'
 import { isActionable } from './severity.mjs'
 import { maxRoundsForRisk } from './risk.mjs'
-import { isGateCurrent, selectTrustedGateMarkers } from './gate-marker.mjs'
+import { findGateFor, selectTrustedGateMarkers } from './gate-marker.mjs'
 import { buildVerdictComment } from './verdict.mjs'
 import { TRUSTED_GATE_AUTHORS } from './trust.mjs'
 
@@ -62,18 +62,28 @@ const token = process.env.GITHUB_TOKEN
 const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/')
 const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
 const pr = event.pull_request.number
-const sha = event.pull_request.head.sha
+const eventHeadSha = event.pull_request.head.sha
 const base = event.pull_request.base.sha
 const prBody = event.pull_request.body ?? ''
 const review = event.review
 
-const [issueComments, reviewComments, initialCheckRuns] = await Promise.all([
-  listIssueComments(token, owner, repo, pr),
-  listReviewComments(token, owner, repo, pr, review.id),
-  listCheckRunsForRef(token, owner, repo, sha),
-])
+function checkSucceeded(run) {
+  return run?.status === 'completed' && run?.conclusion === 'success'
+}
 
-const markers = parseMarkers(issueComments.map((c) => c.body))
+/**
+ * Everything that happens once a review is confirmed to describe the commit
+ * it claims to. `sha` is `review.commit_id`, never `pull_request.head.sha`
+ * directly — see the entry check below for why.
+ */
+async function handleFreshReview(sha) {
+  const [issueComments, reviewComments, initialCheckRuns] = await Promise.all([
+    listIssueComments(token, owner, repo, pr),
+    listReviewComments(token, owner, repo, pr, review.id),
+    listCheckRunsForRef(token, owner, repo, sha),
+  ])
+
+  const markers = parseMarkers(issueComments.map((c) => c.body))
 
 // The risk this PR is rated at, from the same trusted-marker mechanism
 // request-review.mjs writes to. Bound to THIS exact head — a rating for an
@@ -82,7 +92,7 @@ const trustedGates = selectTrustedGateMarkers({
   sources: issueComments.map((c) => ({ author: c.user?.login ?? null, body: c.body })),
   trustedAuthors: TRUSTED_GATE_AUTHORS,
 })
-const currentGate = trustedGates.find((g) => isGateCurrent(g, { base, head: sha }))
+const currentGate = findGateFor({ markers: trustedGates, base, head: sha })
 const risk = currentGate?.risk
 const MAX_ROUNDS = maxRoundsForRisk(risk)
 
@@ -92,21 +102,6 @@ const findingCandidates = [
 ]
 const actionableFindings = findingCandidates.filter((f) => isActionable(f.body))
 const hasActionableFindings = actionableFindings.length > 0
-
-// Concurrency guard for the dispatch path only (the only path that pushes).
-// The auto-fix leg used to stay pinned to the narrow `claude/me2-*` lane
-// specifically so it would never land on a branch a live window was holding
-// (CLAUDE.md §6, one window per branch). Now that it shares the same
-// `claude/*` scope as the review-request leg, this re-fetch is what stands
-// in for that: if the PR's head has moved past the sha Codex reviewed by the
-// time this job actually runs, someone pushed while the review was in
-// flight, and dispatching now would push a fix for code that is no longer
-// current. Only worth the extra API call when there is something to dispatch.
-const isStale = hasActionableFindings ? (await getPullRequest(token, owner, repo, pr)).head.sha !== sha : false
-
-function checkSucceeded(run) {
-  return run?.status === 'completed' && run?.conclusion === 'success'
-}
 
 let requiredCheck = initialCheckRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.test(run.name))
 // The freshest full list we have. Reporting from the pre-poll snapshot
@@ -142,6 +137,17 @@ if (!hasActionableFindings && !checkSucceeded(requiredCheck)) {
 
 const ciSuccess = checkSucceeded(requiredCheck)
 
+// Fail closed against a head that moved since `sha` (review.commit_id) was
+// reviewed. One fresh fetch, taken as late as possible — after the CI poll
+// above, which can itself run for several minutes — so it also catches a
+// push that landed *during* this very run, not just before it. `isStale`
+// still feeds `decideStage` so the dispatch path keeps its existing
+// "skip without consuming a round" behaviour; the check below extends the
+// same guarantee to needs-human / wait-ci / ready, none of which decideStage
+// gates on staleness (see plan.mjs — isStale only matters when there are
+// actionable findings).
+const isStale = (await getPullRequest(token, owner, repo, pr)).head.sha !== sha
+
 const plan = decideStage({
   markers,
   sha,
@@ -150,6 +156,14 @@ const plan = decideStage({
   ciSuccess,
   maxRounds: MAX_ROUNDS,
 })
+
+if (isStale && plan.action !== 'skip') {
+  console.log(
+    `PR #${pr}: head moved past ${sha} (the reviewed commit) before this run could write its conclusion — skipping ${plan.action} without consuming a round.`,
+  )
+  setOutput('action', 'skip')
+  return
+}
 
 switch (plan.action) {
   case 'skip': {
@@ -298,4 +312,30 @@ switch (plan.action) {
   }
   default:
     throw new Error(`Unhandled plan action: ${plan.action}`)
+}
+}
+
+// GitHub's review payload carries the commit Codex actually reviewed in
+// `review.commit_id` — not `pull_request.head.sha`, which reflects the PR's
+// head at event-delivery time and can already be newer than what Codex saw
+// if a push landed while the review was in flight or queued for delivery.
+// Trusting the delivered head here would let an already-stale review drive
+// a head sha Codex never looked at.
+//
+// Fail closed in two places, not one:
+//   1. Here, at entry: `commit_id` must exist and must already match this
+//      same event's head. A mismatch here means the review was stale the
+//      moment GitHub delivered it — do nothing, no round consumed.
+//   2. Inside `handleFreshReview`, right before any write (`isStale`,
+//      re-checked against a FRESH fetch) — because that function's own CI
+//      poll can itself run for several minutes, its own window for a push
+//      to land in.
+const reviewedSha = typeof review?.commit_id === 'string' ? review.commit_id : null
+if (!reviewedSha || reviewedSha !== eventHeadSha) {
+  console.log(
+    `PR #${pr}: review.commit_id (${reviewedSha ?? 'missing'}) does not match the event's head sha (${eventHeadSha}) — this review was already stale on delivery. Skipping without writing anything or consuming a round.`,
+  )
+  setOutput('action', 'skip')
+} else {
+  await handleFreshReview(reviewedSha)
 }

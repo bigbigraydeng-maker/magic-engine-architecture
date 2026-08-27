@@ -18,7 +18,7 @@ import { createIssueComment, listCheckRunsForRef, listIssueComments, listPullReq
 import { buildMarker, parseMarkers } from './markers.mjs'
 import { classifyRisk, parseDeclaredRisk } from './risk.mjs'
 import { shouldRequestCodexReview } from './sampling.mjs'
-import { isGateCurrent, selectTrustedGateMarkers } from './gate-marker.mjs'
+import { findGateFor, selectTrustedGateMarkers } from './gate-marker.mjs'
 import { buildRatingComment } from './report.mjs'
 import { buildVerdictComment } from './verdict.mjs'
 import { TRUSTED_GATE_AUTHORS } from './trust.mjs'
@@ -54,7 +54,7 @@ const trustedGates = selectTrustedGateMarkers({
   sources: comments.map((c) => ({ author: c.user?.login ?? null, body: c.body })),
   trustedAuthors: TRUSTED_GATE_AUTHORS,
 })
-const currentGate = trustedGates.find((g) => isGateCurrent(g, { base, head: sha }))
+const currentGate = findGateFor({ markers: trustedGates, base, head: sha })
 
 let risk
 if (currentGate) {
@@ -109,12 +109,14 @@ if (markers.some((m) => m.stage === 'review-requested' && m.sha === sha)) {
     // backs off with "no current trusted rating yet" when it loses that race,
     // with nothing left to re-trigger it once CI has already gone green. So:
     // if CI already happened to be green by the time this step runs, evaluate
-    // readiness right here instead of leaving it to a check_run event that
-    // may never come. Whichever of the two gets there first wins; the other
-    // sees the `decision` already on the gate marker and no-ops (same dedup
-    // buildVerdictComment/recheck-readiness.mjs already rely on) — checked
-    // explicitly here too, since a re-run of this exact step must not post a
-    // second verdict for a sha that already has one.
+    // readiness right here instead of leaving it to a workflow_run event that
+    // may never come. This job and ops-dev-gate-recheck.yml's job share one
+    // concurrency group per head sha (`ops-dev-gate-<sha>`, see both workflow
+    // files), so only one of the two can be writing at a time — whichever
+    // runs second sees the `decision` already on the gate marker and no-ops
+    // (same dedup buildVerdictComment/recheck-readiness.mjs already rely on)
+    // — checked explicitly here too, since a re-run of this exact step must
+    // not post a second verdict for a sha that already has one.
     const alreadyDecided = Boolean(currentGate) && 'decision' in currentGate
     const checkRuns = alreadyDecided ? [] : await listCheckRunsForRef(readToken, owner, repo, sha)
     const requiredCheck = checkRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.test(run.name))

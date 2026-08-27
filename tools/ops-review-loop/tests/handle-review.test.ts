@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parseOutputs } from '../src/output.mjs'
 
 const createIssueComment = vi.fn().mockResolvedValue({})
 const getPullRequest = vi.fn()
@@ -41,13 +42,25 @@ function gateMarker({ head, risk }: { head: string; risk: string }) {
   return `<!-- me-dev-gate:${JSON.stringify({ v: 1, base: BASE, head, risk })} -->`
 }
 
-function eventFile(dir: string, { body = 'clean review' }: { body?: string } = {}) {
+// `commitId` defaults to SHA (the same value `pull_request.head.sha` carries)
+// so every existing fixture reads as "the review describes the PR's current
+// head" — the fail-closed entry check in handle-review.mjs requires exactly
+// that match before it does anything else. Tests exercising a stale or
+// malformed review pass a different `commitId` (or `null`) explicitly.
+function eventFile(
+  dir: string,
+  {
+    body = 'clean review',
+    commitId = SHA,
+    headSha = SHA,
+  }: { body?: string; commitId?: string | null; headSha?: string } = {},
+) {
   const eventPath = join(dir, 'event.json')
   writeFileSync(
     eventPath,
     JSON.stringify({
-      pull_request: { number: 7, head: { sha: SHA }, base: { sha: BASE }, body: 'PR body' },
-      review: { id: 99, body },
+      pull_request: { number: 7, head: { sha: headSha }, base: { sha: BASE }, body: 'PR body' },
+      review: { id: 99, body, commit_id: commitId },
     }),
   )
   return eventPath
@@ -61,6 +74,10 @@ function outputFile(dir: string) {
   const outPath = join(dir, 'out.txt')
   writeFileSync(outPath, '')
   return outPath
+}
+
+function readAction(outPath: string) {
+  return parseOutputs(readFileSync(outPath, 'utf8')).action
 }
 
 describe('handle-review: round budget follows risk', () => {
@@ -171,6 +188,7 @@ describe('handle-review: the ready case runs the real quality gate', () => {
     listReviewComments.mockResolvedValue([])
     listCheckRunsForRef.mockResolvedValue([GREEN_CI])
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
+    getPullRequest.mockResolvedValue({ head: { sha: SHA } })
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputFile(dir) },
@@ -202,7 +220,7 @@ describe('handle-review: the ready case runs the real quality gate', () => {
       eventPath,
       JSON.stringify({
         pull_request: { number: 7, head: { sha: SHA }, base: { sha: BASE }, body: richBody },
-        review: { id: 99, body: 'Clean review — nothing to flag.' },
+        review: { id: 99, body: 'Clean review — nothing to flag.', commit_id: SHA },
       }),
     )
     listIssueComments.mockResolvedValue([
@@ -214,6 +232,7 @@ describe('handle-review: the ready case runs the real quality gate', () => {
       { filename: 'docs/x.md', status: 'modified' },
       { filename: 'scripts/example.test.ts', status: 'added' },
     ])
+    getPullRequest.mockResolvedValue({ head: { sha: SHA } })
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputFile(dir) },
@@ -222,5 +241,99 @@ describe('handle-review: the ready case runs the real quality gate', () => {
 
     const [, , , , body] = createIssueComment.mock.calls[0]
     expect(body).toContain('READY FOR PRODUCT OWNER')
+  })
+})
+
+describe('handle-review: fails closed when the reviewed commit is not the current head', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ops-loop-hr-stale-'))
+    createIssueComment.mockClear()
+    getPullRequest.mockReset()
+    listCheckRunsForRef.mockReset()
+    listIssueComments.mockReset()
+    listPullRequestFiles.mockReset()
+    listReviewComments.mockReset()
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    vi.resetModules()
+  })
+
+  it("skips with no reads at all when review.commit_id does not match the event's own head sha (old review, new event head)", async () => {
+    // Codex's review describes an older commit; by the time GitHub delivered
+    // pull_request_review.submitted, the PR's head had already moved on —
+    // the event payload's own pull_request.head.sha proves it. This must be
+    // caught before any I/O, not just before the final write.
+    const eventPath = eventFile(dir, { body: 'P1 fix this', commitId: OLD_SHA_1, headSha: SHA })
+    const outPath = outputFile(dir)
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outPath },
+      () => import('../src/handle-review.mjs'),
+    )
+
+    expect(listIssueComments).not.toHaveBeenCalled()
+    expect(getPullRequest).not.toHaveBeenCalled()
+    expect(createIssueComment).not.toHaveBeenCalled()
+    expect(readAction(outPath)).toBe('skip')
+  })
+
+  it('skips without any writes when review.commit_id is missing or not a string', async () => {
+    const eventPath = eventFile(dir, { body: 'P1 fix this', commitId: null })
+    const outPath = outputFile(dir)
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outPath },
+      () => import('../src/handle-review.mjs'),
+    )
+
+    expect(listIssueComments).not.toHaveBeenCalled()
+    expect(createIssueComment).not.toHaveBeenCalled()
+    expect(readAction(outPath)).toBe('skip')
+  })
+
+  it('skips a clean-review verdict without writing when the head moved past the reviewed commit before this run could conclude', async () => {
+    // Simulates a push landing after Codex reviewed SHA but before this run
+    // reached its conclusion (e.g. during the required-CI poll) —
+    // getPullRequest now reports a head newer than what was reviewed.
+    const eventPath = eventFile(dir, { body: 'Clean review — nothing to flag.' })
+    const outPath = outputFile(dir)
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: SHA, risk: 'C' }) },
+    ])
+    listReviewComments.mockResolvedValue([])
+    listCheckRunsForRef.mockResolvedValue([GREEN_CI])
+    listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
+    getPullRequest.mockResolvedValue({ head: { sha: 'f'.repeat(40) } })
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outPath },
+      () => import('../src/handle-review.mjs'),
+    )
+
+    expect(createIssueComment).not.toHaveBeenCalled()
+    expect(readAction(outPath)).toBe('skip')
+  })
+
+  it('skips a dispatch without consuming a round when the head moved past the reviewed commit', async () => {
+    const eventPath = eventFile(dir, { body: 'P1 fix this' })
+    const outPath = outputFile(dir)
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: SHA, risk: 'A' }) },
+    ])
+    listReviewComments.mockResolvedValue([])
+    listCheckRunsForRef.mockResolvedValue([GREEN_CI])
+    getPullRequest.mockResolvedValue({ head: { sha: 'f'.repeat(40) } })
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outPath },
+      () => import('../src/handle-review.mjs'),
+    )
+
+    expect(createIssueComment).not.toHaveBeenCalled()
+    expect(readAction(outPath)).toBe('skip')
   })
 })

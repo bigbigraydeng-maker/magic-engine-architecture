@@ -1,18 +1,29 @@
 /**
- * Workflow C entrypoint (ops-dev-gate-recheck.yml). Runs whenever any check
- * run in the repository completes. Exists for exactly the gap
- * `handle-review.mjs` (the review-triggered leg) cannot close: a C-level PR
- * `sampling.mjs`'s stable 20% sample did NOT select for Codex review. Nothing
- * then ever fires `pull_request_review.submitted` for it, so without this
- * leg an otherwise-done unsampled C-level PR would sit forever with no READY
- * / BLOCKED verdict — the "skip Codex and nobody ever re-evaluates it"
- * outcome ME2-OPS03 PR2 forbids.
+ * Workflow C entrypoint (ops-dev-gate-recheck.yml). Runs whenever the
+ * `ai-orchestrator CI` workflow completes anywhere in the repository. Exists
+ * for exactly the gap `handle-review.mjs` (the review-triggered leg) cannot
+ * close: a C-level PR `sampling.mjs`'s stable 20% sample did NOT select for
+ * Codex review. Nothing then ever fires `pull_request_review.submitted` for
+ * it, so without this leg an otherwise-done unsampled C-level PR would sit
+ * forever with no READY / BLOCKED verdict — the "skip Codex and nobody ever
+ * re-evaluates it" outcome ME2-OPS03 PR2 forbids.
+ *
+ * 🔴 **Why `workflow_run`, not `check_run`.** GitHub does not deliver
+ * `check_run` events for check suites GitHub Actions itself created — that
+ * is a deliberate anti-recursion rule
+ * (https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#check_run).
+ * `ai-orchestrator-tests` is exactly such a check suite, so a `check_run`
+ * trigger here would never fire in production: this whole recheck leg would
+ * be dead on arrival while looking wired. `workflow_run` has no such
+ * exclusion and carries the same facts this script needs — `head_sha`,
+ * `pull_requests`, `status`/`conclusion` — off `event.workflow_run` instead
+ * of `event.check_run`.
  *
  * Scope is deliberately narrow, and the two legs never race each other:
  *
- *   - This script only acts when the completed check run matches the
- *     required-check name pattern (everything else is ignored immediately).
- *   - For each PR the check run belongs to, it only proceeds when the PR's
+ *   - This script only acts when the completed workflow run matches the
+ *     required-workflow name pattern (everything else is ignored immediately).
+ *   - For each PR the workflow run belongs to, it only proceeds when the PR's
  *     current trusted risk rating is C AND the stable sample did not select
  *     it for Codex review (`shouldRequestCodexReview` returning false).
  *   - Every A/B PR, and every sampled C, is left entirely to the
@@ -32,16 +43,23 @@
 import { readFileSync } from 'node:fs'
 import { createIssueComment, getPullRequest, listCheckRunsForRef, listIssueComments } from './github.mjs'
 import { shouldRequestCodexReview } from './sampling.mjs'
-import { isGateCurrent, selectTrustedGateMarkers } from './gate-marker.mjs'
+import { findGateFor, selectTrustedGateMarkers } from './gate-marker.mjs'
 import { buildVerdictComment } from './verdict.mjs'
 import { TRUSTED_GATE_AUTHORS } from './trust.mjs'
 
+// Matches the `name:` field of ai-orchestrator-ci.yml ("ai-orchestrator CI"),
+// which is what `workflow_run.name` carries — a different field from the
+// check-run job name (`ai-orchestrator-tests`) `evaluateOne` below matches
+// against `listCheckRunsForRef`'s results. Deliberately the same loose
+// pattern as the other two entrypoints so all three agree on what counts as
+// "the required CI".
+const REQUIRED_WORKFLOW_NAME_PATTERN = /ai-orchestrator/i
 const REQUIRED_CHECK_NAME_PATTERN = /ai-orchestrator/i
 
 const token = process.env.GITHUB_TOKEN
 const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/')
 const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
-const checkRun = event.check_run
+const workflowRun = event.workflow_run
 
 function checkSucceeded(run) {
   return run?.status === 'completed' && run?.conclusion === 'success'
@@ -64,7 +82,7 @@ async function currentTrustedGate(prNumber, base, sha) {
     sources: comments.map((c) => ({ author: c.user?.login ?? null, body: c.body })),
     trustedAuthors: TRUSTED_GATE_AUTHORS,
   })
-  return trustedGates.find((g) => isGateCurrent(g, { base, head: sha })) ?? null
+  return findGateFor({ markers: trustedGates, base, head: sha })
 }
 
 async function evaluateOne(prNumber) {
@@ -99,7 +117,7 @@ async function evaluateOne(prNumber) {
   const requiredCiPassed = checkSucceeded(requiredCheck)
   if (!requiredCiPassed) {
     console.log(
-      `PR #${prNumber}: ${sha} required check is not green yet (${requiredCheck?.status ?? 'not seen'}/${requiredCheck?.conclusion ?? 'n/a'}). Waiting for the next check_run event.`,
+      `PR #${prNumber}: ${sha} required check is not green yet (${requiredCheck?.status ?? 'not seen'}/${requiredCheck?.conclusion ?? 'n/a'}). Waiting for the next workflow_run event.`,
     )
     return
   }
@@ -124,14 +142,14 @@ async function evaluateOne(prNumber) {
   console.log(`PR #${prNumber}: posted ${decision.decision} for ${sha} (unsampled C, CI green).`)
 }
 
-if (!REQUIRED_CHECK_NAME_PATTERN.test(checkRun?.name ?? '')) {
-  console.log(`Check run "${checkRun?.name}" is not the required check. Nothing to do.`)
-} else if (checkRun.status !== 'completed') {
-  console.log('Check run has not completed yet. Nothing to do.')
+if (!REQUIRED_WORKFLOW_NAME_PATTERN.test(workflowRun?.name ?? '')) {
+  console.log(`Workflow run "${workflowRun?.name}" is not the required workflow. Nothing to do.`)
+} else if (workflowRun.status !== 'completed') {
+  console.log('Workflow run has not completed yet. Nothing to do.')
 } else {
-  const candidates = Array.isArray(checkRun.pull_requests) ? checkRun.pull_requests : []
+  const candidates = Array.isArray(workflowRun.pull_requests) ? workflowRun.pull_requests : []
   if (candidates.length === 0) {
-    console.log('No associated pull requests on this check run.')
+    console.log('No associated pull requests on this workflow run.')
   }
   for (const candidate of candidates) {
     await evaluateOne(candidate.number)

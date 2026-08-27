@@ -316,4 +316,35 @@ describe('request-review: closes the race for unsampled C when CI is already gre
     expect(listCheckRunsForRef).not.toHaveBeenCalled()
     expect(createIssueComment).not.toHaveBeenCalled()
   })
+
+  it('does not re-post the rating or a second verdict when an older rating-only marker sits ahead of the decision marker in comment history', async () => {
+    // Reproduces the exact shape a real PR's comment history has: the rating
+    // (no `decision` field) is always posted before the quality verdict.
+    // `.find()` picking the FIRST match — the rating — would make the
+    // `decision` field permanently invisible to every later run, causing an
+    // infinite re-rate/re-verdict loop. `findGateFor`'s last-match-wins must
+    // surface the decision-bearing marker instead.
+    const pr = 42
+    const sha = shaSampledAs(pr, false)
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(
+      eventPath,
+      JSON.stringify({ pull_request: { number: pr, head: { sha }, base: { sha: BASE }, body: '' } }),
+    )
+    const ratingOnlyMarker = `<!-- me-dev-gate:{"v":1,"base":"${BASE}","head":"${sha}","risk":"C","reasons":[]} -->`
+    const decidedMarker = `<!-- me-dev-gate:{"v":1,"base":"${BASE}","head":"${sha}","risk":"C","score":80,"decision":"READY_FOR_PRODUCT_OWNER"} -->`
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: ratingOnlyMarker },
+      { user: { login: 'github-actions[bot]' }, body: decidedMarker },
+    ])
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/request-review.mjs'),
+    )
+
+    expect(listPullRequestFiles).not.toHaveBeenCalled()
+    expect(listCheckRunsForRef).not.toHaveBeenCalled()
+    expect(createIssueComment).not.toHaveBeenCalled()
+  })
 })
