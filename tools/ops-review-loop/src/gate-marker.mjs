@@ -51,6 +51,18 @@ export const GATE_MARKER_VERSION = 1
 const MARKER_RE = /<!--\s*me-dev-gate:(\{[^]*?\})\s*-->/g
 
 /**
+ * The only levels a marker may carry.
+ *
+ * 🔴 Codex finding on PR #1205 (P2): the parser only checked that `risk` was a
+ * string, so a marker claiming `"risk":"nonsense"` parsed as valid and became
+ * the record in force. The score threshold falls back to A's 90 for an
+ * unrecognised level — but the *category-matched evidence* gate only runs when
+ * `risk === 'A'`, so an unrecognised level skipped it entirely. A level nobody
+ * recognises must not be storable, not merely scored strictly.
+ */
+const VALID_RISKS = new Set(['A', 'B', 'C'])
+
+/**
  * Serialise the payload so it can never contain an HTML comment delimiter.
  *
  * `<` and `>` are not JSON structural characters, so replacing every one of
@@ -72,6 +84,9 @@ function serialisePayload(payload) {
  * @throws if the marker does not survive its own parser
  */
 export function buildGateMarker({ base, head, risk, reasons = [], score = null, decision = null }) {
+  if (!VALID_RISKS.has(risk)) {
+    throw new Error(`refusing to emit a gate marker with risk "${risk}" — only A / B / C are storable`)
+  }
   const payload = {
     v: GATE_MARKER_VERSION,
     base: String(base),
@@ -122,7 +137,7 @@ export function parseGateMarkers(bodies) {
       if (!payload || typeof payload !== 'object') continue
       if (payload.v !== GATE_MARKER_VERSION) continue
       if (typeof payload.base !== 'string' || typeof payload.head !== 'string') continue
-      if (typeof payload.risk !== 'string') continue
+      if (!VALID_RISKS.has(payload.risk)) continue
       out.push({
         ...payload,
         reasons: Array.isArray(payload.reasons) ? payload.reasons.filter((r) => typeof r === 'string') : [],
@@ -156,4 +171,55 @@ export function isGateCurrent(gate, current) {
 export function findGateFor({ markers, base, head }) {
   const matches = (Array.isArray(markers) ? markers : []).filter((m) => isGateCurrent(m, { base, head }))
   return matches.length === 0 ? null : matches[matches.length - 1]
+}
+
+/**
+ * Read gate markers only from sources whose author is trusted.
+ *
+ * 🔴 Codex finding on PR #1205 (P2, second half): a gate marker is a *verdict*,
+ * and anyone who can comment on a PR — including its author — can type one.
+ * Without an author check, an author who did not like being rated A can post
+ * `<!-- me-dev-gate:{"v":1,...,"risk":"C"} -->` for their own base/head pair,
+ * and "last one wins" hands it the decision. The marker's escaping stops it
+ * being *truncated*; nothing in the payload stops it being *authored*.
+ *
+ * So the identity check is a separate, explicit step, and this is the only
+ * supported way to read markers off PR comments. A source with no author, or an
+ * author not on the list, is dropped — the wiring PR must pass the identity
+ * that actually writes the rating (the check-run producer, or the loop's own
+ * bot login), never `github.event.pull_request.user.login`.
+ *
+ * Provenance is a property of *where the text came from*, which is why this
+ * cannot be folded into `parseGateMarkers`: that function is handed strings and
+ * has no way to know.
+ *
+ * @param {{sources?: Array<{author?: string|null, body?: string|null}>|unknown, trustedAuthors?: Iterable<string>|unknown}} input
+ * @returns {GateRecord[]}
+ */
+export function selectTrustedGateMarkers({ sources, trustedAuthors } = {}) {
+  // A bare string is rejected rather than iterated: `trustedAuthors: 'ci-bot'`
+  // would otherwise become the six single characters of that name, trusting
+  // nobody while looking configured.
+  const iterable =
+    trustedAuthors !== null &&
+    trustedAuthors !== undefined &&
+    typeof trustedAuthors !== 'string' &&
+    typeof trustedAuthors[Symbol.iterator] === 'function'
+  // Only string logins enter the allowlist, and that single normalisation is
+  // what makes every later comparison safe: identity is a GitHub login, so a
+  // caller passing a numeric account id must not be able to establish trust by
+  // having `Set.has` match two numbers.
+  //
+  // Two other guards were written here and removed, both for the same reason —
+  // a branch no test can reach is a branch that quietly stops working:
+  //   - `trusted.size === 0` early return: an empty Set already makes every
+  //     `has()` false, so an empty allowlist trusts nobody regardless.
+  //   - `typeof s.author === 'string'` on the source side: given the allowlist
+  //     holds strings only, a non-string author can never match anyway.
+  // Deleting either one alone left the suite green, which is the definition of
+  // a guard that is not doing the work. One guard, one test, no illusion.
+  const trusted = new Set([...(iterable ? trustedAuthors : [])].filter((a) => typeof a === 'string'))
+  if (!Array.isArray(sources)) return []
+  const bodies = sources.filter((s) => s && trusted.has(s.author)).map((s) => s.body)
+  return parseGateMarkers(bodies)
 }

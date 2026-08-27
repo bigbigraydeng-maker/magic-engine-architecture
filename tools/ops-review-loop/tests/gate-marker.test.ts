@@ -23,6 +23,7 @@ import {
   findGateFor,
   isGateCurrent,
   parseGateMarkers,
+  selectTrustedGateMarkers,
 } from '../src/gate-marker.mjs'
 
 const BASE = 'd8ee449d13f7632e2f67234a22d00a1b76175b9b'
@@ -104,6 +105,156 @@ describe('a reason cannot close the HTML comment it lives in', () => {
     const marker = buildGateMarker({ base: BASE, head: HEAD, risk: 'A', reasons: [HOSTILE] })
     const parsed = parseGateMarkers([marker])
     expect(parsed.map((m: { risk: string }) => m.risk)).toEqual(['A'])
+  })
+})
+
+/**
+ * Codex finding on PR #1205 (P2): the parser accepted any string as `risk`. An
+ * unrecognised level is not merely scored strictly — the category-matched
+ * evidence gate in quality.mjs only runs when `risk === 'A'`, so a marker
+ * saying `"risk":"nonsense"` skipped that gate entirely while still counting as
+ * the record in force.
+ */
+describe('only A, B and C are storable levels', () => {
+  it.each(['A', 'B', 'C'])('accepts %s', (risk) => {
+    expect(parseGateMarkers([buildGateMarker({ base: BASE, head: HEAD, risk })])[0].risk).toBe(risk)
+  })
+
+  // `unknown` on purpose: half of these are not strings, and the point of the
+  // test is that the builder refuses them rather than that TypeScript does.
+  // At runtime the payload comes from JSON, where the compiler is not present.
+  it.each<[string, unknown]>([
+    ['nonsense', 'nonsense'],
+    ['lowercase a', 'a'],
+    ['empty string', ''],
+    ['a number', 3],
+    ['null', null],
+    ['an object', { risk: 'A' }],
+  ])('refuses to build a marker with risk = %s', (_label, risk) => {
+    expect(() => buildGateMarker({ base: BASE, head: HEAD, risk: risk as string })).toThrow(
+      /only A \/ B \/ C are storable/,
+    )
+  })
+
+  it.each([
+    ['nonsense', '<!-- me-dev-gate:{"v":1,"base":"a","head":"b","risk":"nonsense"} -->'],
+    ['lowercase', '<!-- me-dev-gate:{"v":1,"base":"a","head":"b","risk":"a"} -->'],
+    ['a number', '<!-- me-dev-gate:{"v":1,"base":"a","head":"b","risk":3} -->'],
+    ['empty', '<!-- me-dev-gate:{"v":1,"base":"a","head":"b","risk":""} -->'],
+  ])('refuses to parse a hand-written marker with risk = %s', (_label, body) => {
+    expect(parseGateMarkers([body])).toEqual([])
+  })
+
+  it('does not let an unrecognised level become the record in force', () => {
+    const valid = buildGateMarker({ base: BASE, head: HEAD, risk: 'A' })
+    const forged = `<!-- me-dev-gate:{"v":1,"base":"${BASE}","head":"${HEAD}","risk":"nonsense"} -->`
+    const markers = parseGateMarkers([valid, forged])
+    // "Last one wins" would hand the decision to the forged one if it parsed.
+    expect(findGateFor({ markers, base: BASE, head: HEAD })?.risk).toBe('A')
+  })
+})
+
+/**
+ * Codex finding on PR #1205 (P2, second half): a marker is a verdict, and
+ * anyone who can comment on a PR can type one. The escaping stops a marker
+ * being truncated; nothing in the payload stops it being authored by the very
+ * person it is meant to constrain.
+ */
+describe('a marker only counts if a trusted identity wrote it', () => {
+  const TRUSTED = 'github-actions[bot]'
+  const gate = (risk: string) => buildGateMarker({ base: BASE, head: HEAD, risk })
+
+  it('reads a marker written by a trusted author', () => {
+    const found = selectTrustedGateMarkers({
+      sources: [{ author: TRUSTED, body: gate('A') }],
+      trustedAuthors: [TRUSTED],
+    })
+    expect(found.map((m: { risk: string }) => m.risk)).toEqual(['A'])
+  })
+
+  it('ignores the same marker written by the PR author', () => {
+    const found = selectTrustedGateMarkers({
+      sources: [{ author: 'bigbigraydeng-maker', body: gate('C') }],
+      trustedAuthors: [TRUSTED],
+    })
+    expect(found).toEqual([])
+  })
+
+  it('is not fooled by an author-posted downgrade sitting after the real rating', () => {
+    const found = selectTrustedGateMarkers({
+      sources: [
+        { author: TRUSTED, body: gate('A') },
+        { author: 'pr-author', body: gate('C') },
+      ],
+      trustedAuthors: [TRUSTED],
+    })
+    expect(findGateFor({ markers: found, base: BASE, head: HEAD })?.risk).toBe('A')
+  })
+
+  it.each([
+    ['no author field', [{ body: '<!-- x -->' }]],
+    ['a null author', [{ author: null, body: '<!-- x -->' }]],
+    ['a non-string author', [{ author: 42, body: '<!-- x -->' }]],
+    ['a null source', [null]],
+  ])('drops a source with %s', (_label, sources) => {
+    expect(
+      selectTrustedGateMarkers({
+        sources: sources.map((s) => (s === null ? s : { ...s, body: gate('A') })),
+        trustedAuthors: [TRUSTED],
+      }),
+    ).toEqual([])
+  })
+
+  it('trusts nobody when the allowlist is empty — it does not fall back to reading everything', () => {
+    expect(
+      selectTrustedGateMarkers({ sources: [{ author: TRUSTED, body: gate('A') }], trustedAuthors: [] }),
+    ).toEqual([])
+  })
+
+  // Identity is compared against a GitHub login, which is a string. A caller
+  // passing a numeric account id on both sides must not accidentally establish
+  // trust through `Set.has` matching two numbers — the allowlist keeps strings
+  // only, so the comparison can never succeed on a non-login value.
+  it('does not trust a non-string identity, even when both sides match', () => {
+    expect(
+      selectTrustedGateMarkers({
+        sources: [{ author: 12345, body: gate('A') }],
+        trustedAuthors: [12345],
+      }),
+    ).toEqual([])
+  })
+
+  it('still trusts the string logins in a mixed allowlist', () => {
+    expect(
+      selectTrustedGateMarkers({
+        sources: [{ author: TRUSTED, body: gate('A') }],
+        trustedAuthors: [12345, TRUSTED, null],
+      }),
+    ).toHaveLength(1)
+  })
+
+  it('trusts nobody when the allowlist is a bare string, rather than trusting its letters', () => {
+    // `trustedAuthors: 'ci-bot'` would become the six characters of that name:
+    // an allowlist that looks configured and trusts no real login.
+    expect(
+      selectTrustedGateMarkers({
+        sources: [{ author: 'c', body: gate('A') }],
+        trustedAuthors: 'ci-bot',
+      }),
+    ).toEqual([])
+  })
+
+  it('accepts a Set as the allowlist', () => {
+    const found = selectTrustedGateMarkers({
+      sources: [{ author: TRUSTED, body: gate('B') }],
+      trustedAuthors: new Set([TRUSTED]),
+    })
+    expect(found).toHaveLength(1)
+  })
+
+  it('tolerates junk input on both sides', () => {
+    expect(selectTrustedGateMarkers()).toEqual([])
+    expect(selectTrustedGateMarkers({ sources: 'nope', trustedAuthors: [TRUSTED] })).toEqual([])
   })
 })
 

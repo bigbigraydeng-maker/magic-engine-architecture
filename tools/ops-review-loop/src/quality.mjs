@@ -42,11 +42,147 @@
  * Pure module: no I/O, no clock. `tests/quality.test.ts` exercises it offline.
  */
 
+import { RISK_CATEGORY } from './risk.mjs'
+
 /**
  * Codex quality reporting status. Reported verbatim so a summary never implies
  * a structured Codex verdict exists. See the module header for the evidence.
  */
 export const CODEX_QUALITY_FIELDS = 'unavailable'
+
+/**
+ * What "the corresponding specialised evidence" means, per risk category.
+ *
+ * 🔴 Codex finding on PR #1205 (P1): this used to be one fixed requirement —
+ * every A-level PR had to show client-isolation evidence. But a migration, a
+ * workflow edit, a payment route and a dependency bump are all A and none of
+ * them produce isolation evidence. Under the old rule they could never be
+ * Ready, or their authors would write isolation prose they had not actually
+ * verified — which is worse than no gate, because it manufactures false
+ * evidence. This very PR is an A-level control-plane change and was one of the
+ * ones permanently blocked.
+ *
+ * The rule the spec actually states is "按命中风险运行" — evidence matching the
+ * risks *hit*. So: `classifyRisk` reports the categories, this table says what
+ * each one owes, and `evaluateSpecializedEvidence` compares required against
+ * observed. A category with no entry here owes nothing; a category the table
+ * does not recognise owes an explicit manual sign-off rather than nothing.
+ */
+export const SPECIALIZED_EVIDENCE = {
+  [RISK_CATEGORY.DB_MIGRATION]: {
+    id: 'migration-evidence',
+    label: '迁移的加列 / 收紧顺序、RLS 策略与回滚路径已写明',
+  },
+  [RISK_CATEGORY.CONTROL_PLANE]: {
+    id: 'control-plane-evidence',
+    label: '权限边界、fail-closed 行为、以及它不能给自己放权，已验证',
+  },
+  [RISK_CATEGORY.PRODUCTION_SCHEDULE]: {
+    id: 'schedule-evidence',
+    label: '调度条目与密钥挂载已核对，失败会被看见',
+  },
+  [RISK_CATEGORY.AUTH_ISOLATION]: {
+    id: 'isolation-evidence',
+    label: '鉴权 / 权限 / 客户隔离的「允许」与「拒绝」两条路径都验过',
+  },
+  [RISK_CATEGORY.KERNEL_EXECUTION]: {
+    id: 'kernel-evidence',
+    label: '授权、幂等、并发与状态机边界已验证',
+  },
+  [RISK_CATEGORY.MONEY]: {
+    id: 'money-evidence',
+    label: '计费 / 扣费 / 预算路径的金额与重复执行已验证',
+  },
+  [RISK_CATEGORY.OUTWARD_WRITE]: {
+    id: 'outward-write-evidence',
+    label: '对外副作用做了干跑或沙箱验证，且确认没有真发出去',
+  },
+  [RISK_CATEGORY.NETWORK_BOUNDARY]: {
+    id: 'ssrf-evidence',
+    label: '出网目标绑定与重定向路径已验证',
+  },
+  [RISK_CATEGORY.CREDENTIALS]: {
+    id: 'credential-evidence',
+    label: '凭证没进日志、没进仓库，作用域最小',
+  },
+  [RISK_CATEGORY.SUPPLY_CHAIN]: {
+    id: 'dependency-evidence',
+    label: '新增依赖的必要性、来源与锁文件变更已说明',
+  },
+  [RISK_CATEGORY.UNREADABLE]: {
+    id: 'manual-rating-evidence',
+    label: '改动清单读不到，改动范围必须由人确认过',
+  },
+}
+
+/** Owed by any category this table does not recognise. Fail closed. */
+export const UNKNOWN_CATEGORY_EVIDENCE = 'manual-rating-evidence'
+
+/**
+ * Iterate a collection of ids, treating a bare string as *not* one.
+ *
+ * A string is iterable in JavaScript, character by character. So passing
+ * `'isolation-evidence'` where a list was meant does not throw and does not
+ * come back empty — it comes back as eighteen single-character ids, none of
+ * which match anything. The evidence then reads as "observed, but none of it
+ * counted", which is the most misleading of the three possible answers. Callers
+ * that hand us a string are making a mistake, and it is treated as one.
+ *
+ * @param {unknown} value
+ * @returns {Iterable<string>}
+ */
+function iterableOrEmpty(value) {
+  if (value === null || value === undefined || typeof value === 'string') return []
+  return typeof value[Symbol.iterator] === 'function' ? value : []
+}
+
+/**
+ * The specialised evidence a set of risk categories owes.
+ *
+ * @param {Iterable<string>} categories
+ * @returns {Array<{category: string, id: string, label: string}>}
+ */
+export function requiredSpecializedEvidence(categories) {
+  const out = []
+  const seen = new Set()
+  for (const category of iterableOrEmpty(categories)) {
+    const entry = SPECIALIZED_EVIDENCE[category] ?? {
+      id: UNKNOWN_CATEGORY_EVIDENCE,
+      label: `风险类别 \`${category}\` 不在证据表里 —— 需要人工确认`,
+    }
+    if (seen.has(entry.id)) continue
+    seen.add(entry.id)
+    out.push({ category, ...entry })
+  }
+  return out
+}
+
+/**
+ * Compare required specialised evidence against what was observed.
+ *
+ * `observed` being unreadable (not iterable) is distinct from being empty, and
+ * is reported as such — the same distinction `risk.mjs` insists on.
+ *
+ * @param {{categories?: Iterable<string>, observed?: Iterable<string>|null}} input
+ * @returns {{required: Array<{category: string, id: string, label: string}>, missing: Array<{category: string, id: string, label: string}>, complete: boolean, readable: boolean}}
+ */
+export function evaluateSpecializedEvidence({ categories = [], observed } = {}) {
+  const required = requiredSpecializedEvidence(categories)
+  // A string is deliberately NOT readable here — see `iterableOrEmpty`. An
+  // empty array is: "we looked and found nothing" is a real, reportable answer,
+  // and a different one from "we could not look".
+  const readable =
+    observed !== null &&
+    observed !== undefined &&
+    typeof observed !== 'string' &&
+    typeof observed[Symbol.iterator] === 'function'
+  if (!readable) {
+    return { required, missing: required, complete: false, readable: false }
+  }
+  const seen = new Set(observed)
+  const missing = required.filter((item) => !seen.has(item.id))
+  return { required, missing, complete: missing.length === 0, readable: true }
+}
 
 /**
  * The five scoring dimensions and their weights, straight from the Product
@@ -82,7 +218,10 @@ export const SCORE_DIMENSIONS = [
     signals: [
       { id: 'risk-rated', points: 5, label: '风险等级已绑定 base+head 落盘' },
       { id: 'scope-guard-green', points: 5, label: '爆炸半径闸门通过' },
-      { id: 'isolation-evidence', points: 10, label: '有鉴权 / 权限 / 客户隔离的专项证据' },
+      // Not "isolation evidence" — see SPECIALIZED_EVIDENCE. What this scores
+      // is that every kind of evidence the PR's own risk categories owe was
+      // actually produced, whatever those kinds turned out to be.
+      { id: 'specialized-evidence-complete', points: 10, label: '命中风险对应的专项证据齐了' },
     ],
   },
   {
@@ -109,11 +248,11 @@ export const SCORE_DIMENSIONS = [
 export const READY_THRESHOLD = { A: 90, B: 85, C: 75 }
 
 /**
- * Signals that must be present for an A-level PR to be Ready at all — the
- * "A 级缺少对应专项证据：不得 Ready" hard gate, expressed as data so the gate
- * and the score read the same table.
+ * Scoring signals every A-level PR must have regardless of category. Deliberately
+ * short: the category-specific half lives in `SPECIALIZED_EVIDENCE`, and pinning
+ * a long universal list here is exactly the mistake Codex caught.
  */
-export const A_REQUIRED_SIGNALS = ['isolation-evidence', 'required-ci-green']
+export const A_REQUIRED_SIGNALS = ['required-ci-green']
 
 /** id -> {dimension, points, label}, built once from the table above. */
 const SIGNAL_INDEX = new Map(
@@ -194,7 +333,17 @@ function hardGateBlockers({ risk, gates, observedSignals }) {
     const observed = new Set(observedSignals ?? [])
     const missing = A_REQUIRED_SIGNALS.filter((id) => !observed.has(id))
     if (missing.length > 0) {
-      blockers.push(`A 级缺少专项证据：${missing.join('、')}`)
+      blockers.push(`A 级缺少必备证据：${missing.join('、')}`)
+    }
+    // The category-matched half. `specialized` is required for an A-level PR:
+    // not passing it is "we did not check what this change owes", which fails
+    // closed rather than passing for free.
+    const specialized = g.specialized
+    if (!specialized || specialized.readable !== true) {
+      blockers.push('A 级：命中风险对应的专项证据读不到 —— 按缺失处理')
+    } else if (Array.isArray(specialized.missing) && specialized.missing.length > 0) {
+      const names = specialized.missing.map((m) => `${m.id}（${m.label}）`).join('、')
+      blockers.push(`A 级缺少命中风险对应的专项证据：${names}`)
     }
   }
   return blockers

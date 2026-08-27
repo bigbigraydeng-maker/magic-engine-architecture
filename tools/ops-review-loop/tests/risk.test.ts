@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest'
 import {
   A_RISK_RULES,
   C_SAFE_RULES,
+  MAX_REASONS,
   classifyFile,
   classifyRisk,
   higherRisk,
@@ -90,6 +91,7 @@ describe('every protected path rates A', () => {
     expect(classifyFile('supabase/migrations/README.md')).toEqual({
       risk: 'A',
       why: 'migration —— 数据库结构变更，不可逆',
+      category: 'db-migration',
     })
   })
 })
@@ -219,6 +221,107 @@ describe('a mixed diff takes the highest level present', () => {
   })
 })
 
+describe('a rename cannot carry a file out of the protected set (Codex P1, PR #1205)', () => {
+  const renamed = (from: string, to: string) => ({
+    filename: to,
+    previous_filename: from,
+    status: 'renamed',
+  })
+
+  it('rates a workflow moved into docs/ as A, on the path it came from', () => {
+    const result = classifyRisk({ files: [renamed('.github/workflows/guard.yml', 'docs/guard.yml')] })
+    expect(result.risk).toBe('A')
+    expect(result.reasons.join('\n')).toContain('.github/workflows/guard.yml')
+    expect(result.categories).toContain('control-plane')
+  })
+
+  it.each([
+    ['supabase/migrations/20260101_x.sql', 'docs/old-migration.md'],
+    ['src/lib/kernel/authorize.ts', 'docs/notes.md'],
+    ['src/lib/auth/whitelist.ts', 'public/whitelist.txt'],
+    ['tools/ops-review-loop/src/plan.mjs', 'docs/plan.md'],
+  ])('%s renamed to %s is still A', (from, to) => {
+    expect(classifyRisk({ files: [renamed(from, to)] }).risk).toBe('A')
+  })
+
+  it('rates a rename INTO a protected path as A too — the new path still counts', () => {
+    const result = classifyRisk({ files: [renamed('docs/draft.yml', '.github/workflows/new.yml')] })
+    expect(result.risk).toBe('A')
+  })
+
+  it('says which path was the pre-rename one, so the reason is not baffling', () => {
+    const result = classifyRisk({ files: [renamed('src/lib/kernel/runner.ts', 'docs/runner.md')] })
+    expect(result.reasons.join('\n')).toContain('rename 前的原路径')
+  })
+
+  it('rates both ends and keeps the higher when they differ', () => {
+    // Old path B, new path A: the naive "only look at previous_filename" fix
+    // would get this one backwards.
+    const result = classifyRisk({ files: [renamed('src/lib/geo/score.ts', 'src/lib/kernel/score.ts')] })
+    expect(result.risk).toBe('A')
+  })
+
+  it('fails closed when an entry claims to be a rename but names no origin', () => {
+    const result = classifyRisk({ files: [{ filename: 'docs/x.md', status: 'renamed' }] })
+    expect(result.risk).toBe('A')
+    expect(result.readable).toBe(false)
+    expect(result.categories).toContain('unreadable')
+  })
+
+  it('treats a copy the same way — the API sets previous_filename there too', () => {
+    const result = classifyRisk({
+      files: [{ filename: 'docs/copy.md', previous_filename: 'render.yaml', status: 'copied' }],
+    })
+    expect(result.risk).toBe('A')
+  })
+
+  // Isolating probe: with `previous_filename` present, the `copied` status never
+  // gets consulted, so dropping 'copied' from the status set changed nothing and
+  // the suite stayed green. Only an origin-less `copied` entry reaches that
+  // branch — and it must fail closed exactly like an origin-less `renamed` one.
+  it.each(['renamed', 'copied'])('fails closed on a %s entry with no origin', (status) => {
+    const result = classifyRisk({ files: [{ filename: 'docs/x.md', status }] })
+    expect(result.risk).toBe('A')
+    expect(result.readable).toBe(false)
+    expect(result.reasons.join('\n')).toContain(status)
+  })
+
+  it('leaves an ordinary non-rename entry alone', () => {
+    const result = classifyRisk({ files: [{ filename: 'docs/a.md', status: 'modified' }] })
+    expect(result.risk).toBe('C')
+    expect(result.readable).toBe(true)
+  })
+})
+
+describe('risk categories drive which evidence is owed', () => {
+  it('reports the categories a diff actually hit, sorted and deduplicated', () => {
+    const result = classifyRisk({
+      files: [
+        { filename: 'supabase/migrations/20260101_x.sql' },
+        { filename: 'src/lib/kernel/runner.ts' },
+        { filename: 'src/app/api/kernel/route.ts' },
+        { filename: 'docs/a.md' },
+      ],
+    })
+    expect(result.categories).toEqual(['db-migration', 'kernel-execution'])
+  })
+
+  it('reports no category for a diff with no A-level surface', () => {
+    expect(classifyRisk({ files: [{ filename: 'src/lib/geo/score.ts' }] }).categories).toEqual([])
+  })
+
+  it('gives every A rule a category', () => {
+    for (const rule of A_RISK_RULES as Array<{ category?: string; why: string }>) {
+      expect(rule.category, `${rule.why} has no category`).toBeTruthy()
+    }
+  })
+
+  it('marks an unreadable diff as the unreadable category, not as nothing', () => {
+    expect(classifyRisk({ files: [] }).categories).toEqual(['unreadable'])
+    expect(classifyRisk({}).categories).toEqual(['unreadable'])
+  })
+})
+
 describe('the author-declared level is a floor, never a ceiling', () => {
   it('a PR declaring C that touches the kernel is still A', () => {
     const result = classifyRisk({ files: [file('src/lib/kernel/runner.ts')], declaredRisk: 'C' })
@@ -284,6 +387,18 @@ describe('fail closed — "we could not look" must not read like "nothing to see
     const result = classifyRisk({ files: [file('docs/a.md'), { additions: 1 }] })
     expect(result.risk).toBe('A')
     expect(result.readable).toBe(false)
+  })
+
+  it('never lets the reason cap hide the fact that part of the diff was unreadable', () => {
+    // 30 protected files plus one unreadable entry at the very end. Reasons are
+    // capped, so a naive append order would push the "we could not read this"
+    // line past the cut and publish a confident A rating with no hint that a
+    // slice of the diff was never examined at all.
+    const many = Array.from({ length: 30 }, (_, i) => file(`src/lib/kernel/f${i}.ts`))
+    const result = classifyRisk({ files: [...many, { additions: 1 }] })
+    expect(result.readable).toBe(false)
+    expect(result.reasons.length).toBeLessThanOrEqual(MAX_REASONS)
+    expect(result.reasons[0]).toContain('没有文件名')
   })
 })
 

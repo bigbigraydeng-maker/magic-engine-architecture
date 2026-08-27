@@ -50,7 +50,7 @@ forbids it, on top of whatever the Claude GitHub App's own token permits).
 ## Risk rating and delivery scoring — present, NOT yet wired
 
 `risk.mjs`, `sampling.mjs`, `quality.mjs` and `gate-marker.mjs` are in `src/`
-with 150 offline tests. **No workflow calls any of them yet.** They are on
+with 215 offline tests. **No workflow calls any of them yet.** They are on
 `main` first, on purpose: both loop workflows run `actions/checkout ref: main`,
 so a step that calls a brand-new module fails on the PR that introduces it,
 every time, until both halves are on main — the exact trap the inline
@@ -64,11 +64,29 @@ What the modules decide, once wired:
 
 | module | question |
 |---|---|
-| `risk.mjs` | A / B / C, computed from the PR's changed files. Protected path → A; a narrow allowlist (docs, styles, images, test-only) → C; anything unrecognised → B; anything unreadable → A. The PR author's declared level is a floor, never a ceiling. |
+| `risk.mjs` | A / B / C, computed from the PR's changed files — **both ends of a rename**, so a protected file cannot be walked out of the set. Protected path → A; a narrow allowlist (docs, styles, images, test-only) → C; anything unrecognised → B; anything unreadable → A. The PR author's declared level is a floor, never a ceiling. Also reports the **risk categories** hit, which is what decides the evidence owed. |
 | `sampling.mjs` | Which C-level heads still draw a Codex review. Stable 20% keyed on `(pr, head sha)` — a re-run cannot re-roll it. A and B are always reviewed. |
 | `maxRoundsForRisk` | Automated fix rounds: C=1, B=1, A=2, replacing the flat 3. An unrecognised level gets the smallest budget, not the largest. |
-| `quality.mjs` | Score out of 100 from *named observed signals only* (missing evidence scores 0; an unregistered signal throws). Thresholds C≥75 / B≥85 / A≥90. Hard gates — red CI, an open Codex P0/P1/P2 on the current head, a stale sha, missing A-level evidence, any unreadable input — block readiness at any score. |
-| `gate-marker.mjs` | The `<!-- me-dev-gate:{...} -->` record, bound to **both** base and head sha, so a rating dies the moment the diff moves. |
+| `quality.mjs` | Score out of 100 from *named observed signals only* (missing evidence scores 0; an unregistered signal throws). Thresholds C≥75 / B≥85 / A≥90. Hard gates — red CI, an open Codex P0/P1/P2 on the current head, a stale sha, **specialised evidence matching the categories hit**, any unreadable input — block readiness at any score. |
+| `gate-marker.mjs` | The `<!-- me-dev-gate:{...} -->` record, bound to **both** base and head sha, so a rating dies the moment the diff moves. Only A/B/C are storable, and markers count only when `selectTrustedGateMarkers` says a trusted identity wrote them. |
+
+### Specialised evidence follows the categories, not a fixed list
+
+An earlier draft required one fixed thing of every A-level PR: client-isolation
+evidence. Codex's review of PR #1205 pointed out that a migration, a workflow
+edit, a payment route and a dependency bump are all A and none of them have an
+isolation surface — so they could never be Ready, or their authors would write
+isolation prose they had not verified. Manufactured evidence is worse than no
+gate. (This very PR is that shape: A because it edits `tools/ops-review-loop/`,
+with no isolation surface at all.)
+
+So `classifyRisk` reports categories, `SPECIALIZED_EVIDENCE` says what each one
+owes (`db-migration` → migration evidence, `control-plane` → control-plane
+evidence, `supply-chain` → dependency justification, and so on), and
+`evaluateSpecializedEvidence` compares required against observed. A category the
+table does not recognise owes an explicit manual sign-off rather than nothing,
+and *not having evaluated it at all* counts as missing — the caller cannot skip
+the check by omitting the input.
 
 Two facts worth keeping, because both were measured rather than assumed:
 

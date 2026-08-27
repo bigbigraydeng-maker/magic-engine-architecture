@@ -14,19 +14,34 @@ import {
   A_REQUIRED_SIGNALS,
   CODEX_QUALITY_FIELDS,
   READY_THRESHOLD,
+  SPECIALIZED_EVIDENCE,
   SCORE_DIMENSIONS,
+  UNKNOWN_CATEGORY_EVIDENCE,
   decideReadiness,
+  evaluateSpecializedEvidence,
   knownSignalIds,
+  requiredSpecializedEvidence,
   scoreDelivery,
 } from '../src/quality.mjs'
+import { RISK_CATEGORY } from '../src/risk.mjs'
 
 const ALL_SIGNALS = knownSignalIds()
+
+/** Every specialised item the given categories owe, as if all were produced. */
+const allEvidenceFor = (categories: string[]) =>
+  evaluateSpecializedEvidence({
+    categories,
+    observed: requiredSpecializedEvidence(categories).map((r: { id: string }) => r.id),
+  })
 
 const cleanGates = {
   evidenceReadable: true,
   shaMatches: true,
   requiredCiPassed: true,
   openBlockerCount: 0,
+  // Non-A paths ignore this; A paths require it, and "we did not compute it" is
+  // itself a blocker, so the clean baseline has to carry a real evaluation.
+  specialized: allEvidenceFor([]),
 }
 
 describe('the scoring table itself', () => {
@@ -131,21 +146,210 @@ describe('hard gates outrank the total', () => {
     expect(result.blockers.join('\n')).toContain('对不上')
   })
 
-  it('blocks an A-level PR missing its specialised evidence, however high it scores', () => {
-    const withoutIsolation = ALL_SIGNALS.filter((id: string) => id !== 'isolation-evidence')
-    const result = decideReadiness({
-      risk: 'A',
-      score: { total: 90 },
-      gates: cleanGates,
-      observedSignals: withoutIsolation,
-    })
-    expect(result.ready).toBe(false)
-    expect(result.blockers.join('\n')).toContain('isolation-evidence')
-  })
-
   it('keeps the A-required list and the scoring table in sync', () => {
     for (const id of A_REQUIRED_SIGNALS as string[]) {
       expect(ALL_SIGNALS).toContain(id)
+    }
+  })
+})
+
+/**
+ * Codex finding on PR #1205 (P1): "A-level needs specialised evidence" used to
+ * mean one fixed thing — client isolation — for every A change. These tests
+ * pin the replacement: what a PR owes follows the risk categories it actually
+ * hit, and the two failure directions (owing nothing when it should owe
+ * something; owing isolation proof for a dependency bump) are both covered.
+ */
+describe('specialised evidence follows the risk categories hit', () => {
+  it('asks a migration PR for migration evidence, not isolation evidence', () => {
+    const required = requiredSpecializedEvidence([RISK_CATEGORY.DB_MIGRATION])
+    expect(required.map((r: { id: string }) => r.id)).toEqual(['migration-evidence'])
+  })
+
+  it('asks a control-plane PR for control-plane evidence — the case that used to be unpassable', () => {
+    // This PR is exactly that shape: A-level because it edits
+    // tools/ops-review-loop/, with no client-isolation surface anywhere in it.
+    const required = requiredSpecializedEvidence([RISK_CATEGORY.CONTROL_PLANE])
+    expect(required.map((r: { id: string }) => r.id)).toEqual(['control-plane-evidence'])
+  })
+
+  it('asks for every category hit, deduplicated', () => {
+    const required = requiredSpecializedEvidence([
+      RISK_CATEGORY.DB_MIGRATION,
+      RISK_CATEGORY.AUTH_ISOLATION,
+      RISK_CATEGORY.DB_MIGRATION,
+    ])
+    expect(required.map((r: { id: string }) => r.id)).toEqual(['migration-evidence', 'isolation-evidence'])
+  })
+
+  it('asks for nothing when no A-level category was hit', () => {
+    expect(requiredSpecializedEvidence([])).toEqual([])
+  })
+
+  it('gives every declared risk category an evidence entry', () => {
+    for (const category of Object.values(RISK_CATEGORY) as string[]) {
+      expect(SPECIALIZED_EVIDENCE[category], `${category} has no evidence entry`).toBeTruthy()
+    }
+  })
+
+  it('demands a manual sign-off for a category the table does not know', () => {
+    const required = requiredSpecializedEvidence(['some-future-category'])
+    expect(required.map((r: { id: string }) => r.id)).toEqual([UNKNOWN_CATEGORY_EVIDENCE])
+  })
+
+  it('demands a manual sign-off when the diff could not be read', () => {
+    const required = requiredSpecializedEvidence([RISK_CATEGORY.UNREADABLE])
+    expect(required.map((r: { id: string }) => r.id)).toEqual(['manual-rating-evidence'])
+  })
+})
+
+describe('evaluateSpecializedEvidence separates "none found" from "could not look"', () => {
+  it('is complete when every required item was observed', () => {
+    const result = evaluateSpecializedEvidence({
+      categories: [RISK_CATEGORY.MONEY],
+      observed: ['money-evidence'],
+    })
+    expect(result).toMatchObject({ complete: true, readable: true, missing: [] })
+  })
+
+  it('reports exactly what is missing, with the label a human can act on', () => {
+    const result = evaluateSpecializedEvidence({
+      categories: [RISK_CATEGORY.MONEY, RISK_CATEGORY.CREDENTIALS],
+      observed: ['money-evidence'],
+    })
+    expect(result.complete).toBe(false)
+    expect(result.missing.map((m: { id: string }) => m.id)).toEqual(['credential-evidence'])
+    expect(result.missing[0].label).toContain('凭证')
+  })
+
+  it('is complete and readable when nothing was owed and nothing observed', () => {
+    expect(evaluateSpecializedEvidence({ categories: [], observed: [] })).toMatchObject({
+      complete: true,
+      readable: true,
+    })
+  })
+
+  it('is NOT readable when observed was never supplied', () => {
+    const result = evaluateSpecializedEvidence({ categories: [RISK_CATEGORY.MONEY] })
+    expect(result.readable).toBe(false)
+    expect(result.complete).toBe(false)
+    expect(result.missing).toHaveLength(1)
+  })
+
+  it('rejects a bare string rather than iterating it character by character', () => {
+    // `observed: 'money-evidence'` is iterable in JavaScript. Accepting it would
+    // produce fourteen single-character ids, match nothing, and report "observed
+    // but none counted" — the most misleading of the three possible answers.
+    const result = evaluateSpecializedEvidence({
+      categories: [RISK_CATEGORY.MONEY],
+      observed: 'money-evidence',
+    })
+    expect(result.readable).toBe(false)
+  })
+
+  it('ignores a category list handed in as a bare string', () => {
+    expect(requiredSpecializedEvidence('db-migration')).toEqual([])
+  })
+
+  it('accepts a Set, not just an array', () => {
+    const result = evaluateSpecializedEvidence({
+      categories: new Set([RISK_CATEGORY.MONEY]),
+      observed: new Set(['money-evidence']),
+    })
+    expect(result.complete).toBe(true)
+  })
+})
+
+describe('the A-level specialised-evidence hard gate', () => {
+  const A_CONTROL = [RISK_CATEGORY.CONTROL_PLANE]
+
+  it('lets an A-level control-plane PR through on control-plane evidence alone', () => {
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 90 },
+      gates: { ...cleanGates, specialized: allEvidenceFor(A_CONTROL) },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.blockers).toEqual([])
+    expect(result.decision).toBe('READY_FOR_PRODUCT_OWNER')
+  })
+
+  it('blocks an A-level PR that owes evidence it did not produce, however high it scores', () => {
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: {
+        ...cleanGates,
+        specialized: evaluateSpecializedEvidence({ categories: A_CONTROL, observed: [] }),
+      },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.ready).toBe(false)
+    expect(result.blockers.join('\n')).toContain('control-plane-evidence')
+  })
+
+  it('names the missing evidence in words, not just an id', () => {
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: {
+        ...cleanGates,
+        specialized: evaluateSpecializedEvidence({
+          categories: [RISK_CATEGORY.AUTH_ISOLATION],
+          observed: [],
+        }),
+      },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.blockers.join('\n')).toContain('拒绝')
+  })
+
+  it('blocks an A-level PR whose specialised evidence was never evaluated', () => {
+    const { specialized: _dropped, ...withoutSpecialized } = cleanGates
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: withoutSpecialized,
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.ready).toBe(false)
+    expect(result.blockers.join('\n')).toContain('专项证据读不到')
+  })
+
+  it('blocks an A-level PR whose specialised evidence could not be read', () => {
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: {
+        ...cleanGates,
+        specialized: evaluateSpecializedEvidence({ categories: A_CONTROL, observed: null }),
+      },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.ready).toBe(false)
+    expect(result.blockers.join('\n')).toContain('读不到')
+  })
+
+  it('does not demand isolation evidence from a dependency bump', () => {
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 90 },
+      gates: { ...cleanGates, specialized: allEvidenceFor([RISK_CATEGORY.SUPPLY_CHAIN]) },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.blockers).toEqual([])
+  })
+
+  it('does not apply the specialised gate to B or C', () => {
+    for (const risk of ['B', 'C']) {
+      const { specialized: _dropped, ...withoutSpecialized } = cleanGates
+      const result = decideReadiness({
+        risk,
+        score: { total: 100 },
+        gates: withoutSpecialized,
+        observedSignals: ALL_SIGNALS,
+      })
+      expect(result.blockers, `${risk} must not be asked for A-level evidence`).toEqual([])
     }
   })
 })
