@@ -1,5 +1,5 @@
 /**
- * GET  /auth/invite-landing?token_hash=<h>&type=invite|magiclink&client_id=<id>
+ * GET  /auth/invite-landing?token_hash=<h>&type=<GoTrue verification_type>&client_id=<id>
  * POST /auth/invite-landing  (form body: token_hash, type, client_id)
  *
  * Landing endpoint for the "you've been invited" email. The invitee's first
@@ -36,7 +36,10 @@ import { resolveRedirectForSession, INVITE_INVALID_REDIRECT } from '@/lib/auth/r
 
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_TYPES = new Set(['invite', 'magiclink'])
+// The full set of EmailOtpType strings GoTrue can report back as
+// `properties.verification_type` from admin.generateLink — see the
+// verifyOtp comment below for why we now trust that value over a guess.
+const ALLOWED_TYPES = new Set(['invite', 'magiclink', 'signup', 'recovery', 'email_change', 'email'])
 
 // Short-lived, one-time same-site nonce cookie. Prevents a login-CSRF where
 // an attacker's cross-origin form POSTs their own invite token into a
@@ -202,9 +205,21 @@ export async function POST(request: NextRequest) {
     },
   )
 
+  // Pass through the EXACT type Supabase's admin.generateLink reported back
+  // in `properties.verification_type` when the token was minted (see
+  // generate-invite-link.ts) — NOT a value we guess here. Two prior guesses
+  // both failed the same production journey: the raw requested type
+  // ('invite' / 'magiclink' — Ray canary 2026-08-27 03:27:09 NZST) and the
+  // hardcoded unified 'email' used by the sibling /api/auth/verify-otp route
+  // (Ray canary 2026-08-27 04:41:04 NZST) — that sibling route verifies a
+  // DIFFERENT GoTrue contract ({email, token} numeric-OTP) than this one
+  // ({token_hash} link-hash), so its 'email' constant does not transfer.
+  // `type` is still shape-validated against ALLOWED_TYPES above; it is now
+  // also the actual verifyOtp discriminator, sourced end-to-end from GoTrue
+  // itself instead of assumed on either side of the contract.
   const { error } = await supabase.auth.verifyOtp({
     token_hash: tokenHash,
-    type: type as 'invite' | 'magiclink',
+    type: type as 'invite' | 'magiclink' | 'signup' | 'recovery' | 'email_change' | 'email',
   })
 
   if (error) {

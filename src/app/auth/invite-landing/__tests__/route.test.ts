@@ -127,6 +127,61 @@ describe('/auth/invite-landing CSRF gates', () => {
 
   // ── POST CSRF gates ──────────────────────────────────────────────────
 
+  // ── CONTRACT (hotfix 2026-08-27 #2): verifyOtp type must be the EXACT type
+  //    GoTrue reported via generateLink's properties.verification_type ──
+
+  it('CONTRACT: passes the type carried in the URL/form straight through to verifyOtp, unchanged', async () => {
+    // Production canary 2026-08-27 03:27:09 NZST failed with the raw
+    // requested type ('magiclink'); the first hotfix's hardcoded 'email'
+    // guess ALSO failed the next canary at 04:41:04 NZST. Neither literal
+    // is safe to assume here. generate-invite-link.ts now threads through
+    // whatever `properties.verification_type` Supabase itself reported at
+    // mint time (see its CONTRACT tests) — by the time that value reaches
+    // this route via the URL/form `type` field, the only correct behaviour
+    // left on this side is to pass it to verifyOtp unmodified.
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+
+    await POST(postReq({
+      fields: { token_hash: 'H_MAGIC', type: 'email', client_id: CLIENT_B, nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).toHaveBeenCalledWith({
+      token_hash: 'H_MAGIC',
+      type: 'email',
+    })
+
+    mocks.verifyOtp.mockClear()
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+
+    await POST(postReq({
+      fields: { token_hash: 'H_INVITE', type: 'signup', client_id: CLIENT_B, nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).toHaveBeenCalledWith({
+      token_hash: 'H_INVITE',
+      type: 'signup',
+    })
+
+    mocks.verifyOtp.mockClear()
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+
+    await POST(postReq({
+      fields: { token_hash: 'H_LEGACY', type: 'magiclink', client_id: CLIENT_B, nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).toHaveBeenCalledWith({
+      token_hash: 'H_LEGACY',
+      type: 'magiclink',
+    })
+  })
+
+  it('POST shape-rejects a type outside the known GoTrue verification_type set', async () => {
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+    const res = await POST(postReq({
+      fields: { token_hash: 'th', type: 'not_a_real_type', client_id: CLIENT_B, nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).not.toHaveBeenCalled()
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+  })
+
   it('POST accepts a valid same-origin + matching nonce and lands the invitee', async () => {
     cookieState.store.set('me-invite-nonce', 'nonce-abc')
     const res = await POST(postReq({
