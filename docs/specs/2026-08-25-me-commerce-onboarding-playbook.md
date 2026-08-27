@@ -1,10 +1,10 @@
-# Spec：ME Commerce 客户 Onboarding Playbook v0.2.5
+# Spec：ME Commerce 客户 Onboarding Playbook v0.2.6
 
-- **日期**：2026-08-25（v0.1 → v0.2 → v0.2.1 收敛版）· 2026-08-26 v0.2.2（Codex PR #1192 review round 1 修订）· 2026-08-26 v0.2.3（Codex PR #1192 review round 2 修订）· 2026-08-26 v0.2.4（Codex PR #1192 review round 3 修订）· 2026-08-27 v0.2.5（Codex PR #1192 review round 4 修订）
+- **日期**：2026-08-25（v0.1 → v0.2 → v0.2.1 收敛版）· 2026-08-26 v0.2.2（Codex PR #1192 review round 1 修订）· 2026-08-26 v0.2.3（Codex PR #1192 review round 2 修订）· 2026-08-26 v0.2.4（Codex PR #1192 review round 3 修订）· 2026-08-27 v0.2.5（Codex PR #1192 review round 4 修订）· 2026-08-28 v0.2.6（Ray 实操反馈：Shopify 主题排版必须走商业模板/page builder，不得 Claude 手拼 section JSON）
 - **owner**：Claude Code 主导编排；提炼自 Ray 与 Claude Code 就 Jing's Pick 转椅 SKU 的实操会话
 - **首个跑通对象**：Jing's Pick（`71b5ec11-…`，client status: prospect → active 待 PM GO）— 作为 ME Commerce Customer Zero
 - **风险级别**：**B 级**（新平台能力设计，无 schema 破坏性变更，无对外新 endpoint 上线；具体 capability 实施走各自的 A/B/C 风险闸）
-- **审阅状态**：DRAFT v0.2.5 · 已过 4 轮 Codex auto-review + 1 轮 PM 手动授权（超 CLAUDE.md 铁律"最多 2 轮" · PM 2026-08-27 显式授权本轮 4→5）· 待 [#1137](https://github.com/bigbigraydeng-maker/magic-engine/issues/1137) triage → 若 promote 后开正式任务合同并送子牙（架构）+ 魏征（挑刺）2 审
+- **审阅状态**：DRAFT v0.2.6 · v0.1-v0.2.5 已过 4 轮 Codex auto-review + 1 轮 PM 手动授权（超 CLAUDE.md 铁律"最多 2 轮" · PM 2026-08-27 显式授权本轮 4→5）· v0.2.6 为 PM 直接反馈修订，未过 Codex review · 待 [#1137](https://github.com/bigbigraydeng-maker/magic-engine/issues/1137) triage → 若 promote 后开正式任务合同并送子牙（架构）+ 魏征（挑刺）2 审
 - **Implementation Authorized**：**NO**（本文档只是 spec，不动 code / schema / migration / 部署）
 - **v0.2 变更**：修 v0.1 自审出的 W1-W5 五个结构性漏洞。
 - **v0.2.1 变更**（过度开发体检后收敛）：v0.2 的 W2/W3 fix 属"为想象未来需求提前抽象，零 caller"，撤回；W5 的 capability 命名撤回，保留 expiry 检查 SQL；W1/W4 fix 有真实 caller（多价段 + 多 tier SKU 都在当前讨论），保留。详见 §10 变更历史 + [docs/history/over-eng-log.md](../history/over-eng-log.md)。
@@ -42,7 +42,8 @@
 | `src/lib/campaign/daily-plan.ts` + `CampaignDailyPlanPanel.tsx` | ✅ 已合（#1159）| Stage 09（推广渠道 creative 生成）复用其 kind pattern，新增 `commerce_daily_v1`；**v0.2.4 订正**：现有 `buildAdCandidate` 把 `creative_ref` 填成 `bundle.date`（日期字符串），Stage 09 落地时必须改填真实内容 id，见下方 `ad_creative_links` 行 |
 | `src/lib/ads/creative-link.ts` + `ad_creative_links` 表 | ✅ 已合（`supabase/migrations/20260801000001_ad_creative_links.sql`）| Stage 09 creative variant 稳定身份直接复用：`(client_id, platform, ad_id)` 唯一键 → `creative_ref` 指向 ME 自己的片子 id，天然支持同日多 `ad_id` 分别绑定不同 variant；**待办**：调用方（daily-plan / campaign 建广告入口）必须传入真实 `creative_ref`（而非日期），否则同日多变体仍会在归因侧合并 |
 | Meta Ads Library MCP `ads_library_search` | ✅ 已实测通（2026-08-25 会话）| Stage 02 需求信号主入口 |
-| Shopify MCP | ✅ 已连（memory 有能力边界文档）| Stage 08 独立站主渠道 |
+| Shopify MCP | ✅ 已连（memory 有能力边界文档）| Stage 08 独立站主渠道；**已实测能力边界**（2026-08-27/28）：`themeDuplicate`/`themeFilesUpsert`/`fileCreate`/`productSet` 等参数化操作全部可用，`themePublish`/`themeDelete` 被 MCP 安全闸拒绝（需 PM 后台手动点，见 memory `reference-shopify-mcp-capability-boundary`）；`shopPolicyUpdate` 需 `write_legal_policies` scope，此官方 Connector app 无此 scope（改用 Magic Engine Ops 自建 app） |
+| `capability: storefront-theme-adapter`（v0.2.6 新增） | ❌ 待建 | Stage 08 Action 1 定义的两条路径（商业主题 MCP 参数化 / page builder 人工施工清单）之上的统一封装——未来客户 onboard 时先判断走哪条路径，再分派对应的接入流程。当前 Magic Picks 只手工验证了两条路径各自可行，尚无代码把"判断 + 分派"封装成可复用能力 |
 | `master_briefs` 表 | ✅ 已有 | Stage 07 直接复用 |
 | `capability: product-catalog-adapter`（Alibaba/Yiwugo/MIC/HKTDC/Global Sources）| ❌ 待建 | 已在 #1137 INSIGHT-01 立案 |
 | `capability: demand-signal-adapter`（Meta Ads/Trade Me/Shopify Trends）| ❌ 待建 | 已在 #1137 INSIGHT-01 立案 |
@@ -282,6 +283,11 @@
 
 **Actions**：
 1. **独立站**（Shopify 类）：主 SKU entity 建，通过 Shopify MCP（v0.x = Shopify-only；未来客户若用 WooCommerce/Wix 等，届时再引入 storefront-adapter 抽象，别现在写空壳）
+   **主题排版必须走商业模板，不得 Claude 手拼（v0.2.6 新增，Ray 2026-08-28 实操反馈）**：Magic Picks Customer Zero 走查实测——Claude Code 手工写 Horizon `templates/*.json` section 组合（首页 hero + 产品长 landing）排版质量不达商用标准，Ray 原话"设计能力好丑，我们直接采购模板吧，没有时间给你练手了"。**结论收窄为两条允许路径**：
+   - **路径 A（默认推荐）**：一次性购买 Shopify Theme Store 付费主题（如 Motion / Impulse / Prestige，需带"单品长 landing" alternate template 结构）。Claude Code **只通过 Shopify MCP 改参数**——logo/favicon 引用（`fileCreate`）、色号/字体变量（`config/settings_data.json`）、产品 entity（`productSet`）、政策文案——**禁止改动 `templates/*.json` 里的 section 排版/组合/顺序**。此路径是唯一可全 MCP 自动化、且未来客户可复制同一套主题起点的方案，是 `capability: storefront-theme-adapter` 的默认实现
+   - **路径 B（快速上线备选，Magic Picks 当前在用）**：客户店自装 landing page builder（PageFly / GemPages，Shopify App Store 付费订阅）。**此路径 MCP 不可控**——PageFly/GemPages 均无公开 API/MCP（2026-08-28 查 MCP registry 确认零结果），页面排版必须客户/FDE 在其专属编辑器里手动拖拽完成。Claude Code 角色降级为**起草施工清单**（逐段文案 + 色号 + 组件类型对照，供人工照抄，例：`docs/clients/magicpicks/2026-08-28-pagefly-chair-landing-brief.md`），不能自动化落地
+   - **两条路径共同前提**：VI（logo/色板/字体）必须先由专业设计工具产出（如 Claude Design 或客户自带设计师），Claude Code 不承担视觉设计判断，只做参数接入与内容起草
+   - **未来 ME 电商版新客户默认走路径 A**：一次性主题成本可摊销到每个新客户身上，且是唯一支持"同一套主题起点、Claude 只换品牌 token"的可规模化方案；路径 B 每个客户都要人工重新拖拽，不具备平台复用性，只作为客户不接受主题采购成本时的降级方案
 2. **Trade Me**（NZ 独家）：通过 Trade Me API 自动同步（需注册开发者账号）
 3. **Facebook Marketplace**：**无官方 API 是硬约束** → ME 生成"待发布内容包"，下发到今日待办栏必须带齐 CLAUDE.md §3 要求的三件套（缺一条视为断头，不算下发完成）：
    - **what**：问题 + 影响，说人话，例如"《XX 转椅》FBM listing 待发布，不发布=该 SKU 少一个已验证渠道（Jing's Pick 已用 FBM 卖出 30 把），当天流量损失"
@@ -305,8 +311,9 @@
 - 只查 HTTP 200 忽略过期 → 客户点进已过期 Trade Me listing 得 404 → 广告费白花 + 品牌信任崩
 - 三渠道超卖（客户下单当天两个渠道同时售出但只有 1 件库存）
 - 只在首次发布时下发 FBM 人工任务，后续库存变化没有对应任务 → FBM 挂牌数量持续漂移，超卖迟早发生（v0.2.3 遗留缺口，v0.2.4 已标注）
+- **Claude Code 手工拼 Shopify `templates/*.json` section 排版当成"独立站已上线"交付**（v0.2.6 新增，Magic Picks 实测踩过）→ 视觉不达商用标准，客户/PM 拒收，等于该渠道白做一遍还要重做
 
-**ME 能力**：`capability: marketplace-adapter`（Trade Me 自动 + FBM 内容包生成，输出契约必须包含 `what`/`how`/`href` 三件套，缺一不算下发完成；v0.2.4 起该契约覆盖首次发布**和**后续每次库存调整两类任务，不只首次）· 库存同步 cron（v0.2.4 起明确：检测到 FBM 差异必须落一条人工任务，不能只落日志/告警）。
+**ME 能力**：`capability: marketplace-adapter`（Trade Me 自动 + FBM 内容包生成，输出契约必须包含 `what`/`how`/`href` 三件套，缺一不算下发完成；v0.2.4 起该契约覆盖首次发布**和**后续每次库存调整两类任务，不只首次）· 库存同步 cron（v0.2.4 起明确：检测到 FBM 差异必须落一条人工任务，不能只落日志/告警）· `capability: storefront-theme-adapter`（v0.2.6 新增，见 §2，独立站主题接入路径判断与分派）。
 Expiry 探测与续期任务下发的具体实现（cron 频率、任务派发路径、`ListingHealth` 表 schema）等 Stage 08 真实施到"第一个 Trade Me listing 上线"时再落细，避免为想象场景写死设计。
 
 ### Stage 09 · 推广渠道矩阵（Ad Channels）
@@ -679,6 +686,12 @@ Stop hook 触发过度开发红灯后（净新增 1549 行 > 1500 阈值），�
 | **I4**（P1）· `OutcomeRecord` 缺 line-item 粒度 | 一笔订单多 SKU 时原契约必然错归因（只能记 1 个 `sku_id` / `net_profit`）。契约改造：新增 `order_line_id`（订单行级主键）+ `qty`；`gross_revenue`/`net_profit_actual` 改为 `line_` 前缀；反哺聚合口径写在 type 注释里（SKU 级 sum group by sku_id、Creative 级 join order_id → group by creative_ref、单件订单退化 qty=1 + `${order_id}#1` 兼容单 SKU 订单）。Stage 10 完成判据 SQL 与 §3 完成判据文字同步用新字段名 |
 | **I5**（P2）· 供应商 gate SQL 缺字段校验 | v0.2.4 已在 §5.1 的 join 条件里加了 `verification_level IN ('gold','verified','audited')` + `moq is not null` + `price_range->>'min'/'max' is not null` + `dropship_supported is not null` 的完整必填字段过滤，且 v0.2.3 已在 §5.1 前置说明段落解释了该改动。Round 4 Codex 对同一位置重复提出，判定为已解决 finding 的重复报，v0.2.5 保留 v0.2.4 现有实现不动，并在本表明确记录以避免下轮再被误报 |
 
+### v0.2.5 → v0.2.6 变更（Ray 2026-08-28 实操反馈，非 Codex review）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| **J1**（PM 直接反馈）· Stage 08 独立站主题排版无质量约束 | Magic Picks Customer Zero 实测：Claude Code 手工写 Shopify `templates/*.json` section 组合（首页 + 产品长 landing）视觉不达商用标准，Ray 明确反馈拒收并要求改走商业模板/page builder。Stage 08 Action 1 新增两条路径：**路径 A**（默认，一次性购买 Theme Store 付费主题 + Claude 只 MCP 参数化，禁止碰 section 排版）· **路径 B**（PageFly/GemPages 人工拖拽，MCP 不可控，Claude 只出施工清单）。§2 新增 `capability: storefront-theme-adapter`（❌ 待建）。新增失败模式："手工拼 section JSON 当独立站已上线交付"。查证：2026-08-28 MCP registry 搜索 "pagefly"/"gempages"/"shopify landing page builder" 均零结果，确认第三方 page builder 无公开 MCP，非本环境限制 |
+
 ### v0.3 待处理（W6-W9）· 首个 WP 开完再看
 
 - **W6**：`demand-signal-adapter` 内含 5 source —— capability 拆分粒度是"每 source 独立" vs "1 adapter + strategy pattern"？影响 WP 拆分节奏。
@@ -694,17 +707,19 @@ Stop hook 触发过度开发红灯后（净新增 1549 行 > 1500 阈值），�
 - **v0.2.2**：**修完 Codex round 1 的 4 个可执行 finding**（币种契约、client_status 字段、Shopify 订单接入待建标注、Outcome Loop 两级判据）
 - **v0.2.3**：**修完 Codex round 2 的 4 个可执行 finding**（准入预算 profile 化、表结构待建声明、FBM 人工任务三件套、供应商 gate SQL 字段完整性）
 - **v0.2.4**：**修完 Codex round 3 的 5 个可执行 finding**（score.ts/landed-cost.ts 订正为 NZ profile 专用实现 + 待建 market-adapter、供应商验证枚举统一、creative variant 稳定身份、FBM 库存持续人工闭环、FBM 订单录入 capability）
+- **v0.2.5**：**修完 Codex round 4 的 5 个 finding**（其中 4 个可执行，1 个为重复报，见上表 I1-I5）
+- **v0.2.6**：**PM 实操反馈修订**（非 Codex review）——Stage 08 独立站主题排版收窄为两条路径（商业主题 MCP 参数化 / page builder 人工施工清单），新增 `capability: storefront-theme-adapter`
 - **v0.3**：完善所有 W1-W9，成为稳定 baseline，进 `docs/history/CHANGELOG.md`
 
 ---
 
-## 11. Reuse Statement（最终 · v0.2.4）
+## 11. Reuse Statement（最终 · v0.2.6）
 
-- **复用**：`scan.ts` / `score.ts` / `landed-cost.ts`（**v0.2.4 订正**：NZ market profile 专用实现，非市场无关）/ `daily-plan.ts` / `ad_creative_links` + `src/lib/ads/creative-link.ts`（v0.2.4 新增识别为可复用）/ `master_briefs` / `clients` / Meta Ads MCP / Shopify MCP
-- **platform-shared 新增**（v0.2.4 收敛后）：
-  - 10 段 flow 结构 · 每段硬完成判据（Stage 03/08 部分依赖首次实施时的 API shape 落细；Stage 09 补 creative variant 稳定身份；Stage 10 拆 Level A/B 两级）
-  - **10 个 capability 契约**（v0.1 的 6 个 + v0.2 保留 1 个 + v0.2.2 新增 1 个 + v0.2.4 新增 2 个 · v0.2.1 撤回 3 个）：
-    - Existing/待建: `supply-mode-tagger` · `demand-signal-adapter` · `product-catalog-adapter` · `fulfillment-model-configurator` · `positioning-differentiator` · `marketplace-adapter` · `multi-channel-order-aggregator` · `shopify-order-ingestion`（v0.2.2 新增，❌ 待建，见 §2）· `commerce-market-adapter`（v0.2.4 新增，❌ 待建，AU/SG/MY 接入 `score.ts` 前置依赖，见 §2）· `fbm-order-entry`（v0.2.4 新增，❌ 待建，见 §2）
+- **复用**：`scan.ts` / `score.ts` / `landed-cost.ts`（**v0.2.4 订正**：NZ market profile 专用实现，非市场无关）/ `daily-plan.ts` / `ad_creative_links` + `src/lib/ads/creative-link.ts`（v0.2.4 新增识别为可复用）/ `master_briefs` / `clients` / Meta Ads MCP / Shopify MCP（**v0.2.6 补充**：`themeDuplicate`/`themeFilesUpsert`/`fileCreate`/`productSet` 等参数化操作已实测可用，`templates/*.json` section 排版**禁止**由 Claude Code 手工产出）
+- **platform-shared 新增**（v0.2.6 收敛后）：
+  - 10 段 flow 结构 · 每段硬完成判据（Stage 03/08 部分依赖首次实施时的 API shape 落细；Stage 08 新增独立站主题两条接入路径；Stage 09 补 creative variant 稳定身份；Stage 10 拆 Level A/B 两级）
+  - **11 个 capability 契约**（v0.1 的 6 个 + v0.2 保留 1 个 + v0.2.2 新增 1 个 + v0.2.4 新增 2 个 + v0.2.6 新增 1 个 · v0.2.1 撤回 3 个）：
+    - Existing/待建: `supply-mode-tagger` · `demand-signal-adapter` · `product-catalog-adapter` · `fulfillment-model-configurator` · `positioning-differentiator` · `marketplace-adapter` · `multi-channel-order-aggregator` · `shopify-order-ingestion`（v0.2.2 新增，❌ 待建，见 §2）· `commerce-market-adapter`（v0.2.4 新增，❌ 待建，AU/SG/MY 接入 `score.ts` 前置依赖，见 §2）· `fbm-order-entry`（v0.2.4 新增，❌ 待建，见 §2）· `storefront-theme-adapter`（v0.2.6 新增，❌ 待建，见 §2，独立站主题接入路径判断与分派）
     - v0.2.1 撤回（零 caller，等触发条件出现再引入）：~~`storefront-adapter`~~ · ~~`listing-health-monitor`~~ · ~~`score-feedback-orchestrator`~~
   - **6 个 enum**（v0.1 的 4 + v0.2.1 保留 2）：`SupplyMode` · `FulfillmentOption` · `SignalSource` · `SupplierVerification`（v0.2.4 起判据/SQL 统一用正向名单 `gold`/`verified`/`audited`，不再引用不存在的 `unknown` 值）· `SkuCommodityTier`(W4) · `ChannelKind`
     - v0.2.1 撤回：~~`StorefrontKind`~~(W2) · ~~`ListingStatus`~~(W5) · ~~`OutcomeGateLevel`~~(W3)
@@ -715,6 +730,6 @@ Stop hook 触发过度开发红灯后（净新增 1549 行 > 1500 阈值），�
   - `commerce-market-au` / `-sg` / `-my`：各自定义 `currency`/`tax_rate`/`baseline`/`min_margin_pct`/`min_monthly_ad_budget`，复用同一 `UnitEconomics`/`OutcomeRecord` 类型与 Stage 00 准入逻辑；**但要真正跑 `score.ts` 打分，需先补 `commerce-market-adapter`**（v0.2.4 新增待建 capability），profile 数值本身不能让 NZ-only 代码变成市场无关
   - `commerce-source-cn`（中国供应源）· `commerce-source-premium`（精品源）
 - **client-specific**：Jing's Pick 供应商合作记录、私价、SKU 库存 —— 落 `client_configuration` 与 `client_private_memory`
-- **红线**：无客户名 / 客户 ID / 华人叙事 / NZ 独有判断进 shared runtime；未来 ME Commerce AU / SG / MY 复用同 flow，但接入现有 `score.ts` 打分链路除换 profile 外还需 `commerce-market-adapter` 落地（v0.2.4 订正，不是"只换 profile 代码不动"）
+- **红线**：无客户名 / 客户 ID / 华人叙事 / NZ 独有判断进 shared runtime；未来 ME Commerce AU / SG / MY 复用同 flow，但接入现有 `score.ts` 打分链路除换 profile 外还需 `commerce-market-adapter` 落地（v0.2.4 订正，不是"只换 profile 代码不动"）；独立站主题排版**不由 Claude Code 承担设计判断**，只承担参数接入（路径 A）或施工清单起草（路径 B），VI 本身由专业设计工具产出（v0.2.6 新增）
 
-—— END v0.2.4 —— 
+—— END v0.2.6 —— 
