@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=Caveat:wght@600&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; background: #FBF6EF; }
+    a { color: #1F3B4D; text-decoration: underline; }
+    a:hover { color: #C15B3A; }
+    ::selection { background: #C15B3A; color: #FBF6EF; }
+  </style>
+</helmet>
+
+<div style="font-family: 'Noto Sans', sans-serif; color: #241F1B; background: #FBF6EF; line-height: 1.5;">
+
+  <!-- NAV -->
+  <div style="position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; padding: 16px 48px; background: rgba(251,246,239,0.92); backdrop-filter: blur(6px); border-bottom: 1px solid #E7DDD0;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <svg width="28" height="28" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#1F3B4D" stroke-width="6"/><circle cx="54" cy="18" r="12" fill="#C15B3A"/></svg>
+      <span style="font-family: 'Noto Serif', serif; font-weight: 600; font-size: 18px; letter-spacing: 0.2px;">Magic Picks</span>
+      <span style="font-size: 12px; color: #6E6459; margin-left: 6px;">Brand Guidelines</span>
+    </div>
+    <div style="display: flex; gap: 24px; font-size: 13px; color: #6E6459;">
+      <span>01 Foundation</span><span>02 Logo</span><span>03 Colour</span><span>04 Type</span><span>05 Voice</span><span>06 Applications</span><span>07 Tokens</span>
+    </div>
+  </div>
+
+  <!-- HERO -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 96px 48px 72px; text-align: center;">
+    <div style="display: inline-flex; align-items: center; gap: 14px; margin-bottom: 28px;">
+      <svg width="56" height="56" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#1F3B4D" stroke-width="6"/><circle cx="54" cy="18" r="12" fill="#C15B3A"/></svg>
+    </div>
+    <h1 style="font-family: 'Noto Serif', serif; font-weight: 600; font-size: 64px; margin: 0 0 20px; letter-spacing: -0.5px; text-wrap: pretty;">Magic Picks</h1>
+    <p style="font-size: 22px; color: #6E6459; max-width: 640px; margin: 0 auto 8px; text-wrap: pretty;">The friend who moved into a nice apartment — and already found the good stuff.</p>
+    <p style="font-size: 14px; color: #948A7D; margin-top: 24px;">Auckland, NZ · Direct-to-consumer home goods · Curated by Jing</p>
+  </div>
+
+  <!-- 01 FOUNDATION -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 48px 48px 96px; border-top: 1px solid #E7DDD0;">
+    <div style="font-size: 13px; letter-spacing: 1.5px; color: #C15B3A; font-weight: 600; margin-bottom: 12px;">01 — BRAND FOUNDATION</div>
+    <div style="display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 64px;">
+      <div>
+        <h2 style="font-family: 'Noto Serif', serif; font-size: 30px; font-weight: 600; margin: 0 0 16px;">Positioning</h2>
+        <p style="font-size: 16px; color: #4A4239; margin: 0 0 16px; text-wrap: pretty;">Magic Picks stocks and ships from a Mt Wellington warehouse — no 30-day dropship wait. Founder Jing personally tests every product before it goes up for sale. Practical quality at fair prices: not luxury, not clearance, not "as seen on TV."</p>
+        <p style="font-size: 16px; color: #4A4239; margin: 0; text-wrap: pretty;">95% of traffic arrives from paid social video. The site is a landing page that catches ad clicks, not a catalogue to browse — one SKU gets the spotlight. Every decision here is built to survive a 3-second scroll on a phone.</p>
+      </div>
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 14px; padding: 28px;">
+        <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin-bottom: 14px;">DIFFERENTIATORS</div>
+        <div style="display: flex; flex-direction: column; gap: 12px; font-size: 14.5px; color: #4A4239;">
+          <div>→ Auckland local stock, ships within 24 hours</div>
+          <div>→ Curated by Jing, tested before it's stocked</div>
+          <div>→ 14-day returns, 12-month warranty</div>
+          <div>→ A real Auckland person answers the email</div>
+        </div>
+        <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin: 22px 0 14px;">NOT BUILT FOR</div>
+        <div style="font-size: 14.5px; color: #948A7D;">Gamers, teens, luxury shoppers, "aesthetic Instagram" browsing.</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 48px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+      <div style="border: 1px solid #E7DDD0; border-radius: 14px; padding: 24px; background: #FFFFFF;">
+        <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin-bottom: 10px;">DISTINCT FROM MAGIC ENGINE (PARENT B2B BRAND)</div>
+        <p style="font-size: 14.5px; color: #4A4239; margin: 0; text-wrap: pretty;">No Golden Ochre, no Space Grotesk, no chip logomark. A customer should never sense this is the same company as our B2B agency.</p>
+      </div>
+      <div style="border: 1px solid #E7DDD0; border-radius: 14px; padding: 24px; background: #FFFFFF;">
+        <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin-bottom: 10px;">DISTINCT FROM NZ COMPETITORS</div>
+        <p style="font-size: 14.5px; color: #4A4239; margin: 0; text-wrap: pretty;">Not Sihoo's red/black gaming edge. Not Ecosa's sage-and-cream wellness minimalism. Not The Warehouse or Kmart's mass-market red. Warm, curated, honest — a little bit personal.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 02 LOGO -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 48px 48px 96px; border-top: 1px solid #E7DDD0;">
+    <div style="font-size: 13px; letter-spacing: 1.5px; color: #C15B3A; font-weight: 600; margin-bottom: 12px;">02 — LOGO SYSTEM</div>
+    <h2 style="font-family: 'Noto Serif', serif; font-size: 30px; font-weight: 600; margin: 0 0 8px;">Primary lockup</h2>
+    <p style="font-size: 15px; color: #6E6459; margin: 0 0 28px; max-width: 640px;">The mark: one circle stepping outside a rounded frame — the pick that stood out from the set. No initials, no chair, no map, no bag.</p>
+
+    <div style="display: flex; align-items: center; justify-content: center; background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 16px; padding: 56px;">
+      <svg width="360" height="96" viewBox="0 0 480 128"><rect x="20" y="20" width="88" height="88" rx="20" fill="none" stroke="#1F3B4D" stroke-width="8"/><circle cx="98" cy="34" r="20" fill="#C15B3A"/><text x="132" y="80" font-family="Noto Serif, Georgia, serif" font-size="46" font-weight="500" fill="#1F3B4D">Magic Picks</text></svg>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 24px;">
+      <div style="background: #1F3B4D; border-radius: 16px; padding: 40px; display: flex; align-items: center; justify-content: center;">
+        <svg width="220" height="59" viewBox="0 0 480 128"><rect x="20" y="20" width="88" height="88" rx="20" fill="none" stroke="#FBF6EF" stroke-width="8"/><circle cx="98" cy="34" r="20" fill="#DE8B68"/><text x="132" y="80" font-family="Noto Serif, Georgia, serif" font-size="46" font-weight="500" fill="#FBF6EF">Magic Picks</text></svg>
+      </div>
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 16px; padding: 40px; display: flex; align-items: center; justify-content: center;">
+        <svg width="90" height="90" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#1F3B4D" stroke-width="6"/><circle cx="54" cy="18" r="12" fill="#C15B3A"/></svg>
+      </div>
+      <div style="background: #1F3B4D; border-radius: 16px; padding: 40px; display: flex; align-items: center; justify-content: center;">
+        <svg width="90" height="90" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#FBF6EF" stroke-width="6"/><circle cx="54" cy="18" r="12" fill="#DE8B68"/></svg>
+      </div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 10px; font-size: 12px; color: #948A7D; text-align: center;">
+      <div>Reverse lockup — dark / video overlay</div>
+      <div>Logomark</div>
+      <div>Logomark reverse</div>
+    </div>
+
+    <h2 style="font-family: 'Noto Serif', serif; font-size: 24px; font-weight: 600; margin: 48px 0 8px;">Favicon &amp; small-scale test</h2>
+    <p style="font-size: 15px; color: #6E6459; margin: 0 0 20px; max-width: 640px;">Simplified stroke weight for 32×32 render. Tested here at true size on white, grey, and inside a mock scrolling feed thumbnail.</p>
+    <div style="display: flex; align-items: center; gap: 32px; background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 16px; padding: 32px;">
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="width: 32px; height: 32px; background: #FFFFFF; display: flex; align-items: center; justify-content: center; border: 1px solid #E7DDD0;">
+          <svg width="32" height="32" viewBox="0 0 32 32"><rect x="4" y="4" width="22" height="22" rx="6" fill="none" stroke="#1F3B4D" stroke-width="3.5"/><circle cx="26" cy="8" r="6.5" fill="#C15B3A"/></svg>
+        </div>
+        <div style="font-size: 11px; color: #948A7D;">on white</div>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+        <div style="width: 32px; height: 32px; background: #C9C2B6; display: flex; align-items: center; justify-content: center;">
+          <svg width="32" height="32" viewBox="0 0 32 32"><rect x="4" y="4" width="22" height="22" rx="6" fill="none" stroke="#1F3B4D" stroke-width="3.5"/><circle cx="26" cy="8" r="6.5" fill="#C15B3A"/></svg>
+        </div>
+        <div style="font-size: 11px; color: #948A7D;">on grey</div>
+      </div>
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 10px; padding-left: 12px; border-left: 1px solid #E7DDD0;">
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 13px;">
+          <svg width="20" height="20" viewBox="0 0 32 32"><rect x="4" y="4" width="22" height="22" rx="6" fill="none" stroke="#1F3B4D" stroke-width="3.5"/><circle cx="26" cy="8" r="6.5" fill="#C15B3A"/></svg>
+          <span style="font-weight: 600;">Magic Picks</span><span style="color: #948A7D;">· Sponsored</span>
+        </div>
+        <div style="height: 8px; width: 70%; background: #E7DDD0; border-radius: 4px;"></div>
+        <div style="height: 8px; width: 45%; background: #E7DDD0; border-radius: 4px;"></div>
+      </div>
+    </div>
+    <p style="font-size: 12px; color: #948A7D; margin-top: 16px;">Files: brand-assets/logo-horizontal.svg · logo-horizontal-reverse.svg · logomark.svg · logomark-reverse.svg · favicon.svg</p>
+  </div>
+
+  <!-- 03 COLOUR -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 48px 48px 96px; border-top: 1px solid #E7DDD0;">
+    <div style="font-size: 13px; letter-spacing: 1.5px; color: #C15B3A; font-weight: 600; margin-bottom: 12px;">03 — COLOUR</div>
+    <h2 style="font-family: 'Noto Serif', serif; font-size: 30px; font-weight: 600; margin: 0 0 24px;">Palette</h2>
+
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px;">
+      <div>
+        <div style="height: 120px; border-radius: 14px 14px 0 0; background: #1F3B4D;"></div>
+        <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-top: none; border-radius: 0 0 14px 14px; padding: 16px;">
+          <div style="font-weight: 600; font-size: 14px;">Harbour Ink — Primary</div>
+          <div style="font-family: monospace; font-size: 12px; color: #6E6459; margin: 4px 0 8px;">#1F3B4D</div>
+          <div style="font-size: 12.5px; color: #948A7D;">A deep, warm-leaning navy. Confident and calm, nods to Auckland's harbour without a literal map. Deliberately not ochre, red, or sage.</div>
+        </div>
+      </div>
+      <div>
+        <div style="height: 120px; border-radius: 14px 14px 0 0; background: #C15B3A;"></div>
+        <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-top: none; border-radius: 0 0 14px 14px; padding: 16px;">
+          <div style="font-weight: 600; font-size: 14px;">Warm Clay — Secondary</div>
+          <div style="font-family: monospace; font-size: 12px; color: #6E6459; margin: 4px 0 8px;">#C15B3A</div>
+          <div style="font-size: 12.5px; color: #948A7D;">Terracotta warmth for CTAs and the "pick" mark itself — human, not corporate; close to a well-loved ceramic glaze.</div>
+        </div>
+      </div>
+      <div>
+        <div style="height: 120px; border-radius: 14px 14px 0 0; background: #8C5B6B;"></div>
+        <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-top: none; border-radius: 0 0 14px 14px; padding: 16px;">
+          <div style="font-weight: 600; font-size: 14px;">Twilight Mauve — Accent</div>
+          <div style="font-family: monospace; font-size: 12px; color: #6E6459; margin: 4px 0 8px;">#8C5B6B</div>
+          <div style="font-size: 12.5px; color: #948A7D;">Evening-lamp plum for small highlights and tags — the "set up perfectly" detail, used sparingly.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin: 32px 0 12px;">NEUTRAL SCALE</div>
+    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;">
+      <div>
+        <div style="height: 72px; border-radius: 10px; background: #FBF6EF; border: 1px solid #E7DDD0;"></div>
+        <div style="font-size: 12px; margin-top: 6px;">Background</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#FBF6EF</div>
+      </div>
+      <div>
+        <div style="height: 72px; border-radius: 10px; background: #FFFFFF; border: 1px solid #E7DDD0;"></div>
+        <div style="font-size: 12px; margin-top: 6px;">Surface</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#FFFFFF</div>
+      </div>
+      <div>
+        <div style="height: 72px; border-radius: 10px; background: #E7DDD0;"></div>
+        <div style="font-size: 12px; margin-top: 6px;">Border</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#E7DDD0</div>
+      </div>
+      <div>
+        <div style="height: 72px; border-radius: 10px; background: #241F1B;"></div>
+        <div style="font-size: 12px; margin-top: 6px;">Text primary</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#241F1B</div>
+      </div>
+      <div>
+        <div style="height: 72px; border-radius: 10px; background: #6E6459;"></div>
+        <div style="font-size: 12px; margin-top: 6px;">Text secondary</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#6E6459</div>
+      </div>
+    </div>
+
+    <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin: 32px 0 12px;">SEMANTIC</div>
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px; background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 10px; padding: 12px;">
+        <div style="width: 28px; height: 28px; border-radius: 8px; background: #B8542E; flex-shrink: 0;"></div>
+        <div><div style="font-size: 13px;">Sale</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#B8542E</div></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 10px; padding: 12px;">
+        <div style="width: 28px; height: 28px; border-radius: 8px; background: #3F7A52; flex-shrink: 0;"></div>
+        <div><div style="font-size: 13px;">Success</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#3F7A52</div></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 10px; padding: 12px;">
+        <div style="width: 28px; height: 28px; border-radius: 8px; background: #C08A3D; flex-shrink: 0;"></div>
+        <div><div style="font-size: 13px;">Warning</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#C08A3D</div></div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 10px; padding: 12px;">
+        <div style="width: 28px; height: 28px; border-radius: 8px; background: #9C3B32; flex-shrink: 0;"></div>
+        <div><div style="font-size: 13px;">Error</div><div style="font-family: monospace; font-size: 11px; color: #948A7D;">#9C3B32</div></div>
+      </div>
+    </div>
+
+    <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin: 32px 0 12px;">NEXT TO PRODUCT PHOTOGRAPHY</div>
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
+      <div style="position: relative; height: 160px; border-radius: 12px; background: repeating-linear-gradient(135deg, #2A2A2A, #2A2A2A 10px, #363636 10px, #363636 20px); display: flex; align-items: center; justify-content: center; color: #B8B8B8; font-family: monospace; font-size: 11px; text-align: center; padding: 12px;">
+        PRODUCT PHOTO<br/>black office chair
+        <div style="position: absolute; bottom: 10px; right: 10px; background: #C15B3A; color: #FBF6EF; font-size: 11px; padding: 3px 10px; border-radius: 20px;">NZ$119</div>
+      </div>
+      <div style="height: 160px; border-radius: 12px; background: repeating-linear-gradient(135deg, #C9A776, #C9A776 10px, #B8925C 10px, #B8925C 20px); display: flex; align-items: center; justify-content: center; color: #4A3A24; font-family: monospace; font-size: 11px; text-align: center; padding: 12px;">
+        PRODUCT PHOTO<br/>wooden furniture
+      </div>
+      <div style="height: 160px; border-radius: 12px; background: repeating-linear-gradient(135deg, #F2EFE9, #F2EFE9 10px, #E6E1D6 10px, #E6E1D6 20px); display: flex; align-items: center; justify-content: center; color: #9C9484; font-family: monospace; font-size: 11px; text-align: center; padding: 12px; border: 1px solid #E7DDD0;">
+        PRODUCT PHOTO<br/>white ceramics
+      </div>
+    </div>
+  </div>
+
+  <!-- 04 TYPE -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 48px 48px 96px; border-top: 1px solid #E7DDD0;">
+    <div style="font-size: 13px; letter-spacing: 1.5px; color: #C15B3A; font-weight: 600; margin-bottom: 12px;">04 — TYPOGRAPHY</div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px;">
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 14px; padding: 32px;">
+        <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin-bottom: 16px;">DISPLAY — Noto Serif</div>
+        <div style="font-family: 'Noto Serif', serif; font-weight: 600; font-size: 44px; margin-bottom: 8px;">Aa Bb Picked</div>
+        <div style="font-family: 'Noto Serif', serif; font-weight: 500; font-size: 20px; color: #4A4239;">为你精选 — curated for you</div>
+      </div>
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 14px; padding: 32px;">
+        <div style="font-size: 12px; letter-spacing: 1px; color: #948A7D; font-weight: 600; margin-bottom: 16px;">BODY — Noto Sans</div>
+        <div style="font-family: 'Noto Sans', sans-serif; font-size: 16px; color: #4A4239; margin-bottom: 10px;">Ships within 24 hours from our Mt Wellington warehouse. 14-day returns, 12-month warranty.</div>
+        <div style="font-family: 'Noto Sans', sans-serif; font-size: 15px; color: #4A4239;">从Mt Wellington仓库24小时内发货，支持14天退货、12个月质保。</div>
+      </div>
+    </div>
+    <p style="font-size: 14px; color: #6E6459; max-width: 760px; margin: 24px 0 32px; text-wrap: pretty;">Noto Serif for headlines, Noto Sans for body — one family for each job, both with full Latin and CJK coverage for future bilingual pages. Minimum body weight is 400; nothing thinner ever ships, since buyers skew 30–65 and read on mid-range phones outdoors.</p>
+
+    <div style="display: flex; flex-direction: column; gap: 16px; border-top: 1px solid #E7DDD0; padding-top: 24px;">
+      <div style="display: flex; align-items: baseline; gap: 24px;"><span style="width: 90px; font-size: 12px; color: #948A7D; font-family: monospace;">64 / 600</span><span style="font-family: 'Noto Serif', serif; font-weight: 600; font-size: 64px;">Headline</span></div>
+      <div style="display: flex; align-items: baseline; gap: 24px;"><span style="width: 90px; font-size: 12px; color: #948A7D; font-family: monospace;">32 / 600</span><span style="font-family: 'Noto Serif', serif; font-weight: 600; font-size: 32px;">Section title</span></div>
+      <div style="display: flex; align-items: baseline; gap: 24px;"><span style="width: 90px; font-size: 12px; color: #948A7D; font-family: monospace;">18 / 500</span><span style="font-family: 'Noto Sans', sans-serif; font-weight: 500; font-size: 18px;">Subhead / price</span></div>
+      <div style="display: flex; align-items: baseline; gap: 24px;"><span style="width: 90px; font-size: 12px; color: #948A7D; font-family: monospace;">16 / 400</span><span style="font-family: 'Noto Sans', sans-serif; font-size: 16px;">Body copy</span></div>
+      <div style="display: flex; align-items: baseline; gap: 24px;"><span style="width: 90px; font-size: 12px; color: #948A7D; font-family: monospace;">13 / 400</span><span style="font-family: 'Noto Sans', sans-serif; font-size: 13px; color: #6E6459;">Caption / legal</span></div>
+    </div>
+  </div>
+
+  <!-- 05 VOICE -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 48px 48px 96px; border-top: 1px solid #E7DDD0;">
+    <div style="font-size: 13px; letter-spacing: 1.5px; color: #C15B3A; font-weight: 600; margin-bottom: 12px;">05 — VOICE &amp; TONE</div>
+    <h2 style="font-family: 'Noto Serif', serif; font-size: 30px; font-weight: 600; margin: 0 0 8px;">Direct. Honest. Quietly confident.</h2>
+    <p style="font-size: 15px; color: #6E6459; max-width: 700px; margin: 0 0 32px; text-wrap: pretty;">We speak like the friend who already did the research, not the store trying to close a sale. No "shop now," no exclamation marks doing the selling for us.</p>
+    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 14px; padding: 24px; font-family: 'Noto Serif', serif; font-size: 19px; border-left: none;">"We tried it before we sold it."</div>
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 14px; padding: 24px; font-family: 'Noto Serif', serif; font-size: 19px;">"In stock in Auckland. Not stuck on a container ship."</div>
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 14px; padding: 24px; font-family: 'Noto Serif', serif; font-size: 19px;">"Good enough that we'd put it in our own lounge."</div>
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 14px; padding: 24px; font-family: 'Noto Serif', serif; font-size: 19px;">"If it's not right, send it back. No drama."</div>
+      <div style="background: #1F3B4D; border-radius: 14px; padding: 24px; font-family: 'Noto Serif', serif; font-size: 19px; color: #FBF6EF; grid-column: span 2;">"One good chair. Chosen properly."</div>
+      <div style="background: #FFFFFF; border: 1px solid #E7DDD0; border-radius: 14px; padding: 24px; font-family: 'Noto Serif', serif; font-size: 19px; grid-column: span 2;">东西我们自己先用过，才敢卖给你。<span style="font-family: 'Noto Sans', sans-serif; font-size: 13px; color: #948A7D; display: block; margin-top: 6px;">— Chinese-language variant</span></div>
+    </div>
+  </div>
+
+  <!-- 06 APPLICATIONS -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 48px 48px 96px; border-top: 1px solid #E7DDD0;">
+    <div style="font-size: 13px; letter-spacing: 1.5px; color: #C15B3A; font-weight: 600; margin-bottom: 12px;">06 — APPLICATIONS</div>
+    <h2 style="font-family: 'Noto Serif', serif; font-size: 30px; font-weight: 600; margin: 0 0 32px;">In the wild</h2>
+
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; align-items: start;">
+      <!-- 1:1 ad -->
+      <div>
+        <div style="width: 100%; aspect-ratio: 1; border-radius: 12px; background: repeating-linear-gradient(135deg, #2A2A2A, #2A2A2A 10px, #363636 10px, #363636 20px); position: relative; overflow: hidden;">
+          <div style="position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#FBF6EF" stroke-width="7"/><circle cx="54" cy="18" r="12" fill="#DE8B68"/></svg><span style="color: #FBF6EF; font-size: 11px; font-weight: 600;">Magic Picks</span></div>
+          <div style="position: absolute; bottom: 12px; left: 12px; right: 12px;"><div style="color: #FBF6EF; font-family: 'Noto Serif', serif; font-size: 15px; margin-bottom: 6px;">Chosen properly.</div><div style="background: #C15B3A; color: #FBF6EF; font-size: 11px; display: inline-block; padding: 3px 10px; border-radius: 20px;">NZ$119</div></div>
+        </div>
+        <div style="font-size: 11px; color: #948A7D; margin-top: 8px; text-align: center;">FB/IG ad — 1:1</div>
+      </div>
+      <!-- 4:5 ad -->
+      <div>
+        <div style="width: 100%; aspect-ratio: 4/5; border-radius: 12px; background: repeating-linear-gradient(135deg, #2A2A2A, #2A2A2A 10px, #363636 10px, #363636 20px); position: relative; overflow: hidden;">
+          <div style="position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#FBF6EF" stroke-width="7"/><circle cx="54" cy="18" r="12" fill="#DE8B68"/></svg><span style="color: #FBF6EF; font-size: 11px; font-weight: 600;">Magic Picks</span></div>
+          <div style="position: absolute; bottom: 12px; left: 12px; right: 12px;"><div style="color: #FBF6EF; font-family: 'Noto Serif', serif; font-size: 15px; margin-bottom: 6px;">Tested before it shipped.</div><div style="background: #C15B3A; color: #FBF6EF; font-size: 11px; display: inline-block; padding: 3px 10px; border-radius: 20px;">NZ$119</div></div>
+        </div>
+        <div style="font-size: 11px; color: #948A7D; margin-top: 8px; text-align: center;">FB/IG ad — 4:5</div>
+      </div>
+      <!-- mobile hero -->
+      <div>
+        <div style="width: 100%; aspect-ratio: 375/812; border-radius: 18px; border: 1px solid #E7DDD0; background: #FFFFFF; overflow: hidden; display: flex; flex-direction: column;">
+          <div style="padding: 10px 12px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #E7DDD0;"><svg width="14" height="14" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#1F3B4D" stroke-width="7"/><circle cx="54" cy="18" r="12" fill="#C15B3A"/></svg><span style="font-size: 9px; font-weight: 600;">Magic Picks</span></div>
+          <div style="flex: 1; background: repeating-linear-gradient(135deg, #2A2A2A, #2A2A2A 8px, #363636 8px, #363636 16px);"></div>
+          <div style="padding: 10px 12px;">
+            <div style="font-family: 'Noto Serif', serif; font-size: 11px; margin-bottom: 4px;">Ergonomic Office Chair</div>
+            <div style="font-size: 10px; color: #C15B3A; font-weight: 600; margin-bottom: 6px;">NZ$119</div>
+            <div style="background: #1F3B4D; color: #FBF6EF; font-size: 9px; text-align: center; padding: 7px; border-radius: 6px; margin-bottom: 4px;">Add to cart</div>
+            <div style="font-size: 7px; color: #948A7D;">24h Auckland dispatch · 14-day returns</div>
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #948A7D; margin-top: 8px; text-align: center;">Product hero — mobile</div>
+      </div>
+      <!-- email header -->
+      <div>
+        <div style="width: 100%; border: 1px solid #E7DDD0; border-radius: 12px; overflow: hidden; background: #FFFFFF;">
+          <div style="background: #1F3B4D; padding: 20px 16px; display: flex; align-items: center; gap: 8px;"><svg width="20" height="20" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#FBF6EF" stroke-width="6"/><circle cx="54" cy="18" r="12" fill="#DE8B68"/></svg><span style="color: #FBF6EF; font-size: 12px; font-weight: 600;">Magic Picks</span></div>
+          <div style="padding: 16px;"><div style="font-family: 'Noto Serif', serif; font-size: 13px; margin-bottom: 6px;">Order confirmed</div><div style="font-size: 10px; color: #948A7D;">Order #MP10321 · dispatching from Mt Wellington</div></div>
+        </div>
+        <div style="font-size: 11px; color: #948A7D; margin-top: 8px; text-align: center;">Order confirmation email</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 20px; max-width: 420px;">
+      <div style="border: 1px solid #E7DDD0; border-radius: 14px; padding: 28px; background: #FFFFFF;">
+        <svg width="26" height="26" viewBox="0 0 64 64"><rect x="8" y="8" width="48" height="48" rx="12" fill="none" stroke="#1F3B4D" stroke-width="6"/><circle cx="54" cy="18" r="12" fill="#C15B3A"/></svg>
+        <div style="font-family: 'Noto Serif', serif; font-size: 17px; margin: 16px 0 10px;">Thanks for picking us.</div>
+        <div style="font-size: 13px; color: #4A4239; margin-bottom: 18px; text-wrap: pretty;">I tested this one myself before it went in the warehouse. If anything's off, just reply to the confirmation email — I read every one.</div>
+        <div style="font-family: 'Caveat', cursive; font-size: 26px; color: #1F3B4D;">— Jing</div>
+      </div>
+      <div style="font-size: 11px; color: #948A7D; margin-top: 8px; text-align: center;">Packing insert card</div>
+    </div>
+  </div>
+
+  <!-- 07 TOKENS -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 48px 48px 96px; border-top: 1px solid #E7DDD0;">
+    <div style="font-size: 13px; letter-spacing: 1.5px; color: #C15B3A; font-weight: 600; margin-bottom: 12px;">07 — DESIGN TOKENS</div>
+    <p style="font-size: 15px; color: #6E6459; max-width: 700px; margin: 0 0 28px;">Copy-ready. Paste the CSS block into Shopify Horizon's theme settings, or use the JSON for other tooling.</p>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+      <div style="background: #241F1B; border-radius: 14px; padding: 24px; position: relative;">
+        <button onClick="{{ copyCss }}" style="position: absolute; top: 16px; right: 16px; background: {{ cssCopied }}; color: #FBF6EF; border: none; font-size: 11px; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-family: 'Noto Sans', sans-serif;">{{ cssLabel }}</button>
+        <pre style="margin: 28px 0 0; color: #E7DDD0; font-family: monospace; font-size: 11.5px; line-height: 1.7; overflow-x: auto;">:root {
+  --color-primary: #1F3B4D;
+  --color-primary-dark: #142A36;
+  --color-primary-tint: #DCE6E8;
+  --color-secondary: #C15B3A;
+  --color-secondary-tint: #F3DDD2;
+  --color-accent: #8C5B6B;
+  --color-accent-tint: #EADDE1;
+  --color-bg: #FBF6EF;
+  --color-surface: #FFFFFF;
+  --color-border: #E7DDD0;
+  --color-text-primary: #241F1B;
+  --color-text-secondary: #6E6459;
+  --color-sale: #B8542E;
+  --color-success: #3F7A52;
+  --color-warning: #C08A3D;
+  --color-error: #9C3B32;
+  --font-display: 'Noto Serif', serif;
+  --font-body: 'Noto Sans', sans-serif;
+  --font-signature: 'Caveat', cursive;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 48px;
+  --space-6: 64px;
+}</pre>
+      </div>
+      <div style="background: #241F1B; border-radius: 14px; padding: 24px; position: relative;">
+        <button onClick="{{ copyJson }}" style="position: absolute; top: 16px; right: 16px; background: {{ jsonCopied }}; color: #FBF6EF; border: none; font-size: 11px; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-family: 'Noto Sans', sans-serif;">{{ jsonLabel }}</button>
+        <pre style="margin: 28px 0 0; color: #E7DDD0; font-family: monospace; font-size: 11.5px; line-height: 1.7; overflow-x: auto;">{
+  "color": {
+    "primary": "#1F3B4D",
+    "primaryDark": "#142A36",
+    "primaryTint": "#DCE6E8",
+    "secondary": "#C15B3A",
+    "secondaryTint": "#F3DDD2",
+    "accent": "#8C5B6B",
+    "accentTint": "#EADDE1",
+    "bg": "#FBF6EF",
+    "surface": "#FFFFFF",
+    "border": "#E7DDD0",
+    "textPrimary": "#241F1B",
+    "textSecondary": "#6E6459",
+    "sale": "#B8542E",
+    "success": "#3F7A52",
+    "warning": "#C08A3D",
+    "error": "#9C3B32"
+  },
+  "font": {
+    "display": "Noto Serif, serif",
+    "body": "Noto Sans, sans-serif",
+    "signature": "Caveat, cursive"
+  },
+  "radius": { "sm": "6px", "md": "12px", "lg": "20px" },
+  "space": { "1": "8px", "2": "16px", "3": "24px", "4": "32px", "5": "48px", "6": "64px" }
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div style="max-width: 1120px; margin: 0 auto; padding: 32px 48px 64px; border-top: 1px solid #E7DDD0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+    <div style="font-size: 12px; color: #948A7D;">Magic Picks is a trading name of VITOL TRADING LIMITED, NZBN 9429050577675.</div>
+    <div style="font-size: 12px; color: #948A7D;">brand-assets/ — 5 SVG files delivered alongside this page</div>
+  </div>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { cssCopied: false, jsonCopied: false };
+
+  copy(text, key) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    this.setState({ [key]: true });
+    setTimeout(() => this.setState({ [key]: false }), 1500);
+  }
+
+  cssText() {
+    return `:root {\n  --color-primary: #1F3B4D;\n  --color-primary-dark: #142A36;\n  --color-primary-tint: #DCE6E8;\n  --color-secondary: #C15B3A;\n  --color-secondary-tint: #F3DDD2;\n  --color-accent: #8C5B6B;\n  --color-accent-tint: #EADDE1;\n  --color-bg: #FBF6EF;\n  --color-surface: #FFFFFF;\n  --color-border: #E7DDD0;\n  --color-text-primary: #241F1B;\n  --color-text-secondary: #6E6459;\n  --color-sale: #B8542E;\n  --color-success: #3F7A52;\n  --color-warning: #C08A3D;\n  --color-error: #9C3B32;\n  --font-display: 'Noto Serif', serif;\n  --font-body: 'Noto Sans', sans-serif;\n  --font-signature: 'Caveat', cursive;\n  --radius-sm: 6px;\n  --radius-md: 12px;\n  --radius-lg: 20px;\n  --space-1: 8px;\n  --space-2: 16px;\n  --space-3: 24px;\n  --space-4: 32px;\n  --space-5: 48px;\n  --space-6: 64px;\n}`;
+  }
+
+  jsonText() {
+    return JSON.stringify({
+      color: { primary: "#1F3B4D", primaryDark: "#142A36", primaryTint: "#DCE6E8", secondary: "#C15B3A", secondaryTint: "#F3DDD2", accent: "#8C5B6B", accentTint: "#EADDE1", bg: "#FBF6EF", surface: "#FFFFFF", border: "#E7DDD0", textPrimary: "#241F1B", textSecondary: "#6E6459", sale: "#B8542E", success: "#3F7A52", warning: "#C08A3D", error: "#9C3B32" },
+      font: { display: "Noto Serif, serif", body: "Noto Sans, sans-serif", signature: "Caveat, cursive" },
+      radius: { sm: "6px", md: "12px", lg: "20px" },
+      space: { "1": "8px", "2": "16px", "3": "24px", "4": "32px", "5": "48px", "6": "64px" }
+    }, null, 2);
+  }
+
+  renderVals() {
+    return {
+      copyCss: () => this.copy(this.cssText(), 'cssCopied'),
+      copyJson: () => this.copy(this.jsonText(), 'jsonCopied'),
+      cssCopied: this.state.cssCopied ? '#3F7A52' : '#3A322A',
+      jsonCopied: this.state.jsonCopied ? '#3F7A52' : '#3A322A',
+      cssLabel: this.state.cssCopied ? 'Copied' : 'Copy CSS',
+      jsonLabel: this.state.jsonCopied ? 'Copied' : 'Copy JSON',
+    };
+  }
+}
+</script>
+</body>
+</html>

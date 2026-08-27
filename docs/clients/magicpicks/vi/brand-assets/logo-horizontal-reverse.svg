@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 128">
+  <rect x="20" y="20" width="88" height="88" rx="20" fill="none" stroke="#FBF6EF" stroke-width="8"></rect>
+  <circle cx="98" cy="34" r="20" fill="#DE8B68"></circle>
+  <text x="132" y="80" font-family="Noto Serif, Georgia, serif" font-size="46" font-weight="500" fill="#FBF6EF">Magic Picks</text>
+</svg>
