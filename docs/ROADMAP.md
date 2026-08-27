@@ -127,11 +127,14 @@
 草稿见 [docs/clients/magicpicks/2026-08-27-shopify-policies-draft.md](./clients/magicpicks/2026-08-27-shopify-policies-draft.md)。
 店里现存 3 个 Homara 遗留政策（主体名 / 币种 AUD / 地区 Brisbane-QLD 全部写错），发布干净主题前必须清理干净；
 ME 目前没有能直写 Shopify 店铺政策的接口（`write_legal_policies` 只是未来 capability 的候选名，还没实现），
-只能由 PM 手工到 Shopify Admin 逐段粘贴。
+只能由 PM 手工到 Shopify Admin 逐段粘贴。已接进今日待办管道（`src/lib/pm-todo/manual-items.ts` 的
+`pushMagicPicksPolicyReplacementItem`），不是只登记在这份 Markdown 里；PM 粘贴完成后要把这一节和
+`manual-items.ts` 里那一行一起删掉，否则待办会一直下发。
 
 - [ ] **PM 手工粘贴 6 段政策**（Contact / Refund / Privacy / Terms / Shipping，Subscription 留空）：
       先跟客户确认 `[SUPPORT_EMAIL]` 等占位（草稿开头有清单），替换完照文档末尾的粘贴 checklist 逐段粘到
-      `Shopify Admin → Settings → Policies`，完成后勾掉这一条并从本清单删除
+      `Shopify Admin → Settings → Policies`，完成后勾掉这一条并从本清单删除，同时删掉
+      `manual-items.ts` 里的 `pushMagicPicksPolicyReplacementItem` 调用
 - [ ] **确认业务承诺再发布**：14 天退货 / 12 个月保修 / 中午前当天发货 / 每单必有追踪，这几条会变成
       对外合同条款，草稿里的「PM 业务承诺确认 checklist」必须逐条核实符合 Magic Picks 实际能力才能粘贴
 

@@ -69,6 +69,8 @@ export type ManualItemKind =
   | 'dm_maybe_stop'
   /** 平台候选（docs/registry/platform-candidates.md）到了复查日期 —— 见 me-platform-tier-gate skill */
   | 'platform_candidate_review_due'
+  /** Magic Picks 店里还有 Homara 遗留政策没清理 —— 见 docs/clients/magicpicks/2026-08-27-shopify-policies-draft.md */
+  | 'shopify_policy_replacement_pending'
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
@@ -210,6 +212,8 @@ export async function loadManualItems(
   await pushCronHealthItems(supabase, items, now)
   // 平台候选到了复查日期 —— 不落库、不查表，纯本地日期判断
   pushPlatformCandidateReviewItems(items, now)
+  // Magic Picks Shopify 政策页还没替换掉 Homara 遗留内容 —— 同样不落库，PM 粘贴完成后手动删掉这行
+  pushMagicPicksPolicyReplacementItem(items)
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
@@ -730,6 +734,31 @@ export function pushPlatformCandidateReviewItems(
       href: PLATFORM_CANDIDATE_REGISTRY_URL,
     })
   }
+}
+
+/** Shopify Admin 店铺政策编辑页 —— 稳定入口，登录后一定打得开（不是会 404 的深链）。 */
+const MAGICPICKS_SHOPIFY_POLICIES_URL = 'https://aai0ep-kt.myshopify.com/admin/settings/legal'
+
+/**
+ * Magic Picks 店里还有 3 个 Homara 遗留政策（主体名 / 币种 AUD / 地区 Brisbane-QLD 全部写错），
+ * 发布干净主题前必须清理干净 —— 草稿已就绪（见 docs/clients/magicpicks/2026-08-27-shopify-policies-draft.md），
+ * 但 ME 目前没有能直写 Shopify 店铺政策的接口，只能 PM 手工粘贴。
+ *
+ * 不落库、不查表：这是一次性任务，没有数据库状态可判断"做完没做"。Codex 复审指出只登记在
+ * ROADMAP.md 里没人会主动翻，必须接进今日待办这条真正有人看的管道（铁律 3 下半句）。
+ *
+ * 🔴 PM 粘贴完成后必须把这个函数的调用从 `loadManualItems` 里删掉（或删掉这整个函数），
+ * 否则这条会永远下发下去 —— 没有状态可以让它自己停。删除时同步勾掉 ROADMAP.md 里的对应条目。
+ */
+function pushMagicPicksPolicyReplacementItem(items: ManualItem[]): void {
+  items.push({
+    kind: 'shopify_policy_replacement_pending',
+    client_id: 'magicpicks',
+    client_name: 'Magic Picks',
+    what: 'Shopify 店铺政策页还是 Homara 遗留内容（主体名 / 币种 AUD / 地区 Brisbane-QLD 全部写错），发布干净主题前必须换成 Magic Picks 自己的政策',
+    how: '打开 docs/clients/magicpicks/2026-08-27-shopify-policies-draft.md 里的 6 段政策草稿，替换头部占位后按文档末尾的粘贴 checklist 逐段粘到 Shopify Admin → Settings → Policies',
+    href: MAGICPICKS_SHOPIFY_POLICIES_URL,
+  })
 }
 
 async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]): Promise<void> {
