@@ -205,9 +205,15 @@ describe('getJob', () => {
           eq: () => ({ maybeSingle: () => Promise.resolve({ data: staleRow, error: null }) }),
         }),
       }),
+      // markFailed(..., { onlyIfActive: true }) 链路是 update → eq → in → select
       update: (patch: Record<string, unknown>) => {
         updates.push(patch)
-        return { eq: () => Promise.resolve({ data: null, error: null }) }
+        const chain = {
+          eq: () => chain,
+          in: () => chain,
+          select: () => Promise.resolve({ data: [{ id: 'job-1' }], error: null }), // 命中了，applied=true
+        }
+        return chain
       },
     }))
 
@@ -215,6 +221,49 @@ describe('getJob', () => {
     expect(result?.status).toBe('failed')
     expect(updates).toHaveLength(1)
     expect(updates[0].status).toBe('failed')
+  })
+
+  it('僵尸判定和后台任务完成撞在一起时，不覆盖已经写好的结果', async () => {
+    const staleRow = {
+      id: 'job-2',
+      client_id: CLIENT,
+      itinerary_id: ITINERARY,
+      kind: 'import_file',
+      status: 'running',
+      input: {},
+      result: null,
+      error: null,
+      created_at: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+      completed_at: null,
+    }
+    const completedRow = { ...staleRow, status: 'completed', result: { payload: { days: [1] } }, error: null }
+    let selectCall = 0
+    ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            // 第一次读到僵尸行；markFailed 因为 onlyIfActive 抢不到（已经 completed 了）
+            // 之后 getJob 递归重读，第二次要看到真实的 completed 状态
+            maybeSingle: () => {
+              selectCall += 1
+              return Promise.resolve({ data: selectCall === 1 ? staleRow : completedRow, error: null })
+            },
+          }),
+        }),
+      }),
+      update: () => {
+        const chain = {
+          eq: () => chain,
+          in: () => chain,
+          select: () => Promise.resolve({ data: [], error: null }), // 没命中：任务已经不是 active 了
+        }
+        return chain
+      },
+    }))
+
+    const result = await getJob(CLIENT, 'job-2')
+    expect(result?.status).toBe('completed')
+    expect(result?.result).toEqual({ payload: { days: [1] } })
   })
 
   it('查询本身报错时抛出，不能静默返回空', async () => {
@@ -233,7 +282,13 @@ describe('getJob', () => {
 describe('markRunning / markCompleted / markFailed', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  /** errorQueue 依次作为每次 .eq() 落地的结果；用完了默认成功。 */
+  /**
+   * errorQueue 依次作为每次落地的结果；用完了默认成功。
+   *
+   * 真实的 Supabase 查询构造器既能继续链式调用（.in()/.select()），又能直接
+   * await（内置 .then()）——markCompleted 用的是后者（await ...eq(...)），
+   * markFailed 现在会再接一个 .select('id')，两种用法这个假件都要撑住。
+   */
   function mockUpdateOnly(
     updates: Array<{ patch: Record<string, unknown>; eq: Array<[string, unknown]> }>,
     errorQueue: Array<{ message: string } | null> = []
@@ -241,13 +296,19 @@ describe('markRunning / markCompleted / markFailed', () => {
     ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation(() => ({
       update: (patch: Record<string, unknown>) => {
         const eqCalls: Array<[string, unknown]> = []
+        const settle = () => {
+          const error = errorQueue.length > 0 ? errorQueue.shift()! : null
+          return { data: error ? null : [{ id: 'x' }], error }
+        }
         const chain = {
           eq: (col: string, val: unknown) => {
             eqCalls.push([col, val])
             updates.push({ patch, eq: eqCalls })
-            const error = errorQueue.length > 0 ? errorQueue.shift()! : null
-            return Promise.resolve({ data: null, error })
+            return chain
           },
+          in: () => chain,
+          select: () => Promise.resolve(settle()),
+          then: (resolve: (v: { data: unknown; error: unknown }) => void) => resolve(settle()),
         }
         return chain
       },
@@ -278,17 +339,29 @@ describe('markRunning / markCompleted / markFailed', () => {
     errSpy.mockRestore()
   })
 
-  it('markCompleted 重试后仍失败——把结果吼进日志，不能悄无声息地丢掉这次生成', async () => {
+  it('markCompleted 重试后仍失败——记一条脱敏摘要，既不彻底丢掉痕迹也不把客户信息写进日志', async () => {
     const updates: Array<{ patch: Record<string, unknown>; eq: Array<[string, unknown]> }> = []
     mockUpdateOnly(updates, [{ message: 'down' }, { message: 'still down' }])
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    await markCompleted('job-1', { payload: { days: [1] }, reply: 'irreplaceable result' })
+    await markCompleted('job-1', {
+      payload: { days: [1, 2, 3], client: { name: 'Shirley Gordon' } },
+      review: [],
+      reply: 'client-facing itinerary text that must not leak into logs',
+    })
 
     expect(updates).toHaveLength(2)
-    // 第二条日志必须带上结果本身，否则这次生成就真的彻底找不回来了
-    const loggedResult = errSpy.mock.calls.find((call) => String(call.join(' ')).includes('irreplaceable result'))
-    expect(loggedResult).toBeTruthy()
+    const allArgs = errSpy.mock.calls.flat()
+    // 必须留一条能人工追查的痕迹（至少知道生成了几天）……
+    const summary = allArgs.find((a): a is { dayCount: number } =>
+      typeof a === 'object' && a !== null && 'dayCount' in a
+    )
+    expect(summary?.dayCount).toBe(3)
+    // ……但绝不能是客户姓名、行程正文这类 PII 原样出现在日志里（既不在文本参数里，
+    // 也不能藏在摘要对象的某个字段里——摘要必须是"数出来的东西"，不是原文的一部分）
+    const flattenedText = allArgs.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')
+    expect(flattenedText).not.toContain('Shirley Gordon')
+    expect(flattenedText).not.toContain('client-facing itinerary text')
     errSpy.mockRestore()
   })
 

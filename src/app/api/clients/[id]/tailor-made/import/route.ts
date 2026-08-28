@@ -215,16 +215,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const base64 = Buffer.from(await file.arrayBuffer()).toString('base64')
 
-  // 建任务前先记一下草稿现在的 updated_at——生成完之后要靠它判断这份草稿
-  // 在生成期间有没有被改过，见 persistIfUnchanged() 的乐观锁注释。
-  const baselineRecord = await getItinerary(params.id, itineraryId)
-  const baselineUpdatedAt = baselineRecord?.updated_at ?? ''
-
-  // 建任务本身也可能失败（比如表还没建好、DB 抖动）——不能让这里的异常
-  // 甩给 Next.js 默认错误页：那正是这次要修的原始故障（HTML 错误页把
-  // "Unexpected token '<'" 甩给浏览器），绝不能在这一层原样复现。
-  let jobId: string, reused: boolean
+  // 建任务前先查草稿现在的 updated_at（生成完要靠它判断草稿有没有被同时改过，
+  // 见 persistIfUnchanged() 的乐观锁注释）——这一步和下面建任务一样可能因为
+  // DB 抖动失败，必须在同一个 try/catch 里，不能让异常漏到 Next.js 默认错误页，
+  // 那正是这次要修的原始故障（HTML 错误页把 "Unexpected token '<'" 甩给浏览器）。
+  let jobId: string, reused: boolean, baselineUpdatedAt: string
   try {
+    const baselineRecord = await getItinerary(params.id, itineraryId)
+    baselineUpdatedAt = baselineRecord?.updated_at ?? ''
     ;({ jobId, reused } = await createOrReuseJob({
       clientId: params.id,
       itineraryId,

@@ -46,20 +46,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const itineraryId = body.itineraryId
   const history = Array.isArray(body.history) ? body.history : []
 
-  // 建任务前先记一下草稿现在的 updated_at——生成完之后要靠它判断这份草稿
-  // 在生成期间有没有被改过，见 runExtractJob() 里 persistIfUnchanged 的乐观锁注释。
-  const baselineRecord = await getItinerary(params.id, itineraryId)
-  const baselineUpdatedAt = baselineRecord?.updated_at ?? ''
-
-  // 建任务本身也可能失败——不能让异常甩给 Next.js 默认错误页，那正是这次
-  // 要修的原始故障（HTML 错误页把 "Unexpected token '<'" 甩给浏览器）。
-  let jobId: string, reused: boolean
+  // 建任务前先查草稿现在的 updated_at（同样的乐观锁道理，见 import/route.ts）——
+  // 这一步和下面建任务都可能因为 DB 抖动失败，必须在同一个 try/catch 里，
+  // 不能让异常漏到 Next.js 默认错误页，那正是这次要修的原始故障。
+  let jobId: string, reused: boolean, baselineUpdatedAt: string
   try {
+    const baselineRecord = await getItinerary(params.id, itineraryId)
+    baselineUpdatedAt = baselineRecord?.updated_at ?? ''
     ;({ jobId, reused } = await createOrReuseJob({
       clientId: params.id,
       itineraryId,
       kind: 'extract_text',
-      inputFingerprint: fingerprintInput(message),
+      // 指纹要盖住整段会影响结果的输入，不能只按 message——两个标签页对同一份
+      // 行程分别改动、恰好敲出同一句指令文字（比如都写"改一下价格"）但 current/
+      // history 不同，只按 message 算指纹会把两次完全不同的提交错当成同一次
+      // （Codex 复审点出来的场景）。
+      inputFingerprint: fingerprintInput(JSON.stringify({ message, current, history })),
       input: { messageLength: message.length },
     }))
   } catch (error) {
