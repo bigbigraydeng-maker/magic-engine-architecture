@@ -270,9 +270,9 @@ export default function PrivacyPage() {
             at:
           </p>
           <address className="mt-4 not-italic text-gray-700">
-            <strong>Magic Lab</strong>
+            <strong>Magic Engine AI Technology Limited</strong>
             <br />
-            98 Beatrice Terrace, Ascot, Brisbane, Queensland, Australia
+            New Zealand
             <br />
             Email:{' '}
             <a href={`mailto:${CONTACT_EMAIL}`} className="text-indigo-600 underline">

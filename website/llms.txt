@@ -2,6 +2,8 @@
 
 > Magic Engine is an AI growth engine for Australian and New Zealand businesses. It connects discovery, analysis, recommended actions, execution and outcome tracking.
 
+Magic Engine is operated by Magic Engine AI Technology Limited in New Zealand.
+
 ## Core product
 
 - [AI Growth Engine](https://magicengine.com.au/ai-growth-engine): how the Magic Engine operating loop works
