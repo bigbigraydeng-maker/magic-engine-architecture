@@ -28,6 +28,49 @@ import ReviewPanel, { sectionIdForPath } from './ReviewPanel';
 
 const PREVIEW_DEBOUNCE_MS = 700;
 
+/**
+ * import / extract 两个入口现在只建任务立刻回 202，AI 真正生成的过程要靠
+ * 轮询这张任务表拿结果——不能再指望一个 HTTP 请求死等到底：ME 后台正式
+ * 域名走 Cloudflare 代理，一个请求等超过约 100 秒 CF 自己会掐断连接，
+ * 27 天以上的团生成经常要 100-180 秒，见 CTS 2027 China Panorama 报障。
+ *
+ * 轮询间隔前密后疏：大多数「改第 5 天」这类小改动几百毫秒到几秒就写完，
+ * 不该让每次小改动都平白多等 2-3 秒；真正的大团慢慢拉长到 3 秒一次即可，
+ * 反正客户端等待的是分钟级的事，轮询密度差一两秒无所谓。
+ */
+const POLL_DELAYS_MS = [300, 600, 1000, 1500, 2000, 3000];
+const POLL_MAX_MS = 10 * 60 * 1000; // 跟 Anthropic 客户端默认超时对齐，兜底用
+
+/** 轮到「已卸载」就返回 { cancelled: true }，调用方据此跳过后续 setState —— 页面已经不在了，改 state 只会挨 React 的警告，请求也没必要再打。 */
+async function pollTailorMadeJob(
+  clientId: string,
+  jobId: string,
+  isCancelled: () => boolean
+): Promise<{ result?: Record<string, unknown>; error?: string; cancelled?: true }> {
+  const startedAt = Date.now();
+  let attempt = 0;
+  for (;;) {
+    if (isCancelled()) return { cancelled: true };
+
+    const res = await fetch(`/api/clients/${clientId}/tailor-made/jobs/${jobId}`, {
+      credentials: 'include',
+    });
+    if (isCancelled()) return { cancelled: true };
+
+    const data = await res.json();
+    if (!res.ok) return { error: data.error || '查询任务失败' };
+    if (data.status === 'completed') return { result: data.result };
+    if (data.status === 'failed') return { error: data.error || '生成失败' };
+
+    if (Date.now() - startedAt > POLL_MAX_MS) {
+      return { error: '等待太久了，任务可能卡住了，请重试或联系技术支持' };
+    }
+    const delay = POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)];
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    attempt += 1;
+  }
+}
+
 export default function TailorMadeEditor({
   record,
   clientId,
@@ -67,6 +110,12 @@ export default function TailorMadeEditor({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const objectUrlRef = useRef<string | null>(null);
 
+  // 轮询期间用户导航离开——停止再 setState，也停止再打轮询请求
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    return () => { isMountedRef.current = false; };
+  }, []);
+
   /** 任何字段变更都走这里，顺带打脏标记 */
   const edit = useCallback((mutate: (draft: TailorMadeItinerary) => void) => {
     setPayload((prev) => {
@@ -90,11 +139,18 @@ export default function TailorMadeEditor({
         const res = await fetch(`/api/clients/${clientId}/tailor-made/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, current: payload, history: turns }),
+          body: JSON.stringify({ message, current: payload, history: turns, itineraryId: record.id }),
           credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'AI 解析失败');
+        const started = await res.json();
+        if (!res.ok) throw new Error(started.error || 'AI 解析失败');
+
+        const { result, error, cancelled } = await pollTailorMadeJob(
+          clientId, started.job_id, () => !isMountedRef.current
+        );
+        if (cancelled) return; // 页面已经不在了，任务在后台继续跑，回来重开草稿页会看到结果
+        if (error) throw new Error(error);
+        const data = result as { payload: TailorMadeItinerary; review?: ReviewItem[]; reply: string };
 
         setPayload(data.payload);
         setDirty(true);
@@ -103,13 +159,14 @@ export default function TailorMadeEditor({
         // 有待确认项时自动展开校对面，否则顾问看不到要改哪里
         if ((data.review ?? []).length > 0) setFieldsOpen(true);
       } catch (err) {
+        if (!isMountedRef.current) return;
         setAiError(err instanceof Error ? err.message : 'AI 解析失败');
         setTurns((prev) => prev.slice(0, -1));
       } finally {
-        setAiBusy(false);
+        if (isMountedRef.current) setAiBusy(false);
       }
     },
-    [clientId, payload, turns]
+    [clientId, payload, turns, record.id]
   );
 
   /**
@@ -156,11 +213,24 @@ export default function TailorMadeEditor({
         const fd = new FormData();
         fd.append('file', file);
         fd.append('current', JSON.stringify(payloadRef.current));
+        fd.append('itineraryId', record.id);
         const res = await fetch(`/api/clients/${clientId}/tailor-made/import`, {
           method: 'POST', body: fd, credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '解析失败');
+        const started = await res.json();
+        if (!res.ok) throw new Error(started.error || '解析失败');
+
+        const { result, error, cancelled } = await pollTailorMadeJob(
+          clientId, started.job_id, () => !isMountedRef.current
+        );
+        if (cancelled) return; // 页面已经不在了，任务在后台继续跑，回来重开草稿页会看到结果
+        if (error) throw new Error(error);
+        const data = result as {
+          payload: TailorMadeItinerary;
+          review?: ReviewItem[];
+          reply: string;
+          heroName?: string | null;
+        };
 
         setPayload(data.payload);
         setDirty(true);
@@ -169,12 +239,13 @@ export default function TailorMadeEditor({
         setImportNote(data.reply ?? '已导入');
         if ((data.review ?? []).length > 0) setFieldsOpen(true);
       } catch (err) {
+        if (!isMountedRef.current) return;
         setImportNote(err instanceof Error ? err.message : '解析失败');
       } finally {
-        setImportBusy(false);
+        if (isMountedRef.current) setImportBusy(false);
       }
     },
-    [clientId]
+    [clientId, record.id]
   );
 
   /** 换封面 —— 自动选会猜错，得留个换的入口 */
