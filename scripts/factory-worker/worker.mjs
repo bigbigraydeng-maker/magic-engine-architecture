@@ -171,15 +171,15 @@ async function muapiGenerate(planItem, sourceImageUrl) {
 
 // #1218:旧版给每个非-hook 段都塞 { caption: wo.angle } —— hook 的 title_sub 也是同一个
 // wo.angle,于是 8 段字幕里 7 段在闪同一句话(CTS work order 7c2809e1 实测)。
-// 跟 copy-generator.ts 的模板 fallback 用同一条原则:宁可留白让画面说话,也不满屏复读——
-// 只在第 2 镜(i===1)带一次 angle,其余非-hook 段留空(buildSrt 对空 caption 直接跳过该段字幕)。
+// 按 #1218 fail-closed 合同:宁可留白让画面说话,也不把 hook 品牌线塞进 middle——
+// 仅 hook(i===0)保留 angle,所有非-hook 段留空(buildSrt 对空 caption 直接跳过)。
 export function resolveCopy(wo) {
   if (wo.brief?.copy?.segments?.length) return wo.brief.copy
   log('⚠️ brief.copy 缺失(后端文案生成可能失败),走 angle 兜底')
   return {
     segments: wo.brief.segments.map((s, i) => ({
       role: s.role,
-      ...(i === 0 ? { title_sub: wo.angle } : i === 1 ? { caption: wo.angle } : {}),
+      ...(i === 0 ? { title_sub: wo.angle } : {}),
     })),
     endcard: { cta: wo.angle, offer: [], url: '' },
   }
