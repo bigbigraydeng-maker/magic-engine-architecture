@@ -61,6 +61,7 @@
 | 候选名 | 建议层级 | 归属 | 来源客户 | 来源行业 | 硬证据进度 | 当前状态 | 首次登记日 | 复查日 | 登记人 | 备注 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 借助 Claude Design 生成品牌 VI 视觉资产（logo · 品牌手册 · 视觉规范）| L1 Capability（候选 · 需硬证据）| 待定 · VI 不在 6 支柱 · **PM 拍板项** | HBay Water | 瓶装水 / FMCG | 1/2 行业（仅 HBay）| candidate | 2026-08-27 | 2026-09-27 | happy-cori-796b21 worktree | HBay Deploy 档扩展；PM 明确 ME 借助 Claude Design 做；未来 CTS / Roman / 其他客户若也用同类能力则可升 L1；Low bar 登记（skill v2 首例）|
+| Current-Sponsored Competitor Discovery（当前活跃广告主实时发现 + diff 竞品清单）| L1 Capability | 竞品 支柱（主）+ 广告 支柱（次·只发现不投放）· IMPACT Inspect 段 | CTS Tours NZ | Outbound Tourism (China 线) | **3/3 客户复制已达标** —— P30 seed 已在 CTS + 22 家 tourism domains 事实复制；PM 列出 9 客户跨 6 行业需要（旅游 / 地产 / 电商 / 地板 / 留学 / 瓶装水）| candidate | 2026-08-28 | 2026-09-28 | 主 session（CTS 竞品扫描） | PM 2026-08-28 quote "但是我觉得这个也是一个 capability"；张良 v2.1 Full Report 判定 L1；配套 L3 新增 Google Ads Transparency Center Adapter；相关 issue: `me2.0-punch-list`（待建）；DataForSEO SERP L3 已存在（`src/lib/dataforseo/serp.ts`）；跨 AU / NZ 市场语义一致；hardcoded 客户名 / 行业 = ✗（走 `clients.primary_keywords` + `industry`）|
 
 <!--
 示例（不作为真实条目）：
