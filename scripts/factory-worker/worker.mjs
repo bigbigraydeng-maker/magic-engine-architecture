@@ -14,6 +14,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 
 // ── 配置 ──────────────────────────────────────────────────────────────────────
 
@@ -438,6 +439,9 @@ async function main() {
 
 // #1218:守住入口 —— 只在直接执行本文件时跑主循环。测试要 import resolveCopy/buildSrt
 // 这两个纯函数做回归验证,没有这道 guard,import 本身就会去敲真实 API、起 claim 循环。
-if (import.meta.url === `file://${process.argv[1]}`) {
+// process.argv[1] 是原始文件系统路径,含空格/#/% 等字符时不会被编码;
+// import.meta.url 是编码过的 file:// URL。直接拼字符串比较在这类路径下恒为假,
+// 需用 pathToFileURL() 把两边都规范成编码后的 URL 再比较。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => { console.error(e); process.exit(1) })
 }
