@@ -309,6 +309,8 @@ export async function bulkKeywordVolume(
 
   const json = await res.json() as {
     tasks?: Array<{
+      status_code?:    number
+      status_message?: string
       result?: Array<{
         items?: Array<{
           keyword?:            string
@@ -326,7 +328,17 @@ export async function bulkKeywordVolume(
     }>
   }
 
-  const items = json.tasks?.[0]?.result?.[0]?.items ?? []
+  const task = json.tasks?.[0]
+  // 采严格路径：status_code 缺失（畸形响应/网关抢答）也抛错，避免踩回 Codex 原本挑的坑。
+  // 跟仓库另一个先例 business-listings.ts:224 反向选择：那处是历史遗留宽处理，
+  // 我们跟 popular-products.ts:166 / business-data.ts 保持一致。
+  if ((task?.status_code ?? 0) !== 20000) {
+    throw new Error(
+      `DataForSEO keyword_overview task error ${task?.status_code ?? 'missing'}: ${task?.status_message ?? 'unknown'}`,
+    )
+  }
+
+  const items = task?.result?.[0]?.items ?? []
 
   return items
     .filter(it => it.keyword)
@@ -558,8 +570,13 @@ export async function getKeywordsGap(
           kw.keyword_difficulty = kdMap.get(kw.keyword) ?? null
         }
       }
-    } catch {
-      // KD enrichment is best-effort; gap results are still useful without it
+    } catch (err) {
+      console.warn('[labs/getKeywordsGap] KD enrichment failed', {
+        clientDomain,
+        competitorCount: competitorDomains.length,
+        missingKdCount: missingKd.length,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 
