@@ -31,8 +31,35 @@ const BODY_SIGNAL_PATTERNS = {
   'reuse-statement': /reuse statement|复用声明/i,
   'failure-handling': /失败处理|fail[- ]closed|失败关闭|失败会/i,
   observability: /观测|observability|会被(?:谁|看见)|谁.{0,6}发现/i,
-  'build-evidence': /npm run build|build\s*(?:通过|succeeded|结果|passed)/i,
-  'test-output': /npx vitest|vitest run|npm test|测试命令/i,
+}
+
+// 🔴 Codex finding (PR #1211, P2): `build-evidence`/`test-output` used to
+// match on the command name alone (`npm run build`, `npx vitest`, ...), so
+// "npm run build 未运行", "npm run build 失败", and "测试命令：npx vitest（待执行）"
+// scored the same 5 points each as a real pass — on a C-level PR (75-point
+// threshold) that is 10 free points, enough on its own to turn a BLOCKED into
+// a READY. These two signals now require an explicit, unambiguous completion
+// word on the SAME LINE as the command mention, with a negation word on that
+// line disqualifying it outright — "npm run build 成功，之前失败过" stays
+// unscored rather than trusting whichever word a looser check happened to
+// key off. A `N/N` ratio (e.g. "473/473") counts as unambiguous success too;
+// a mismatched ratio ("467/473") does not match the backreference and is
+// correctly treated as not-yet-proven.
+const EVIDENCE_NEGATION_PATTERN =
+  /未运行|未执行|不通过|未通过|失败|取消|待执行|待运行|skip(?:ped|s)?|not\s+run|didn.?t\s+run|no\s+run|pending|cancell?ed|fail(?:ed|s|ure)?/i
+const EVIDENCE_SUCCESS_PATTERN = /通过|成功|全绿|绿灯|succeeded|success(?:ful)?|passed|green|(\d+)\s*\/\s*\1\b/i
+const BUILD_COMMAND_PATTERN = /npm run build|\bbuild\b/i
+const TEST_COMMAND_PATTERN = /npx vitest|vitest run|npm test|测试命令/i
+
+function linesOf(body) {
+  return typeof body === 'string' ? body.split(/\r?\n/) : []
+}
+
+/** True when some line names the command AND unambiguously claims success on that same line. */
+function hasUnambiguousCompletion(prBody, commandPattern) {
+  return linesOf(prBody).some(
+    (line) => commandPattern.test(line) && EVIDENCE_SUCCESS_PATTERN.test(line) && !EVIDENCE_NEGATION_PATTERN.test(line),
+  )
 }
 
 /**
@@ -43,9 +70,12 @@ const BODY_SIGNAL_PATTERNS = {
  */
 export function bodySignals(prBody) {
   if (typeof prBody !== 'string') return []
-  return Object.entries(BODY_SIGNAL_PATTERNS)
+  const ids = Object.entries(BODY_SIGNAL_PATTERNS)
     .filter(([, pattern]) => pattern.test(prBody))
     .map(([id]) => id)
+  if (hasUnambiguousCompletion(prBody, BUILD_COMMAND_PATTERN)) ids.push('build-evidence')
+  if (hasUnambiguousCompletion(prBody, TEST_COMMAND_PATTERN)) ids.push('test-output')
+  return ids
 }
 
 /** Matches the same test-file shape `risk.mjs`'s C-safe rules recognise. */

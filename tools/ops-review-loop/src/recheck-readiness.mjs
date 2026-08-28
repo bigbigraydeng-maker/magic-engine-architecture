@@ -115,9 +115,22 @@ async function evaluateOne(prNumber) {
   const checkRuns = await listCheckRunsForRef(token, owner, repo, sha)
   const requiredCheck = checkRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.test(run.name))
   const requiredCiPassed = checkSucceeded(requiredCheck)
-  if (!requiredCiPassed) {
+  // Codex finding (PR #1211, P1): this leg only fires once, on the required
+  // workflow's own completion event — there is no later event to catch up on
+  // for this sha. A required check that finished with anything other than
+  // `success` (failure, cancelled, timed_out, ...) is therefore just as
+  // terminal as one that succeeded: "not passed yet" and "already failed and
+  // never trying again" used to both return here silently, leaving the PR
+  // with no READY/BLOCKED marker forever. Only a check that has not
+  // COMPLETED at all is worth waiting on — a future workflow_run for the same
+  // required workflow can still arrive for that case. Once it has completed,
+  // let buildVerdictComment's own hard gate turn `requiredCiPassed: false`
+  // into the BLOCKED verdict the evidence already supports, rather than
+  // waiting on an event that will not come.
+  const requiredCiFinished = requiredCheck?.status === 'completed'
+  if (!requiredCiFinished) {
     console.log(
-      `PR #${prNumber}: ${sha} required check is not green yet (${requiredCheck?.status ?? 'not seen'}/${requiredCheck?.conclusion ?? 'n/a'}). Waiting for the next workflow_run event.`,
+      `PR #${prNumber}: ${sha} required check has not completed yet (${requiredCheck?.status ?? 'not seen'}). Waiting for the next workflow_run event.`,
     )
     return
   }

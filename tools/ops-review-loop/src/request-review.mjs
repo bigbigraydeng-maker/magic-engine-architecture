@@ -14,7 +14,7 @@
  * Never merges, never deploys, never touches production.
  */
 import { readFileSync } from 'node:fs'
-import { createIssueComment, listCheckRunsForRef, listIssueComments, listPullRequestFiles } from './github.mjs'
+import { createIssueComment, getPullRequest, listCheckRunsForRef, listIssueComments, listPullRequestFiles } from './github.mjs'
 import { buildMarker, parseMarkers } from './markers.mjs'
 import { classifyRisk, parseDeclaredRisk } from './risk.mjs'
 import { shouldRequestCodexReview } from './sampling.mjs'
@@ -48,6 +48,20 @@ const prBody = event.pull_request.body ?? ''
 const comments = await listIssueComments(readToken, owner, repo, pr)
 const markers = parseMarkers(comments.map((c) => c.body))
 
+// Codex finding (PR #1211, P1): the concurrency group above only serialises
+// runs for the SAME head sha. Two pushes to the same PR in quick succession
+// (old sha, new sha) get two different groups and can run concurrently — and
+// `listPullRequestFiles`/`listCheckRunsForRef` are not scoped to a historical
+// sha, they describe the PR's CURRENT state. A delayed run for an old event
+// could therefore rate or verdict the OLD sha using the NEW diff. Re-checked
+// as late as possible before every write below; any mismatch is fail-closed —
+// skip without writing, since the event for the new head (already delivered,
+// or about to be) is the one that owns rating/verdicting it.
+async function isCurrentHead() {
+  const current = await getPullRequest(readToken, owner, repo, pr)
+  return current?.head?.sha === sha
+}
+
 // --- Step 1: rate the PR, unless a trusted rating for this exact base/head
 // is already on record. ---
 const trustedGates = selectTrustedGateMarkers({
@@ -57,9 +71,19 @@ const trustedGates = selectTrustedGateMarkers({
 const currentGate = findGateFor({ markers: trustedGates, base, head: sha })
 
 let risk
+// True once this event is known to be stale (head moved past `sha`) — set the
+// first time a freshness check fails, and checked before every later step so
+// one stale event cannot rate step 1, then also act on step 2 with a `risk`
+// that came from a diff that may no longer describe `sha`.
+let stale = false
 if (currentGate) {
   risk = currentGate.risk
   console.log(`Gate marker already current for ${base.slice(0, 10)}..${sha.slice(0, 10)}: ${risk}. Not re-posting.`)
+} else if (!(await isCurrentHead())) {
+  stale = true
+  console.log(
+    `PR #${pr}: head moved past ${sha} before its changed files could be read — skipping this stale event entirely (the event for the new head will rate it).`,
+  )
 } else {
   let files = null
   try {
@@ -81,8 +105,15 @@ if (currentGate) {
     base,
     head: sha,
   })
-  await createIssueComment(readToken, owner, repo, pr, comment)
-  console.log(`Rated PR #${pr} at ${base.slice(0, 10)}..${sha.slice(0, 10)}: ${risk}.`)
+  if (!(await isCurrentHead())) {
+    stale = true
+    console.log(
+      `PR #${pr}: head moved past ${sha} while its changed files were being read — discarding this rating instead of posting it for a diff that may no longer describe ${sha}.`,
+    )
+  } else {
+    await createIssueComment(readToken, owner, repo, pr, comment)
+    console.log(`Rated PR #${pr} at ${base.slice(0, 10)}..${sha.slice(0, 10)}: ${risk}.`)
+  }
 }
 
 // --- Step 2: decide whether this head still needs a Codex review. ---
@@ -90,16 +121,22 @@ if (currentGate) {
 // nothing runs after this block anyway, and avoiding process.exit keeps this
 // script importable by a test in the same process — the same reason
 // recheck-readiness.mjs was written this way from the start.
-if (markers.some((m) => m.stage === 'review-requested' && m.sha === sha)) {
+if (stale) {
+  console.log(`PR #${pr}: skipping the Codex-review / readiness step for ${sha} too — this event is stale.`)
+} else if (markers.some((m) => m.stage === 'review-requested' && m.sha === sha)) {
   console.log(`Codex review already requested for PR #${pr} at ${sha}. Skipping (dedup).`)
 } else {
   const { review, reason } = shouldRequestCodexReview({ risk, pr, sha })
   if (review) {
     console.log(`Requesting Codex review for PR #${pr} at ${sha}: ${reason}`)
-    const marker = buildMarker({ stage: 'review-requested', pr, sha })
-    // The one call that must carry the Product Owner's identity.
-    await createIssueComment(postToken, owner, repo, pr, `@codex review\n\n${marker}`)
-    console.log(`Requested Codex review for PR #${pr} at ${sha}.`)
+    if (!(await isCurrentHead())) {
+      console.log(`PR #${pr}: head moved past ${sha} before the Codex review request could be posted — skipping.`)
+    } else {
+      const marker = buildMarker({ stage: 'review-requested', pr, sha })
+      // The one call that must carry the Product Owner's identity.
+      await createIssueComment(postToken, owner, repo, pr, `@codex review\n\n${marker}`)
+      console.log(`Requested Codex review for PR #${pr} at ${sha}.`)
+    }
   } else {
     console.log(`Not requesting Codex review for PR #${pr} at ${sha}: ${reason}`)
     // ops-dev-gate-recheck.yml is the normal path that evaluates this case,
@@ -124,22 +161,26 @@ if (markers.some((m) => m.stage === 'review-requested' && m.sha === sha)) {
     if (alreadyDecided) {
       console.log(`PR #${pr}: ${sha} already has a readiness decision on record. Skipping (dedup).`)
     } else if (requiredCiPassed) {
-      const { decision, comment } = await buildVerdictComment({
-        token: readToken,
-        owner,
-        repo,
-        prNumber: pr,
-        prBody,
-        base,
-        sha,
-        risk,
-        shaMatches: true,
-        checkRuns,
-        requiredCiPassed,
-        openBlockerCount: 0,
-      })
-      await createIssueComment(readToken, owner, repo, pr, comment)
-      console.log(`Posted ${decision.decision} for PR #${pr} at ${sha} (unsampled C, CI already green at rating time).`)
+      if (!(await isCurrentHead())) {
+        console.log(`PR #${pr}: head moved past ${sha} before the readiness verdict could be posted — skipping.`)
+      } else {
+        const { decision, comment } = await buildVerdictComment({
+          token: readToken,
+          owner,
+          repo,
+          prNumber: pr,
+          prBody,
+          base,
+          sha,
+          risk,
+          shaMatches: true,
+          checkRuns,
+          requiredCiPassed,
+          openBlockerCount: 0,
+        })
+        await createIssueComment(readToken, owner, repo, pr, comment)
+        console.log(`Posted ${decision.decision} for PR #${pr} at ${sha} (unsampled C, CI already green at rating time).`)
+      }
     }
   }
 }

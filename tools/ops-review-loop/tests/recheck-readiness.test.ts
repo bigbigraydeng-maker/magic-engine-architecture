@@ -247,7 +247,39 @@ describe('recheck-readiness', () => {
     expect(createIssueComment).not.toHaveBeenCalled()
   })
 
-  it('waits (posts nothing) when the unsampled C-level PR is not green yet', async () => {
+  it('waits (posts nothing) when the required check has not completed yet, even though the workflow_run itself has', async () => {
+    // The workflow_run event that triggers this leg can arrive before the
+    // required CHECK RUN it cares about (a different GitHub object,
+    // eventually consistent against the check-runs API) has finished
+    // reporting. That is the one case still worth waiting on — a later
+    // workflow_run for the same required workflow can still arrive.
+    const pr = openPr({ number: 31, head: { ref: 'claude/issue-31', sha: shaSampledAs(31, false), repo: { full_name: OWNER_REPO } } })
+    const eventPath = eventFile(dir, {
+      name: 'ai-orchestrator CI',
+      status: 'completed',
+      conclusion: 'success',
+      pull_requests: [{ number: 31 }],
+    })
+    getPullRequest.mockResolvedValue(pr)
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
+    ])
+    listCheckRunsForRef.mockResolvedValue([{ name: 'ai-orchestrator-tests', status: 'in_progress', conclusion: null }])
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/recheck-readiness.mjs'),
+    )
+    expect(createIssueComment).not.toHaveBeenCalled()
+  })
+
+  it('posts BLOCKED for an unsampled C-level PR whose required check completed with a failing conclusion', async () => {
+    // Codex finding (PR #1211, P1): this leg only fires once, on the required
+    // workflow's own completion event. A required check that finished
+    // `failure`/`cancelled`/`timed_out` is just as terminal as one that
+    // succeeded — there is no future workflow_run coming to re-evaluate it.
+    // The old behaviour returned silently here, leaving the PR with no
+    // READY/BLOCKED marker forever. It must instead flow into the same
+    // quality gate as a passing run and come out BLOCKED.
     const pr = openPr({ number: 31, head: { ref: 'claude/issue-31', sha: shaSampledAs(31, false), repo: { full_name: OWNER_REPO } } })
     const eventPath = eventFile(dir, {
       name: 'ai-orchestrator CI',
@@ -260,11 +292,37 @@ describe('recheck-readiness', () => {
       { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
     ])
     listCheckRunsForRef.mockResolvedValue([{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' }])
+    listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
     await withEnv(
       { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
       () => import('../src/recheck-readiness.mjs'),
     )
-    expect(createIssueComment).not.toHaveBeenCalled()
+    expect(createIssueComment).toHaveBeenCalledTimes(1)
+    const [, , , , body] = createIssueComment.mock.calls[0]
+    expect(body).toContain('BLOCKED')
+  })
+
+  it('posts BLOCKED when the required check completed as cancelled, not just failure', async () => {
+    const pr = openPr({ number: 34, head: { ref: 'claude/issue-34', sha: shaSampledAs(34, false), repo: { full_name: OWNER_REPO } } })
+    const eventPath = eventFile(dir, {
+      name: 'ai-orchestrator CI',
+      status: 'completed',
+      conclusion: 'cancelled',
+      pull_requests: [{ number: 34 }],
+    })
+    getPullRequest.mockResolvedValue(pr)
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
+    ])
+    listCheckRunsForRef.mockResolvedValue([{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'cancelled' }])
+    listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/recheck-readiness.mjs'),
+    )
+    expect(createIssueComment).toHaveBeenCalledTimes(1)
+    const [, , , , body] = createIssueComment.mock.calls[0]
+    expect(body).toContain('BLOCKED')
   })
 
   it('posts a verdict for an unsampled C-level PR once required CI is green', async () => {

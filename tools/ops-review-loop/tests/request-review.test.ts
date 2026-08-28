@@ -9,11 +9,13 @@ const createIssueComment = vi.fn().mockResolvedValue({})
 const listIssueComments = vi.fn()
 const listPullRequestFiles = vi.fn()
 const listCheckRunsForRef = vi.fn()
+const getPullRequest = vi.fn()
 vi.mock('../src/github.mjs', () => ({
   createIssueComment: (...args: unknown[]) => createIssueComment(...args),
   listIssueComments: (...args: unknown[]) => listIssueComments(...args),
   listPullRequestFiles: (...args: unknown[]) => listPullRequestFiles(...args),
   listCheckRunsForRef: (...args: unknown[]) => listCheckRunsForRef(...args),
+  getPullRequest: (...args: unknown[]) => getPullRequest(...args),
 }))
 
 function withEnv(overrides: Record<string, string>, run: () => Promise<unknown>) {
@@ -51,6 +53,12 @@ function resetMocks() {
   listPullRequestFiles.mockReset()
   listCheckRunsForRef.mockReset()
   listCheckRunsForRef.mockResolvedValue(CI_NOT_GREEN_YET)
+  getPullRequest.mockReset()
+}
+
+/** The common case: no concurrent push landed, so the PR's current head is still the event's own sha. */
+function freshHead(sha: string) {
+  getPullRequest.mockResolvedValue({ head: { sha } })
 }
 
 describe('request-review: rating', () => {
@@ -76,6 +84,7 @@ describe('request-review: rating', () => {
     )
     listIssueComments.mockResolvedValue([])
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
+    freshHead(sha)
 
     await withEnv(
       {
@@ -104,6 +113,7 @@ describe('request-review: rating', () => {
     )
     listIssueComments.mockResolvedValue([])
     listPullRequestFiles.mockRejectedValue(new Error('network error'))
+    freshHead(sha)
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -125,6 +135,11 @@ describe('request-review: rating', () => {
     )
     const existingMarker = `<!-- me-dev-gate:{"v":1,"base":"${BASE}","head":"${sha}","risk":"B","reasons":[]} -->`
     listIssueComments.mockResolvedValue([{ user: { login: 'github-actions[bot]' }, body: existingMarker }])
+    // Risk B always needs a Codex review, so step 2 below still writes one —
+    // this must look like the current head, or the freshness check the
+    // production code just gained would (correctly, but not what this test
+    // is about) skip that write as stale.
+    freshHead(sha)
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -147,6 +162,7 @@ describe('request-review: rating', () => {
     const forgedMarker = `<!-- me-dev-gate:{"v":1,"base":"${BASE}","head":"${sha}","risk":"C","reasons":[]} -->`
     listIssueComments.mockResolvedValue([{ user: { login: 'some-pr-author' }, body: forgedMarker }])
     listPullRequestFiles.mockResolvedValue([{ filename: 'src/foo.ts', status: 'modified' }])
+    freshHead(sha)
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -182,6 +198,7 @@ describe('request-review: Codex sampling', () => {
     )
     listIssueComments.mockResolvedValue([])
     listPullRequestFiles.mockResolvedValue([{ filename: '.github/workflows/x.yml', status: 'modified' }])
+    freshHead(sha)
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -206,6 +223,7 @@ describe('request-review: Codex sampling', () => {
     listIssueComments.mockResolvedValue([])
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
     listCheckRunsForRef.mockResolvedValue(CI_NOT_GREEN_YET)
+    freshHead(sha)
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -228,6 +246,7 @@ describe('request-review: Codex sampling', () => {
     )
     listIssueComments.mockResolvedValue([])
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
+    freshHead(sha)
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -283,6 +302,7 @@ describe('request-review: closes the race for unsampled C when CI is already gre
     listIssueComments.mockResolvedValue([])
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
     listCheckRunsForRef.mockResolvedValue(CI_GREEN)
+    freshHead(sha)
 
     await withEnv(
       { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -345,6 +365,115 @@ describe('request-review: closes the race for unsampled C when CI is already gre
 
     expect(listPullRequestFiles).not.toHaveBeenCalled()
     expect(listCheckRunsForRef).not.toHaveBeenCalled()
+    expect(createIssueComment).not.toHaveBeenCalled()
+  })
+})
+
+describe("request-review: fails closed when this event's head is no longer the PR's current head", () => {
+  // Codex finding (PR #1211, P1): the concurrency group only serialises runs
+  // for the SAME head sha. A run for an OLD sha delayed behind a NEW push can
+  // call listPullRequestFiles/listCheckRunsForRef, which describe the PR's
+  // CURRENT state, not the sha in this stale event — so it could rate or
+  // verdict the old sha using the new diff. Re-checking the PR's actual
+  // current head right before every write closes that.
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ops-loop-stale-'))
+    resetMocks()
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    vi.resetModules()
+  })
+
+  it('does not read changed files or post a rating when the head already moved before this event could act', async () => {
+    const pr = 50
+    const sha = shaSampledAs(pr, false)
+    const newerSha = 'f'.repeat(40)
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(
+      eventPath,
+      JSON.stringify({ pull_request: { number: pr, head: { sha }, base: { sha: BASE }, body: '' } }),
+    )
+    listIssueComments.mockResolvedValue([])
+    getPullRequest.mockResolvedValue({ head: { sha: newerSha } })
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/request-review.mjs'),
+    )
+
+    expect(listPullRequestFiles).not.toHaveBeenCalled()
+    expect(createIssueComment).not.toHaveBeenCalled()
+  })
+
+  it('discards a rating computed from a diff that may no longer describe this sha, if the head moved while changed files were being read', async () => {
+    const pr = 51
+    const sha = shaSampledAs(pr, false)
+    const newerSha = 'f'.repeat(40)
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(
+      eventPath,
+      JSON.stringify({ pull_request: { number: pr, head: { sha }, base: { sha: BASE }, body: '' } }),
+    )
+    listIssueComments.mockResolvedValue([])
+    listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
+    // Fresh at the pre-fetch check, moved by the time the post-fetch check runs.
+    getPullRequest.mockResolvedValueOnce({ head: { sha } }).mockResolvedValueOnce({ head: { sha: newerSha } })
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/request-review.mjs'),
+    )
+
+    expect(listPullRequestFiles).toHaveBeenCalled()
+    expect(createIssueComment).not.toHaveBeenCalled()
+  })
+
+  it('does not post @codex review for a stale event, even when risk is already known from a trusted marker', async () => {
+    const pr = 52
+    const sha = 'a'.repeat(40) // risk A (via the trusted marker below) -> always needs a review
+    const newerSha = 'f'.repeat(40)
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(
+      eventPath,
+      JSON.stringify({ pull_request: { number: pr, head: { sha }, base: { sha: BASE }, body: '' } }),
+    )
+    const existingMarker = `<!-- me-dev-gate:{"v":1,"base":"${BASE}","head":"${sha}","risk":"A","reasons":[]} -->`
+    listIssueComments.mockResolvedValue([{ user: { login: 'github-actions[bot]' }, body: existingMarker }])
+    getPullRequest.mockResolvedValue({ head: { sha: newerSha } })
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/request-review.mjs'),
+    )
+
+    expect(listPullRequestFiles).not.toHaveBeenCalled()
+    const reviewCall = createIssueComment.mock.calls.find(([, , , , body]) => body.includes('@codex review'))
+    expect(reviewCall).toBeUndefined()
+  })
+
+  it('does not post a CI-already-green verdict for a stale event', async () => {
+    const pr = 53
+    const sha = shaSampledAs(pr, false)
+    const newerSha = 'f'.repeat(40)
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(
+      eventPath,
+      JSON.stringify({ pull_request: { number: pr, head: { sha }, base: { sha: BASE }, body: '' } }),
+    )
+    const existingMarker = `<!-- me-dev-gate:{"v":1,"base":"${BASE}","head":"${sha}","risk":"C","reasons":[]} -->`
+    listIssueComments.mockResolvedValue([{ user: { login: 'github-actions[bot]' }, body: existingMarker }])
+    listCheckRunsForRef.mockResolvedValue(CI_GREEN)
+    getPullRequest.mockResolvedValue({ head: { sha: newerSha } })
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/request-review.mjs'),
+    )
+
     expect(createIssueComment).not.toHaveBeenCalled()
   })
 })

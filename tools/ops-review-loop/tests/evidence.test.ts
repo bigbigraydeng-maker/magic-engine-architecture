@@ -31,14 +31,38 @@ describe('bodySignals', () => {
     ['observability', 'observability: logged to console'],
     ['build-evidence', 'npm run build 通过'],
     ['build-evidence', 'build succeeded'],
-    ['test-output', 'npx vitest run tools/ops-review-loop'],
-    ['test-output', 'npm test output attached'],
+    ['build-evidence', '`npm run build`：在非敏感占位 Supabase 环境变量下成功'],
+    ['build-evidence', '473/473 build steps green'],
+    ['test-output', 'npx vitest run tools/ops-review-loop 全绿'],
+    ['test-output', 'npm test output attached, all passed'],
+    ['test-output', '`npx vitest run tools/ops-review-loop --reporter=verbose`：473/473'],
   ])('detects %s from matching text', (id, text) => {
     expect(bodySignals(text)).toContain(id)
   })
 
   it('does not detect a signal from unrelated prose', () => {
     expect(bodySignals('This PR renames a variable.')).toEqual([])
+  })
+
+  // Codex finding (PR #1211, P2): these two signals used to match on the
+  // command name alone, so a PR could earn the same 5 points for a build/test
+  // command it explicitly says did NOT pass. On a C-level PR (75-point
+  // threshold) that is 10 free points — enough on its own to turn a BLOCKED
+  // into a READY.
+  it.each([
+    ['build-evidence', 'npm run build 未运行'],
+    ['build-evidence', 'npm run build 失败'],
+    ['build-evidence', '`npm run build`（待执行）'],
+    ['build-evidence', 'npm run build: not run'],
+    ['build-evidence', 'build failed'],
+    ['build-evidence', 'npm run build: cancelled'],
+    ['test-output', '测试命令：npx vitest（待执行）'],
+    ['test-output', 'npx vitest run tools/ops-review-loop 失败'],
+    ['test-output', 'npm test: cancelled'],
+    ['test-output', 'vitest run — tests pending'],
+    ['test-output', 'npm test: 3 tests failed, rest skipped'],
+  ])('does NOT detect %s from a non-passing or unrun claim: %s', (id, text) => {
+    expect(bodySignals(text)).not.toContain(id)
   })
 })
 

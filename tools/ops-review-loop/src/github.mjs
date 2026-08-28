@@ -119,14 +119,37 @@ export async function listCheckRunsForRef(token, owner, repo, ref) {
  * GitHub returns — `filename`, `status`, `previous_filename` for renames —
  * so callers (risk.mjs's `classifyRisk`) can rate both ends of a rename.
  *
+ * 🔴 Codex finding (PR #1211, P2): GitHub's List pull request files endpoint
+ * hard-caps its result set at 3000 entries
+ * (https://docs.github.com/en/rest/pulls/pulls?apiVersion=2022-11-28#list-pull-requests-files),
+ * a limit `paginateAll`'s own "short page = done" rule cannot see — a PR with
+ * more than 3000 changed files ends on a page short of 100 (or empty)
+ * entries for the same reason a genuinely complete list does, and the risk
+ * rating would then silently be computed from only the first 3000 files. A
+ * PR that big is exactly the shape most likely to bury an A-level path (a
+ * migration, a workflow file) past that cutoff. `changed_files` on the PR
+ * resource itself is a count, not a paginated list, so it is not subject to
+ * the same cap — comparing against it is the only way to tell "short because
+ * complete" from "short because truncated".
+ *
  * @param {string} token
  * @param {string} owner
  * @param {string} repo
  * @param {number|string} pullNumber
  * @returns {Promise<Array<Record<string, unknown>>>}
- * @throws if a page request fails or pagination does not terminate within
- *   {@link MAX_LIST_PAGES}
+ * @throws if a page request fails, pagination does not terminate within
+ *   {@link MAX_LIST_PAGES}, or the returned file count does not match the
+ *   PR's own `changed_files` count
  */
 export async function listPullRequestFiles(token, owner, repo, pullNumber) {
-  return paginateAll(token, (page) => `/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`)
+  const [pr, items] = await Promise.all([
+    getPullRequest(token, owner, repo, pullNumber),
+    paginateAll(token, (page) => `/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`),
+  ])
+  if (typeof pr.changed_files === 'number' && items.length !== pr.changed_files) {
+    throw new Error(
+      `PR #${pullNumber} reports ${pr.changed_files} changed files but the files API returned ${items.length} — refusing to rate this PR from a possibly-truncated file list (GitHub's List pull request files endpoint caps out at 3000 results).`,
+    )
+  }
+  return items
 }
