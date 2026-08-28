@@ -16,6 +16,19 @@ name: OPS — Dev Gate Recheck
 # to the review-triggered leg — see the script's header comment for why the
 # two never race.
 #
+# WHY THIS ALSO LISTENS FOR `OPS — Auto-fix blast radius guard`
+# ----------------------------------------------------------------
+# Codex finding (PR #1211, P2): the verdict this workflow writes scores
+# ops-fix-scope-guard.yml's own check run (`scope-guard-green`), not just the
+# required CI's — and that workflow's `pull_request` trigger races
+# ai-orchestrator-ci.yml's on every push. Listening only for `ai-orchestrator
+# CI` meant whichever of the two finished first triggered a run that could
+# lock in a verdict while the OTHER was still queued/in_progress, silently
+# scoring it as not passed. recheck-readiness.mjs now requires both check
+# runs to be `completed` before writing anything; listening for either
+# workflow's completion here is what guarantees whichever one finishes
+# SECOND is the one that actually triggers the write.
+#
 # WHY workflow_run, NOT check_run
 # --------------------------------
 # GitHub does not deliver `check_run` events for check suites GitHub Actions
@@ -32,7 +45,7 @@ name: OPS — Dev Gate Recheck
 
 on:
   workflow_run:
-    workflows: ["ai-orchestrator CI"]
+    workflows: ["ai-orchestrator CI", "OPS — Auto-fix blast radius guard"]
     types: [completed]
 
 permissions:
