@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { extractItinerary, applyPatch, type ChatTurn } from '@/lib/tailor-made/extract'
-import { createOrReuseJob, markRunning, markCompleted, markFailed } from '@/lib/tailor-made/jobs'
+import { createOrReuseJob, fingerprintInput, markRunning, markCompleted, markFailed } from '@/lib/tailor-made/jobs'
+import { getItinerary, saveItinerary } from '@/lib/tailor-made/store'
 import type { TailorMadeItinerary } from '@/lib/tailor-made/types'
 
 /**
@@ -42,7 +43,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const current = body.current
+  const itineraryId = body.itineraryId
   const history = Array.isArray(body.history) ? body.history : []
+
+  // 建任务前先记一下草稿现在的 updated_at——生成完之后要靠它判断这份草稿
+  // 在生成期间有没有被改过，见 runExtractJob() 里 persistIfUnchanged 的乐观锁注释。
+  const baselineRecord = await getItinerary(params.id, itineraryId)
+  const baselineUpdatedAt = baselineRecord?.updated_at ?? ''
 
   // 建任务本身也可能失败——不能让异常甩给 Next.js 默认错误页，那正是这次
   // 要修的原始故障（HTML 错误页把 "Unexpected token '<'" 甩给浏览器）。
@@ -50,8 +57,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     ;({ jobId, reused } = await createOrReuseJob({
       clientId: params.id,
-      itineraryId: body.itineraryId,
+      itineraryId,
       kind: 'extract_text',
+      inputFingerprint: fingerprintInput(message),
       input: { messageLength: message.length },
     }))
   } catch (error) {
@@ -61,7 +69,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   if (!reused) {
-    void runExtractJob({ jobId, message, current, history }).catch((err) => {
+    void runExtractJob({
+      jobId, clientId: params.id, itineraryId, baselineUpdatedAt, message, current, history,
+    }).catch((err) => {
       console.error('[tailor-made/extract] background job crashed', err)
     })
   }
@@ -69,22 +79,44 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ job_id: jobId }, { status: 202 })
 }
 
+/**
+ * 生成结束后顺手把结果存回行程草稿本身，跟 import/route.ts 的 persistIfUnchanged
+ * 是同一套道理：顾问在等待期间关掉标签页，任务表里有结果但草稿页上看不到，
+ * 只能重新点一次、重新花一次钱。乐观锁同款：updated_at 变过就不覆盖。
+ */
+async function persistIfUnchanged(
+  clientId: string, itineraryId: string, baselineUpdatedAt: string, payload: TailorMadeItinerary
+): Promise<void> {
+  try {
+    const latest = await getItinerary(clientId, itineraryId)
+    if (!latest) return
+    if (latest.updated_at !== baselineUpdatedAt) {
+      console.warn('[tailor-made/extract] 草稿在生成期间被改过，跳过自动回存，避免覆盖更新的内容', { itineraryId })
+      return
+    }
+    await saveItinerary(clientId, itineraryId, payload)
+  } catch (err) {
+    console.error('[tailor-made/extract] 自动回存草稿失败（任务表里的结果还在，不算彻底丢失）', err)
+  }
+}
+
 async function runExtractJob(params: {
   jobId: string
+  clientId: string
+  itineraryId: string
+  baselineUpdatedAt: string
   message: string
   current: TailorMadeItinerary
   history: ChatTurn[]
 }): Promise<void> {
-  const { jobId, message, current, history } = params
+  const { jobId, clientId, itineraryId, baselineUpdatedAt, message, current, history } = params
   await markRunning(jobId)
 
   try {
     const result = await extractItinerary({ message, current, history })
-    await markCompleted(jobId, {
-      payload: applyPatch(current, result.patch),
-      review: result.review,
-      reply: result.reply,
-    })
+    const payload = applyPatch(current, result.patch)
+    await markCompleted(jobId, { payload, review: result.review, reply: result.reply })
+    await persistIfUnchanged(clientId, itineraryId, baselineUpdatedAt, payload)
   } catch (error) {
     const msg = error instanceof Error ? error.message : '解析失败'
     console.error('[tailor-made/extract]', msg)

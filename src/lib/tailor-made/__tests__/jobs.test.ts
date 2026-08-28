@@ -1,13 +1,16 @@
 /**
  * tailor_made_jobs 读写。钉住的几件事：
- *   1. 同一份行程、同一种任务还有没跑完的（queued/running），复用它，不重开——
- *      防手抖连点两次上传白白多花一次 AI 调用的钱。
- *   2. 并发插入撞上数据库唯一索引（23505）时退化为复用，不能把冲突甩给调用方
+ *   1. 同一份行程、同一种任务、**同一份输入内容**还有没跑完的（queued/running），
+ *      复用它，不重开——防手抖连点两次上传白白多花一次 AI 调用的钱。
+ *   2. 输入内容不同的两次提交永远各建各的，不能被复用逻辑悄悄合并
+ *      （Codex 复审点出来的真实场景：两个标签页对同一份行程提交不同内容，
+ *      复用会让第二份输入被无声丢弃、还把第一份结果错当成第二份的）。
+ *   3. 并发插入撞上数据库唯一索引（23505）时退化为复用，不能把冲突甩给调用方
  *      （子牙+魏征复审都点出「先查后插」本身挡不住并发，真正防线在 DB 唯一索引，
  *      代码必须接住冲突）。
- *   3. 卡住太久的僵尸任务（Render 重启/进程被杀留下的）不能一直挡着新任务，
+ *   4. 卡住太久的僵尸任务（Render 重启/进程被杀留下的）不能一直挡着新任务，
  *      也不能被 createOrReuseJob 永远复用。
- *   4. completed/failed 各自写对状态、结果、时间戳，且查询报错时不能被静默吞掉
+ *   5. completed/failed 各自写对状态、结果、时间戳，且查询报错时不能被静默吞掉
  *      ——吞掉等于让 500 变成 Next.js 默认 HTML 错误页，原样复现这次要修的故障。
  */
 
@@ -18,7 +21,9 @@ vi.mock('@/lib/supabase', () => ({
 }))
 
 import { supabaseAdmin } from '@/lib/supabase'
-import { createOrReuseJob, getJob, markCompleted, markFailed, markRunning } from '../jobs'
+import { createOrReuseJob, fingerprintInput, getJob, markCompleted, markFailed, markRunning } from '../jobs'
+
+const FP = fingerprintInput('some-file-content')
 
 const CLIENT = 'client-cts'
 const ITINERARY = 'itin-1'
@@ -28,6 +33,8 @@ interface MockState {
   selectQueue: Array<Array<{ id: string }>>
   insertResult: { data: { id: string } | null; error: { code: string; message: string } | null }
   updates: Array<{ patch: Record<string, unknown>; eq: Array<[string, unknown]>; lt?: string }>
+  /** 每次 activeJob() 的 select().eq(...) 参数，用来断言真的按 fingerprint 过滤了 */
+  selectEqCalls?: Array<Array<[string, unknown]>>
 }
 
 function mockDb(state: MockState) {
@@ -35,11 +42,15 @@ function mockDb(state: MockState) {
     if (table !== 'tailor_made_jobs') throw new Error(`unexpected table ${table}`)
     return {
       select: () => {
+        const eqCalls: Array<[string, unknown]> = []
         const chain = {
-          eq: () => chain,
+          eq: (col: string, val: unknown) => { eqCalls.push([col, val]); return chain },
           in: () => chain,
           order: () => chain,
-          limit: () => Promise.resolve({ data: state.selectQueue.shift() ?? [], error: null }),
+          limit: () => {
+            ;(state.selectEqCalls ??= []).push(eqCalls)
+            return Promise.resolve({ data: state.selectQueue.shift() ?? [], error: null })
+          },
         }
         return chain
       },
@@ -84,6 +95,7 @@ describe('createOrReuseJob', () => {
       clientId: CLIENT,
       itineraryId: ITINERARY,
       kind: 'import_file',
+      inputFingerprint: FP,
       input: { filename: 'x.pdf' },
     })
 
@@ -105,10 +117,34 @@ describe('createOrReuseJob', () => {
       clientId: CLIENT,
       itineraryId: ITINERARY,
       kind: 'extract_text',
+      inputFingerprint: FP,
       input: { messageLength: 42 },
     })
 
     expect(result).toEqual({ jobId: 'job-new', reused: false })
+  })
+
+  it('activeJob() 真的按 input_fingerprint 过滤，不同内容各建各的', async () => {
+    const state: MockState = {
+      selectQueue: [[]], // 不同指纹查不到对方
+      insertResult: { data: { id: 'job-for-different-input' }, error: null },
+      updates: [],
+    }
+    mockDb(state)
+    const otherFp = fingerprintInput('a-completely-different-file')
+
+    const result = await createOrReuseJob({
+      clientId: CLIENT,
+      itineraryId: ITINERARY,
+      kind: 'import_file',
+      inputFingerprint: otherFp,
+      input: { filename: 'y.pdf' },
+    })
+
+    expect(result).toEqual({ jobId: 'job-for-different-input', reused: false })
+    // 断言查询真的把 fingerprint 当过滤条件传下去了，不是摆设字段
+    const fingerprintFilters = state.selectEqCalls?.flat().filter(([col]) => col === 'input_fingerprint')
+    expect(fingerprintFilters).toEqual([['input_fingerprint', otherFp]])
   })
 
   it('插入撞上唯一索引冲突（23505）时退化为复用，不抛错', async () => {
@@ -125,6 +161,7 @@ describe('createOrReuseJob', () => {
       clientId: CLIENT,
       itineraryId: ITINERARY,
       kind: 'import_file',
+      inputFingerprint: FP,
       input: { filename: 'x.pdf' },
     })
 
@@ -140,7 +177,7 @@ describe('createOrReuseJob', () => {
     mockDb(state)
 
     await expect(
-      createOrReuseJob({ clientId: CLIENT, itineraryId: ITINERARY, kind: 'import_file', input: {} })
+      createOrReuseJob({ clientId: CLIENT, itineraryId: ITINERARY, kind: 'import_file', inputFingerprint: FP, input: {} })
     ).rejects.toThrow(/建任务失败/)
   })
 })
@@ -196,7 +233,11 @@ describe('getJob', () => {
 describe('markRunning / markCompleted / markFailed', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  function mockUpdateOnly(updates: Array<{ patch: Record<string, unknown>; eq: Array<[string, unknown]> }>) {
+  /** errorQueue 依次作为每次 .eq() 落地的结果；用完了默认成功。 */
+  function mockUpdateOnly(
+    updates: Array<{ patch: Record<string, unknown>; eq: Array<[string, unknown]> }>,
+    errorQueue: Array<{ message: string } | null> = []
+  ) {
     ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation(() => ({
       update: (patch: Record<string, unknown>) => {
         const eqCalls: Array<[string, unknown]> = []
@@ -204,7 +245,8 @@ describe('markRunning / markCompleted / markFailed', () => {
           eq: (col: string, val: unknown) => {
             eqCalls.push([col, val])
             updates.push({ patch, eq: eqCalls })
-            return chain
+            const error = errorQueue.length > 0 ? errorQueue.shift()! : null
+            return Promise.resolve({ data: null, error })
           },
         }
         return chain
@@ -222,6 +264,32 @@ describe('markRunning / markCompleted / markFailed', () => {
     expect(updates[0].patch.result).toEqual({ payload: { days: [] }, review: [], reply: 'ok' })
     expect(updates[0].patch.completed_at).toEqual(expect.any(String))
     expect(updates[0].eq).toEqual([['id', 'job-1']])
+  })
+
+  it('markCompleted 第一次写库失败时重试一次，重试成功就不丢结果', async () => {
+    const updates: Array<{ patch: Record<string, unknown>; eq: Array<[string, unknown]> }> = []
+    mockUpdateOnly(updates, [{ message: 'db hiccup' }, null]) // 第一次失败，第二次成功
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await markCompleted('job-1', { payload: { days: [1] } })
+
+    expect(updates).toHaveLength(2) // 确实重试了一次
+    expect(errSpy).toHaveBeenCalledTimes(1) // 只在失败时提醒一次，成功了不该再报
+    errSpy.mockRestore()
+  })
+
+  it('markCompleted 重试后仍失败——把结果吼进日志，不能悄无声息地丢掉这次生成', async () => {
+    const updates: Array<{ patch: Record<string, unknown>; eq: Array<[string, unknown]> }> = []
+    mockUpdateOnly(updates, [{ message: 'down' }, { message: 'still down' }])
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await markCompleted('job-1', { payload: { days: [1] }, reply: 'irreplaceable result' })
+
+    expect(updates).toHaveLength(2)
+    // 第二条日志必须带上结果本身，否则这次生成就真的彻底找不回来了
+    const loggedResult = errSpy.mock.calls.find((call) => String(call.join(' ')).includes('irreplaceable result'))
+    expect(loggedResult).toBeTruthy()
+    errSpy.mockRestore()
   })
 
   it('markFailed 写 failed 状态与错误信息，不把半截结果当成功存', async () => {

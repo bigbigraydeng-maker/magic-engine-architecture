@@ -55,10 +55,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const ids = stuck.map((r) => (r as { id: string }).id)
 
+  // .in('status', ...) 是这次更新真正的安全闸，不是摆设：长 PDF 的转录+抽取
+  // 是两个串行 Claude 调用，跨过 10 分钟阈值完全可能，如果任务恰好在
+  // 「上面选出来」和「这里写 failed」之间完成，不带这个条件会把刚写好的
+  // completed 结果原地覆盖成 failed，等于把已经生成好的内容悄悄冲掉。
   const { error: updateErr } = await supabaseAdmin
     .from('tailor_made_jobs')
     .update({ status: 'failed', error: STUCK_MESSAGE, completed_at: new Date().toISOString() })
     .in('id', ids)
+    .in('status', ['queued', 'running'])
 
   if (updateErr) {
     console.error('[tailor-made-jobs-sweeper] update failed', updateErr)

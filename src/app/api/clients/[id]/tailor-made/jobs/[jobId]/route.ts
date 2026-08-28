@@ -24,16 +24,25 @@ export async function GET(
   const access = await requireDashboardClientAccess(params.id)
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status })
 
-  const job = await getJob(params.id, params.jobId)
-  if (!job) return NextResponse.json({ error: '任务不存在' }, { status: 404 })
+  // 这是个被高频轮询的端点——一次瞬时 DB 抖动就足够被打到。不接住的话
+  // Next.js 默认 500 页不保证是 JSON，前端 `await res.json()` 会再炸一次
+  // "Unexpected token '<'"，跟这一整轮修复要挡的原始症状一模一样。
+  try {
+    const job = await getJob(params.id, params.jobId)
+    if (!job) return NextResponse.json({ error: '任务不存在' }, { status: 404 })
 
-  return NextResponse.json(
-    {
-      job_id: job.id,
-      status: job.status,
-      result: job.status === 'completed' ? job.result : null,
-      error: job.status === 'failed' ? job.error : null,
-    },
-    { headers: { 'Cache-Control': 'no-store' } },
-  )
+    return NextResponse.json(
+      {
+        job_id: job.id,
+        status: job.status,
+        result: job.status === 'completed' ? job.result : null,
+        error: job.status === 'failed' ? job.error : null,
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    )
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '查询任务失败'
+    console.error('[tailor-made/jobs] getJob failed', msg)
+    return NextResponse.json({ error: msg }, { status: 502 })
+  }
 }

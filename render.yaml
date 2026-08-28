@@ -202,6 +202,8 @@ services:
   # 晾在 queued/running。getJob()/createOrReuseJob() 已经有惰性自愈（被轮询或
   # 被同一份行程再次建任务时会自动纠正），这个 cron 只兜底"从此没人再碰"的情况。
   # 见 CTS 2027 China Panorama 报障后续修复（tailor_made_jobs 表新增）。
+  # 密钥用 fromGroup 自动挂，不要改回 `sync: false`——那条路径不会真的给新服务
+  # 灌值，line ~980 那条 cron 的注释已经记过一次这个坑（连续 401 且没人发现）。
   # ⚠️ 没有配 healthchecks.io ping —— 没有权限新建 check，PM 有空的话在
   #    healthchecks.io 建一个再把 hc-ping 行加回来（参照上面 blog-stuck-generating 的写法）。
   - type: cron
@@ -213,8 +215,7 @@ services:
       curl -fsS --max-time 60 -H "Authorization: Bearer $CRON_SECRET" \
         https://app.magicengine.com.au/api/cron/tailor-made-jobs-sweeper
     envVars:
-      - key: CRON_SECRET
-        sync: false
+      - fromGroup: me-shared-cron-secret
 
   # Weekly AI Visibility Tracker — every Monday at 1am UTC (~1pm NZST)
   # Processes all clients with enabled queries; writes runs + weekly snapshot.

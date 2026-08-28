@@ -5,7 +5,8 @@ import { extractItinerary, applyPatch } from '@/lib/tailor-made/extract'
 import { detectKind, docxToText, plainToText, type SourceKind } from '@/lib/tailor-made/read-source'
 import { heroForTrip, pickHeroName } from '@/lib/tailor-made/hero'
 import { parseFlightPdf } from '@/lib/tailor-made/flights'
-import { createOrReuseJob, markRunning, markCompleted, markFailed } from '@/lib/tailor-made/jobs'
+import { createOrReuseJob, fingerprintInput, markRunning, markCompleted, markFailed } from '@/lib/tailor-made/jobs'
+import { getItinerary, saveItinerary } from '@/lib/tailor-made/store'
 import type { TailorMadeItinerary } from '@/lib/tailor-made/types'
 
 /**
@@ -82,15 +83,43 @@ function looksLikeTicket(text: string): boolean {
   return hasFlightNo && hasLeg && hasTicketMarker
 }
 
+/**
+ * 生成结束后，除了写进任务表给轮询的人看，也顺手把结果存回行程草稿本身——
+ * 不然顾问在生成期间关掉标签页（Codex 复审点出来的场景），任务表里趟着一份
+ * 生成好的内容，草稿页上却永远看不到，用户只能重新点一次、重新花一次钱。
+ *
+ * 乐观锁：只有草稿的 updated_at 跟建任务时读到的一致，才落这次结果——如果
+ * 顾问在等待期间自己手动改过草稿（正常的自动保存已经落库），updated_at 会
+ * 变，这时候宁可不存，也不能拿一份基于旧草稿算出来的结果覆盖用户更新的内容。
+ */
+async function persistIfUnchanged(
+  clientId: string, itineraryId: string, baselineUpdatedAt: string, payload: TailorMadeItinerary
+): Promise<void> {
+  try {
+    const latest = await getItinerary(clientId, itineraryId)
+    if (!latest) return // 草稿被删了，没什么好存的
+    if (latest.updated_at !== baselineUpdatedAt) {
+      console.warn('[tailor-made/import] 草稿在生成期间被改过，跳过自动回存，避免覆盖更新的内容', { itineraryId })
+      return
+    }
+    await saveItinerary(clientId, itineraryId, payload)
+  } catch (err) {
+    console.error('[tailor-made/import] 自动回存草稿失败（任务表里的结果还在，不算彻底丢失）', err)
+  }
+}
+
 /** 后台真正干活的地方——不绑定任何 HTTP 连接，AI 想跑多久跑多久 */
 async function runImportJob(params: {
   jobId: string
+  clientId: string
+  itineraryId: string
+  baselineUpdatedAt: string
   kind: SourceKind
   base64: string
   filename: string
   current: TailorMadeItinerary
 }): Promise<void> {
-  const { jobId, kind, base64, filename, current } = params
+  const { jobId, clientId, itineraryId, baselineUpdatedAt, kind, base64, filename, current } = params
   await markRunning(jobId)
 
   try {
@@ -105,12 +134,14 @@ async function runImportJob(params: {
     // 传错框也能救回来：认出是出票单就走航班解析，不当行程糟蹋掉
     if (kind === 'pdf' && looksLikeTicket(text)) {
       const flights = await parseFlightPdf(base64, filename)
+      const payload = { ...current, flights: flights.flights, bookingRef: flights.bookingRef || current.bookingRef }
       await markCompleted(jobId, {
-        payload: { ...current, flights: flights.flights, bookingRef: flights.bookingRef || current.bookingRef },
+        payload,
         review: [],
         reply: `这份是出票单，不是行程 —— 已按航班读取。${flights.note}`,
         detectedAs: 'ticket',
       })
+      await persistIfUnchanged(clientId, itineraryId, baselineUpdatedAt, payload)
       return
     }
 
@@ -142,6 +173,7 @@ async function runImportJob(params: {
     }
 
     await markCompleted(jobId, { payload, review: result.review, reply: result.reply, heroName, sourceKind: kind })
+    await persistIfUnchanged(clientId, itineraryId, baselineUpdatedAt, payload)
   } catch (error) {
     const msg = error instanceof Error ? error.message : '解析失败'
     console.error('[tailor-made/import]', msg)
@@ -183,6 +215,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const base64 = Buffer.from(await file.arrayBuffer()).toString('base64')
 
+  // 建任务前先记一下草稿现在的 updated_at——生成完之后要靠它判断这份草稿
+  // 在生成期间有没有被改过，见 persistIfUnchanged() 的乐观锁注释。
+  const baselineRecord = await getItinerary(params.id, itineraryId)
+  const baselineUpdatedAt = baselineRecord?.updated_at ?? ''
+
   // 建任务本身也可能失败（比如表还没建好、DB 抖动）——不能让这里的异常
   // 甩给 Next.js 默认错误页：那正是这次要修的原始故障（HTML 错误页把
   // "Unexpected token '<'" 甩给浏览器），绝不能在这一层原样复现。
@@ -192,6 +229,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       clientId: params.id,
       itineraryId,
       kind: 'import_file',
+      inputFingerprint: fingerprintInput(base64),
       input: { filename: file.name, sourceKind: kind },
     }))
   } catch (error) {
@@ -201,7 +239,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   if (!reused) {
-    void runImportJob({ jobId, kind, base64, filename: file.name, current }).catch((err) => {
+    void runImportJob({
+      jobId, clientId: params.id, itineraryId, baselineUpdatedAt, kind, base64, filename: file.name, current,
+    }).catch((err) => {
       console.error('[tailor-made/import] background job crashed', err)
     })
   }
