@@ -182,6 +182,7 @@ async function executeDiscoveryJob(
     }
 
     // Enrich seed keywords with per-keyword SEMrush metrics (volume / KD / CPC)
+    let enrichmentWarning: string | null = null
     if (report.seed_keywords.length > 0) {
       await updateJobProgress(supabaseAdmin, jobId, { progress_note: '正在获取种子关键词数据…' })
       try {
@@ -198,12 +199,26 @@ async function executeDiscoveryJob(
             semrush_cpc: d.cpc ?? 0,
           }
         })
-      } catch {
-        // Non-fatal — seed keywords saved without per-keyword metrics
+      } catch (err) {
+        enrichmentWarning = err instanceof Error ? err.message : String(err)
+        console.warn('[zhangqian/discover] bulkKeywordVolume enrichment failed', {
+          jobId,
+          clientId,
+          domain,
+          error: enrichmentWarning,
+        })
       }
     }
 
     await completeJob(supabaseAdmin, jobId, clientId, report)
+
+    // completeJob 会把 progress_note 覆盖成 "Discovery complete."，
+    // 所以降级提示必须放在 completeJob 之后，否则会被冲掉。
+    if (enrichmentWarning) {
+      await updateJobProgress(supabaseAdmin, jobId, {
+        progress_note: '⚠️ 种子关键词补数据未完成，报告字段可能不完整（详情见运维日志）',
+      })
+    }
 
     // MTC commit (skipped for admin runs where projectedMtc was set to 0)
     if (projectedMtc > 0) {
