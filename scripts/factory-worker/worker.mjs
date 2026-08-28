@@ -80,11 +80,6 @@ function brandkitFor(clientId) {
 const MUAPI_SLUG = ENV.MUAPI_KLING_SLUG || 'kling-v2.1-standard-i2v'
 const CLIP_UNIT_COST = Number(ENV.FACTORY_CLIP_UNIT_COST_USD || '0.225')
 
-if (!WORKER_TOKEN) {
-  console.error('FATAL: FACTORY_WORKER_TOKEN 未配置(scripts/factory-worker/.env)')
-  process.exit(1)
-}
-
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
 // ── ME API 客户端 ──────────────────────────────────────────────────────────────
@@ -421,6 +416,10 @@ async function processOrder(wo) {
 // ── 主循环 ──────────────────────────────────────────────────────────────────────
 
 async function main() {
+  if (!WORKER_TOKEN) {
+    console.error('FATAL: FACTORY_WORKER_TOKEN 未配置(scripts/factory-worker/.env)')
+    process.exit(1)
+  }
   const loop = process.argv.includes('--loop')
   const intervalMs = Number(ENV.FACTORY_POLL_INTERVAL_MS || '30000')
   log(`worker 启动 id=${WORKER_ID} api=${API_BASE} loop=${loop}`)
