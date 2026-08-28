@@ -20,7 +20,7 @@ import { classifyRisk, parseDeclaredRisk } from './risk.mjs'
 import { shouldRequestCodexReview } from './sampling.mjs'
 import { findGateFor, selectTrustedGateMarkers } from './gate-marker.mjs'
 import { buildRatingComment } from './report.mjs'
-import { buildVerdictComment } from './verdict.mjs'
+import { buildVerdictComment, SCOPE_GUARD_CHECK_NAME_PATTERN } from './verdict.mjs'
 import { TRUSTED_GATE_AUTHORS } from './trust.mjs'
 
 // Matches the job name in ai-orchestrator-ci.yml or the workflow name shown
@@ -157,10 +157,19 @@ if (stale) {
     const alreadyDecided = Boolean(currentGate) && 'decision' in currentGate
     const checkRuns = alreadyDecided ? [] : await listCheckRunsForRef(readToken, owner, repo, sha)
     const requiredCheck = checkRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.test(run.name))
+    const scopeGuardCheck = checkRuns.find((run) => SCOPE_GUARD_CHECK_NAME_PATTERN.test(run.name))
     const requiredCiPassed = requiredCheck?.status === 'completed' && requiredCheck?.conclusion === 'success'
+    // Codex finding (PR #1211, P2): ops-fix-scope-guard scores its own
+    // `scope-guard-green` point in the same verdict `buildVerdictComment`
+    // computes below, and its workflow races the required CI's on this same
+    // `pull_request` event. Required CI already being green does not mean
+    // the scope guard has finished too — locking in a verdict here while it
+    // is still `queued`/`in_progress` can silently lose that point and post
+    // a wrongly-BLOCKED verdict that then dedupes forever.
+    const scopeGuardFinished = scopeGuardCheck?.status === 'completed'
     if (alreadyDecided) {
       console.log(`PR #${pr}: ${sha} already has a readiness decision on record. Skipping (dedup).`)
-    } else if (requiredCiPassed) {
+    } else if (requiredCiPassed && scopeGuardFinished) {
       if (!(await isCurrentHead())) {
         console.log(`PR #${pr}: head moved past ${sha} before the readiness verdict could be posted — skipping.`)
       } else {
@@ -179,8 +188,19 @@ if (stale) {
           openBlockerCount: 0,
         })
         await createIssueComment(readToken, owner, repo, pr, comment)
-        console.log(`Posted ${decision.decision} for PR #${pr} at ${sha} (unsampled C, CI already green at rating time).`)
+        console.log(
+          `Posted ${decision.decision} for PR #${pr} at ${sha} (unsampled C; required CI ${requiredCheck.conclusion}, scope guard ${scopeGuardCheck.conclusion} at rating time).`,
+        )
       }
+    } else if (requiredCiPassed && !scopeGuardFinished) {
+      // Leave it to ops-dev-gate-recheck.yml, which now also listens for
+      // ops-fix-scope-guard's own workflow completing (see
+      // recheck-readiness.mjs) — that gives this PR a deterministic future
+      // event once the scope guard actually finishes, instead of this leg
+      // guessing at an incomplete score.
+      console.log(
+        `PR #${pr}: ${sha} required CI is already green, but ops-fix-scope-guard has not completed yet (${scopeGuardCheck?.status ?? 'not seen'}) — leaving the readiness verdict to ops-dev-gate-recheck.yml.`,
+      )
     }
   }
 }

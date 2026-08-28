@@ -21,8 +21,13 @@ import { collectObservedSignals, observedSpecializedEvidence } from './evidence.
 import { evaluateReadiness } from './readiness-decision.mjs'
 import { buildReadinessComment } from './report.mjs'
 
-/** The auto-fix blast-radius guard's own check run — see ops-fix-scope-guard.yml. */
-const SCOPE_GUARD_CHECK_NAME_PATTERN = /ops-fix-scope-guard/i
+/**
+ * The auto-fix blast-radius guard's own check run — see ops-fix-scope-guard.yml.
+ * Exported so recheck-readiness.mjs and request-review.mjs can require this
+ * check to be terminal before locking in a verdict that scores it — see the
+ * P2 finding on PR #1211 documented at each of those call sites.
+ */
+export const SCOPE_GUARD_CHECK_NAME_PATTERN = /ops-fix-scope-guard/i
 
 function checkSucceeded(run) {
   return run?.status === 'completed' && run?.conclusion === 'success'

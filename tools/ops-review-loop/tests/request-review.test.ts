@@ -45,7 +45,20 @@ interface CheckRun {
 }
 
 const CI_NOT_GREEN_YET: CheckRun[] = []
-const CI_GREEN: CheckRun[] = [{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' }]
+// Both required CI and ops-fix-scope-guard terminal and passing — the shape
+// the "CI already green" fallback needs to actually reach its verdict write.
+// Codex finding (PR #1211, P2): a fixture with required CI alone used to be
+// enough to exercise that write path, which is exactly the bug — production
+// scores ops-fix-scope-guard's own check run too, and it races the required
+// one on every push.
+const CI_GREEN: CheckRun[] = [
+  { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' },
+  { name: 'ops-fix-scope-guard', status: 'completed', conclusion: 'success' },
+]
+const CI_GREEN_SCOPE_GUARD_PENDING: CheckRun[] = [
+  { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' },
+  { name: 'ops-fix-scope-guard', status: 'in_progress', conclusion: null },
+]
 
 function resetMocks() {
   createIssueComment.mockClear()
@@ -315,6 +328,37 @@ describe('request-review: closes the race for unsampled C when CI is already gre
     expect(verdictCall).toBeDefined()
     const reviewCall = createIssueComment.mock.calls.find(([, , , , body]) => body.includes('@codex review'))
     expect(reviewCall).toBeUndefined()
+  })
+
+  it('does not lock in a verdict when required CI is already green but ops-fix-scope-guard has not completed yet', async () => {
+    // Codex finding (PR #1211, P2): ops-fix-scope-guard scores its own point
+    // in the same verdict and races ai-orchestrator-ci.yml on the same
+    // `pull_request` event. Required CI finishing first must not be enough
+    // on its own to write a verdict — that used to silently lose the
+    // scope-guard-green point and could post a wrongly-BLOCKED verdict that
+    // then deduped forever.
+    const pr = 43
+    const sha = shaSampledAs(pr, false)
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(
+      eventPath,
+      JSON.stringify({ pull_request: { number: pr, head: { sha }, base: { sha: BASE }, body: '' } }),
+    )
+    listIssueComments.mockResolvedValue([])
+    listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
+    listCheckRunsForRef.mockResolvedValue(CI_GREEN_SCOPE_GUARD_PENDING)
+    freshHead(sha)
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', REVIEW_REQUEST_TOKEN: 'pat', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/request-review.mjs'),
+    )
+
+    // Only the rating comment — no verdict, and no @codex review (this PR is
+    // unsampled C).
+    expect(createIssueComment).toHaveBeenCalledTimes(1)
+    const verdictCall = createIssueComment.mock.calls.find(([, , , , body]) => body.includes('质量分'))
+    expect(verdictCall).toBeUndefined()
   })
 
   it('does not post a second verdict when one is already on record for this sha', async () => {

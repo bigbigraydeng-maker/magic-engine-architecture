@@ -291,7 +291,13 @@ describe('recheck-readiness', () => {
     listIssueComments.mockResolvedValue([
       { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
     ])
-    listCheckRunsForRef.mockResolvedValue([{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' }])
+    // The scope guard is also terminal here — this test is about the
+    // required check's own failing conclusion still producing BLOCKED, not
+    // about the scope-guard-pending race (see the dedicated tests below).
+    listCheckRunsForRef.mockResolvedValue([
+      { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' },
+      { name: 'ops-fix-scope-guard', status: 'completed', conclusion: 'success' },
+    ])
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
     await withEnv(
       { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -314,7 +320,10 @@ describe('recheck-readiness', () => {
     listIssueComments.mockResolvedValue([
       { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
     ])
-    listCheckRunsForRef.mockResolvedValue([{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'cancelled' }])
+    listCheckRunsForRef.mockResolvedValue([
+      { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'cancelled' },
+      { name: 'ops-fix-scope-guard', status: 'completed', conclusion: 'success' },
+    ])
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
     await withEnv(
       { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
@@ -341,7 +350,10 @@ describe('recheck-readiness', () => {
     listIssueComments.mockResolvedValue([
       { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
     ])
-    listCheckRunsForRef.mockResolvedValue([{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' }])
+    listCheckRunsForRef.mockResolvedValue([
+      { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' },
+      { name: 'ops-fix-scope-guard', status: 'completed', conclusion: 'success' },
+    ])
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
 
     await withEnv(
@@ -356,6 +368,139 @@ describe('recheck-readiness', () => {
     // not READY by default.
     expect(body).toContain('BLOCKED')
     expect(body).toContain('质量分')
+  })
+
+  it('waits (posts nothing) when required CI is green but ops-fix-scope-guard has not completed yet', async () => {
+    // Codex finding (PR #1211, P2): ops-fix-scope-guard scores its own point
+    // in the same verdict and races ai-orchestrator-ci.yml on every push.
+    // Whichever finishes first must NOT be enough on its own to write a
+    // verdict — a required-CI-only wait let a BLOCKED lock in for a PR whose
+    // scope guard simply hadn't reported yet.
+    const pr = openPr({ number: 35, head: { ref: 'claude/issue-35', sha: shaSampledAs(35, false), repo: { full_name: OWNER_REPO } } })
+    const eventPath = eventFile(dir, {
+      name: 'ai-orchestrator CI',
+      status: 'completed',
+      conclusion: 'success',
+      pull_requests: [{ number: 35 }],
+    })
+    getPullRequest.mockResolvedValue(pr)
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
+    ])
+    listCheckRunsForRef.mockResolvedValue([
+      { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' },
+      { name: 'ops-fix-scope-guard', status: 'in_progress', conclusion: null },
+    ])
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/recheck-readiness.mjs'),
+    )
+    expect(createIssueComment).not.toHaveBeenCalled()
+  })
+
+  it('waits (posts nothing) when ops-fix-scope-guard is green but required CI has not completed yet, even though THIS event is the scope guard finishing', async () => {
+    // Symmetric case: this run was triggered by ops-fix-scope-guard's own
+    // workflow_run completing (not ai-orchestrator CI's), but the required
+    // check itself is still running. Waiting on the OTHER check is exactly
+    // as necessary regardless of which workflow's completion triggered this
+    // particular run.
+    const pr = openPr({ number: 36, head: { ref: 'claude/issue-36', sha: shaSampledAs(36, false), repo: { full_name: OWNER_REPO } } })
+    const eventPath = eventFile(dir, {
+      name: 'OPS — Auto-fix blast radius guard',
+      status: 'completed',
+      conclusion: 'success',
+      pull_requests: [{ number: 36 }],
+    })
+    getPullRequest.mockResolvedValue(pr)
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
+    ])
+    listCheckRunsForRef.mockResolvedValue([
+      { name: 'ai-orchestrator-tests', status: 'in_progress', conclusion: null },
+      { name: 'ops-fix-scope-guard', status: 'completed', conclusion: 'success' },
+    ])
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/recheck-readiness.mjs'),
+    )
+    expect(createIssueComment).not.toHaveBeenCalled()
+  })
+
+  it('posts exactly one verdict when ops-fix-scope-guard finishes SECOND, triggered by its own workflow_run', async () => {
+    // Event order: ai-orchestrator CI already went green earlier (this leg
+    // backed off with the "waits" behaviour above, posting nothing). Now
+    // ops-fix-scope-guard finishes too, and ITS workflow_run is what fires
+    // this run — required CI is already terminal from before, so both are
+    // terminal now and exactly one verdict comes out.
+    const richBody = [
+      'Closes #1210',
+      '验收条件：全部通过',
+      '明确不做：不动 kernel',
+      '## Reuse Statement 复用声明',
+      '失败处理：fail-closed',
+      '观测：失败会被谁发现 —— cron 日志',
+      'npm run build 通过',
+      'npx vitest run tools/ops-review-loop 全绿',
+    ].join('\n\n')
+    const pr = openPr({
+      number: 37,
+      head: { ref: 'claude/issue-37', sha: shaSampledAs(37, false), repo: { full_name: OWNER_REPO } },
+      body: richBody,
+    })
+    const eventPath = eventFile(dir, {
+      name: 'OPS — Auto-fix blast radius guard',
+      status: 'completed',
+      conclusion: 'success',
+      pull_requests: [{ number: 37 }],
+    })
+    getPullRequest.mockResolvedValue(pr)
+    listIssueComments.mockResolvedValue([
+      { user: { login: 'github-actions[bot]' }, body: gateMarker({ head: pr.head.sha, risk: 'C' }) },
+    ])
+    listCheckRunsForRef.mockResolvedValue([
+      { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' },
+      { name: 'ops-fix-scope-guard', status: 'completed', conclusion: 'success' },
+    ])
+    listPullRequestFiles.mockResolvedValue([
+      { filename: 'docs/x.md', status: 'modified' },
+      { filename: 'scripts/example.test.ts', status: 'added' },
+    ])
+
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/recheck-readiness.mjs'),
+    )
+
+    expect(createIssueComment).toHaveBeenCalledTimes(1)
+    const [, , , , body] = createIssueComment.mock.calls[0]
+    expect(body).toContain('READY FOR PRODUCT OWNER')
+  })
+
+  it('does not post a second verdict when ops-fix-scope-guard\'s workflow_run arrives after a decision is already on record', async () => {
+    // Duplicate-event case: the decision marker already exists (e.g. posted
+    // by the ai-orchestrator-CI-triggered run), and a later, redundant
+    // workflow_run for ops-fix-scope-guard (a re-run, or simply arriving
+    // after the fact) must not write a second verdict.
+    const pr = openPr({ number: 38, head: { ref: 'claude/issue-38', sha: shaSampledAs(38, false), repo: { full_name: OWNER_REPO } } })
+    const eventPath = eventFile(dir, {
+      name: 'OPS — Auto-fix blast radius guard',
+      status: 'completed',
+      conclusion: 'success',
+      pull_requests: [{ number: 38 }],
+    })
+    getPullRequest.mockResolvedValue(pr)
+    listIssueComments.mockResolvedValue([
+      {
+        user: { login: 'github-actions[bot]' },
+        body: gateMarker({ head: pr.head.sha, risk: 'C', score: 90, decision: 'READY_FOR_PRODUCT_OWNER' }),
+      },
+    ])
+    await withEnv(
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      () => import('../src/recheck-readiness.mjs'),
+    )
+    expect(listCheckRunsForRef).not.toHaveBeenCalled()
+    expect(createIssueComment).not.toHaveBeenCalled()
   })
 
   it('reaches READY when the PR body and diff carry every observed signal', async () => {

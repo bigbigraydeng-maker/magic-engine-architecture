@@ -193,6 +193,14 @@ describe('the request-review workflow', () => {
     expect(guardIndex).toBeGreaterThanOrEqual(0)
     expect(postIndex).toBeGreaterThan(guardIndex)
   })
+
+  it('grants checks: read for the unsampled-C "CI already green" fallback, and nothing broader', () => {
+    // Codex finding (PR #1211, P1): request-review.mjs's fallback path calls
+    // GET /commits/{ref}/check-runs. Without this scope that 403s silently on
+    // every unsampled C-level PR — no error surfaces, just zero verdicts.
+    expect(request.doc.permissions?.checks).toBe('read')
+    expect(request.doc.permissions?.checks).not.toBe('write')
+  })
 })
 
 describe('the codex-to-claude-fix workflow', () => {
@@ -436,7 +444,7 @@ describe('the dev-gate recheck workflow (unsampled C-level PRs)', () => {
   const RECHECK_PATH = join(ROOT, 'ops-dev-gate-recheck.yml')
   const recheck = load(RECHECK_PATH)
 
-  it('parses as YAML with a workflow_run trigger scoped to ai-orchestrator CI', () => {
+  it('parses as YAML with a workflow_run trigger scoped to ai-orchestrator CI and ops-fix-scope-guard', () => {
     // Codex A-level finding on PR #1211: GitHub does not deliver `check_run`
     // events for check suites GitHub Actions itself created (a deliberate
     // anti-recursion rule), and ai-orchestrator-tests is exactly such a
@@ -446,7 +454,13 @@ describe('the dev-gate recheck workflow (unsampled C-level PRs)', () => {
     expect(recheck.doc).toBeTruthy()
     expect(Object.keys(recheck.triggers)).toEqual(['workflow_run'])
     const trigger = recheck.triggers.workflow_run as { workflows: string[]; types: string[] }
-    expect(trigger.workflows).toEqual(['ai-orchestrator CI'])
+    // Codex finding (PR #1211, P2): the verdict this workflow writes also
+    // scores ops-fix-scope-guard.yml's own check run, and that workflow races
+    // ai-orchestrator-ci.yml on every push. Listening for both — not just
+    // ai-orchestrator CI — is what guarantees whichever one finishes SECOND
+    // still triggers a run (recheck-readiness.mjs requires both terminal
+    // before it writes anything; see its own assertions).
+    expect(trigger.workflows).toEqual(['ai-orchestrator CI', 'OPS — Auto-fix blast radius guard'])
     expect(trigger.types).toEqual(['completed'])
   })
 

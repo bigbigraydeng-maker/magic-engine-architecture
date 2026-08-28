@@ -1,7 +1,9 @@
 /**
  * Workflow C entrypoint (ops-dev-gate-recheck.yml). Runs whenever the
- * `ai-orchestrator CI` workflow completes anywhere in the repository. Exists
- * for exactly the gap `handle-review.mjs` (the review-triggered leg) cannot
+ * `ai-orchestrator CI` workflow or the `ops-fix-scope-guard` workflow
+ * completes anywhere in the repository — see the two 🔴 notes below for why
+ * both. Exists for exactly the gap `handle-review.mjs` (the review-triggered
+ * leg) cannot
  * close: a C-level PR `sampling.mjs`'s stable 20% sample did NOT select for
  * Codex review. Nothing then ever fires `pull_request_review.submitted` for
  * it, so without this leg an otherwise-done unsampled C-level PR would sit
@@ -18,6 +20,20 @@
  * exclusion and carries the same facts this script needs — `head_sha`,
  * `pull_requests`, `status`/`conclusion` — off `event.workflow_run` instead
  * of `event.check_run`.
+ *
+ * 🔴 **Why this listens for TWO workflows, not just `ai-orchestrator CI`.**
+ * Codex finding (PR #1211, P2): `buildVerdictComment` (via `verdict.mjs`)
+ * scores `scope-guard-green` off `ops-fix-scope-guard.yml`'s own check run,
+ * not just the required CI's. That workflow triggers on the same
+ * `pull_request` event as `ai-orchestrator CI` and the two race — whichever
+ * finishes first used to be treated as "CI is done, decide now", locking in
+ * a verdict computed while the other was still `queued`/`in_progress`. A
+ * missing `scope-guard-green` point can be the difference between C's 75
+ * threshold and a permanent, wrongly-deduped BLOCKED. `evaluateOne` below
+ * now waits for BOTH check runs to reach `completed` before it will write
+ * anything, and this workflow listens for either workflow's completion so
+ * whichever one finishes SECOND is guaranteed to trigger the run that
+ * actually writes the verdict.
  *
  * Scope is deliberately narrow, and the two legs never race each other:
  *
@@ -44,16 +60,19 @@ import { readFileSync } from 'node:fs'
 import { createIssueComment, getPullRequest, listCheckRunsForRef, listIssueComments } from './github.mjs'
 import { shouldRequestCodexReview } from './sampling.mjs'
 import { findGateFor, selectTrustedGateMarkers } from './gate-marker.mjs'
-import { buildVerdictComment } from './verdict.mjs'
+import { buildVerdictComment, SCOPE_GUARD_CHECK_NAME_PATTERN } from './verdict.mjs'
 import { TRUSTED_GATE_AUTHORS } from './trust.mjs'
 
-// Matches the `name:` field of ai-orchestrator-ci.yml ("ai-orchestrator CI"),
-// which is what `workflow_run.name` carries — a different field from the
-// check-run job name (`ai-orchestrator-tests`) `evaluateOne` below matches
-// against `listCheckRunsForRef`'s results. Deliberately the same loose
-// pattern as the other two entrypoints so all three agree on what counts as
-// "the required CI".
-const REQUIRED_WORKFLOW_NAME_PATTERN = /ai-orchestrator/i
+// The exact `name:` fields of ai-orchestrator-ci.yml and ops-fix-scope-guard.yml
+// — what `workflow_run.name` carries for each. Kept as an exact list, not a
+// loose pattern, because ops-dev-gate-recheck.yml's own `on.workflow_run.workflows`
+// must name these two literally (GitHub requires the exact workflow name there),
+// and workflow-guards.test.ts pins the YAML and this list to the same values.
+const REQUIRED_WORKFLOW_NAMES = ['ai-orchestrator CI', 'OPS — Auto-fix blast radius guard']
+// Matches the check-run job name (`ai-orchestrator-tests`) `evaluateOne` below
+// looks for in `listCheckRunsForRef`'s results — a different field from the
+// workflow name above. Deliberately the same loose pattern as the other two
+// entrypoints so all three agree on what counts as "the required CI".
 const REQUIRED_CHECK_NAME_PATTERN = /ai-orchestrator/i
 
 const token = process.env.GITHUB_TOKEN
@@ -114,7 +133,7 @@ async function evaluateOne(prNumber) {
 
   const checkRuns = await listCheckRunsForRef(token, owner, repo, sha)
   const requiredCheck = checkRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.test(run.name))
-  const requiredCiPassed = checkSucceeded(requiredCheck)
+  const scopeGuardCheck = checkRuns.find((run) => SCOPE_GUARD_CHECK_NAME_PATTERN.test(run.name))
   // Codex finding (PR #1211, P1): this leg only fires once, on the required
   // workflow's own completion event — there is no later event to catch up on
   // for this sha. A required check that finished with anything other than
@@ -128,13 +147,23 @@ async function evaluateOne(prNumber) {
   // into the BLOCKED verdict the evidence already supports, rather than
   // waiting on an event that will not come.
   const requiredCiFinished = requiredCheck?.status === 'completed'
-  if (!requiredCiFinished) {
+  // Codex finding (PR #1211, P2): ops-fix-scope-guard scores its own
+  // `scope-guard-green` point in the same verdict, and its workflow races
+  // the required CI's on every push — both trigger off the same
+  // `pull_request` event. Terminal for one is not terminal for both: waiting
+  // only on the required check let a verdict lock in while the scope guard
+  // was still `queued`/`in_progress`, silently losing that point (and, once
+  // the decision marker landed, permanently — the guard finishing later
+  // never re-triggered anything).
+  const scopeGuardFinished = scopeGuardCheck?.status === 'completed'
+  if (!requiredCiFinished || !scopeGuardFinished) {
     console.log(
-      `PR #${prNumber}: ${sha} required check has not completed yet (${requiredCheck?.status ?? 'not seen'}). Waiting for the next workflow_run event.`,
+      `PR #${prNumber}: ${sha} not all scoring checks are terminal yet (ai-orchestrator: ${requiredCheck?.status ?? 'not seen'}, ops-fix-scope-guard: ${scopeGuardCheck?.status ?? 'not seen'}). Waiting for the next workflow_run event.`,
     )
     return
   }
 
+  const requiredCiPassed = checkSucceeded(requiredCheck)
   const { decision, comment } = await buildVerdictComment({
     token,
     owner,
@@ -152,11 +181,13 @@ async function evaluateOne(prNumber) {
     openBlockerCount: 0,
   })
   await createIssueComment(token, owner, repo, prNumber, comment)
-  console.log(`PR #${prNumber}: posted ${decision.decision} for ${sha} (unsampled C, CI green).`)
+  console.log(
+    `PR #${prNumber}: posted ${decision.decision} for ${sha} (unsampled C; required CI ${requiredCheck.conclusion}, scope guard ${scopeGuardCheck.conclusion}).`,
+  )
 }
 
-if (!REQUIRED_WORKFLOW_NAME_PATTERN.test(workflowRun?.name ?? '')) {
-  console.log(`Workflow run "${workflowRun?.name}" is not the required workflow. Nothing to do.`)
+if (!REQUIRED_WORKFLOW_NAMES.includes(workflowRun?.name)) {
+  console.log(`Workflow run "${workflowRun?.name}" is not one of the required workflows. Nothing to do.`)
 } else if (workflowRun.status !== 'completed') {
   console.log('Workflow run has not completed yet. Nothing to do.')
 } else {

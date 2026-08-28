@@ -39,6 +39,13 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  # Codex finding (PR #1211, P1): request-review.mjs's "CI already green"
+  # fallback calls GET /commits/{ref}/check-runs for unsampled C-level PRs.
+  # Without this scope that call 403s on every one of them — no error
+  # surfaces to a human, it just silently produces zero verdicts for 80% of
+  # C-level PRs. Minimal grant, read-only, matches ops-dev-gate-recheck.yml's
+  # own `checks: read` for the same API call.
+  checks: read
 
 concurrency:
   # Same literal group ops-dev-gate-recheck.yml uses for the same head sha
