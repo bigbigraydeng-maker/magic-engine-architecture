@@ -73,6 +73,13 @@ export interface ClaudeCallResult {
   input_tokens: number
   output_tokens: number
   cost_usd: number
+  /**
+   * 'max_tokens' 表示输出被截断——调用方想校验完整性时应该检查这个字段。
+   * 可选，避免这个已有多处调用方在用的共享类型因为一次性新增必填字段
+   * 而拖累一大批不相关模块的 mock（实测会连累 zhuge/diagnostic/prospecting
+   * 等十几个测试文件）。
+   */
+  stop_reason?: string | null
 }
 
 /**
@@ -124,6 +131,7 @@ export async function callClaudeWithDocs(params: {
   let text: string
   let inputTok: number
   let outputTok: number
+  let stopReason: string | null
 
   if (hasPdfs) {
     // Beta API required for PDF document support
@@ -140,6 +148,7 @@ export async function callClaudeWithDocs(params: {
       .join('')
     inputTok = message.usage.input_tokens
     outputTok = message.usage.output_tokens
+    stopReason = message.stop_reason
   } else {
     // Use stable API when no PDFs (avoids invalid empty anthropic-beta header)
     const stableContent: Anthropic.MessageParam['content'] = content.map(b => ({
@@ -158,12 +167,13 @@ export async function callClaudeWithDocs(params: {
       .join('')
     inputTok = message.usage.input_tokens
     outputTok = message.usage.output_tokens
+    stopReason = message.stop_reason
   }
 
   const costUsd = (inputTok / 1_000_000) * PRICE_INPUT_PER_M
     + (outputTok / 1_000_000) * PRICE_OUTPUT_PER_M
 
-  return { text, input_tokens: inputTok, output_tokens: outputTok, cost_usd: costUsd }
+  return { text, input_tokens: inputTok, output_tokens: outputTok, cost_usd: costUsd, stop_reason: stopReason }
 }
 
 /**
@@ -221,7 +231,7 @@ export async function callClaudeChat(params: {
   const costUsd = (inputTok / 1_000_000) * PRICE_INPUT_PER_M
     + (outputTok / 1_000_000) * PRICE_OUTPUT_PER_M
 
-  return { text, input_tokens: inputTok, output_tokens: outputTok, cost_usd: costUsd }
+  return { text, input_tokens: inputTok, output_tokens: outputTok, cost_usd: costUsd, stop_reason: message.stop_reason }
 }
 
 // ─── callClaudeWithWebSearch — Anthropic server-side web search helper ───────

@@ -28,11 +28,18 @@ import type { TailorMadeItinerary } from '@/lib/tailor-made/types'
  */
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 120
+export const maxDuration = 180
 
 const MAX_BYTES = 12 * 1024 * 1024
 
-/** PDF 走文档通道：先让 Claude 转成保结构的纯文本，再进抽取链 */
+/**
+ * PDF 走文档通道：先让 Claude 转成保结构的纯文本，再进抽取链。
+ *
+ * 这一步的截断和 extractItinerary() 的截断是两个独立的坑：这里如果被
+ * max_tokens 切断，转录出来的文本本身就是残的，后面 extractItinerary()
+ * 再准也没用——喂给它的原料已经少了几天。所以要单独加 bypassGateway
+ * （长文档转录同样可能撞上 CF 网关超时）和 stop_reason 检查。
+ */
 async function pdfToText(base64: string, filename: string): Promise<string> {
   const res = await callClaudeWithDocs({
     systemPrompt:
@@ -41,8 +48,12 @@ async function pdfToText(base64: string, filename: string): Promise<string> {
       'sections. Do not summarise, do not omit, do not add. Output text only.',
     userMessage: '把这份行程文件转成保留结构的纯文本。',
     docs: [{ type: 'pdf', content: base64, filename }],
-    maxOutputTokens: 8096,
+    maxOutputTokens: 12000,
+    bypassGateway: true,
   })
+  if (res.stop_reason === 'max_tokens') {
+    throw new Error('行程文件转录到一半就被截断了（文件内容特别多的团容易发生）。请重试一次；如果还是不行，请联系技术支持处理')
+  }
   return res.text.trim()
 }
 
