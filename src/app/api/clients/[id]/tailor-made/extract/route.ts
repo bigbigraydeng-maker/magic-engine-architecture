@@ -14,7 +14,7 @@ import type { TailorMadeItinerary } from '@/lib/tailor-made/types'
  */
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60 // 20 天行程的抽取会跑较久
+export const maxDuration = 180 // 长行程（27 天+）抽取的 max_tokens 提到 16000 后耗时相应变长
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const access = await requireDashboardClientAccess(params.id)
