@@ -173,13 +173,17 @@ async function muapiGenerate(planItem, sourceImageUrl) {
 // worker 不再写文案(以前硬编 CTS,只能服务一个客户)。brief.copy 缺失才走品牌无关兜底
 // (仅用 angle,不硬编任何客户名/网址)——正常路径永远有 brief.copy。
 
-function resolveCopy(wo) {
+// #1218:旧版给每个非-hook 段都塞 { caption: wo.angle } —— hook 的 title_sub 也是同一个
+// wo.angle,于是 8 段字幕里 7 段在闪同一句话(CTS work order 7c2809e1 实测)。
+// 跟 copy-generator.ts 的模板 fallback 用同一条原则:宁可留白让画面说话,也不满屏复读——
+// 只在第 2 镜(i===1)带一次 angle,其余非-hook 段留空(buildSrt 对空 caption 直接跳过该段字幕)。
+export function resolveCopy(wo) {
   if (wo.brief?.copy?.segments?.length) return wo.brief.copy
   log('⚠️ brief.copy 缺失(后端文案生成可能失败),走 angle 兜底')
   return {
     segments: wo.brief.segments.map((s, i) => ({
       role: s.role,
-      ...(i === 0 ? { title_sub: wo.angle } : { caption: wo.angle }),
+      ...(i === 0 ? { title_sub: wo.angle } : i === 1 ? { caption: wo.angle } : {}),
     })),
     endcard: { cta: wo.angle, offer: [], url: '' },
   }
@@ -187,7 +191,7 @@ function resolveCopy(wo) {
 
 // ── SRT / segments.json ────────────────────────────────────────────────────────
 
-function buildSrt(segments, copy) {
+export function buildSrt(segments, copy) {
   let t = 0, out = '', n = 1
   const fmt = (s) => {
     const h = String(Math.floor(s / 3600)).padStart(2, '0')
@@ -433,4 +437,8 @@ async function main() {
   } while (loop)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+// #1218:守住入口 —— 只在直接执行本文件时跑主循环。测试要 import resolveCopy/buildSrt
+// 这两个纯函数做回归验证,没有这道 guard,import 本身就会去敲真实 API、起 claim 循环。
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { console.error(e); process.exit(1) })
+}
