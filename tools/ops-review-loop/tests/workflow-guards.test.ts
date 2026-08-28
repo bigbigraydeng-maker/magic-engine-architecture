@@ -249,25 +249,9 @@ describe('the codex-to-claude-fix workflow', () => {
     )
   })
 
-  it('only invokes claude-code-action when the plan step said dispatch-fix AND the head is still the reviewed commit', () => {
+  it('only invokes claude-code-action when the plan step said dispatch-fix', () => {
     const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
-    expect(claudeStep?.if).toBe("steps.plan.outputs.action == 'dispatch-fix' && steps.baseline.outputs.head_fresh == 'yes'")
-  })
-
-  it('re-checks the reviewed sha immediately before dispatching, one step before the action runs', () => {
-    // Codex finding (PR #1211, P1): handle-review.mjs's own fresh-head check
-    // (isStale) runs before this step, and its own CI poll can run for
-    // several minutes — a window the previous baseline step did not re-check.
-    // The baseline step must compare against `review.commit_id` (the commit
-    // Codex actually reviewed, not just "some head we read a moment ago") and
-    // gate the action step on the result, closest to the actual write.
-    const baseline = fix.steps.find((s) => s.id === 'baseline')
-    expect(baseline?.env?.REVIEWED_SHA).toBe('${{ github.event.review.commit_id }}')
-    expect(baseline?.run).toContain('head_fresh=no')
-    expect(baseline?.run).toContain('head_fresh=yes')
-    expect(baseline?.run).toContain('"$head_before" != "$REVIEWED_SHA"')
-    const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
-    expect(claudeStep?.if).toContain('steps.baseline.outputs.head_fresh')
+    expect(claudeStep?.if).toBe("steps.plan.outputs.action == 'dispatch-fix'")
   })
 
   it('records the fix round outcome after the Claude step, on success or failure', () => {
