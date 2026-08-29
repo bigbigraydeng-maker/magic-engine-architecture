@@ -1,0 +1,48 @@
+name: Build Control CI
+
+# Ordinary read-only CI for tools/build-control, mirroring ai-orchestrator-ci.yml.
+#
+# This is the one Build Control workflow that *does* execute PR-proposed code,
+# which is exactly why it uses `pull_request` rather than `pull_request_target`:
+# that trigger's token is read-only for forks, carries no repository secrets, and
+# this workflow grants no write permission of any kind. The gates that make
+# decisions never run PR code; this one only runs tests.
+#
+# No `paths:` filter, deliberately: a required check with a path filter never
+# reports on a PR the filter excludes and sits Pending forever.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-control-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: build-control-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Tests, including the workflow-guards structural checks
+        run: npx vitest run tools/build-control --reporter=verbose
+
+      - name: Confirm the run changed nothing
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::CI modified the working tree. It must not."
+            git status --porcelain
+            exit 1
+          fi

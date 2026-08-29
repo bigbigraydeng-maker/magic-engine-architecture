@@ -1,71 +1,96 @@
 /**
- * `ME_OUTCOME_RECEIPT_V1` — the marker that lets a business IMPACT Issue
+ * `ME_OUTCOME_RECEIPT_V1` — the receipt that lets a business IMPACT Issue
  * actually close.
  *
- * CLAUDE.md's IMPACT loop is Inspect → Measure → Prescribe → Act → Check →
- * Tune, and this repo's recurring failure mode (named explicitly in Issue
- * #1249) is calling *Act* finished and reporting it as if it were the whole
- * loop. So the receipt names five stages — Execution, Activation,
- * Measurement/Check, Outcome classification, Tune/next-decision — and
- * completion is judged only on the three that prove the loop actually closed:
- * Measurement, Outcome and Tune. Execution alone (the engineering work
- * landed) is necessary but never sufficient; Activation is real work that
- * does not exist for every loop (e.g. a change that is live the moment it
- * merges has no separate activation step), so it must be *present* but is not
- * part of the completion test.
+ * CLAUDE.md's loop is Inspect → Measure → Prescribe → Act → Check → Tune, and
+ * the failure mode Issue #1249 names is calling *Act* finished and reporting
+ * it as the whole loop. So closing requires Execution **and** Measurement/Check
+ * **and** Outcome classification **and** Tune/next-decision, each `DONE` with
+ * non-empty evidence — a status word on its own is not proof. Activation must
+ * be present but may be `UNKNOWN`: it is real work that does not exist for
+ * every loop (a change live the moment it merges has no separate activation).
+ *
+ * Provenance is bound the same way as merge authorisation: an allow-listed
+ * comment author whose login matches the payload's own `recorded_by` /
+ * `authorized_by`. A random commenter cannot close an impact-loop Issue.
  */
+
+import { findMarkers, serializeMarker } from './markers.mjs'
 
 export const OUTCOME_RECEIPT_MARKER = 'ME_OUTCOME_RECEIPT_V1'
 
 export const RECEIPT_STAGES = ['execution', 'activation', 'measurement', 'outcome', 'tune']
 
-/** Stages whose status must read DONE for the receipt to close a business loop. */
-const COMPLETION_STAGES = ['measurement', 'outcome', 'tune']
+/** Stages that must read DONE, with evidence, for the receipt to close a loop. */
+export const COMPLETION_STAGES = ['execution', 'measurement', 'outcome', 'tune']
 
 export const VALID_STAGE_STATUSES = new Set(['DONE', 'PENDING', 'UNKNOWN'])
 
-const MARKER_RE = new RegExp(`<!--\\s*${OUTCOME_RECEIPT_MARKER}\\s*:\\s*(\\{[\\s\\S]*?\\})\\s*-->`, 'g')
+/** Keys naming who produced the receipt; every one present must match the author. */
+const ACTOR_KEYS = ['recorded_by', 'authorized_by']
 
 /**
  * @param {unknown} payload
  * @returns {string}
  */
 export function serializeOutcomeReceipt(payload) {
-  return `<!-- ${OUTCOME_RECEIPT_MARKER}: ${JSON.stringify(payload).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')} -->`
+  return serializeMarker(OUTCOME_RECEIPT_MARKER, payload)
 }
 
 /**
- * @param {string|null|undefined} body
- * @returns {unknown[]}
+ * Receipts from allow-listed authors whose declared actor agrees with the
+ * actual comment author, in comment order.
+ *
+ * @param {{ comments: Array<{ author?: string | null, body?: string | null }>, allowlist: Iterable<string> }} input
+ * @returns {{ trusted: unknown[], rejected: string[] }}
  */
-export function findOutcomeReceiptMarkers(body) {
-  if (typeof body !== 'string') return []
-  const out = []
-  for (const match of body.matchAll(MARKER_RE)) {
-    try {
-      out.push(JSON.parse(match[1]))
-    } catch {
-      // skip malformed payload rather than fail the whole read
+export function selectTrustedOutcomeReceipts({ comments, allowlist }) {
+  const allowed = new Set([...(allowlist ?? [])].filter((login) => typeof login === 'string'))
+  /** @type {unknown[]} */
+  const trusted = []
+  /** @type {string[]} */
+  const rejected = []
+
+  for (const comment of Array.isArray(comments) ? comments : []) {
+    if (!comment) continue
+    const author = comment.author ?? null
+    for (const payload of findMarkers(OUTCOME_RECEIPT_MARKER, comment.body)) {
+      if (!allowed.has(author)) {
+        rejected.push(`a receipt from ${author ?? '(unattributed)'} is not from an allow-listed Outcome recorder`)
+        continue
+      }
+      const declared = ACTOR_KEYS.map((key) => /** @type {Record<string, unknown>} */ (payload ?? {})[key]).filter(
+        (v) => v !== undefined
+      )
+      if (declared.length === 0) {
+        rejected.push(`a receipt from ${author} declares no recorded_by/authorized_by`)
+        continue
+      }
+      if (declared.some((v) => v !== author)) {
+        rejected.push(`a receipt from ${author} declares a different recorded_by/authorized_by`)
+        continue
+      }
+      trusted.push(payload)
     }
   }
-  return out
+  return { trusted, rejected }
 }
 
 /**
- * Structural validity: every stage key present, each an object with a
- * recognised `status`. This is deliberately weaker than completion — a
- * structurally valid receipt can still be "Execution DONE, everything else
- * PENDING", which is exactly the case `isImpactComplete` must reject.
+ * Structural validity: every stage present, an object, with a recognised
+ * status. Deliberately weaker than completion — "Execution DONE, everything
+ * else PENDING" is structurally valid and is exactly what must not close.
  *
  * @param {unknown} payload
  * @returns {{ valid: boolean, reasons: string[] }}
  */
 export function validateOutcomeReceiptShape(payload) {
-  const reasons = []
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return { valid: false, reasons: ['payload is not an object'] }
   }
   const record = /** @type {Record<string, unknown>} */ (payload)
+  /** @type {string[]} */
+  const reasons = []
 
   for (const stage of RECEIPT_STAGES) {
     if (!(stage in record)) {
@@ -82,16 +107,10 @@ export function validateOutcomeReceiptShape(payload) {
       reasons.push(`stage ${stage} has an invalid status: ${JSON.stringify(status)}`)
     }
   }
-
   return { valid: reasons.length === 0, reasons }
 }
 
 /**
- * Can this receipt close a business IMPACT Issue? Requires structural
- * validity plus Measurement, Outcome and Tune all reading DONE. Execution
- * being DONE (or not) is irrelevant to this test — a shape violation there is
- * already caught by `validateOutcomeReceiptShape`.
- *
  * @param {unknown} payload
  * @returns {{ complete: boolean, reasons: string[] }}
  */
@@ -99,13 +118,18 @@ export function isImpactComplete(payload) {
   const shape = validateOutcomeReceiptShape(payload)
   if (!shape.valid) return { complete: false, reasons: shape.reasons }
 
-  const record = /** @type {Record<string, { status: string }>} */ (payload)
-  const notDone = COMPLETION_STAGES.filter((stage) => record[stage].status !== 'DONE')
-  if (notDone.length > 0) {
-    return {
-      complete: false,
-      reasons: notDone.map((stage) => `stage ${stage} is ${record[stage].status}, not DONE`),
+  const record = /** @type {Record<string, { status: string, evidence?: unknown }>} */ (payload)
+  /** @type {string[]} */
+  const reasons = []
+  for (const stage of COMPLETION_STAGES) {
+    const { status, evidence } = record[stage]
+    if (status !== 'DONE') {
+      reasons.push(`stage ${stage} is ${status}, not DONE`)
+      continue
+    }
+    if (typeof evidence !== 'string' || evidence.trim() === '') {
+      reasons.push(`stage ${stage} claims DONE with no evidence — a status word is not proof`)
     }
   }
-  return { complete: true, reasons: [] }
+  return { complete: reasons.length === 0, reasons }
 }

@@ -1,40 +1,50 @@
 /**
- * Pure decision function behind the business-loop closure guard.
+ * Business-loop closure guard.
  *
- * Scope is deliberately narrow: this only applies to Issues explicitly
- * labelled `impact-loop` (a business IMPACT loop per CLAUDE.md's
- * Inspect → Measure → Prescribe → Act → Check → Tune). An ordinary
- * engineering Issue or a merged PR never needs an external Outcome receipt —
- * gating those would be exactly the "CI green / merge / execution receipt
- * equals Outcome" confusion Issue #1249 forbids.
+ * Scope is deliberately narrow: only Issues explicitly labelled `impact-loop`.
+ * An ordinary engineering Issue or a merged PR never needs an external Outcome
+ * receipt, and gating those would be exactly the "CI green / merge / execution
+ * receipt equals Outcome" confusion Issue #1249 forbids.
+ *
+ * Applying `impact-loop` to a business Issue is an owner rollout action, not
+ * something this code does — an unlabelled Issue is simply NOT_APPLICABLE.
  */
 
-import { findOutcomeReceiptMarkers, isImpactComplete } from './outcome-receipt.mjs'
+import { OUTCOME_RECEIPT_MARKER, isImpactComplete, selectTrustedOutcomeReceipts } from './outcome-receipt.mjs'
 
 export const IMPACT_LOOP_LABEL = 'impact-loop'
 export const IMPACT_INCOMPLETE_LABEL = 'build-control:impact-incomplete'
 
 /**
- * @param {{ labels: string[], comments: Array<{ body: string }> }} input
- * @returns {
- *   | { status: 'NOT_APPLICABLE' }
- *   | { status: 'COMPLETE' }
- *   | { status: 'INCOMPLETE', reasons: string[] }
- * }
+ * @typedef {{ status: 'NOT_APPLICABLE' }} NotApplicable
+ * @typedef {{ status: 'COMPLETE' }} LoopComplete
+ * @typedef {{ status: 'INCOMPLETE', reasons: string[] }} LoopIncomplete
  */
-export function evaluateBusinessLoopClosure({ labels, comments }) {
-  if (!Array.isArray(labels) || !labels.includes(IMPACT_LOOP_LABEL)) {
-    return { status: 'NOT_APPLICABLE' }
+
+/**
+ * @param {{
+ *   labels: string[],
+ *   comments: Array<{ author?: string | null, body?: string | null }>,
+ *   allowlist: Iterable<string>,
+ * }} input
+ * @returns {NotApplicable | LoopComplete | LoopIncomplete}
+ */
+export function evaluateBusinessLoopClosure({ labels, comments, allowlist }) {
+  if (!Array.isArray(labels) || !labels.includes(IMPACT_LOOP_LABEL)) return { status: 'NOT_APPLICABLE' }
+
+  const { trusted, rejected } = selectTrustedOutcomeReceipts({ comments, allowlist })
+  if (trusted.length === 0) {
+    return {
+      status: 'INCOMPLETE',
+      reasons: [
+        `no ${IMPACT_LOOP_LABEL} Issue may close without a trusted ${OUTCOME_RECEIPT_MARKER}, and none was found`,
+        ...rejected,
+      ],
+    }
   }
 
-  const markers = (Array.isArray(comments) ? comments : []).flatMap((c) => findOutcomeReceiptMarkers(c.body))
-  if (markers.length === 0) {
-    return { status: 'INCOMPLETE', reasons: [`no ${IMPACT_LOOP_LABEL} Issue may close without a ME_OUTCOME_RECEIPT_V1 marker, and none was found`] }
-  }
-
-  // Last one wins, same rule as every other marker reader here — a later,
-  // more complete receipt supersedes an earlier partial one for the same loop.
-  const latest = markers[markers.length - 1]
-  const result = isImpactComplete(latest)
+  // Last one wins — a later, more complete receipt supersedes an earlier
+  // partial one for the same loop.
+  const result = isImpactComplete(trusted[trusted.length - 1])
   return result.complete ? { status: 'COMPLETE' } : { status: 'INCOMPLETE', reasons: result.reasons }
 }

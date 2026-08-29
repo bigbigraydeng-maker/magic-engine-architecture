@@ -1,56 +1,84 @@
 import { describe, expect, it } from 'vitest'
+import { CONTROL_STATE_MARKER, serializeControlState } from '../src/control-state.mjs'
 import { evaluateControlStateGuard } from '../src/issue-1140-guard.mjs'
-import { serializeControlState } from '../src/control-state.mjs'
 
 function completePayload(overrides: Record<string, unknown> = {}) {
   return {
-    schema_version: 'ME_CONTROL_STATE_V1',
+    schema_version: CONTROL_STATE_MARKER,
     updated_at: '2026-08-29T12:00:00Z',
-    summary: 'ok',
-    current_p0: 'Issue #1225',
-    portfolio_p0: [],
-    product_capabilities: [],
-    customer_loops: [],
+    summary: 'one line of real state',
+    current_p0: { issue: 1225, status: 'UNKNOWN' },
+    portfolio_p0: { current_stage: 'recovery' },
+    product_capabilities: [{ capability: 'Build Control' }],
+    customer_loops: [{ loop: 'daily content' }],
     active_lanes: [],
-    ray_needed: 'UNKNOWN',
-    bottleneck: 'UNKNOWN',
+    ray_needed: [],
+    bottleneck: 'worker version unproven',
     ...overrides,
   }
 }
 
+const at = '2026-08-29T12:05:00Z'
+const comment = (author: string, payload: unknown, createdAt = at) => ({
+  author,
+  body: serializeControlState(payload),
+  createdAt,
+})
+const writerAllowlist = ['state-writer']
+
 describe('evaluateControlStateGuard', () => {
   it('reports NO_MARKER when nothing carries the marker', () => {
-    expect(evaluateControlStateGuard({ comments: [{ body: 'just a comment', createdAt: '2026-08-29T12:00:00Z' }] })).toEqual({
-      status: 'NO_MARKER',
-    })
+    expect(
+      evaluateControlStateGuard({
+        comments: [{ author: 'state-writer', body: 'just a comment', createdAt: at }],
+        writerAllowlist,
+      })
+    ).toEqual({ status: 'NO_MARKER' })
   })
 
-  it('validates a complete, fresh marker', () => {
-    const body = serializeControlState(completePayload())
-    const result = evaluateControlStateGuard({ comments: [{ body, createdAt: '2026-08-29T12:05:00Z' }] })
+  it('validates a complete, fresh marker from an allow-listed writer', () => {
+    const result = evaluateControlStateGuard({ comments: [comment('state-writer', completePayload())], writerAllowlist })
     expect(result.status).toBe('VALID')
   })
 
-  // Fixture #8: an incomplete #1140 state fails even when its marker and JSON syntax are valid.
   it('flags an incomplete marker as INVALID even though the JSON is well-formed', () => {
     const { bottleneck: _drop, ...incomplete } = completePayload()
-    const body = serializeControlState(incomplete)
-    const result = evaluateControlStateGuard({ comments: [{ body, createdAt: '2026-08-29T12:05:00Z' }] })
+    const result = evaluateControlStateGuard({ comments: [comment('state-writer', incomplete)], writerAllowlist })
     expect(result.status).toBe('INVALID')
-    if (result.status === 'INVALID') {
-      expect(result.reasons.some((r) => r.includes('bottleneck'))).toBe(true)
-    }
+    expect(result.status === 'INVALID' && result.reasons.some((r) => r.includes('bottleneck'))).toBe(true)
   })
 
-  it('reads the latest marker when several comments carry one', () => {
-    const older = serializeControlState(completePayload({ summary: 'stale' }))
-    const { current_p0: _drop, ...newerIncomplete } = completePayload({ summary: 'fresh' })
-    const newer = serializeControlState(newerIncomplete)
+  // The newest marked comment is the one downstream would read, so an
+  // untrusted one must be reported, not quietly skipped past to an older
+  // trusted snapshot that no longer reflects what the Issue shows.
+  it('never reports an untrusted latest marker as canonical', () => {
     const result = evaluateControlStateGuard({
       comments: [
-        { body: older, createdAt: '2026-08-29T10:00:00Z' },
-        { body: newer, createdAt: '2026-08-29T12:00:00Z' },
+        comment('state-writer', completePayload(), '2026-08-29T10:00:00Z'),
+        comment('drive-by', completePayload(), '2026-08-29T12:00:00Z'),
       ],
+      writerAllowlist,
+    })
+    expect(result.status).toBe('UNTRUSTED')
+    expect(result.status === 'UNTRUSTED' && result.reasons[0]).toContain('drive-by')
+  })
+
+  it('treats an unattributed comment as untrusted', () => {
+    const result = evaluateControlStateGuard({
+      comments: [{ author: null, body: serializeControlState(completePayload()), createdAt: at }],
+      writerAllowlist,
+    })
+    expect(result.status).toBe('UNTRUSTED')
+  })
+
+  it('reads the latest trusted marker when several comments carry one', () => {
+    const { current_p0: _drop, ...newerIncomplete } = completePayload()
+    const result = evaluateControlStateGuard({
+      comments: [
+        comment('state-writer', completePayload(), '2026-08-29T10:00:00Z'),
+        comment('state-writer', newerIncomplete, '2026-08-29T12:00:00Z'),
+      ],
+      writerAllowlist,
     })
     expect(result.status).toBe('INVALID')
   })

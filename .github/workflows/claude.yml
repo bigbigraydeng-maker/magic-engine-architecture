@@ -10,13 +10,80 @@ on:
   pull_request_review:
     types: [submitted]
 
+# One active new-implementation lane, globally (Issue #1249).
+#
+# Every dispatch that would start a *new* Issue implementation shares one
+# constant concurrency group, so a second one queues behind the first instead of
+# racing it — this is the mechanism that closes the same-Issue race the
+# duplicate-PR check cannot see (two dispatches landing before either has opened
+# a PR). `cancel-in-progress: false` so the queued run still executes afterwards
+# and is then blocked by the ordinary duplicate check against the first run's PR.
+#
+# Review / remediation dispatches on an existing PR are keyed per PR instead, so
+# they are never serialised behind an implementation lane and are never subject
+# to the recovery PR cap.
+concurrency:
+  group: >-
+    ${{ (github.event_name == 'issues' || (github.event_name == 'issue_comment' && github.event.issue.pull_request == null))
+    && 'build-control-new-implementation-lane'
+    || format('build-control-review-lane-{0}', github.event.issue.number || github.event.pull_request.number) }}
+  cancel-in-progress: false
+
 jobs:
-  claude:
+  # Build Control dispatch preflight (Issue #1249): stops a *new implementation
+  # dispatch from an Issue* before any model call when another open PR (Draft
+  # included) already declares the same Primary-Issue, or admitting the lane
+  # would push the repository past the recovery cap. A review / remediation
+  # comment on an existing PR is a different path and is never gated here.
+  #
+  # Fails closed: any error reading GitHub facts fails this job, and the `claude`
+  # job below requires `needs.dispatch-preflight.result == 'success'`, so "we
+  # could not check" blocks exactly like "we checked and it is blocked".
+  dispatch-preflight:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      blocked: ${{ steps.preflight.outputs.blocked }}
+    steps:
+      # `main`, never the triggering ref: the guard must not be editable by the
+      # thing it is guarding.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Evaluate duplicate-lane / cap before any model call
+        id: preflight
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # A "new implementation dispatch from an Issue" is either a fresh
+          # Issue event, or an issue_comment whose target is an Issue rather
+          # than a PR (github.event.issue.pull_request is only set for PR
+          # conversation comments). pull_request_review* events are always about
+          # an existing PR and are never gated by this preflight.
+          IS_NEW_IMPLEMENTATION_DISPATCH: ${{ (github.event_name == 'issues' || (github.event_name == 'issue_comment' && github.event.issue.pull_request == null)) && 'true' || 'false' }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          CAP_OVERRIDE_ALLOWLIST: ${{ vars.BUILD_CONTROL_OWNER_ALLOWLIST || github.repository_owner }}
+        run: node tools/build-control/src/dispatch-preflight-cli.mjs
+
+  claude:
+    needs: dispatch-preflight
+    if: needs.dispatch-preflight.result == 'success' && needs.dispatch-preflight.outputs.blocked != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,13 +93,13 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
           fetch-depth: 1
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
@@ -47,4 +114,3 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr *)'
-

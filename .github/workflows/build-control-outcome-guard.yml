@@ -1,0 +1,51 @@
+name: Build Control — Business-Loop Outcome Guard
+
+# Business-loop closure guard (Issue #1249), scoped to Issues explicitly
+# labelled `impact-loop`. Reopens the Issue if it closes without a complete,
+# trusted ME_OUTCOME_RECEIPT_V1 — Execution, Measurement/Check, Outcome
+# classification and Tune/next-decision all DONE with non-empty evidence.
+# Activation must be present but may be UNKNOWN.
+#
+# Ordinary engineering Issues are never touched: the guard is a no-op unless the
+# `impact-loop` label is present. This workflow creates only its own
+# machine-output label; applying `impact-loop` to a business Issue is a separate
+# Product Owner rollout action and is not done here.
+#
+# Reopening an Issue is reversible and scoped to this one label, so it is
+# treated as a safe automated action.
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: build-control-outcome-guard-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  outcome-guard:
+    name: build-control-outcome-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Require a complete Outcome receipt to close an impact-loop Issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          OUTCOME_RECEIPT_ALLOWLIST: ${{ vars.BUILD_CONTROL_OWNER_ALLOWLIST || github.repository_owner }}
+        run: node tools/build-control/src/business-loop-guard-cli.mjs

@@ -1,11 +1,14 @@
 /**
- * Pure decision function behind the PR admission workflow
- * (`.github/workflows/build-control-admission.yml`). This is the "catch
- * bypasses outside the dispatcher" layer: the dispatch preflight in
- * `claude.yml` only sees Issue-triggered dispatches, so any PR opened another
- * way (a human, a different automation, `gh pr create`) is validated here
- * instead. A failed check here does not itself stop the PR from existing —
- * that is exactly why the dispatch preflight has to exist too.
+ * Pure decision function behind `.github/workflows/build-control-admission.yml`.
+ *
+ * This is the "catch bypasses outside the dispatcher" layer: the dispatch
+ * preflight in `claude.yml` only sees Issue-triggered dispatches, so a PR
+ * opened another way (a human, a different automation, `gh pr create`) is
+ * validated here instead.
+ *
+ * The cap counts *other* open PRs — the PR being admitted is already open by
+ * the time this runs, and counting it would make the cap block the very PR
+ * that fills the last permitted slot.
  */
 
 import { extractPrimaryIssue } from './primary-issue.mjs'
@@ -15,11 +18,15 @@ import { evaluateCap } from './pr-cap.mjs'
 import { applyCutoverGrading } from './legacy-cutover.mjs'
 
 /**
- * @typedef {{ number: number, body: string | null, isDraft?: boolean, createdAt: string }} PullRequestSummary
+ * @typedef {{ number: number, body: string | null, isDraft?: boolean, createdAt?: string }} PullRequestSummary
  */
 
 /**
- * @param {{ pr: PullRequestSummary, openPullRequests: PullRequestSummary[] }} input
+ * @param {{
+ *   pr: PullRequestSummary & { createdAt: string },
+ *   openPullRequests: PullRequestSummary[],
+ *   capOverride?: import('./cap-override.mjs').CapOverrideRecord | null,
+ * }} input
  * @returns {{
  *   grade: 'PASS' | 'FAIL' | 'LEGACY_TRIAGE_REQUIRED',
  *   reasons: string[],
@@ -31,24 +38,24 @@ import { applyCutoverGrading } from './legacy-cutover.mjs'
  *   },
  * }}
  */
-export function evaluateAdmission({ pr, openPullRequests }) {
+export function evaluateAdmission({ pr, openPullRequests, capOverride = null }) {
+  const others = (Array.isArray(openPullRequests) ? openPullRequests : []).filter((p) => p.number !== pr.number)
+
   const primaryIssue = extractPrimaryIssue(pr.body)
   const outcomeContract = extractOutcomeContract(pr.body)
   const duplicate = primaryIssue.ok
-    ? isIssueClaimedByOpenPr({
-        pullRequests: openPullRequests,
-        issueNumber: primaryIssue.issueNumber,
-        excludePrNumber: pr.number,
-      })
+    ? isIssueClaimedByOpenPr({ pullRequests: others, issueNumber: primaryIssue.issueNumber })
     : { claimed: false, byPrNumbers: [] }
-  const cap = evaluateCap({ openPrCount: openPullRequests.length, isNewImplementation: true })
+  // The override lifts the cap and nothing else: it is not consulted by any
+  // branch below except this one.
+  const cap = evaluateCap({ openPrCount: others.length, isNewImplementation: true, override: capOverride })
 
   /** @type {string[]} */
   const reasons = []
   if (!primaryIssue.ok) {
     reasons.push(
       primaryIssue.reason === 'AMBIGUOUS'
-        ? 'PR body declares more than one distinct Primary-Issue value'
+        ? 'PR body declares `Primary-Issue` more than once — exactly one declaration is required'
         : 'PR body is missing an explicit `Primary-Issue: #<number>` field'
     )
   }
@@ -64,11 +71,8 @@ export function evaluateAdmission({ pr, openPullRequests }) {
       `Primary-Issue #${primaryIssue.ok ? primaryIssue.issueNumber : '?'} is already claimed by open PR(s) #${duplicate.byPrNumbers.join(', #')}`
     )
   }
-  if (cap.blocked) {
-    reasons.push(cap.reason)
-  }
+  if (cap.blocked) reasons.push(cap.reason)
 
   const grade = applyCutoverGrading({ createdAt: pr.createdAt, wouldFail: reasons.length > 0 })
-
   return { grade, reasons, checks: { primaryIssue, outcomeContract, duplicate, cap } }
 }

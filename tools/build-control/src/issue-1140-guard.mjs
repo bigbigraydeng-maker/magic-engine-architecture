@@ -1,14 +1,17 @@
 /**
- * Pure decision function behind the #1140 strict-state guard.
+ * Strict-state guard for the `ME_CONTROL_STATE_V1` marker on Issue #1140.
  *
- * Important limitation, stated once here so it cannot be lost by omission
- * elsewhere: `chatgpt-codex-connector` has raw Issue-write permission today,
- * so nothing in this repository can *stop* it from posting an invalid
- * `ME_CONTROL_STATE_V1` comment — this guard can only detect an invalid
- * comment after the fact and leave a bounded, machine-visible signal. The
- * Obsidian consumer remains the fail-closed boundary that actually refuses to
- * *use* an incomplete payload; this guard does not replace it, and this
- * module does not edit or delete the source comment it is judging.
+ * Documented limitation, stated here so it cannot be lost by omission:
+ * `chatgpt-codex-connector` holds raw Issue-write permission, so nothing in
+ * this repository can *stop* an invalid or untrusted state comment from being
+ * posted. This guard detects it and leaves a bounded, machine-visible signal;
+ * the existing Obsidian consumer remains the fail-closed boundary that refuses
+ * to *use* a payload. This module never edits or deletes the comment it judges.
+ *
+ * Provenance is explicit: canonical state is the newest marked comment from an
+ * allow-listed writer. If the newest marked comment overall came from anyone
+ * else it is reported `UNTRUSTED` — never silently promoted to canonical, and
+ * never silently ignored either.
  */
 
 import { findControlStateMarkers, validateControlState } from './control-state.mjs'
@@ -16,33 +19,52 @@ import { findControlStateMarkers, validateControlState } from './control-state.m
 export const CONTROL_STATE_INVALID_LABEL = 'build-control:1140-state-invalid'
 
 /**
- * @param {{ comments: Array<{ body: string, createdAt: string }>, maxFreshnessMs?: number }} input
- * @returns {
- *   | { status: 'NO_MARKER' }
- *   | { status: 'VALID', comment: { createdAt: string } }
- *   | { status: 'INVALID', comment: { createdAt: string }, reasons: string[] }
- * }
+ * @typedef {{ createdAt: string, author: string | null }} StateComment
+ * @typedef {{ status: 'NO_MARKER' }} NoMarker
+ * @typedef {{ status: 'VALID', comment: StateComment }} StateValid
+ * @typedef {{ status: 'UNTRUSTED', comment: StateComment, reasons: string[] }} StateUntrusted
+ * @typedef {{ status: 'INVALID', comment: StateComment, reasons: string[] }} StateInvalid
  */
-export function evaluateControlStateGuard({ comments, maxFreshnessMs }) {
-  const withMarkers = (Array.isArray(comments) ? comments : [])
+
+/**
+ * @param {{
+ *   comments: Array<{ author?: string | null, body: string, createdAt: string }>,
+ *   writerAllowlist: Iterable<string>,
+ *   maxFreshnessMs?: number,
+ * }} input
+ * @returns {NoMarker | StateValid | StateUntrusted | StateInvalid}
+ */
+export function evaluateControlStateGuard({ comments, writerAllowlist, maxFreshnessMs }) {
+  const trusted = new Set([...(writerAllowlist ?? [])].filter((login) => typeof login === 'string'))
+  const marked = (Array.isArray(comments) ? comments : [])
     .map((comment) => ({ comment, markers: findControlStateMarkers(comment.body) }))
     .filter((entry) => entry.markers.length > 0)
 
-  if (withMarkers.length === 0) return { status: 'NO_MARKER' }
+  if (marked.length === 0) return { status: 'NO_MARKER' }
 
-  // Newest comment carrying a marker wins, same "last write wins" rule as
-  // every other marker reader in this repository.
-  const latest = withMarkers[withMarkers.length - 1]
-  const latestMarker = latest.markers[latest.markers.length - 1]
+  const newest = marked[marked.length - 1]
+  const author = newest.comment.author ?? null
+  const at = { createdAt: newest.comment.createdAt, author }
 
+  if (!trusted.has(author)) {
+    return {
+      status: 'UNTRUSTED',
+      comment: at,
+      reasons: [
+        `the newest ${author === null ? 'unattributed' : `\`${author}\``} state comment is not from an ` +
+          'allow-listed state writer, so it must not be treated as canonical portfolio state',
+      ],
+    }
+  }
+
+  // Last write wins among trusted writers, same rule as every other marker
+  // reader here.
+  const payload = newest.markers[newest.markers.length - 1]
   const result = validateControlState({
-    payload: latestMarker,
-    commentTimestamp: latest.comment.createdAt,
+    payload,
+    commentTimestamp: newest.comment.createdAt,
     ...(maxFreshnessMs !== undefined ? { maxFreshnessMs } : {}),
   })
 
-  if (result.valid) {
-    return { status: 'VALID', comment: { createdAt: latest.comment.createdAt } }
-  }
-  return { status: 'INVALID', comment: { createdAt: latest.comment.createdAt }, reasons: result.reasons }
+  return result.valid ? { status: 'VALID', comment: at } : { status: 'INVALID', comment: at, reasons: result.reasons }
 }

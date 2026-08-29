@@ -1,0 +1,52 @@
+name: Build Control — 1140 Control-State Guard
+
+# Strict-state guard for the ME_CONTROL_STATE_V1 block consumed by Issue #1140,
+# without touching Obsidian or its syncer in any way.
+#
+# Limitation, stated here because it is easy to lose: `chatgpt-codex-connector`
+# has raw Issue-write permission today, so nothing in this repository can
+# *prevent* an invalid or untrusted state comment from being posted. This
+# workflow detects one after the fact and leaves a bounded, machine-visible
+# label plus a job summary. It never edits or deletes the source comment. The
+# existing Obsidian consumer remains the fail-closed boundary that refuses to
+# *use* an incomplete payload.
+#
+# Not a merge gate, so it is not a ruleset candidate and carries no pending
+# required check risk.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: build-control-1140-guard
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: build-control-1140-guard
+    if: github.event.issue.number == 1140 && github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Validate the latest ME_CONTROL_STATE_V1 block
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CONTROL_ISSUE_NUMBER: '1140'
+          CONTROL_STATE_WRITER_ALLOWLIST: ${{ vars.BUILD_CONTROL_STATE_WRITERS || github.repository_owner }}
+        run: node tools/build-control/src/issue-1140-guard-cli.mjs

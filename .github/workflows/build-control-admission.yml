@@ -1,0 +1,62 @@
+name: Build Control — PR Admission
+
+# Metadata-only admission check (Issue #1249).
+#
+# Trusted-workflow boundary: `pull_request_target` runs the *default branch's*
+# workflow definition, and the one checkout below is pinned to `main`, so the
+# code that judges a PR is never code the PR supplied. Nothing from the PR head
+# is fetched, built or executed here — only PR metadata and comments read over
+# the API.
+#
+# Because a `pull_request_target` job's own status attaches to the base branch,
+# it can never satisfy a branch ruleset that must apply to the code being
+# merged. So the verdict is written as an explicit check run named exactly
+# **Build Control Admission** against the PR's current full head SHA, on every
+# applicable event. That name is deliberately not used as a job name here, so
+# exactly one check carries it and it is always the head-attached one.
+#
+# No `paths:` / `paths-ignore:` filter: a required check with a path filter
+# never reports on a PR the filter excludes and sits Pending forever.
+#
+# This workflow does not modify the `Protect main` ruleset. Adding
+# **Build Control Admission** as a required context is a separate Product Owner
+# action.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: write
+
+concurrency:
+  group: build-control-admission-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  admission:
+    name: build-control-admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Evaluate Primary-Issue / Outcome-Contract / duplicate / cap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CAP_OVERRIDE_ALLOWLIST: ${{ vars.BUILD_CONTROL_OWNER_ALLOWLIST || github.repository_owner }}
+        run: node tools/build-control/src/pr-admission-cli.mjs
