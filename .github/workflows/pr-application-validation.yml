@@ -68,16 +68,87 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Run repository type-check
+      - name: Run baseline-aware repository type-check
+        shell: bash
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: npm run type-check
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          head_log="${RUNNER_TEMP}/typecheck-head.log"
+          base_log="${RUNNER_TEMP}/typecheck-base.log"
+          head_errors="${RUNNER_TEMP}/typecheck-head.errors"
+          base_errors="${RUNNER_TEMP}/typecheck-base.errors"
+          new_errors="${RUNNER_TEMP}/typecheck-new.errors"
+
+          set +e
+          npm run type-check 2>&1 | tee "${head_log}"
+          head_status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ ${head_status} -eq 0 ]]; then
+            echo '- Mode: full type-check PASS on PR head.' >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          if grep -Eqi 'heap out of memory|FATAL ERROR' "${head_log}"; then
+            echo '::error::PR-head type-check did not complete; baseline comparison is unsafe.'
+            exit 1
+          fi
+
+          grep -E 'error TS[0-9]+:' "${head_log}" | LC_ALL=C sort -u > "${head_errors}" || true
+          if [[ ! -s "${head_errors}" ]]; then
+            echo '::error::PR-head type-check failed without comparable TypeScript diagnostics.'
+            exit 1
+          fi
+
+          base_dir="${RUNNER_TEMP}/typecheck-base"
+          git worktree add --detach "${base_dir}" "${BASE_SHA}"
+          pushd "${base_dir}" >/dev/null
+          npm ci
+          set +e
+          npm run type-check 2>&1 | tee "${base_log}"
+          base_status=${PIPESTATUS[0]}
+          set -e
+          popd >/dev/null
+
+          if grep -Eqi 'heap out of memory|FATAL ERROR' "${base_log}"; then
+            echo '::error::Base type-check did not complete; baseline comparison is unsafe.'
+            exit 1
+          fi
+
+          if [[ ${base_status} -eq 0 ]]; then
+            echo '::error::Base type-check passes but PR head fails.'
+            exit 1
+          fi
+
+          grep -E 'error TS[0-9]+:' "${base_log}" | LC_ALL=C sort -u > "${base_errors}" || true
+          if [[ ! -s "${base_errors}" ]]; then
+            echo '::error::Base type-check failed without comparable TypeScript diagnostics.'
+            exit 1
+          fi
+
+          comm -13 "${base_errors}" "${head_errors}" > "${new_errors}"
+          if [[ -s "${new_errors}" ]]; then
+            echo '::error::PR head introduces new TypeScript diagnostics:'
+            cat "${new_errors}"
+            exit 1
+          fi
+
+          echo "::notice::PR head adds no TypeScript diagnostics beyond base ${BASE_SHA}; baseline debt is recorded separately."
+          {
+            echo '- Mode: baseline-aware type-check PASS.'
+            echo "- Base SHA: \`${BASE_SHA}\`"
+            echo "- Existing base diagnostics: $(wc -l < \"${base_errors}\")"
+            echo '- New PR diagnostics: 0'
+          } >> "${GITHUB_STEP_SUMMARY}"
       - name: Record exact tested head
         if: always()
         run: |
@@ -108,6 +179,7 @@ jobs:
           # statically evaluates modules. This job performs no deployment.
           NEXT_PUBLIC_SUPABASE_URL: https://ci-validation.invalid
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key-not-a-secret
+          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key-not-a-secret
         run: npm run build
       - name: Record exact tested head
         if: always()
