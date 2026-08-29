@@ -11,28 +11,80 @@ name: PR Application Validation
 
 on:
   pull_request:
+  # Explicitly authorised, read-only fallback for the rare case where a
+  # normal pull_request event does not produce a run (for example, a workflow
+  # registration/indexing race after this file first reaches the default
+  # branch). Build Control supplies an open PR number; the workflow resolves
+  # the exact head from GitHub's API and never accepts a caller-supplied SHA.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Open PR number to re-run exact-HEAD checks for (fallback only).'
+        required: true
+        type: string
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
-  group: pr-application-validation-${{ github.event.pull_request.number }}
+  group: pr-application-validation-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 env:
   CI: 'true'
   NEXT_TELEMETRY_DISABLED: '1'
-  PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
 jobs:
+  resolve-fallback-target:
+    name: Resolve fallback PR head
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+    steps:
+      - name: Resolve exact PR head via GitHub API (not caller-supplied SHA)
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          state=$(jq -r '.state' <<<"${pr_json}")
+          if [[ "${state}" != "open" ]]; then
+            echo "::error::PR #${PR_NUMBER} is not open (state=${state}); refusing fallback run."
+            exit 1
+          fi
+          head_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+          base_sha=$(jq -r '.base.sha' <<<"${pr_json}")
+          {
+            echo "head_sha=${head_sha}"
+            echo "base_sha=${base_sha}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo '## Fallback trigger — resolved target'
+            echo
+            echo "- PR: #${PR_NUMBER}"
+            echo "- Head SHA (from API, not caller input): \`${head_sha}\`"
+            echo "- Base SHA: \`${base_sha}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   crm-focused-tests:
+    needs: resolve-fallback-target
+    if: always() && (github.event_name == 'pull_request' || needs.resolve-fallback-target.result == 'success')
     name: CRM focused tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
@@ -62,13 +114,18 @@ jobs:
 
   type-check:
     name: Type-check
+    needs: resolve-fallback-target
+    if: always() && (github.event_name == 'pull_request' || needs.resolve-fallback-target.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
@@ -79,7 +136,7 @@ jobs:
         shell: bash
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.resolve-fallback-target.outputs.base_sha }}
         run: |
           set -euo pipefail
           head_log="${RUNNER_TEMP}/typecheck-head.log"
@@ -161,12 +218,17 @@ jobs:
 
   application-build:
     name: Application build
+    needs: resolve-fallback-target
+    if: always() && (github.event_name == 'pull_request' || needs.resolve-fallback-target.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
