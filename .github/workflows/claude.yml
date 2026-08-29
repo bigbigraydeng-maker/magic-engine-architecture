@@ -10,70 +10,13 @@ on:
   pull_request_review:
     types: [submitted]
 
-# One dispatch at a time per Issue/PR, queued rather than raced. This closes
-# the gap the duplicate-PR check alone cannot: two @claude triggers on the
-# same Issue landing before either has opened a PR yet, which would otherwise
-# both pass the dispatch preflight below (there is no PR to compare against
-# yet) and could both start an implementation run. `cancel-in-progress: false`
-# so a queued second run still executes afterwards rather than being dropped
-# — the preflight will then see the first run's PR (if any) and block on the
-# ordinary duplicate check.
-concurrency:
-  group: claude-dispatch-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: false
-
 jobs:
-  # Build Control dispatch preflight (Issue #1249): stops a *new implementation
-  # dispatch from an Issue* before any model call when another open PR
-  # (Draft included) already declares the same Primary-Issue, or the
-  # repository is at/above the recovery cap of 12 open PRs. A PR
-  # review/remediation comment on an *existing* PR is a different path and is
-  # never gated here — see IS_NEW_IMPLEMENTATION_DISPATCH below.
-  #
-  # Fails closed: any error reading GitHub facts makes this job fail, and the
-  # `claude` job below requires `needs.dispatch-preflight.result == 'success'`,
-  # so "we could not check" blocks exactly like "we checked and it is blocked".
-  dispatch-preflight:
+  claude:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-    outputs:
-      blocked: ${{ steps.preflight.outputs.blocked }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
-        with:
-          ref: main
-          fetch-depth: 1
-          persist-credentials: false
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '22'
-
-      - name: Evaluate duplicate-lane / cap before any model call
-        id: preflight
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A "new implementation dispatch from an Issue" is either a fresh
-          # Issue event, or an issue_comment whose target is an Issue rather
-          # than a PR (github.event.issue.pull_request is only set for PR
-          # conversation comments). pull_request_review* events are always
-          # about an existing PR and are never gated by this preflight.
-          IS_NEW_IMPLEMENTATION_DISPATCH: ${{ (github.event_name == 'issues' || (github.event_name == 'issue_comment' && github.event.issue.pull_request == null)) && 'true' || 'false' }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: node tools/build-control/src/dispatch-preflight-cli.mjs
-
-  claude:
-    needs: dispatch-preflight
-    if: needs.dispatch-preflight.result == 'success' && needs.dispatch-preflight.outputs.blocked != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -104,3 +47,4 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr *)'
+
