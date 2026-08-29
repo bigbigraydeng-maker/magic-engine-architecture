@@ -14,6 +14,7 @@ import {
 import type { ReviewItem } from '@/lib/tailor-made/extract';
 import AiComposer, { type ChatTurn } from './AiComposer';
 import ReviewPanel, { sectionIdForPath } from './ReviewPanel';
+import { pollTailorMadeJob } from '@/lib/tailor-made/poll-job';
 
 /**
  * Tailor-made 行程单编辑器。
@@ -27,49 +28,6 @@ import ReviewPanel, { sectionIdForPath } from './ReviewPanel';
  */
 
 const PREVIEW_DEBOUNCE_MS = 700;
-
-/**
- * import / extract 两个入口现在只建任务立刻回 202，AI 真正生成的过程要靠
- * 轮询这张任务表拿结果——不能再指望一个 HTTP 请求死等到底：ME 后台正式
- * 域名走 Cloudflare 代理，一个请求等超过约 100 秒 CF 自己会掐断连接，
- * 27 天以上的团生成经常要 100-180 秒，见 CTS 2027 China Panorama 报障。
- *
- * 轮询间隔前密后疏：大多数「改第 5 天」这类小改动几百毫秒到几秒就写完，
- * 不该让每次小改动都平白多等 2-3 秒；真正的大团慢慢拉长到 3 秒一次即可，
- * 反正客户端等待的是分钟级的事，轮询密度差一两秒无所谓。
- */
-const POLL_DELAYS_MS = [300, 600, 1000, 1500, 2000, 3000];
-const POLL_MAX_MS = 10 * 60 * 1000; // 跟 Anthropic 客户端默认超时对齐，兜底用
-
-/** 轮到「已卸载」就返回 { cancelled: true }，调用方据此跳过后续 setState —— 页面已经不在了，改 state 只会挨 React 的警告，请求也没必要再打。 */
-async function pollTailorMadeJob(
-  clientId: string,
-  jobId: string,
-  isCancelled: () => boolean
-): Promise<{ result?: Record<string, unknown>; error?: string; cancelled?: true }> {
-  const startedAt = Date.now();
-  let attempt = 0;
-  for (;;) {
-    if (isCancelled()) return { cancelled: true };
-
-    const res = await fetch(`/api/clients/${clientId}/tailor-made/jobs/${jobId}`, {
-      credentials: 'include',
-    });
-    if (isCancelled()) return { cancelled: true };
-
-    const data = await res.json();
-    if (!res.ok) return { error: data.error || '查询任务失败' };
-    if (data.status === 'completed') return { result: data.result };
-    if (data.status === 'failed') return { error: data.error || '生成失败' };
-
-    if (Date.now() - startedAt > POLL_MAX_MS) {
-      return { error: '等待太久了，任务可能卡住了，请重试或联系技术支持' };
-    }
-    const delay = POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)];
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    attempt += 1;
-  }
-}
 
 export default function TailorMadeEditor({
   record,
@@ -115,6 +73,15 @@ export default function TailorMadeEditor({
   useEffect(() => {
     return () => { isMountedRef.current = false; };
   }, []);
+
+  /**
+   * 有 AI 任务在跑（上传解析 / 对话改行程）。
+   *
+   * 这期间整个编辑区冻住：任务跑完是「整份替换」payload，而那份 payload 是按
+   * 提交那一刻的草稿算出来的——等待期间的任何手工修改都会被无声冲掉。
+   * 与其事后补救，不如这几分钟里不让人改。
+   */
+  const generating = importBusy || aiBusy;
 
   /** 任何字段变更都走这里，顺带打脏标记 */
   const edit = useCallback((mutate: (draft: TailorMadeItinerary) => void) => {
@@ -382,9 +349,18 @@ export default function TailorMadeEditor({
    */
   useEffect(() => {
     if (!dirty || saving) return;
+    // 生成期间不自动保存。
+    //
+    // 🔴 生成结束时 setPayload(data.payload) 是整份替换，而那份 payload 是用
+    // 「提交那一刻」的草稿算出来的。如果顾问在等待的 2-3 分钟里填了价格 / 客户
+    // 姓名（界面还提示「✓ 已自动保存」，他有理由以为存住了），结果一回来就
+    // 被整份盖掉，1.5 秒后自动保存再把这个倒退写进库——顾问填的东西无声消失，
+    // 最坏情况是价格空着的行程单发给了真实旅客。
+    // 生成期间连同下面的表单一起冻住，是目前最不容易出错的做法。
+    if (generating) return;
     const timer = setTimeout(() => { void save(); }, 1500);
     return () => clearTimeout(timer);
-  }, [dirty, saving, save]);
+  }, [dirty, saving, save, generating]);
 
   // ⌘S / Ctrl+S 保存 —— 顾问改长行程时会本能地按
   useEffect(() => {
@@ -538,7 +514,10 @@ export default function TailorMadeEditor({
             )}
           </section>
 
-          <AiComposer onSubmit={askAi} busy={aiBusy} turns={turns} error={aiError} />
+          {/* busy 传 generating 而不是 aiBusy：上传解析期间也不能发对话指令——
+              两个任务各自拿着提交那一刻的草稿快照，谁后跑完谁覆盖谁，
+              上传的 27 天会被一句「改第 5 天」的结果整份顶掉。 */}
+          <AiComposer onSubmit={askAi} busy={generating} turns={turns} error={aiError} />
 
           <ReviewPanel
             items={review}
@@ -556,7 +535,20 @@ export default function TailorMadeEditor({
             <span className="text-me-charcoal/40">{fieldsOpen ? '收起 ▴' : '展开 ▾'}</span>
           </button>
 
-          <div className={fieldsOpen ? 'space-y-6' : 'hidden'}>
+          {/* 生成期间整块冻住：结果回来是整份替换 payload，这期间改的东西留不住。
+              明说原因，别让顾问以为界面卡了。 */}
+          {generating && fieldsOpen && (
+            <p className="rounded-lg border border-me-ochre/30 bg-me-ivory px-4 py-3 text-xs leading-relaxed text-me-charcoal/75">
+              <strong>生成中，这几分钟先不要改下面的内容。</strong>
+              AI 跑完会把整份行程替换掉，现在填的价格、客户姓名会被覆盖掉留不住。
+              等下面的表单恢复可编辑，再一项项核对补充。
+            </p>
+          )}
+          <div
+            className={fieldsOpen ? 'space-y-6' : 'hidden'}
+            aria-busy={generating}
+            style={generating ? { opacity: 0.45, pointerEvents: 'none' } : undefined}
+          >
           <Section id="tm-client" title="终端客户与报价">
             <Grid2>
               <Text label="终端客户称呼" hint="行程单要发给的人，出现在封面 Prepared for" value={payload.client.name}
