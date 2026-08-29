@@ -1,0 +1,102 @@
+/**
+ * 只读决策清单（CI-WP01 / Issue #1009）—— 钉住三条硬约束：
+ *   · 今天已处理 / 别再联系的人绝不能出现在只读清单上
+ *   · 每行必须同时有「为什么」和「建议下一步」
+ *   · 空清单不是靠猜的，输入是空就输出空
+ */
+import { describe, expect, it } from 'vitest'
+import { buildDecisionList, type DecisionBucketSource, type DecisionSourceRow } from '../decision-list'
+
+const person = (over: Partial<DecisionSourceRow> = {}): DecisionSourceRow => ({
+  contactId: 'c1',
+  name: 'Susan',
+  phone: '021123456',
+  email: 'susan@example.com',
+  reason: '客户来消息了，已经等了 3 小时',
+  suggestedChannel: 'phone',
+  ...over,
+})
+
+const bucket = (people: DecisionSourceRow[], over: Partial<DecisionBucketSource> = {}): DecisionBucketSource => ({
+  layer: 'waiting',
+  label: '客人在等你',
+  people,
+  ...over,
+})
+
+describe('buildDecisionList', () => {
+  it('把桶拍平成一条清单，带上身份 / 为什么 / 建议下一步', () => {
+    const rows = buildDecisionList([bucket([person()])])
+    expect(rows).toEqual([
+      {
+        contactId: 'c1',
+        name: 'Susan',
+        contact: '021123456',
+        why: '客户来消息了，已经等了 3 小时',
+        nextAction: '建议致电',
+        layerLabel: '客人在等你',
+        pinned: false,
+      },
+    ])
+  })
+
+  it('今天已经处理过的人不出现在清单上', () => {
+    const rows = buildDecisionList([bucket([person({ doneToday: true })])])
+    expect(rows).toHaveLength(0)
+  })
+
+  it('被标「别再联系」的人绝不出现，即使上游意外带了进来（防御性过滤）', () => {
+    const rows = buildDecisionList([bucket([person({ doNotContact: true })])])
+    expect(rows).toHaveLength(0)
+  })
+
+  it('空桶给空清单，不编造行', () => {
+    expect(buildDecisionList([])).toEqual([])
+    expect(buildDecisionList([bucket([])])).toEqual([])
+  })
+
+  it('号码打不通时如实标注，不假装能打', () => {
+    const rows = buildDecisionList([bucket([person({ phoneUnusable: true })])])
+    expect(rows[0].contact).toBe('021123456（打不通）')
+  })
+
+  it('没电话时退回邮箱，两个都没有就说清楚', () => {
+    const withEmail = buildDecisionList([bucket([person({ phone: null })])])
+    expect(withEmail[0].contact).toBe('susan@example.com')
+
+    const withNeither = buildDecisionList([bucket([person({ phone: null, email: null })])])
+    expect(withNeither[0].contact).toBe('没留联系方式')
+  })
+
+  it('有系统建议改状态时，下一步里带上具体状态和原因', () => {
+    const rows = buildDecisionList([
+      bucket([
+        person({
+          suggestedStage: { toStage: 'closed', label: '停止营销', why: '客户明确说过不感兴趣', stillFollowed: false },
+        }),
+      ]),
+    ])
+    expect(rows[0].nextAction).toBe('建议致电 · 系统建议改状态为「停止营销」（客户明确说过不感兴趣）')
+  })
+
+  it('置顶客人保留 pinned 标记', () => {
+    const rows = buildDecisionList([bucket([person({ pinned: true })])])
+    expect(rows[0].pinned).toBe(true)
+  })
+
+  it('多个桶按原有顺序拍平，不重排', () => {
+    const rows = buildDecisionList([
+      bucket([person({ contactId: 'a' })], { label: '客人在等你' }),
+      bucket([person({ contactId: 'b' })], { label: '还没搭上话', layer: 'acted' }),
+    ])
+    expect(rows.map((r) => r.contactId)).toEqual(['a', 'b'])
+  })
+
+  it('每个 suggestedChannel 值都有对应的中文建议，不漏一个', () => {
+    const channels: DecisionSourceRow['suggestedChannel'][] = ['phone', 'sms', 'email', 'messenger', 'none']
+    for (const suggestedChannel of channels) {
+      const rows = buildDecisionList([bucket([person({ suggestedChannel })])])
+      expect(rows[0].nextAction.length).toBeGreaterThan(0)
+    }
+  })
+})
