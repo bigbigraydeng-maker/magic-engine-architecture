@@ -110,6 +110,24 @@ describe('buildDecisionList', () => {
       expect(rows[0].nextAction.length).toBeGreaterThan(0)
     }
   })
+
+  it('layer: queued 的桶整个不进清单 —— 交给自动跟进的人不算今天需要人工关注', () => {
+    const rows = buildDecisionList([
+      bucket([person({ contactId: 'a' })], { layer: 'waiting' }),
+      bucket([person({ contactId: 'b' })], { layer: 'queued', label: '先放着的人' }),
+    ])
+    expect(rows.map((r) => r.contactId)).toEqual(['a'])
+  })
+
+  it('同行默认不进清单，跟主看板默认视图（终端客户）保持一致', () => {
+    const rows = buildDecisionList([bucket([person({ kind: 'trade' })])])
+    expect(rows).toHaveLength(0)
+  })
+
+  it('没有 kind 字段的人当终端客户处理，照样出现在清单上', () => {
+    const rows = buildDecisionList([bucket([person({ kind: undefined })])])
+    expect(rows).toHaveLength(1)
+  })
 })
 
 describe('hasHandledToday —— 区分「都处理完了」和「今天压根没有到期的跟进」', () => {
@@ -125,6 +143,10 @@ describe('hasHandledToday —— 区分「都处理完了」和「今天压根�
     expect(hasHandledToday([bucket([])])).toBe(false)
     expect(hasHandledToday([])).toBe(false)
   })
+
+  it('queued 桶里的 doneToday 不算数 —— 那批人本来就不是今天的人工清单', () => {
+    expect(hasHandledToday([bucket([person({ doneToday: true })], { layer: 'queued' })])).toBe(false)
+  })
 })
 
 describe('hasTruncatedBucket —— 桶超过单桶显示上限时必须能被识别出来', () => {
@@ -135,5 +157,9 @@ describe('hasTruncatedBucket —— 桶超过单桶显示上限时必须能被�
   it('没有桶被截断就不提示', () => {
     expect(hasTruncatedBucket([bucket([person()], { truncated: false })])).toBe(false)
     expect(hasTruncatedBucket([bucket([person()])])).toBe(false)
+  })
+
+  it('queued 桶被截断不提示 —— 那个桶本来就不在这份清单上显示', () => {
+    expect(hasTruncatedBucket([bucket([person()], { layer: 'queued', truncated: true })])).toBe(false)
   })
 })

@@ -122,7 +122,8 @@ export default function CrmDecisionsPage() {
           {truncated && (
             <div className="rounded-xl border border-me-ochre/30 bg-me-ochre/8 p-3">
               <p className="text-xs font-semibold text-me-charcoal/70">
-                ⚠️ 部分分类超过单桶显示上限，清单没能显示全部客人 —— 去「今天要联系」那一页看完整名单。
+                ⚠️ 部分分类超过单桶显示上限，清单没能显示全部客人，目前没有能看到全部名单的入口
+                ——「今天要联系」那一页同样只显示每桶前 300 人。
               </p>
             </div>
           )}
