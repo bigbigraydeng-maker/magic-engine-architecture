@@ -75,6 +75,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Run repository type-check
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: npm run type-check
       - name: Record exact tested head
         if: always()
@@ -101,6 +103,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Build application
+        env:
+          # Non-secret, non-routable placeholders used only while Next.js
+          # statically evaluates modules. This job performs no deployment.
+          NEXT_PUBLIC_SUPABASE_URL: https://ci-validation.invalid
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key-not-a-secret
         run: npm run build
       - name: Record exact tested head
         if: always()
@@ -110,4 +117,5 @@ jobs:
             echo
             echo "- PR head: \`${PR_HEAD_SHA}\`"
             echo "- Result: \`${{ job.status }}\`"
+            echo '- Environment: non-secret, non-routable build placeholders; no deployment.' 
           } >> "${GITHUB_STEP_SUMMARY}"
