@@ -15,6 +15,9 @@
  *   · 同行默认不进「今天该联系客人」——跟主看板默认视图（终端客户）保持一致，
  *     否则同行会无标记地混进客人清单和顶部人数（Codex 复审 2026-08-29）
  *   · 空清单必须说清是「都处理完了」还是「压根没有数据」，不能长得一样
+ *   · 「今天已处理」的判断必须跟清单同一客群口径——如果桶里只有同行的
+ *     `doneToday`，终端客户其实压根没被判断过，不能说「都处理完了」
+ *     （Codex 复审 2026-08-29）
  */
 
 import type { ContactKind } from './contact-kind'
@@ -97,13 +100,26 @@ function isManualLayer(bucket: DecisionBucketSource): boolean {
 }
 
 /**
+ * 清单只展示终端客户、且已经排除 DNC —— 判断「今天是否已经处理过」时必须
+ * 用同一个客群范围，否则同行的 `doneToday` 会被算成终端客户已处理
+ * （Codex 复审 2026-08-29）。
+ */
+function isDisplayedAudience(p: DecisionSourceRow): boolean {
+  if (p.doNotContact) return false
+  if ((p.kind ?? 'retail') === 'trade') return false
+  return true
+}
+
+/**
  * 空清单是「今天该处理的都处理了」还是「今天压根没有到期的跟进」——
  * 两句话意思完全不同，不能靠 `totalContacts > 0` 瞎猜（客户有 300 个联系人，
  * 但今天全部在推迟 / 未来培育 / 已终止阶段，跟「今天处理完了」是两回事）。
- * 判据：桶里（过滤前）有没有出现过 `doneToday` 的人。
+ * 判据：桶里（过滤前，但限定在清单展示的客群范围内）有没有出现过 `doneToday` 的人。
  */
 export function hasHandledToday(buckets: DecisionBucketSource[]): boolean {
-  return buckets.filter(isManualLayer).some((b) => b.people.some((p) => p.doneToday === true))
+  return buckets
+    .filter(isManualLayer)
+    .some((b) => b.people.some((p) => isDisplayedAudience(p) && p.doneToday === true))
 }
 
 /** 是否有桶因为人数超过单桶上限而没能显示全部 —— 必须提示，不能悄悄截断。 */
@@ -124,9 +140,8 @@ export function buildDecisionList(buckets: DecisionBucketSource[]): DecisionRow[
     if (!isManualLayer(bucket)) continue
     for (const p of bucket.people) {
       // 防御性过滤：不重判，只是不让这几类人以任何理由出现在只读清单上。
-      if (p.doNotContact) continue
+      if (!isDisplayedAudience(p)) continue
       if (p.doneToday) continue
-      if ((p.kind ?? 'retail') === 'trade') continue
       rows.push({
         contactId: p.contactId,
         name: p.name,

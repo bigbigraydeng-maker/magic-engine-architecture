@@ -112,11 +112,13 @@ export default function CrmDecisionsPage() {
               ? truncated
                 ? `至少 ${rows.length} 位客人需要关注 —— 部分分类人数过多，清单未显示全部`
                 : `今天有 ${rows.length} 位客人需要关注`
-              : totalContacts > 0
-                ? handledToday
-                  ? '今天没有人需要关注 —— 该处理的都处理了'
-                  : '今天没有人需要关注 —— 现在没有到期的跟进'
-                : '这个客户还没有任何客人数据'}
+              : truncated
+                ? '当前返回的部分名单里没有可显示的记录 —— 部分分类人数过多，清单未显示全部，不能确认是否还有人需要关注'
+                : totalContacts > 0
+                  ? handledToday
+                    ? '今天没有人需要关注 —— 该处理的都处理了'
+                    : '今天没有人需要关注 —— 现在没有到期的跟进'
+                  : '这个客户还没有任何客人数据'}
           </p>
 
           {truncated && (
@@ -131,11 +133,13 @@ export default function CrmDecisionsPage() {
           {rows.length === 0 ? (
             <div className="rounded-xl border border-black/10 bg-white p-8 text-center">
               <p className="text-sm text-me-charcoal/60">
-                {totalContacts > 0
-                  ? handledToday
-                    ? '今天没有需要关注的客人。'
-                    : '现在没有到期的跟进，都在推迟、未来培育或已终止阶段。'
-                  : '还没有同步到任何客人。'}
+                {truncated
+                  ? '当前返回的部分名单里没有可显示的记录，但部分分类人数过多、清单未显示全部，无法确认是否还有人需要关注。'
+                  : totalContacts > 0
+                    ? handledToday
+                      ? '今天没有需要关注的客人。'
+                      : '现在没有到期的跟进，都在推迟、未来培育或已终止阶段。'
+                    : '还没有同步到任何客人。'}
               </p>
             </div>
           ) : (

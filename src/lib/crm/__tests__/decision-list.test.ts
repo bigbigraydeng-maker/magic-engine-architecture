@@ -147,6 +147,21 @@ describe('hasHandledToday —— 区分「都处理完了」和「今天压根�
   it('queued 桶里的 doneToday 不算数 —— 那批人本来就不是今天的人工清单', () => {
     expect(hasHandledToday([bucket([person({ doneToday: true })], { layer: 'queued' })])).toBe(false)
   })
+
+  it('桶里只有同行的 doneToday=true：终端客户没被判断过，不能算「都处理完了」', () => {
+    expect(hasHandledToday([bucket([person({ kind: 'trade', doneToday: true })])])).toBe(false)
+  })
+
+  it('桶里既有同行已处理、也有终端客户已处理：终端客户那条才算数（结果仍是 true）', () => {
+    expect(
+      hasHandledToday([
+        bucket([
+          person({ contactId: 'trade-1', kind: 'trade', doneToday: true }),
+          person({ contactId: 'retail-1', doneToday: true }),
+        ]),
+      ]),
+    ).toBe(true)
+  })
 })
 
 describe('hasTruncatedBucket —— 桶超过单桶显示上限时必须能被识别出来', () => {
