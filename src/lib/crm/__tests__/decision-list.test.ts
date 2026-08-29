@@ -5,7 +5,13 @@
  *   · 空清单不是靠猜的，输入是空就输出空
  */
 import { describe, expect, it } from 'vitest'
-import { buildDecisionList, type DecisionBucketSource, type DecisionSourceRow } from '../decision-list'
+import {
+  buildDecisionList,
+  hasHandledToday,
+  hasTruncatedBucket,
+  type DecisionBucketSource,
+  type DecisionSourceRow,
+} from '../decision-list'
 
 const person = (over: Partial<DecisionSourceRow> = {}): DecisionSourceRow => ({
   contactId: 'c1',
@@ -55,8 +61,13 @@ describe('buildDecisionList', () => {
     expect(buildDecisionList([bucket([])])).toEqual([])
   })
 
-  it('号码打不通时如实标注，不假装能打', () => {
+  it('号码打不通但有邮箱时，邮箱要露出来，不能让人看着「建议发邮件」却找不到邮箱', () => {
     const rows = buildDecisionList([bucket([person({ phoneUnusable: true })])])
+    expect(rows[0].contact).toBe('021123456（打不通）· susan@example.com')
+  })
+
+  it('号码打不通且没有邮箱时，只标注号码打不通', () => {
+    const rows = buildDecisionList([bucket([person({ phoneUnusable: true, email: null })])])
     expect(rows[0].contact).toBe('021123456（打不通）')
   })
 
@@ -98,5 +109,31 @@ describe('buildDecisionList', () => {
       const rows = buildDecisionList([bucket([person({ suggestedChannel })])])
       expect(rows[0].nextAction.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('hasHandledToday —— 区分「都处理完了」和「今天压根没有到期的跟进」', () => {
+  it('桶里有人 doneToday=true：今天确实处理过', () => {
+    expect(hasHandledToday([bucket([person({ doneToday: true })])])).toBe(true)
+  })
+
+  it('桶里的人只是被标「别再联系」，不算今天处理过', () => {
+    expect(hasHandledToday([bucket([person({ doNotContact: true })])])).toBe(false)
+  })
+
+  it('空桶：没有处理过任何人', () => {
+    expect(hasHandledToday([bucket([])])).toBe(false)
+    expect(hasHandledToday([])).toBe(false)
+  })
+})
+
+describe('hasTruncatedBucket —— 桶超过单桶显示上限时必须能被识别出来', () => {
+  it('任一桶 truncated=true 就该提示', () => {
+    expect(hasTruncatedBucket([bucket([person()], { truncated: true })])).toBe(true)
+  })
+
+  it('没有桶被截断就不提示', () => {
+    expect(hasTruncatedBucket([bucket([person()], { truncated: false })])).toBe(false)
+    expect(hasTruncatedBucket([bucket([person()])])).toBe(false)
   })
 })

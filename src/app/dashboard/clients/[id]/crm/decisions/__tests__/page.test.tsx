@@ -61,10 +61,23 @@ describe('正常 tenant：显示身份 / why now / 建议下一步', () => {
 })
 
 describe('诚实的空 / 加载中 / 失败状态', () => {
-  it('清单为空但客户有数据 —— 说清是"都处理完了"，不是压根没数据', async () => {
-    stubFetch(200, { buckets: [], totalContacts: 42, generatedAt: '2026-08-29T00:00:00.000Z' })
+  it('清单为空、今天确实处理过人（doneToday）—— 说清是"都处理完了"', async () => {
+    stubFetch(200, {
+      buckets: [bucket([person({ doneToday: true })])],
+      totalContacts: 42,
+      generatedAt: '2026-08-29T00:00:00.000Z',
+    })
     render(<CrmDecisionsPage />)
     await waitFor(() => expect(screen.getByText(/该处理的都处理了/)).toBeTruthy())
+  })
+
+  it('清单为空、桶里没有任何 doneToday 的人 —— 说的是"今天没有到期的跟进"，不能瞎猜成"都处理完了"', async () => {
+    stubFetch(200, { buckets: [], totalContacts: 42, generatedAt: '2026-08-29T00:00:00.000Z' })
+    render(<CrmDecisionsPage />)
+    await waitFor(() =>
+      expect(screen.getByText('今天没有人需要关注 —— 现在没有到期的跟进')).toBeTruthy(),
+    )
+    expect(screen.queryByText(/该处理的都处理了/)).toBeNull()
   })
 
   it('客户压根没有数据 —— 跟"都处理完了"说不同的话', async () => {
@@ -105,7 +118,7 @@ describe('已处理 / 别再联系的人不能被错误提升为需要关注', (
     expect(screen.queryByText('Handled Today')).toBeNull()
   })
 
-  it('doNotContact=true 的人即使被上游意外带进桶里也不出现', async () => {
+  it('doNotContact=true 的人即使被上游意外带进桶里也不出现，且不冒充「都处理完了」', async () => {
     stubFetch(200, {
       buckets: [bucket([person({ contactId: 'dnc1', name: 'Do Not Contact Me', doNotContact: true })])],
       totalContacts: 1,
@@ -113,7 +126,37 @@ describe('已处理 / 别再联系的人不能被错误提升为需要关注', (
     })
     render(<CrmDecisionsPage />)
 
-    await waitFor(() => expect(screen.getByText(/该处理的都处理了/)).toBeTruthy())
+    // 这个人不是「今天处理过」，只是被永久排除 —— 不能说成「该处理的都处理了」。
+    await waitFor(() =>
+      expect(screen.getByText('今天没有人需要关注 —— 现在没有到期的跟进')).toBeTruthy(),
+    )
+    expect(screen.queryByText(/该处理的都处理了/)).toBeNull()
     expect(screen.queryByText('Do Not Contact Me')).toBeNull()
+  })
+})
+
+describe('清单被截断时必须提示，不能假装人数已经齐了', () => {
+  it('任一桶 truncated=true 时显示警示，且顶部人数带「至少」', async () => {
+    stubFetch(200, {
+      buckets: [{ ...bucket([person()]), total: 400, truncated: true }],
+      totalContacts: 400,
+      generatedAt: '2026-08-29T00:00:00.000Z',
+    })
+    render(<CrmDecisionsPage />)
+
+    await waitFor(() => expect(screen.getByText(/至少 1 位客人需要关注/)).toBeTruthy())
+    expect(screen.getByText(/清单没能显示全部客人/)).toBeTruthy()
+  })
+
+  it('没有桶被截断时不显示警示', async () => {
+    stubFetch(200, {
+      buckets: [bucket([person()])],
+      totalContacts: 1,
+      generatedAt: '2026-08-29T00:00:00.000Z',
+    })
+    render(<CrmDecisionsPage />)
+
+    await waitFor(() => expect(screen.getByText('Susan')).toBeTruthy())
+    expect(screen.queryByText(/清单没能显示全部客人/)).toBeNull()
   })
 })

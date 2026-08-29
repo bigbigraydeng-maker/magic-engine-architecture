@@ -40,6 +40,10 @@ export interface DecisionBucketSource {
   layer: 'waiting' | 'acted' | 'queued'
   label: string
   people: DecisionSourceRow[]
+  /** 这个桶命中的总人数（含被本页过滤掉的）—— `/crm/today` 每桶只回前 300 人。 */
+  total?: number
+  /** 这个桶命中的人比返回的 `people` 多 —— 清单没能显示全部，必须如实提示。 */
+  truncated?: boolean
 }
 
 export interface DecisionRow {
@@ -63,7 +67,7 @@ const CHANNEL_ACTION_LABEL: Record<SuggestedChannel, string> = {
 
 function contactText(phone: string | null, email: string | null, phoneUnusable?: boolean): string {
   if (phone && !phoneUnusable) return phone
-  if (phone && phoneUnusable) return `${phone}（打不通）`
+  if (phone && phoneUnusable) return email ? `${phone}（打不通）· ${email}` : `${phone}（打不通）`
   if (email) return email
   return '没留联系方式'
 }
@@ -74,6 +78,21 @@ function nextActionText(row: DecisionSourceRow): string {
     return `${channel} · 系统建议改状态为「${row.suggestedStage.label}」（${row.suggestedStage.why}）`
   }
   return channel
+}
+
+/**
+ * 空清单是「今天该处理的都处理了」还是「今天压根没有到期的跟进」——
+ * 两句话意思完全不同，不能靠 `totalContacts > 0` 瞎猜（客户有 300 个联系人，
+ * 但今天全部在推迟 / 未来培育 / 已终止阶段，跟「今天处理完了」是两回事）。
+ * 判据：桶里（过滤前）有没有出现过 `doneToday` 的人。
+ */
+export function hasHandledToday(buckets: DecisionBucketSource[]): boolean {
+  return buckets.some((b) => b.people.some((p) => p.doneToday === true))
+}
+
+/** 是否有桶因为人数超过单桶上限而没能显示全部 —— 必须提示，不能悄悄截断。 */
+export function hasTruncatedBucket(buckets: DecisionBucketSource[]): boolean {
+  return buckets.some((b) => b.truncated === true)
 }
 
 /** 把 `/crm/today` 的桶拍平成一条只读决策清单，按桶原有的优先级顺序。 */

@@ -18,7 +18,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { CrmTabs } from '../_components/CrmTabs'
-import { buildDecisionList, type DecisionBucketSource, type DecisionRow } from '@/lib/crm/decision-list'
+import {
+  buildDecisionList,
+  hasHandledToday,
+  hasTruncatedBucket,
+  type DecisionBucketSource,
+  type DecisionRow,
+} from '@/lib/crm/decision-list'
 
 interface Payload {
   buckets?: DecisionBucketSource[]
@@ -34,6 +40,8 @@ export default function CrmDecisionsPage() {
   const [rows, setRows] = useState<DecisionRow[] | null>(null)
   const [totalContacts, setTotalContacts] = useState(0)
   const [generatedAt, setGeneratedAt] = useState<string | null>(null)
+  const [handledToday, setHandledToday] = useState(false)
+  const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -51,6 +59,8 @@ export default function CrmDecisionsPage() {
       setRows(buildDecisionList(json.buckets ?? []))
       setTotalContacts(json.totalContacts ?? 0)
       setGeneratedAt(json.generatedAt ?? null)
+      setHandledToday(hasHandledToday(json.buckets ?? []))
+      setTruncated(hasTruncatedBucket(json.buckets ?? []))
     } catch {
       setError('加载失败，检查网络后再试。')
       setRows(null)
@@ -99,16 +109,32 @@ export default function CrmDecisionsPage() {
         <>
           <p className="text-xs font-bold text-me-charcoal/50">
             {rows.length > 0
-              ? `今天有 ${rows.length} 位客人需要关注`
+              ? truncated
+                ? `至少 ${rows.length} 位客人需要关注 —— 部分分类人数过多，清单未显示全部`
+                : `今天有 ${rows.length} 位客人需要关注`
               : totalContacts > 0
-                ? '今天没有人需要关注 —— 该处理的都处理了'
+                ? handledToday
+                  ? '今天没有人需要关注 —— 该处理的都处理了'
+                  : '今天没有人需要关注 —— 现在没有到期的跟进'
                 : '这个客户还没有任何客人数据'}
           </p>
+
+          {truncated && (
+            <div className="rounded-xl border border-me-ochre/30 bg-me-ochre/8 p-3">
+              <p className="text-xs font-semibold text-me-charcoal/70">
+                ⚠️ 部分分类超过单桶显示上限，清单没能显示全部客人 —— 去「今天要联系」那一页看完整名单。
+              </p>
+            </div>
+          )}
 
           {rows.length === 0 ? (
             <div className="rounded-xl border border-black/10 bg-white p-8 text-center">
               <p className="text-sm text-me-charcoal/60">
-                {totalContacts > 0 ? '今天没有需要关注的客人。' : '还没有同步到任何客人。'}
+                {totalContacts > 0
+                  ? handledToday
+                    ? '今天没有需要关注的客人。'
+                    : '现在没有到期的跟进，都在推迟、未来培育或已终止阶段。'
+                  : '还没有同步到任何客人。'}
               </p>
             </div>
           ) : (
