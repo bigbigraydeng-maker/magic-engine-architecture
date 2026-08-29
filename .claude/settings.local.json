@@ -13,5 +13,17 @@
       "mcp__ca736b0e-a212-43ef-bc9d-ab81f5088d26__list_projects",
       "mcp__ca736b0e-a212-43ef-bc9d-ab81f5088d26__execute_sql"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/link-worktree-env.sh 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
   }
 }
