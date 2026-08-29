@@ -1,0 +1,56 @@
+name: Build Control — PR Admission
+
+# Metadata-only admission check for new/reopened/edited/synchronised PRs.
+#
+# Reads PR metadata (body, created_at) and the open-PR list from the GitHub
+# API only. Never checks out or executes PR-head code: the one checkout step
+# below is pinned to `main`, so a PR cannot edit the guard that judges it
+# (same pattern as tools/ops-review-loop's ops-fix-scope-guard.yml).
+#
+# A failed check here does NOT by itself stop the PR from existing — GitHub
+# has no such gate. It only marks the PR red. The actual admission control
+# for a *new Issue dispatch* is the preflight in claude.yml, which runs
+# before any model call; this workflow exists to catch a PR that reached
+# `open` state some other way (human-opened, `gh pr create`, a different
+# automation).
+#
+# No `paths:` / `paths-ignore:` filter: a required check with a path filter
+# never reports on a PR the filter excludes and sits Pending forever
+# (documented at length in ai-orchestrator-ci.yml). This must stay filter-free
+# if it is ever added to the `Protect main` ruleset.
+#
+# Stable check name: **Build Control Admission** (the job name below).
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: build-control-admission-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  admission:
+    name: Build Control Admission
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Evaluate Primary-Issue / Outcome-Contract / duplicate / cap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node tools/build-control/src/pr-admission-cli.mjs

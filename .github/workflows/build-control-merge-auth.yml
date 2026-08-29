@@ -1,0 +1,65 @@
+name: Build Control — Merge Authorisation
+
+# Exact-head merge-authorisation check. Passes only when the PR's current,
+# full head SHA has a trusted `ME_MERGE_AUTH_V1` comment naming that exact
+# SHA from an owner allow-listed login. A push automatically invalidates any
+# older authorisation because the marker names the SHA it was written for —
+# no separate revocation step exists or is needed.
+#
+# Two triggers, one reason: `pull_request` re-runs the check on every push
+# (so a new head SHA starts unauthorised until re-authorised), and
+# `issue_comment` re-runs it the moment the marker itself is posted, without
+# waiting for a synchronize event. The `issue_comment` path writes an
+# explicit Checks-API check run for the PR's current head SHA (see
+# WRITE_EXPLICIT_CHECK below) because a comment alone produces no natural
+# per-SHA check the way a `pull_request` event's own job status does.
+#
+# Checked out from `main`, never the PR head — this workflow only reads PR
+# metadata and issue comments via the API; it never executes PR content.
+#
+# This PR does NOT modify the `Protect main` ruleset. Once a separate Product
+# Owner authorisation approves it, the exact stable check context to add is:
+# **Build Control Merge Authorisation** (the job name below).
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  checks: write
+
+concurrency:
+  group: build-control-merge-auth-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  merge-auth:
+    name: Build Control Merge Authorisation
+    # For issue_comment, only run when the comment is on a PR (a comment on a
+    # plain Issue has no head SHA to authorise and is out of scope here).
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Evaluate ME_MERGE_AUTH_V1 against the exact current head SHA
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          MERGE_AUTH_ALLOWLIST: ${{ vars.BUILD_CONTROL_MERGE_AUTH_ALLOWLIST || github.event.repository.owner.login }}
+          WRITE_EXPLICIT_CHECK: ${{ github.event_name == 'issue_comment' && 'true' || 'false' }}
+        run: node tools/build-control/src/merge-auth-cli.mjs

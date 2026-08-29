@@ -1,0 +1,46 @@
+name: Build Control — Business-Loop Outcome Guard
+
+# Business-loop closure guard, scoped to Issues explicitly labelled
+# `impact-loop` (a business IMPACT loop per CLAUDE.md's
+# Inspect -> Measure -> Prescribe -> Act -> Check -> Tune). Reopens the Issue
+# if it closes without a complete ME_OUTCOME_RECEIPT_V1 (Measurement +
+# Outcome + Tune all DONE) — an Execution-only receipt is not enough.
+#
+# Ordinary engineering Issues and ordinary merged PRs are never touched: the
+# guard is a no-op unless the `impact-loop` label is present. Reopening an
+# Issue is reversible and scoped to this one label, so it is treated as a
+# safe automated action rather than one requiring separate authorisation.
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: build-control-outcome-guard-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  outcome-guard:
+    name: Build Control Outcome Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Require a complete Outcome receipt to close an impact-loop Issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: node tools/build-control/src/business-loop-guard-cli.mjs
