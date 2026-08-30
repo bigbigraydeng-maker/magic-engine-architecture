@@ -27,6 +27,31 @@ import { startCronRun } from '@/lib/cron/run-logger'
 // 一个客户可能有多个表单，每个表单还要翻页；给足时间。
 export const maxDuration = 600
 
+/**
+ * 把每个客户的失败原因压成一行,给 `cron_run_logs.error_message`。
+ *
+ * 日报邮件只截前 200 字符,所以**先说有多少家挂了,再说错在哪** —— 同一把令牌
+ * 失效时 N 家的报错是同一句,按原文去重能让这 200 字符装下真正不同的病因,
+ * 而不是同一句话重复四遍。
+ *
+ * 全好时返回 undefined,`finish()` 就仍把这次跑标成 completed。
+ */
+export function summariseFailures(results: readonly { clientName: string; error?: string }[]): string | undefined {
+  const failures = results.filter((r) => r.error)
+  if (failures.length === 0) return undefined
+
+  const byReason = new Map<string, string[]>()
+  for (const f of failures) {
+    const reason = (f.error ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
+    const names = byReason.get(reason) ?? []
+    names.push(f.clientName)
+    byReason.set(reason, names)
+  }
+
+  const parts = [...byReason].map(([reason, names]) => `${names.join('/')}: ${reason}`)
+  return `${failures.length}/${results.length} 个客户取不到线索 — ${parts.join(' ‖ ')}`
+}
+
 async function run(): Promise<NextResponse> {
   const cronRun = await startCronRun('meta-leads-sync')
 
@@ -70,6 +95,12 @@ async function run(): Promise<NextResponse> {
     completed: results.length - failed,
     failed,
     summary: { newContacts, leadsIngested, results },
+    // 有客户取不到数就必须把原话带进 error_message —— 日报邮件的「错误原因」列
+    // 读的就是这个字段。2026-08-21~08-30 这里一直是 null,于是日报每天照发
+    // 「meta-leads-sync 4 failed —」,一屏破折号没有一个字说明是什么事,
+    // 9 天没人看得懂,4 个客户的线索管道全程断供(CTS 一家漏 45 条、NZ$736)。
+    // 真正的报错当时就躺在 summary 里,只是没人把它搬到人看得见的地方。
+    error: summariseFailures(results),
   })
 
   return NextResponse.json({
