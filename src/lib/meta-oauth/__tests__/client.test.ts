@@ -99,6 +99,12 @@ describe('meta-oauth consent url', () => {
     expect(META_PAGE_SCOPES).toContain('pages_read_user_content')
   })
 
+  it('asks for pages_manage_ads — Graph refuses to list leadgen_forms without it, even with leads_retrieval + pages_show_list (2026-08-30 production)', () => {
+    expect(META_PAGE_SCOPES).toContain('pages_manage_ads')
+    const url = new URL(buildAuthUrl('state-value', 'https://me.test/cb'))
+    expect(url.searchParams.get('scope')).toContain('pages_manage_ads')
+  })
+
   it('asks for leads_retrieval — without it meta-leads-sync lists zero forms and silently ingests nothing', () => {
     expect(META_PAGE_SCOPES).toContain('leads_retrieval')
     const url = new URL(buildAuthUrl('state-value', 'https://me.test/cb'))
