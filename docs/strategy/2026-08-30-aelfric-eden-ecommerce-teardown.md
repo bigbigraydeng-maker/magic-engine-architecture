@@ -156,11 +156,13 @@ Aelfric Eden 不是"社媒做得好的独立站"，是**一台把创作者内容
 ```
 
 Loox 的评价是客户端渲染的，但服务端交给 Google 的结构化数据是一个**无效评分**。
-后果：**969 个商品页全部拿不到搜索结果里的星级富摘要**，还可能被判为无效结构化数据。这是主题层的 bug，改一处全站生效。
+**范围订正**：本次只解析了 7 个商品页（含 6 个 best-sellers），这 7 个页面全部拿不到搜索结果里的星级富摘要，还可能被判为无效结构化数据。**未抽样的商品页可能使用不同模板 / 评价状态 / JSON-LD 注入路径**，不能据此断言全部 969 个商品页都受影响，也不能直接定性为"全站主题 bug"——如果确认是同一主题模板统一渲染，需要先扫描全部商品 URL 或至少扩大抽样后再报告全站数量。
 
-### 6.2 🔴 商品页没有 hreflang
+### 6.2 🟡 商品页没有语言 / 地区 alternate URL（不等同于"缺 hreflang bug"）
 
-7 个货币、全球发货，商品页却只有 canonical，**没有任何语言/地区 alternate**。多市场站点的基本功缺失。
+7 个货币、全球发货，商品页却只有 canonical，**没有观察到任何语言/地区的独立 URL 变体**（该店是同一 URL 下切换货币 / 客户端翻译）。
+
+**订正**：`hreflang` 是给"同一内容的不同语言/地区 URL"之间做双向标注的，如果站点根本没有可索引的本地化 URL（例如货币切换和翻译都发生在同一 URL 上，用 query/cookie 而非路径/子域区分），那么"缺 hreflang"本身就不成立，也不该作为自动检测规则直接套用到任意 Shopify 店——会对这类站点产生误报。**正确的检测顺序应该是**：先探测是否存在独立的本地化 URL（如 `/en-au/`、`?locale=`对应的可索引路径等），如果存在再检查这些 URL 之间是否有完整的双向 `hreflang` 集群；本次扫描没有做前一步，因此这一条目前只能算"未观察到本地化 URL"，不能定性为"多市场站点基本功缺失"。
 
 ### 6.3 🔴 1247 个 collection 里大量内部垃圾被公开索引
 
@@ -185,23 +187,25 @@ Loox 的评价是客户端渲染的，但服务端交给 Google 的结构化数�
 
 ---
 
-## 7. 映射到 ME 6 支柱 —— 能变成产品规则的 5 条
+## 7. 映射到 ME 6 支柱 —— 5 条待验证研究候选（⚠️ 单店观察，未晋升为行业规则）
 
-| # | 发现 | 支柱 | ME 该怎么做 |
+⚠️ **以下 5 条全部只有 Aelfric Eden 这一个观察样本支撑，是研究候选（research candidate），不是可下发的 L2 行业规则。** 在有第二、第三个兼容电商店铺的实测数据 + Outcome 证据支持前，**不得**当成 Playbook 标准动作对客户执行，也不得写入 shared runtime 或作为通用检测口径直接上线。
+
+| # | 发现 | 支柱 | 候选方向（待多店验证后才能晋升为规则） |
 |---|---|---|---|
-| 1 | 创作者专属 collection | 社媒 + 归因 | **进 ME 电商版 Playbook 标准动作**：每个合作创作者建一个 collection + 独立 UTM，Outcome 走现有 attribution 能力验证。这是既有能力的场景应用，不新增能力线 |
-| 2 | 上新节奏喂内容 | 社媒 | 内容排产的输入从"想主题"改成"读客户的上新 feed"。ME 已有内容工厂，加一个 `products.json` 上新监听即可 |
-| 3 | 促销走叠加不改价 | 广告 + 口碑 | **Playbook 规则**：促销一律用 Shopify automatic discount，禁止批量改 `compare_at_price`。理由是保护商品 feed 干净 + 保护价格锚 |
-| 4 | aggregateRating=0 / 缺 hreflang / sitemap 垃圾 | SEO | **三条都可自动检测**。ME 已有 Site Analyzer，加三条 check 就能对任意 Shopify 店出诊断报告 —— 属于既有 SEO 能力的规则扩展 |
-| 5 | Shopify 默认开了 UCP / agents.md | AI 可见度 | AI agent 现在能直接在 Shopify 店里搜品、建车、结账。**ME 的 AI 可见度测量口径要加一维：AI agent 能不能买到你** —— 不只是"AI 提不提你" |
+| 1 | 创作者专属 collection | 社媒 + 归因 | 候选：每个合作创作者建一个 collection + 独立 UTM，Outcome 走现有 attribution 能力验证。若属实，是既有能力的场景应用，不新增能力线 |
+| 2 | 上新节奏喂内容 | 社媒 | 候选：内容排产的输入从"想主题"改成"读客户的上新 feed"，用 ME 已有内容工厂加一个 `products.json` 上新监听验证 |
+| 3 | 促销走叠加不改价 | 广告 + 口碑 | 候选：促销一律用 Shopify automatic discount，避免批量改 `compare_at_price`。仍需在其他店验证这一模式确实优于改价促销 |
+| 4 | aggregateRating=0 / 缺 hreflang / sitemap 垃圾 | SEO | 候选检测方向，但**不能直接照搬为通用规则**——见 §6.2 的 hreflang 适用条件订正与 §6.1 的抽样范围订正，需先扩大抽样、明确适用前提 |
+| 5 | Shopify 默认开了 UCP / agents.md | AI 可见度 | 候选：AI agent 能不能买到你，作为 AI 可见度测量口径的候选新维度，需在多店确认该行为是 Shopify 平台默认而非个案 |
 
-> §7.4 的三条自动检测规则可以直接开成 issue，我可以出提案。
+> §7.4 的检测方向若要开成 issue 落地，必须先在多个兼容店铺验证，且需按 §6.1 / §6.2 的订正范围收窄适用条件，不能直接以本文档口径出提案。
 
 ---
 
-## 8. 给 Magic Picks（ME Commerce Customer Zero）的落地建议
+## 8. 给 Jing's Pick（ME Commerce Customer Zero）的落地建议
 
-⚠️ 前置约束（来自既有认知）：Magic Picks 是 **NZ 市场 + 华人叙事 + Mt Wellington 展厅 + hybrid 供应链**，NZ 电商销售渠道只有三个（独立站 + Trade Me + FBM）。
+⚠️ 前置约束（来自既有认知）：Jing's Pick 是 **NZ 市场 + 华人叙事 + Mt Wellington 展厅 + hybrid 供应链**，NZ 电商销售渠道只有三个（独立站 + Trade Me + FBM）。
 
 ### 可移植 ✅
 - **创作者专属 collection** —— NZ 本地 KOC 体量小，2000 粉门槛甚至可以再降
@@ -211,7 +215,7 @@ Loox 的评价是客户端渲染的，但服务端交给 Google 的结构化数�
 - **BNPL** —— NZ 市场 Afterpay/Laybuy 普及度高，对客单价有实际拉动
 
 ### 不可移植 ❌
-- **每月 176 个新品** —— AE 是自有快时尚供应链；Magic Picks 是 hybrid 供货，硬追节奏会烧死现金流
+- **每月 176 个新品** —— AE 是自有快时尚供应链；Jing's Pick 是 hybrid 供货，硬追节奏会烧死现金流
 - **学生 30% off** —— AE 靠的是美国大学生规模；NZ 大学生盘子太小，ROI 不成立
 - **自有 App** —— 流量体量没到，不要碰
 
@@ -240,8 +244,8 @@ Loox 的评价是客户端渲染的，但服务端交给 Google 的结构化数�
 
 - **复用了什么已有平台能力**：无代码改动。本次只做外部研究，产出为 L2 Playbook 的输入素材
 - **platform-shared**：无
-- **industry-specific（L2）**：§7 的 5 条规则、§5 的"促销不改价"规则 —— 归属 ME 电商版 Playbook
-- **client-specific（L4）**：§8 Magic Picks 的落地建议
+- **industry-specific（L2 候选，待多店验证）**：§7 的 5 条研究候选、§5 的"促销不改价"规则 —— 归属 ME 电商版 Playbook 输入素材，尚未晋升为可下发规则
+- **client-specific（L4）**：§8 Jing's Pick 的落地建议
 - **有没有把客户名 / 客户 ID / 行业判断写进 shared runtime**：没有。本文件在 `docs/strategy/`，不进 `src/lib/`
 - **落点与 tier-gate 决策是否一致**：一致。决策时判为"竞对研究 → 喂 L2 Playbook，不新增能力线、不动 shared runtime"，实际落点即 `docs/strategy/` 单篇研究文档，无代码路径变更
 - **学习升级边界**：§7 的 5 条目前只有 1 个观察样本，**留在行业级（L2）**，不升 global memory；§7.4 的三条 SEO 检测规则如要落成 ME 能力，需另开提案走既有 SEO 能力扩展路径
