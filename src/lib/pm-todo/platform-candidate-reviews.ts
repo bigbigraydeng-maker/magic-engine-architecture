@@ -54,4 +54,9 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: 'AI agent 能否直接购买（Shopify UCP / agents.md 是否平台默认开放）作为 AI 可见度测量口径候选维度',
     reviewDate: '2026-09-30',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '跨源交叉验证与对照实验设计（用独立数据源互证结论 · 用对照组排除替代解释）',
+    reviewDate: '2026-09-30',
+  },
 ]
