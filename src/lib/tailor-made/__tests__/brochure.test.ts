@@ -13,6 +13,7 @@ import {
   blankBrochureCard,
   blankBrochureNote,
 } from '../brochure-types'
+import { renderBrochureHtml } from '../brochure-render'
 import { injectData } from '../template-html'
 import { createBlankItinerary } from '../types'
 
@@ -46,6 +47,46 @@ describe('createBlankBrochure', () => {
     expect(brochure.overview.intro).toBe('')
     expect(brochure.cities[0].hero.body).toBe('')
     expect(brochure.cities[0].blocks).toEqual([])
+  })
+})
+
+describe('renderBrochureHtml', () => {
+  /**
+   * CTS-2026-0025（真实报价单）：4 城 15 天，画册最常见的形态。
+   */
+  it('渲染出每个城市的开篇页，并把封面收件人接上', async () => {
+    const brochure = createBlankBrochure(itineraryWithRoute(['Beijing', "Xi'an", 'Chongqing', 'Shanghai']))
+    const html = await renderBrochureHtml(brochure, {
+      preparedFor: 'Jazz & Family',
+      quoteRef: 'CTS-2026-0010',
+    })
+
+    for (const city of ['Beijing', "Xi'an", 'Chongqing', 'Shanghai']) {
+      expect(html).toContain(city)
+    }
+    // 注入的是 JSON 数据，HTML 转义由模板在浏览器端做，所以这里看到的是原文
+    expect(html).toContain('Jazz & Family')
+    expect(html).toContain('CTS-2026-0010')
+  })
+
+  /**
+   * CTS-2026-0024（真实报价单）：27 天 12 城。页数由内容决定，模板里没有任何
+   * 「最多几个城市」的上限 —— 真有人卖这种行程，排不下就是当场翻车。
+   */
+  it('撑得住 27 天 12 城的行程', async () => {
+    const route = ['Beijing', "Xi'an", 'Yichang', 'Chongqing', 'Chengdu', 'Dali',
+                   'Kunming', 'Guilin', 'Yangshuo', 'Hangzhou', 'Suzhou', 'Shanghai']
+    const brochure = createBlankBrochure(itineraryWithRoute(route))
+    expect(brochure.cities).toHaveLength(12)
+
+    const html = await renderBrochureHtml(brochure, { preparedFor: 'A', quoteRef: 'CTS-2026-0024' })
+    for (const city of route) expect(html).toContain(city)
+  })
+
+  it('缺 logo 也照样出稿，不让顾问点了预览只看到报错', async () => {
+    const brochure = createBlankBrochure(itineraryWithRoute(['Beijing']))
+    const html = await renderBrochureHtml(brochure, { preparedFor: '', quoteRef: '' })
+    expect(html).toContain('__DATA_END__')
   })
 })
 
