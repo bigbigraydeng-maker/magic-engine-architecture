@@ -181,25 +181,28 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 5. 外部服务
 
-| 服务 | 用途 | 对外封装名 |
-|---|---|---|
-| OpenAI GPT-4o-mini | 文案 / Vision / Realtime | **Content Engine** |
-| Anthropic Claude Sonnet | Brief / 策略 / 诸葛亮 | **Strategy Engine** |
-| Muapi (ModelsLab) | 图 / 视频（P21.J 后主用） | **Visual Studio / Video Studio** |
-| Atlas Cloud (WaveSpeed / Seedance) | 图 / 视频 | 同上 |
-| HeyGen | 数字人头像视频 | **Avatar Studio** |
-| DataForSEO | 关键词 / SERP / 外链（**主数据源**） | **Keyword Intelligence** |
-| SerpAPI | SERP / Google AI Overviews | — |
-| Publer | 多平台排期发布 | **Publishing Hub** |
-| Stripe | MTC 充值 | — |
-| Resend | 全部事务邮件 | — |
-| Cloudflare AI Gateway | OpenAI / Anthropic 代理 | — |
-| Apify | scraper（Pinterest / IG / FB 等） | — |
-| Unsplash | 免费商用图库 | — |
-| Jina.ai Reader | 网页抓取 | **Site Analyzer** |
-| Airtable | **正在退役** — 代码仅剩 3 处引用 | **Content Workspace** |
-| SEMrush | **已被 DataForSEO 取代** — 代码 0 引用（`SEMRUSH_DB` 除外） | **Keyword Intelligence** |
-| Zapier | **已完全移除** | — |
+| 服务 | 用途 | 对外封装名 | **已有封装（调用前先看这里）** |
+|---|---|---|---|
+| OpenAI GPT-4o-mini | 文案 / Vision / Realtime | **Content Engine** | `src/lib/geo-module/` · `src/lib/geo-baseline/parser.ts` |
+| Anthropic Claude Sonnet | Brief / 策略 / 诸葛亮 | **Strategy Engine** | `src/lib/anthropic/` |
+| Muapi (ModelsLab) | 图 / 视频（P21.J 后主用） | **Visual Studio / Video Studio** | `src/lib/muapi/` |
+| Atlas Cloud (WaveSpeed / Seedance) | 图 / 视频 | 同上 | 同上 |
+| HeyGen | 数字人头像视频 | **Avatar Studio** | `src/lib/mcp/vendor-filter.ts`（仅过滤，无直调封装） |
+| DataForSEO | 关键词 / SERP / 外链（**主数据源**） | **Keyword Intelligence** | **`src/lib/dataforseo/`**（9 模块：search-volume / serp / labs / onpage / business-data …） |
+| SerpAPI | SERP / Google AI Overviews | — | `src/lib/dataforseo/search-volume.ts` 内混用 |
+| Publer | 多平台排期发布 | **Publishing Hub** | `src/lib/publer/` |
+| Stripe | MTC 充值 | — | `src/lib/mtc/` |
+| Resend | 全部事务邮件 | — | `src/lib/market-intel/pipeline.ts` 等按需引用 |
+| Cloudflare AI Gateway | OpenAI / Anthropic 代理 | — | （代理层，无独立封装） |
+| Apify | scraper（Pinterest / IG / FB 等） | — | `src/lib/apify/` |
+| Unsplash | 免费商用图库 | — | `src/lib/images/unsplash.ts` |
+| Jina.ai Reader | 网页抓取 | **Site Analyzer** | `src/lib/luban/tools.ts` |
+| Airtable | **正在退役** — 代码仅剩 3 处引用 | **Content Workspace** | 正在退役，勿新增引用 |
+| SEMrush | **已被 DataForSEO 取代** — 代码 0 引用（`SEMRUSH_DB` 除外） | **Keyword Intelligence** | **已废弃，一律改用 DataForSEO** |
+| Zapier | **已完全移除** | — | 已移除 |
+| **AI 可见度 / LLM 问答**（Perplexity · ChatGPT · Claude · Gemini） | 问 AI 看它怎么回答、引用谁 | — | **`src/lib/geo-baseline/`** · **`src/lib/industry-ai-visibility/`** · 契约在 `src/lib/geo-measurement/` |
+
+> 🔴 **第 4 列是防重复造轮子用的**：任何要调外部 API 的动作（含调研脚本、一次性探针）之前先查这一列。2026-08-30 有过一次实例——做市场调研时手写脚本直调 DataForSEO 与 AI 可见度接口，而两者的封装早已存在，错误认知进而污染了后续两轮架构判断。
 
 > **UI / 报告 / 客户交付物中禁止出现真实供应商名**，只用封装名。API 路由内部、错误日志、环境变量可用真名。
 
