@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { TailorMadeItinerary } from './types';
+import { normaliseItinerary } from './normalise';
 import { injectData, loadTemplate } from './template-html';
 
 /**
@@ -20,5 +21,7 @@ const TEMPLATE_PATH = path.join(
 
 export async function renderItineraryHtml(data: TailorMadeItinerary): Promise<string> {
   const template = await loadTemplate(TEMPLATE_PATH, '行程单');
-  return injectData(template, data);
+  // 归一化放在渲染入口，预览和导出走的是同一条路 —— 放在别处就会出现
+  // 「预览好好的，导出来是空的」这种最难查的差异。见 normalise.ts
+  return injectData(template, normaliseItinerary(data));
 }
