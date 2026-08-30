@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { getItinerary } from '@/lib/tailor-made/store'
-import TailorMadeEditor from '../_components/TailorMadeEditor'
+import QuoteWorkspace from '../_components/QuoteWorkspace'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,7 +35,7 @@ export default async function TailorMadeEditorPage({
         ← 返回行程单列表
       </Link>
       <div className="mt-3">
-        <TailorMadeEditor record={record} clientId={params.id} />
+        <QuoteWorkspace record={record} clientId={params.id} />
       </div>
     </div>
   )
