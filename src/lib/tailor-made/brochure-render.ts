@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { TailorMadeBrochure } from './brochure-types';
-import { buildCreditLine } from './brochure-types';
+import { buildCreditLine, HERO_PREFIX } from './brochure-types';
+import { loadHeroDataUri } from './hero';
 import { injectData, loadTemplate } from './template-html';
 
 /**
@@ -49,13 +50,44 @@ export interface BrochureRenderContext {
   quoteRef: string;
 }
 
+/**
+ * 把 `hero:beijing` 展开成 data URI。
+ *
+ * 存的是名字、渲染时才读图，所以数据库里一份画册只有几十 KB，而不是十几兆。
+ * 读不到就留空 —— 少一张图的稿子仍然能用，报错的预览不能。
+ */
+async function resolveImages(data: TailorMadeBrochure): Promise<TailorMadeBrochure> {
+  const cache = new Map<string, string>();
+
+  const resolve = async (value: string): Promise<string> => {
+    if (!value.startsWith(HERO_PREFIX)) return value;
+    const name = value.slice(HERO_PREFIX.length);
+    if (!cache.has(name)) cache.set(name, (await loadHeroDataUri(name)) ?? '');
+    return cache.get(name) ?? '';
+  };
+
+  const next = structuredClone(data);
+  next.cover.image = await resolve(next.cover.image);
+  for (const city of next.cities) {
+    city.hero.image = await resolve(city.hero.image);
+    for (const block of city.blocks) {
+      if ('image' in block) block.image = await resolve(block.image);
+    }
+  }
+  return next;
+}
+
 export async function renderBrochureHtml(
   data: TailorMadeBrochure,
   context: BrochureRenderContext
 ): Promise<string> {
-  const [template, logo] = await Promise.all([loadTemplate(TEMPLATE_PATH, '画册'), loadLogo()]);
+  const [template, logo, resolved] = await Promise.all([
+    loadTemplate(TEMPLATE_PATH, '画册'),
+    loadLogo(),
+    resolveImages(data),
+  ]);
   return injectData(template, {
-    ...data,
+    ...resolved,
     logo,
     preparedFor: context.preparedFor,
     quoteRef: context.quoteRef,

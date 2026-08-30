@@ -5,12 +5,12 @@ import {
   blankBrochureCard,
   blankBrochureCity,
   blankBrochureNote,
-  createBlankBrochure,
   isBrochureCard,
   type BrochureBlock,
   type BrochureCity,
   type TailorMadeBrochure,
 } from '@/lib/tailor-made/brochure-types';
+import { createBrochureFromItinerary } from '@/lib/tailor-made/brochure-seed';
 import type { TailorMadeRecord } from '@/lib/tailor-made/types';
 
 /**
@@ -35,7 +35,7 @@ export default function BrochureEditor({
   clientId: string;
 }) {
   const [brochure, setBrochure] = useState<TailorMadeBrochure>(
-    () => record.brochure ?? createBlankBrochure(record.payload)
+    () => record.brochure ?? createBrochureFromItinerary(record.payload)
   );
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -43,6 +43,8 @@ export default function BrochureEditor({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [library, setLibrary] = useState<Library>({ cities: [] });
+  const [instruction, setInstruction] = useState('');
+  const [assisting, setAssisting] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const objectUrlRef = useRef<string | null>(null);
@@ -106,6 +108,33 @@ export default function BrochureEditor({
   useEffect(() => () => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
   }, []);
+
+  /* ---------------- 一句话改写 ---------------- */
+
+  const assist = useCallback(async () => {
+    if (!instruction.trim() || assisting) return;
+    setAssisting(true);
+    setNote(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/tailor-made/brochure-assist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brochure, instruction }),
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || '改写失败');
+
+      setBrochure(json.brochure as TailorMadeBrochure);
+      setDirty(true);
+      setInstruction('');
+      setNote({ kind: 'ok', text: `${json.note}（改了 ${json.changed.length} 处：${json.changed.slice(0, 3).join('、')}${json.changed.length > 3 ? '…' : ''}）` });
+    } catch (err) {
+      setNote({ kind: 'err', text: err instanceof Error ? err.message : '改写失败' });
+    } finally {
+      setAssisting(false);
+    }
+  }, [brochure, clientId, instruction, assisting]);
 
   /* ---------------- 保存 / 导出 ---------------- */
 
@@ -214,6 +243,37 @@ export default function BrochureEditor({
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         {/* ---------- 左：表单 ---------- */}
         <div className="space-y-4">
+          <Section
+            title="用一句话改"
+            hint="内容已经按行程单排好了。想改哪里直接说 —— 「北京那段写长一点」「所有介绍都别用感叹句」「上海标题换成外滩」。"
+          >
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={instruction}
+                placeholder="例如：把每个城市的介绍都缩短到三句话"
+                onChange={(e) => setInstruction(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) void assist();
+                }}
+                disabled={assisting}
+                className="flex-1 rounded-md border border-black/10 px-3 py-2 text-sm focus:border-me-ochre focus:outline-none disabled:bg-gray-50"
+              />
+              <button
+                type="button"
+                onClick={() => void assist()}
+                disabled={assisting || !instruction.trim()}
+                className="whitespace-nowrap rounded-md bg-me-ochre px-4 py-2 text-sm font-medium text-white hover:bg-me-ochre/90 disabled:bg-gray-300"
+              >
+                {assisting ? '改写中…' : '改'}
+              </button>
+            </div>
+            <p className="text-[11px] text-me-charcoal/45">
+              改完先在右边看一眼，认可了再点「立即保存」。AI 不会自己写进数据库。
+              价格、酒店、餐食、车次这些承诺性内容它一律不碰。
+            </p>
+          </Section>
+
           <Section title="封面" hint="客户名和报价编号跟着行程单走，这里不用填。">
             <Field label="大标题" value={brochure.cover.title}
               onChange={(v) => edit((d) => { d.cover.title = v; })} />

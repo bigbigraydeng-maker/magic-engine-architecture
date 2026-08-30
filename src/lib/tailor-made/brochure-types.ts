@@ -12,9 +12,21 @@
 
 import type { TailorMadeItinerary } from './types';
 
+/**
+ * 图片字段可以是三种值：
+ *   - `https://…` / `data:…`  —— 顾问自己的图
+ *   - `hero:beijing`          —— 内置城市图库（templates/tailor-made-itinerary/heroes/）
+ *   - 空字符串                —— 不出图
+ *
+ * 内置图存名字而不是图本身：一份画册十几个城市，每张 data URI 约 200KB，
+ * 直接塞进 jsonb 会让一行记录涨到几兆，之后每次读写都要付这个代价。
+ * 名字在渲染时才展开成 data URI，见 brochure-render.ts。
+ */
+export const HERO_PREFIX = 'hero:';
+
 /** 一张景点卡片：一张图 + 标题 + 一段英文介绍 */
 export interface BrochureCard {
-  /** 图片 URL（Supabase 公开链接或 data: URI）；留空则该卡片只出文字 */
+  /** 见 HERO_PREFIX 说明；留空则该卡片只出文字 */
   image: string;
   /** 角标，如 "Day 04"；留空不渲染 */
   day: string;

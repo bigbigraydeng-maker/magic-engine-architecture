@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { clearBrochure, getItinerary, saveBrochure } from '@/lib/tailor-made/store'
-import { createBlankBrochure, type TailorMadeBrochure } from '@/lib/tailor-made/brochure-types'
+import type { TailorMadeBrochure } from '@/lib/tailor-made/brochure-types'
+import { createBrochureFromItinerary } from '@/lib/tailor-made/brochure-seed'
 
 /**
  * /api/clients/[id]/tailor-made/[quoteId]/brochure
@@ -24,9 +25,9 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
     const record = await getItinerary(params.id, params.quoteId)
     if (!record) return NextResponse.json({ error: '行程单不存在' }, { status: 404 })
 
-    // 没做过画册就现给一份空白的：城市和日期从行程单继承，顾问一打开就能写内容，
-    // 不用先点一次「创建」再等一次往返。
-    const brochure = record.brochure ?? createBlankBrochure(record.payload)
+    // 没做过画册就按行程单现排一份：城市、天数、每天的正文、大图全部就位，
+    // 顾问打开就是一份能看的稿子，活从「写」变成「改」。不落库，保存时才写。
+    const brochure = record.brochure ?? createBrochureFromItinerary(record.payload)
     return NextResponse.json({ brochure, exists: record.brochure !== null })
   } catch (error) {
     return NextResponse.json({ error: message(error) }, { status: 500 })
