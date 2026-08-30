@@ -41,7 +41,9 @@ export default function TailorMadeEditor({
   const [status, setStatus] = useState<TailorMadeStatus>(record.status);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [note, setNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [note, setNote] = useState<{ kind: 'ok' | 'info' | 'err'; text: string } | null>(null);
+  const [instruction, setInstruction] = useState('');
+  const [assisting, setAssisting] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -276,6 +278,44 @@ export default function TailorMadeEditor({
     });
   }, []);
 
+  /* ---------------- 一句话改 ---------------- */
+
+  const assist = useCallback(async () => {
+    if (!instruction.trim() || assisting) return;
+    setAssisting(true);
+    setNote(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/tailor-made/assist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload, instruction }),
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || '改写失败');
+
+      const changed: string[] = json.changed ?? [];
+      if (changed.length === 0) {
+        // 模型没动内容 —— 多半在回答问题，或拒绝改酒店/价格这类承诺性字段。
+        // 这不是失败，保留输入框里的原话，别让顾问以为系统坏了。
+        setNote({ kind: 'info', text: json.note });
+        return;
+      }
+
+      setPayload(json.payload as TailorMadeItinerary);
+      setDirty(true);
+      setInstruction('');
+      setNote({
+        kind: 'ok',
+        text: `${json.note}（改了 ${changed.length} 处：${changed.slice(0, 3).join('、')}${changed.length > 3 ? '…' : ''}）`,
+      });
+    } catch (err) {
+      setNote({ kind: 'err', text: err instanceof Error ? err.message : '改写失败' });
+    } finally {
+      setAssisting(false);
+    }
+  }, [payload, clientId, instruction, assisting]);
+
   /* ---------------- 预览 ---------------- */
 
   useEffect(() => {
@@ -421,7 +461,17 @@ export default function TailorMadeEditor({
           </div>
 
           {note && (
-            <span className={`text-sm ${note.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{note.text}</span>
+            <span
+              className={`text-sm ${
+                note.kind === 'ok'
+                  ? 'text-green-700'
+                  : note.kind === 'info'
+                    ? 'text-me-charcoal/70'
+                    : 'text-red-600'
+              }`}
+            >
+              {note.text}
+            </span>
           )}
 
           <button
@@ -456,6 +506,44 @@ export default function TailorMadeEditor({
           {/* 空字段体检。模板遇到缺字段是渲染成空白、不报错，8 页里人眼看不出来 ——
               CTS-2026-0025 就这样带着两处空白发给了客户。见 lib/tailor-made/audit.ts */}
           <ItineraryAudit payload={payload} />
+
+          {/* 一句话改。放在体检下面 —— 顾问先看到「哪里空着」，再顺手说一句让它改。 */}
+          <section className="space-y-3 rounded-xl border border-black/10 bg-white p-5">
+            <div>
+              <h2 className="text-sm font-black text-me-charcoal">用一句话改</h2>
+              <p className="mt-1 text-xs text-me-charcoal/55">
+                想改哪里直接说 ——「第 5 天写详细一点」「所有描述都短一些」「西安那两天写得更适合带小孩」。
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={instruction}
+                placeholder="例如：把每天的正文都缩短到三句话"
+                onChange={(e) => setInstruction(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) void assist();
+                }}
+                disabled={assisting}
+                className="flex-1 rounded-md border border-black/10 px-3 py-2 text-sm focus:border-me-ochre focus:outline-none disabled:bg-gray-50"
+              />
+              <button
+                type="button"
+                onClick={() => void assist()}
+                disabled={assisting || !instruction.trim()}
+                className="whitespace-nowrap rounded-md bg-me-ochre px-4 py-2 text-sm font-medium text-white hover:bg-me-ochre/90 disabled:bg-gray-300"
+              >
+                {assisting ? '改写中…' : '改'}
+              </button>
+            </div>
+
+            <p className="text-[11px] leading-relaxed text-me-charcoal/45">
+              只改介绍性文字。<b className="font-bold">酒店、餐食、车次、价格改不动</b> ——
+              那些是对客户的承诺，写错了客人拿着它去值机、去入住，只能你自己改。
+              改完先在右边看一眼，认可了再点「立即保存」。
+            </p>
+          </section>
 
           {/* 第一步：两份文件。这是甲方描述的真实起点 ——
               「他们会先输入 2 个信息：航班信息 pdf 和每日行程文本文件」。
