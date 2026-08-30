@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
     : 'local-mac'
   const claimClientIds = workerClaimClientIds(body, whitelist)
   if (!claimClientIds) {
-    return NextResponse.json({ error: 'client_id is required and must be allowlisted' }, { status: 403 })
+    return NextResponse.json({ error: 'client_id must be allowlisted when provided' }, { status: 403 })
   }
 
   const { data, error } = await supabaseAdmin.rpc('factory_claim_work_order', {

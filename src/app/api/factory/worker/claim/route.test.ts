@@ -58,11 +58,14 @@ describe('POST /api/factory/worker/claim client scope', () => {
     expect(rpcMock).not.toHaveBeenCalled()
   })
 
-  it('未指定目标 → 403 且不调用 claim RPC', async () => {
+  it('未指定目标 → 保留现有全白名单 claim 行为', async () => {
     const response = await POST(claimRequest({ worker_id: 'mac-shared' }))
 
-    expect(response.status).toBe(403)
-    expect(rpcMock).not.toHaveBeenCalled()
+    expect(response.status).toBe(200)
+    expect(rpcMock).toHaveBeenCalledWith('factory_claim_work_order', {
+      p_worker_id: 'mac-shared',
+      p_client_ids: [CLIENT_A, CLIENT_B],
+    })
   })
 
   it.each([null, [], 'bad', 42])('畸形 body %j → 400 且不调用 claim RPC', async (body) => {

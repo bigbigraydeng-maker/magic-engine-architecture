@@ -15,7 +15,7 @@
 ```bash
 cp scripts/factory-worker/.env.example scripts/factory-worker/.env
 # 编辑 .env:填 FACTORY_WORKER_TOKEN(= Render 上同名值)
-# 以及 FACTORY_WORKER_TARGET_CLIENT_ID;服务端仍按既有白名单复核
+# 可选填 FACTORY_WORKER_TARGET_CLIENT_ID 来限定单客户;不填沿用现有全白名单行为
 # 生成路径再填 MUAPI_API_KEY;文案可选 OPENAI_API_KEY
 ```
 
@@ -32,7 +32,7 @@ node scripts/factory-worker/worker.mjs --loop   # 常驻轮询(生产)
 
 ## 流程与护栏
 
-1. **claim**:`factory_claim_work_order` RPC(FOR UPDATE SKIP LOCKED)只领 `FACTORY_WORKER_TARGET_CLIENT_ID` 指定客户的最老 queued；目标必填,且服务端先校验它属于既有白名单。返回 brief + 库存 clip 签名下载 URL + 成片/生成 clip 签名上传 URL。
+1. **claim**:`factory_claim_work_order` RPC(FOR UPDATE SKIP LOCKED)。配置 `FACTORY_WORKER_TARGET_CLIENT_ID` 时只领该客户的最老 queued，且服务端先校验它属于既有白名单；不配置时保留原有全白名单领取行为。返回 brief + 库存 clip 签名下载 URL + 成片/生成 clip 签名上传 URL。
 2. **clip 就绪**:每段优先用 `clip_ids` 库存实拍;缺则按 `clip_generation_plan` 调 muapi Kling I2V 生成。**预扣硬数本地强制 check**:已生成数 ≥ `max_new_clips` 立即 fail(不可重试)。
 3. **文案**:OpenAI 溯源 `angle`+`rationale` 写短文案;无 key 走模板 fallback(不编价格数字)。
 4. **装配**:`make_promo.py` 出 1080×1920、brandkit watermark + endcard + 音乐 + 转场。
