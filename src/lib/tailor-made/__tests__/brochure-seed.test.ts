@@ -102,9 +102,10 @@ describe('createBrochureFromItinerary', () => {
     const beijing = brochure.cities[0]
     // 长城那天正文最长，升为整版大图 —— 大图也按内容配，不退回泛泛的北京城景
     expect(beijing.hero.image).toBe(`${HERO_PREFIX}great-wall`)
-    // 抵达日没写到具体地标，落回本城通用照；故宫那天配故宫
-    expect(img(beijing.blocks[0])).toBe(`${HERO_PREFIX}beijing`)
-    expect(img(beijing.blocks[1])).toBe(`${HERO_PREFIX}forbidden-city`)
+    // 一句话里同时有天安门和故宫 —— 先匹配到的当卡片图（RULES 里天安门在前）
+    expect(img(beijing.blocks[1])).toBe(`${HERO_PREFIX}tiananmen-square`)
+    // 抵达日没写地标，从备选池拿到没被用上的故宫 —— 比再来一张城景强
+    expect(img(beijing.blocks[0])).toBe(`${HERO_PREFIX}forbidden-city`)
   })
 
   /**

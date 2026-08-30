@@ -8,7 +8,35 @@
  * 加新城市：在 RULES 里加一条，再把图放进 templates/tailor-made-itinerary/heroes/。
  */
 
+/**
+ * 顺序即优先级，**景点排在城市前面**。
+ *
+ * 一度图库里只有城市级的 16 张，结果北京那几页全是同一张长城/城景 ——
+ * PM 2026-08-30 反馈「图片不能有重叠的」。加了 16 张景点图之后，
+ * 「天坛」那天配天坛、「胡同」那天配胡同，同一座城里不再重复。
+ *
+ * 城市名的规则必须留在最后：一天写「Visit the Temple of Heaven in Beijing」
+ * 同时命中天坛和北京，先匹配到的赢，所以景点要排在前面才拿得到。
+ */
 const RULES: Array<{ hero: string; patterns: RegExp }> = [
+  // —— 景点级（排在城市前面）——
+  { hero: 'temple-of-heaven',   patterns: /temple of heaven|天坛/i },
+  { hero: 'tiananmen-square',   patterns: /tian'?anmen|天安门/i },
+  { hero: 'olympic-green',      patterns: /water cube|bird'?s nest|olympic|aquatics cent|national stadium|水立方|鸟巢|奥林匹克/i },
+  { hero: 'beijing-hutong',     patterns: /hutong|胡同/i },
+  { hero: 'summer-palace',      patterns: /summer palace|颐和园/i },
+  { hero: 'beihai-park',        patterns: /beihai|北海公园/i },
+  { hero: 'xian-city-wall',     patterns: /city wall|城墙/i },
+  { hero: 'wild-goose-pagoda',  patterns: /wild goose pagoda|大雁塔/i },
+  { hero: 'tang-everbright-city', patterns: /ever ?bright city|tang paradise|大唐不夜城/i },
+  { hero: 'muslim-quarter',     patterns: /muslim quarter|回民街/i },
+  { hero: 'ciqikou',            patterns: /ciqikou|磁器口/i },
+  { hero: 'liziba',             patterns: /liziba|李子坝/i },
+  { hero: 'jiefangbei',         patterns: /jiefangbei|liberation monument|解放碑/i },
+  { hero: 'dazu-rock-carvings', patterns: /dazu|大足/i },
+  { hero: 'yu-garden',          patterns: /yu ?garden|yuyuan|豫园/i },
+  { hero: 'oriental-pearl-tower', patterns: /oriental pearl|东方明珠/i },
+  // —— 城市级（兜底）——
   { hero: 'zhangjiajie',    patterns: /zhangjiajie|tianmen|张家界|天门/i },
   { hero: 'guilin',         patterns: /guilin|桂林/i },
   { hero: 'yangshuo',       patterns: /yangshuo|阳朔/i },
@@ -46,6 +74,17 @@ export const FALLBACK = 'beijing'
  */
 export function matchHeroName(text: string): string | null {
   return RULES.find((r) => r.patterns.test(text))?.hero ?? null;
+}
+
+/**
+ * 这段文字命中的**全部**图，按规则顺序。
+ *
+ * 一天常常写到好几个地方（「先豫园，再登东方明珠」），只取第一个会浪费掉
+ * 另一张本可以用的图 —— 而同一座城里的中转日、自由活动日正缺图可用，
+ * 结果只能重复城景。见 brochure-seed.ts 的兜底池。
+ */
+export function matchAllHeroNames(text: string): string[] {
+  return RULES.filter((r) => r.patterns.test(text)).map((r) => r.hero);
 }
 
 export function pickHeroName(trip: { title?: string; route?: string[] }): string {
