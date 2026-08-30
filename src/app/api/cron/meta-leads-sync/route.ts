@@ -23,34 +23,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { syncClientMetaLeads, type MetaLeadsSyncClient } from '@/lib/meta/leads-sync'
 import { startCronRun } from '@/lib/cron/run-logger'
+import { summariseFailures } from '@/lib/meta/leads-sync-alert'
 
 // 一个客户可能有多个表单，每个表单还要翻页；给足时间。
 export const maxDuration = 600
-
-/**
- * 把每个客户的失败原因压成一行,给 `cron_run_logs.error_message`。
- *
- * 日报邮件只截前 200 字符,所以**先说有多少家挂了,再说错在哪** —— 同一把令牌
- * 失效时 N 家的报错是同一句,按原文去重能让这 200 字符装下真正不同的病因,
- * 而不是同一句话重复四遍。
- *
- * 全好时返回 undefined,`finish()` 就仍把这次跑标成 completed。
- */
-export function summariseFailures(results: readonly { clientName: string; error?: string }[]): string | undefined {
-  const failures = results.filter((r) => r.error)
-  if (failures.length === 0) return undefined
-
-  const byReason = new Map<string, string[]>()
-  for (const f of failures) {
-    const reason = (f.error ?? '').replace(/\s+/g, ' ').trim().slice(0, 160)
-    const names = byReason.get(reason) ?? []
-    names.push(f.clientName)
-    byReason.set(reason, names)
-  }
-
-  const parts = [...byReason].map(([reason, names]) => `${names.join('/')}: ${reason}`)
-  return `${failures.length}/${results.length} 个客户取不到线索 — ${parts.join(' ‖ ')}`
-}
 
 async function run(): Promise<NextResponse> {
   const cronRun = await startCronRun('meta-leads-sync')

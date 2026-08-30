@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { summariseFailures } from '../route'
+import { summariseFailures } from '../leads-sync-alert'
 
 /**
  * 样本取自 2026-08-30 生产 `cron_run_logs` 的真实报错原文（4 个客户全挂 9 天，
