@@ -53,6 +53,13 @@ export const META_PAGE_SCOPES = [
   // 但这条权限一直没进过本清单,所以点「连接 Meta」永远修不好线索同步。
   // 已经连过的客户要重新点一次「连接 Meta」才能拿到它。
   'leads_retrieval',
+  // 列出主页的即时表单必须有这一条。`lead-forms.ts` 的注释说 `pages_show_list`
+  // 或 `pages_manage_ads` 二选一即可 —— **那句是错的**。2026-08-30 加完
+  // leads_retrieval 重新授权后，生产 cron 报的仍是一字不变的
+  // `(#200) Requires pages_manage_ads permission to manage the object`,
+  // 而当时 token 已经带着 pages_show_list。Graph 要的就是这一条,没有替代品。
+  // 教训:注释与生产报错冲突时,信报错。
+  'pages_manage_ads',
 ] as const
 
 /**
