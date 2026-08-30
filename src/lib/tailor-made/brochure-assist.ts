@@ -222,8 +222,16 @@ ${instruction.trim()}`
     if (applyEdit(draft, edit.id, edit.value)) changed.push(labels.get(edit.id) ?? edit.id)
   }
 
+  // 一条都没改不是错误：顾问问的可能是个问题（「图片怎么不显示」），
+  // 或者要求的是模型不该写的东西（「把价格写进去」）。
+  // 当成异常抛出去，界面会渲染成红色报错，看着像系统崩了 —— 而模型其实
+  // 正确地回答了他。原样返回，让界面用普通说明的样式展示。
   if (changed.length === 0) {
-    throw new Error(parsed.note?.trim() || '这次没改动任何内容，换个说法试试')
+    return {
+      brochure,
+      changed: [],
+      note: (parsed.note ?? '').trim() || '这次没有改动任何内容 —— 换个说法，或直接在左边的输入框里改。',
+    }
   }
 
   return {

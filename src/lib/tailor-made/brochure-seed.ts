@@ -63,9 +63,34 @@ function assignDaysToCities(days: TailorMadeDay[], route: string[]): Map<string,
   return buckets;
 }
 
-function dayCard(day: TailorMadeDay): BrochureCard {
+/**
+ * 按当天写了什么来配图。
+ *
+ * 第一版把卡片图一律留空，想着「图片是各家旅行社自己的资产，让顾问配」。
+ * 实际打开是十几张空灰块，顾问的第一反应不是「我该配图了」而是「这东西坏了」。
+ *
+ * 两条规则，都是被真实数据打出来的（CTS-2026-0026）：
+ *
+ *  1. **不许用到别的城市的照片。** 中转日「Chongqing → Shanghai」的正文里有
+ *     "Transfer to Chongqing airport"，按正文匹配会给上海那页配一张重庆的照片。
+ *     客人分不清哪张对应哪座城，但会觉得这册子不对劲。
+ *
+ *  2. **允许跟本城大图重复。** 一度为了避免撞图而留空，结果 11 张卡片空了 8 张 ——
+ *     为了躲一个小瑕疵制造了一个大问题。同一座城里重复一张城景，远好过一片空灰块。
+ */
+function cardImage(day: TailorMadeDay, cityImage: string, otherCityImages: Set<string>): string {
+  const matched = matchHeroName(day.body ?? '');
+  if (!matched) return cityImage;
+
+  const image = `${HERO_PREFIX}${matched}`;
+  // 匹配到的是别的城市的图 —— 宁可用本城的通用照
+  if (image !== cityImage && otherCityImages.has(image)) return cityImage;
+  return image;
+}
+
+function dayCard(day: TailorMadeDay, image: string): BrochureCard {
   return {
-    image: '',
+    image,
     day: day.day ? `Day ${String(day.day).padStart(2, '0')}` : '',
     title: day.route || '',
     body: day.body || '',
@@ -96,10 +121,14 @@ export function createBrochureFromItinerary(itinerary: TailorMadeItinerary): Tai
     const cityDays = buckets.get(name) ?? [];
     const city = blankBrochureCity(name);
     // 图库里没有这个城市就留空，不拿别处的图凑 —— 见 hero.ts matchHeroName
-    const heroName = matchHeroName(name);
-    city.hero.image = heroName ? `${HERO_PREFIX}${heroName}` : '';
+    const byName = matchHeroName(name);
+    city.hero.image = byName ? `${HERO_PREFIX}${byName}` : '';
 
     if (cityDays.length === 0) return city;
+
+    // 本城的通用照（卡片的兜底），以及这条路线上别的城市的照片（用来挡跨城配图）
+    const cityImage = city.hero.image;
+    const others = otherCityImages(route, name);
 
     city.days = spanLabel(cityDays);
     city.glance = glanceFor(cityDays);
@@ -117,11 +146,15 @@ export function createBrochureFromItinerary(itinerary: TailorMadeItinerary): Tai
       city.hero.title = /[→>]/.test(lead.route ?? '') ? name : (lead.route || name);
       city.hero.body = lead.body ?? '';
       city.hero.caption = `${name}${lead.day ? ` · Day ${String(lead.day).padStart(2, '0')}` : ''}`;
+
+      // 大图跟卡片走同一套规则：这天写的是长城就配长城，比一张泛泛的北京城景准。
+      // 整版大图是这一页最先被看到的东西，不该退回通用照。
+      city.hero.image = cardImage(lead, city.hero.image, others);
     }
 
     city.blocks = cityDays
       .filter((d) => d !== lead && (d.body ?? '').trim().length > 0)
-      .map(dayCard);
+      .map((d) => dayCard(d, cardImage(d, cityImage, others)));
 
     return city;
   });
@@ -155,6 +188,17 @@ export function createBrochureFromItinerary(itinerary: TailorMadeItinerary): Tai
     },
     credits: [],
   };
+}
+
+/** 这条路线上除了 `self` 之外，每个城市各自的通用照 —— 用来挡住跨城配图 */
+function otherCityImages(route: string[], self: string): Set<string> {
+  const out = new Set<string>();
+  for (const city of route) {
+    if (city === self) continue;
+    const name = matchHeroName(city);
+    if (name) out.add(`${HERO_PREFIX}${name}`);
+  }
+  return out;
 }
 
 /** "DAYS 02 – 05"；只有一天就写 "DAY 02" */

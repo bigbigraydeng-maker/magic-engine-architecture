@@ -39,7 +39,7 @@ export default function BrochureEditor({
   );
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [note, setNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [note, setNote] = useState<{ kind: 'ok' | 'info' | 'err'; text: string } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [library, setLibrary] = useState<Library>({ cities: [] });
@@ -125,10 +125,21 @@ export default function BrochureEditor({
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || '改写失败');
 
+      const changed: string[] = json.changed ?? [];
+      if (changed.length === 0) {
+        // 模型没动内容 —— 它多半是在回答问题或拒绝写承诺性内容。
+        // 这不是失败，保留输入框里的原话，别让顾问以为系统坏了。
+        setNote({ kind: 'info', text: json.note });
+        return;
+      }
+
       setBrochure(json.brochure as TailorMadeBrochure);
       setDirty(true);
       setInstruction('');
-      setNote({ kind: 'ok', text: `${json.note}（改了 ${json.changed.length} 处：${json.changed.slice(0, 3).join('、')}${json.changed.length > 3 ? '…' : ''}）` });
+      setNote({
+        kind: 'ok',
+        text: `${json.note}（改了 ${changed.length} 处：${changed.slice(0, 3).join('、')}${changed.length > 3 ? '…' : ''}）`,
+      });
     } catch (err) {
       setNote({ kind: 'err', text: err instanceof Error ? err.message : '改写失败' });
     } finally {
@@ -217,7 +228,15 @@ export default function BrochureEditor({
           </div>
 
           {note && (
-            <span className={`text-sm ${note.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>
+            <span
+              className={`text-sm ${
+                note.kind === 'ok'
+                  ? 'text-green-700'
+                  : note.kind === 'info'
+                    ? 'text-me-charcoal/70'
+                    : 'text-red-600'
+              }`}
+            >
               {note.text}
             </span>
           )}
