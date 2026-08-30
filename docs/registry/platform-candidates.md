@@ -67,6 +67,7 @@
 | 促销走购物车层折扣叠加、不批量改 `compare_at_price` | L2 Playbook | 广告 支柱（主）+ 口碑 支柱（次） | Aelfric Eden（外部研究对象，非 ME 客户）| 电商（快时尚 DTC） | 0/2 客户复制（因果机制本身未验证，见文档 §5） | candidate | 2026-08-30 | 2026-09-30 | claude/ecstatic-lichterman-a56dac（PR #1253 Codex 复审补登记）| 来自同上文档 §7.3；需先在本店核实促销实现机制，再在其他店验证 |
 | 电商 SEO 检测方向：aggregateRating 空评分 / hreflang 适用性判断 / sitemap 内部垃圾过滤 | L2 Playbook | SEO 支柱 | Aelfric Eden（外部研究对象，非 ME 客户）| 电商（快时尚 DTC） | 0/2 客户复制（仅 7/969 商品页抽样，见文档 §6.1/§6.2 订正） | candidate | 2026-08-30 | 2026-09-30 | claude/ecstatic-lichterman-a56dac（PR #1253 Codex 复审补登记）| 来自同上文档 §7.4；开 issue 落地前须先扩大抽样、按订正范围收窄适用条件 |
 | AI agent 能否直接购买（Shopify UCP / agents.md 是否平台默认开放）作为 AI 可见度测量口径候选维度 | L2 Playbook | AI 可见度 支柱 | Aelfric Eden（外部研究对象，非 ME 客户）| 电商（快时尚 DTC） | 0/2 客户复制（仅本店观察，未核实是否为 Shopify 2026 平台默认能力） | candidate | 2026-08-30 | 2026-09-30 | claude/ecstatic-lichterman-a56dac（PR #1253 Codex 复审补登记）| 来自同上文档 §7.5；需查 Shopify 官方文档或再扫多家兼容店铺才能定论 |
+| 跨源交叉验证与对照实验设计（用独立数据源互证结论 · 用对照组排除替代解释） | L1 Capability | 平台基础设施：Verification 机制（不属 6 支柱任一柱） | ME 自主研究（**非客户提出**，无付费客户需求背书） | 跨行业（旅游 to C + 会奖 to B 两次） | **0/2 付费客户提出**；ME 自用 2/2 次复制（澳洲赴华市场扫描 · MICE 入华市场扫描，均 2026-08-30） | candidate | 2026-08-30 | 2026-09-30 | docs/register-crossval-candidate | 登记前已做现状盘点。**判据库范式不需新建**：`src/lib/geo-measurement/` 已把「未知三分法」（`GeoUnknownReason`：not_recorded_by_source / not_applicable / source_ambiguous）、可比性判定与 5 个 validator 冻结成机器判定；`market-intel/grounding.ts` 已实现摘要事实核对（抽实体+数字回原文比对）。**真正缺的只有两件**：① 跨源交叉验证（本次用搜索量排序 × 广交会官方国别排序互证）② 对照实验设计（本次 A/B/C 三组，排除「查错词」与「中国特别差」两种替代解释）。⚠️ 本次探针阶段用临时脚本重复调了 DataForSEO 与 AI 可见度，而 `src/lib/dataforseo/search-volume.ts`、`src/lib/geo-baseline/provider.ts`、`src/lib/industry-ai-visibility/collector.ts` 均已存在——产品化时必须复用，不得另起 |
 
 <!--
 示例（不作为真实条目）：
@@ -95,3 +96,4 @@
 
 - 2026-08-27 · 建仓，为落地 [me-platform-tier-gate](../../.claude/skills/me-platform-tier-gate/SKILL.md) 的候选管道。子牙架构复审的必改问题 2。
 - 2026-08-27 · 补两处：明确本表不约束 L3 Connector；月度复查接入 `pm-daily-todo` 自动待办（`src/lib/pm-todo/platform-candidate-reviews.ts`），不再只靠"当值 FDE 记日历"。Codex 复审必改。
+- 2026-08-30 · 登记「跨源交叉验证与对照实验设计」候选。**登记前先做了现状盘点**：ME 已有判据库范式（geo-measurement 契约）、事实核对（market-intel/grounding.ts）与全部数据抓取封装（dataforseo / geo-baseline / industry-ai-visibility），候选范围据此从最初设想的「市场情报报告能力」收窄为仅缺的分析两件事。证据为 ME 自用复制，**非付费客户提出**，晋升判据尚未起算。
