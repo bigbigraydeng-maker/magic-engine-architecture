@@ -102,14 +102,16 @@ async function claimOne() {
   const r = await api('/api/factory/worker/claim', 'POST', buildClaimBody(WORKER_ID, TARGET_CLIENT_ID))
   if (!r.ok) throw new Error(`claim ${r.status}: ${JSON.stringify(r.json)}`)
   if (!r.json.claimed) return null
-  if (!claimMatchesTarget(r.json, TARGET_CLIENT_ID)) {
+  if (TARGET_CLIENT_ID && !claimMatchesTarget(r.json, TARGET_CLIENT_ID)) {
     throw new Error('claim 返回了目标客户之外的工单,已停止且未开始生成')
   }
   return r.json
 }
 
 export function buildClaimBody(workerId, targetClientId) {
-  return { worker_id: workerId, client_id: targetClientId }
+  return targetClientId
+    ? { worker_id: workerId, client_id: targetClientId }
+    : { worker_id: workerId }
 }
 
 export function claimMatchesTarget(claim, targetClientId) {
@@ -433,10 +435,6 @@ async function processOrder(wo) {
 async function main() {
   if (!WORKER_TOKEN) {
     console.error('FATAL: FACTORY_WORKER_TOKEN 未配置(scripts/factory-worker/.env)')
-    process.exit(1)
-  }
-  if (!TARGET_CLIENT_ID) {
-    console.error('FATAL: FACTORY_WORKER_TARGET_CLIENT_ID 未配置,拒绝跨客户领取')
     process.exit(1)
   }
   const loop = process.argv.includes('--loop')

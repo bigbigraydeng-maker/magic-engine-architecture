@@ -43,13 +43,15 @@ export function workerClientWhitelist(): string[] | null {
 }
 
 /**
- * 单客户 claim 范围。目标客户必须显式提供且已在服务端白名单内。
- * 返回 null 表示调用方缺失、提供非法或越权的 client_id，路由必须 fail-closed。
+ * 可选的单客户 claim 范围。未提供 client_id 时保留既有白名单行为；
+ * 一旦提供，目标必须是非空字符串且已在服务端白名单内。
+ * 返回 null 表示调用方提供了非法或越权的 client_id，路由必须 fail-closed。
  */
 export function workerClaimClientIds(
   body: Record<string, unknown>,
   whitelist: string[],
 ): string[] | null {
+  if (!Object.prototype.hasOwnProperty.call(body, 'client_id')) return whitelist
   const requested = body['client_id']
   if (typeof requested !== 'string' || requested.trim().length === 0) return null
   const matched = whitelist.find((id) => id.toLowerCase() === requested.trim().toLowerCase())

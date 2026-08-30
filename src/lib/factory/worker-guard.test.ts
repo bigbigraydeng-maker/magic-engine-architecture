@@ -72,8 +72,8 @@ describe('workerClaimClientIds(单客户 claim 隔离)', () => {
     expect(workerClaimClientIds({ client_id: CLIENT }, whitelist)).toEqual([CLIENT])
   })
 
-  it('未指定目标客户 → fail-closed', () => {
-    expect(workerClaimClientIds({}, whitelist)).toBeNull()
+  it('未指定目标客户 → 保留现有全白名单行为', () => {
+    expect(workerClaimClientIds({}, whitelist)).toEqual(whitelist)
   })
 
   it('越权、空值或非字符串目标 → fail-closed', () => {

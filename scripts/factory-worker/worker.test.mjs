@@ -16,8 +16,8 @@ describe('buildClaimBody — 可选单客户 claim', () => {
     expect(buildClaimBody('mac-1', 'client-1')).toEqual({ worker_id: 'mac-1', client_id: 'client-1' })
   })
 
-  it('未配置目标客户 → 仍显式发送空值,由服务端 fail-closed', () => {
-    expect(buildClaimBody('mac-1', '')).toEqual({ worker_id: 'mac-1', client_id: '' })
+  it('未配置目标客户 → 省略 client_id,保留服务端现有白名单行为', () => {
+    expect(buildClaimBody('mac-1', '')).toEqual({ worker_id: 'mac-1' })
   })
 
   it('只接受目标客户响应', () => {
