@@ -113,3 +113,23 @@ describe('createBrochureFromItinerary', () => {
     expect(brochure.cities[0].days).toBe('')
   })
 })
+
+/**
+ * hero.ts 拆成「选图规则」和「读文件」两半之后，读文件那半仍要能独立跑通。
+ *
+ * 这条用例是被一个真 bug 逼出来的：拆分时 pickHeroName 只被 re-export、
+ * 没 import 进作用域，`export {x} from` 不会在本模块建立绑定。
+ * 单测没调用过 heroForTrip，所以测试全绿、构建也过，只有 type-check 报了出来。
+ */
+describe('hero 拆分后仍然可用', () => {
+  it('heroForTrip 能选图并读出图来', async () => {
+    const { heroForTrip } = await import('../hero')
+    const uri = await heroForTrip({ title: 'China Icons', route: ['Beijing', 'Shanghai'] })
+    expect(uri).toMatch(/^data:image\/jpeg;base64,/)
+  })
+
+  it('图库里没有的名字回落到兜底图，不抛错', async () => {
+    const { loadHeroDataUri } = await import('../hero')
+    expect(await loadHeroDataUri('../../etc/passwd')).toMatch(/^data:image\/jpeg;base64,/)
+  })
+})

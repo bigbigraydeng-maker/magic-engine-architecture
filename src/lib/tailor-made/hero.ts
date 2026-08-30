@@ -21,8 +21,10 @@ import path from 'node:path'
 
 const HERO_DIR = path.join(process.cwd(), 'templates', 'tailor-made-itinerary', 'heroes')
 
+// 选图规则在 ./hero-rules（纯逻辑，可在客户端跑）；这里只管读文件。
+// re-export 让既有调用方不用改 import 路径。
 export { matchHeroName, pickHeroName, FALLBACK, HERO_CHOICES } from './hero-rules'
-import { FALLBACK } from './hero-rules'
+import { FALLBACK, pickHeroName } from './hero-rules'
 
 /**
  * 关键词 → 图片名。顺序即优先级：先匹配到的赢。
