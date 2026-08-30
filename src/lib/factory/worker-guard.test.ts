@@ -9,6 +9,7 @@ import {
   trackFolder,
   validateClipPath,
   validateRenderPath,
+  workerClaimClientIds,
   workerClientWhitelist,
   workerIdFromBody,
 } from './worker-guard'
@@ -60,6 +61,29 @@ describe('workerClientWhitelist', () => {
   it('全是非法值 → null,不放行空白名单', () => {
     process.env.FACTORY_WORKER_CLIENT_IDS = 'not-a-uuid, also-bad'
     expect(workerClientWhitelist()).toBeNull()
+  })
+})
+
+describe('workerClaimClientIds(单客户 claim 隔离)', () => {
+  const OTHER = '10000000-0000-0000-0000-000000000001'
+  const whitelist = [CLIENT, OTHER]
+
+  it('目标客户在服务端白名单内 → 只传该客户给原子 claim RPC', () => {
+    expect(workerClaimClientIds({ client_id: CLIENT }, whitelist)).toEqual([CLIENT])
+  })
+
+  it('未指定目标客户 → fail-closed', () => {
+    expect(workerClaimClientIds({}, whitelist)).toBeNull()
+  })
+
+  it('越权、空值或非字符串目标 → fail-closed', () => {
+    expect(workerClaimClientIds({ client_id: WO }, whitelist)).toBeNull()
+    expect(workerClaimClientIds({ client_id: '  ' }, whitelist)).toBeNull()
+    expect(workerClaimClientIds({ client_id: 42 }, whitelist)).toBeNull()
+  })
+
+  it('大小写和外围空白可规范化为服务端白名单中的 UUID', () => {
+    expect(workerClaimClientIds({ client_id: `  ${CLIENT.toUpperCase()}  ` }, whitelist)).toEqual([CLIENT])
   })
 })
 
