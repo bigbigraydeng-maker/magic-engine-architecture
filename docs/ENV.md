@@ -114,6 +114,8 @@
 | `AIRTABLE_API_KEY` | Airtable —— **正在退役**，代码仅剩 3 处引用 | Render-web | ❌ |
 | `FACTORY_OPS_BASE_ID` / `FACTORY_REVIEW_TABLE_ID` / `WINNER_INTAKE_TABLE_ID` | Airtable 表 ID（Factory 审核，同上退役中） | Render-web | ❌ |
 | `OZTOP_WP_USERNAME` / `OZTOP_WP_APP_PASSWORD` | Oztop WordPress 直连 | Render-web | ⚠️ render 有，代码走 `cms_connections` 表 |
+| `OPENSRS_RESELLER_USERNAME` / `OPENSRS_API_KEY` | 域名 + 企业邮箱经销（对外名 Domain & Mailbox Hub）；**尚未开通经销商账号**，配上之前 `src/lib/opensrs/` 一律抛错不发请求 | Render-web | ❌ 待 PM 开户 |
+| `OPENSRS_ENV` | `live` 才打生产注册机，**其余一切取值（含缺省、拼错）都落回 horizon 测试环境**；生产还额外要求出口 IP 白名单，见 spec §3.4 | Render-web | ❌ 待 PM 开户 |
 
 ## 7. 计费 / 变现 — **整块都没登记过**
 
