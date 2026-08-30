@@ -36,7 +36,7 @@
 |---|---|---|
 | 域名注册商接入 | ❌ 全仓 0 处 | 全仓 grep `opensrs\|registrar\|namecheap\|godaddy` 只命中 DataForSEO 的 domain-analytics 与文档，**没有任何注册商封装**。这是从零起的第一条。 |
 | `src/lib/email/` | ⚠️ 不可复用 | 只有 `sender.ts` / `portal-invite.ts`，是**发通知信**（Resend），跟「给客户开邮箱账户」是两回事。 |
-| `src/lib/kernel/` + `src/lib/capabilities/` | ✅ 必须复用 | 对外**写**动作一律走 Kernel gateway。注册域名 = 花钱 + 不可逆，属于 Kernel 治理的典型对象，**禁止**绕过 gateway 直接调 provider。 |
+| `src/lib/kernel/` + `src/lib/capabilities/` | ⚠️ 必须复用，但域名注册当前**过不了** | 对外**写**动作一律走 Kernel gateway，**禁止**绕过 gateway 直接调 provider。但 `outward-authorization.ts:57-65` 对 `reversible !== true` 的对外动作无条件拒绝，而域名注册被本文档定义为不可逆——见 Phase 2 硬前置门 0，域名注册要么等 Kernel 契约升级放开不可逆对外动作，要么改成只读 capability + 人工下单，不能直接假设"接 gateway"就能跑通。 |
 | `src/lib/platform-oauth/connection-store.ts` | ⚠️ 待评估 | OpenSRS 用的是 reseller 账号级凭证（非 per-client OAuth），凭证存 env 而非 connection-store；但「哪个客户挂了哪些域名/邮箱」需要一张新表。 |
 | `src/lib/mtc/` + `src/lib/billing/` | ✅ 应复用 | 客户侧收费不得另起计费系统。 |
 | `src/lib/pm-todo/manual-items.ts` | ✅ 应复用 | 需要真人处理的环节（如域名转移授权码、ICANN 验证邮件）走「🙋 需要你动手」栏，不得死在日志里。 |
@@ -79,7 +79,7 @@ ME 跑在 Render。Render 的默认出站 IP 是**整个 region 与所有 Render
 | B. 把 Render 共享 CIDR 段加白名单 | 免费 | 等于所有 Render 用户都在白名单里，白名单的防护意义归零（仍有 API key 兜底，但不该这么干） |
 | C. 自建固定 IP 出口代理 | 低 | 新增一块基础设施，多一个故障点 |
 
-**技术决策（我拍板，不上抛 PM）**：**先不选**。第一阶段全部在 `horizon` 测试环境完成——测试环境**不需要白名单**，可以把注册、续费、开邮箱整条链路真跑通。等第一个真实付费客户出现、这条线证明有收入时，再决定 A/B/C。理由：先证明跑得通，再付固定成本；反过来就是先烧钱后验证。
+**技术决策（我拍板，不上抛 PM）**：**先不选**。第一阶段**域名侧（XCP）**全部在 `horizon` 测试环境完成——测试环境**不需要白名单**，域名的查询、注册、续费这条链路可以真跑通。**这个结论只覆盖域名，不能推广到邮箱**：`horizon` 是域名 XCP 专属沙箱，OMA 邮箱 API 没有已确认的对应测试环境（见 §3.2）；邮箱侧能否在拿到生产白名单前跑通验证，取决于开户后能否找到 OMA 的 test cluster——找不到就按 §3.2 / Phase 1 的条件分支处理，邮箱 adapter 移出本阶段，不得因为域名侧跑通了就默认邮箱也跑通。等第一个真实付费客户出现、这条线证明有收入时，再决定域名生产端点的 A/B/C。理由：先证明跑得通，再付固定成本；反过来就是先烧钱后验证。
 
 ---
 
@@ -94,11 +94,19 @@ ME 跑在 Render。Render 的默认出站 IP 是**整个 region 与所有 Render
 - `src/lib/opensrs/mailbox-adapter.ts`（OMA JSON 客户端）——**前置条件**：(1) Phase 0 已拿到邮箱管理员凭证/`session_token`（见上），(2) 已向 OpenSRS 确认并记录 OMA 的真实测试 cluster/IP 访问方式（见 §3.2 警示）。两者任一缺失，邮箱 adapter 移出本阶段，先只交付域名 adapter
 
 **Phase 2 · 写动作进 Kernel**
-🔴 **硬前置门（Kernel 启用 preflight，进本阶段第一步必须做，不能跳）**：按 [docs/STATE.md §3.1](../STATE.md) 2026-08-12 实查记录，生产环境 `action_runs` / `action_run_steps` / `authorization_decisions` / `client_automation_policies` 四张表和全部 `kernel_*` RPC **一个都不存在**，migration `20260808000003_me2_execution_kernel_v1.sql` 未 apply。这是会过期的快照，不能直接当现况用。进 Phase 2 前必须：
+
+🔴 **硬前置门 0（Kernel 契约门，比数据库对象门更根本，必须先过）**：本文档第 6 行已把域名注册定义为**不可逆**（一旦提交不可撤销、按年扣款）。但 `src/lib/kernel/outward-authorization.ts:57-65` 规定 Kernel v1 对 `sideEffect === 'outward'` 且 `reversible !== true` 的动作**一律返回拒绝**，且这条判据没有全局开关、没有 env 旁路、`requiresHumanApproval` 或补 `rollback` 字段都不能让它通过——注释原文写明"真要放开不可逆的对外动作，那是一次单独的、要重新评估风险的决定"。也就是说：**就算 Phase 0 拿到了 API key、Phase 2 的四张表和 RPC 全部 apply 完成，把"注册域名"做成 capability 交给 `gateway.ts` 执行也会被这道判据挡死**，人工批准和补数据库对象都不能放行。在选定下面 (a)/(b) 之一前，Phase 2 不得规划"域名注册 / 续费接 capability"这一步：
+  - (a) 把"放开 `reversible: false` 的对外动作"列为独立的 Kernel 契约升级项，走一次单独的风险评估 + 2 审（子牙 + 魏征），明确新的授权模型（例如：更高等级的人工确认、更严格的账本、限额或冷静期），升级完成后域名注册才能作为 capability 接 gateway；
+  - (b) 从 Phase 2/3/4 的自动化范围里**去掉**"域名注册 / 续费"这个写动作，只把只读能力（可用性查询、价格查询、到期日查询）做成 capability，注册这一步走人工——按 [`src/lib/pm-todo/manual-items.ts`](../../src/lib/pm-todo/manual-items.ts) 的"🙋 需要你动手"三件套下发（what/how/href 到 OpenSRS RWI 下单页），ME 只负责查询、提醒和记账，不负责代客户点下注册按钮。
+
+  邮箱侧（开邮箱账户）如果确认是可撤销的（关闭邮箱账户 = 停止计费，不构成"按年扣款不可逆"这类事实），可以继续走 capability + gateway 路线，不受这道门槛约束；但域名注册必须先在 (a)/(b) 之间选一个，不能默认按原计划直接接。
+
+🔴 **硬前置门 1（Kernel 启用 preflight，与门 0 相互独立、缺一不可，就算门 0 走了 (a) 升级完成，门 1 仍要单独过）**：按 [docs/STATE.md §3.1](../STATE.md) 2026-08-12 实查记录，生产环境 `action_runs` / `action_run_steps` / `authorization_decisions` / `client_automation_policies` 四张表和全部 `kernel_*` RPC **一个都不存在**，migration `20260808000003_me2_execution_kernel_v1.sql` 未 apply。这是会过期的快照，不能直接当现况用。进 Phase 2 前必须：
 1. 重新对生产对象跑一次存在性核查（不能沿用旧记录）；
 2. 若表/RPC 仍不存在，**apply 该 migration 需要 PM 另外显式授权**（属于第 6 条铁律"不可逆操作必须 PM 显式 go"），不得因为"这个 PR 已经拍板卖给客户"就默认可以顺带 apply；
 3. 在 Kernel 存储确认可用之前，**不得**开始注册 / 续费 / 开邮箱这类写动作的接入代码——否则会在调用 provider 之前就因为审批与账本无处可写而失败或裸写。
-只有以上三步都确认通过，才继续做「注册 / 续费 / 开邮箱一律做成 capability，经 `kernel/gateway.ts` 授权后执行；不可逆 + 花钱的动作必须落审批与账本」这部分。
+
+只有门 0（域名注册的不可逆授权路径已选定并落地）和门 1（数据库对象已确认存在）都通过，才继续做「注册 / 续费 / 开邮箱一律做成 capability，经 `kernel/gateway.ts` 授权后执行；不可逆 + 花钱的动作必须落审批与账本」这部分。
 
 **Phase 3 · 客户侧**
 新表记录「哪个客户持有哪些域名/邮箱」、到期提醒、计费接 MTC/billing、Settings UI 一起做完（不许让 FDE 进 Supabase 直填）。
@@ -114,6 +122,7 @@ ME 跑在 Render。Render 的默认出站 IP 是**整个 region 与所有 Render
 2. **开户**（Phase 0 阻塞项）—— US$95 + 首笔预存款
 3. **对客户的定价**：ME 在批发价上加多少 / 是打包进月费还是单收（需等 Phase 0 拿到真实批发价才谈得拢）
 4. **要不要为生产环境花 US$100/月**（Phase 4 才需要决定，现在不用）
+5. **域名注册这个不可逆对外动作怎么过 Kernel**（见 Phase 2 硬前置门 0）—— 是走 (a) 单独评估 + 2 审升级 Kernel 契约放开 `reversible: false` 的对外动作，还是 (b) 域名注册永远不自动化、只做只读查询 + 人工下单；这道判定同样不是纯技术问题（涉及"要不要放开 Kernel v1 的不可逆红线"这个治理决定），需 PM + 架构一起拍，Phase 2 不得默认选边
 
 ---
 
