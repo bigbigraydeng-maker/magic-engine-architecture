@@ -1,0 +1,179 @@
+{
+  "note": "英文景点文案素材库（中国线）。图片不入库：图片属于各家旅行社自己的资产，文案才是每次重写最费时的部分。顾问从库里选文案，再配自家的图。",
+  "cities": [
+    {
+      "city": "Beijing",
+      "entries": [
+        {
+          "key": "great-wall",
+          "title": "The Great Wall at Mutianyu",
+          "day": "",
+          "body": "Roughly 70 kilometres north of the city, Mutianyu is widely regarded as the finest restored stretch of the Great Wall near Beijing. Some 5.4 kilometres of Ming-dynasty wall follow the crest of a steep, densely forested ridge, punctuated by more than twenty watchtowers set unusually close together — this was a heavily defended approach to the capital. Wooded valleys fall away on both sides, and the wall is visible snaking along the skyline in either direction. A cable car and chairlift carry you up, and visitor numbers are markedly lower here than at Badaling.",
+          "hero": true
+        },
+        {
+          "key": "temple-of-heaven",
+          "title": "Temple of Heaven",
+          "day": "Day 02",
+          "body": "Completed in 1420 under the Ming emperor Yongle, this was where emperors came each winter solstice to pray for a good harvest — the most important ritual site in imperial China. The Hall of Prayer for Good Harvests is a circular triple-eaved hall of deep blue tile on three tiers of white marble, built entirely of timber joinery without a single nail. Mornings in the surrounding 270-hectare park belong to Beijingers: tai chi, cards, singing and dancing under the old cypresses. UNESCO listed, 1998.",
+          "hero": false
+        },
+        {
+          "key": "tiananmen-square",
+          "title": "Tian'anmen Square",
+          "day": "Day 03",
+          "body": "At around 44 hectares, one of the largest public squares in the world and the ceremonial heart of modern China. The Monument to the People's Heroes stands at its centre, the Great Hall of the People to the west, the National Museum to the east, and to the north the vermilion Gate of Heavenly Peace — the threshold into the Forbidden City. Please carry your passport: security screening is required to enter, and your guide will walk you through it.",
+          "hero": false
+        },
+        {
+          "key": "forbidden-city",
+          "title": "The Forbidden City",
+          "day": "Day 03",
+          "body": "Built between 1406 and 1420 and home to twenty-four Ming and Qing emperors, this is the largest surviving timber palace complex in the world — some 980 buildings across 72 hectares behind a moat and a 10-metre wall. You follow the imperial axis: the Meridian Gate, the marble bridges of the Golden Stream, the vast courtyard of the Hall of Supreme Harmony, then the smaller residential courts within. Now the Palace Museum, holding over a million imperial artefacts.",
+          "hero": false
+        },
+        {
+          "key": "beihai-park",
+          "title": "Beihai Park",
+          "day": "Day 03",
+          "body": "One of the oldest and best-preserved imperial gardens in China, a royal retreat since the 11th century — older than the Forbidden City next door. More than half of its 69 hectares is lake, and the view across the water is held by the White Dagoba, a Tibetan-style stupa raised on Jade Flower Island in 1651. Willows, rowing boats, and the Nine-Dragon Screen of glazed tile. An unhurried, local counterpoint to the scale of the morning.",
+          "hero": false
+        },
+        {
+          "key": "olympic-green",
+          "title": "Olympic Green — Bird's Nest & Water Cube",
+          "day": "Day 04",
+          "body": "The two landmarks of the 2008 Olympics face one another across the Olympic Green. The National Stadium — the Bird's Nest — was designed by Herzog & de Meuron with Ai Weiwei as consultant, its 80,000 seats wrapped in a lattice of exposed steel. Opposite, the National Aquatics Centre wears a translucent skin of ETFE bubbles that glows blue after dark. Beijing is the only city to have hosted both a Summer and a Winter Games.",
+          "hero": false
+        },
+        {
+          "key": "beijing-hutong",
+          "title": "Beijing's Hutongs",
+          "day": "Day 05",
+          "body": "The narrow lanes between siheyuan — the grey-brick courtyard houses that were the standard Beijing home for centuries. The layout dates to the Yuan dynasty, and the name is thought to come from a Mongolian word for water well. Districts such as Nanluoguxiang and lakeside Shichahai remain intact and lived-in: carved gateposts, courtyard doors left ajar, tea houses, barbers and bicycle repair stands — daily life at a scale the boulevards outside no longer keep.",
+          "hero": false
+        },
+        {
+          "key": "summer-palace",
+          "title": "The Summer Palace",
+          "day": "Day 05",
+          "body": "The Qing court's warm-weather retreat: 290 hectares, three-quarters of it water. Kunming Lake was dug by hand and the spoil raised into Longevity Hill, on whose slope the Tower of Buddhist Incense stands. The Long Corridor runs 728 metres along the shore, its beams carrying some 14,000 painted scenes — no two alike. Rebuilt in 1888 by the Empress Dowager Cixi, it is the most complete surviving example of Chinese imperial garden design.",
+          "hero": false
+        }
+      ]
+    },
+    {
+      "city": "Xi'an",
+      "entries": [
+        {
+          "key": "terracotta-warriors",
+          "title": "The Terracotta Warriors and Horses",
+          "day": "",
+          "body": "In 1974, farmers sinking a well east of Xi'an struck fragments of fired clay. What they had found was the buried guard of Qin Shi Huang, the first emperor of a unified China, who died in 210 BC — an estimated 8,000 life-size soldiers, horses and chariots arrayed in battle formation to protect his tomb. Pit 1 is the largest, a vaulted hall some 230 metres long with rank upon rank of infantry still standing where they were placed. Each figure carries individual features, armour and rank insignia, and all were originally painted in bright mineral pigments, traces of which survive.",
+          "hero": true
+        },
+        {
+          "key": "tang-everbright-city",
+          "title": "Grand Tang Dynasty Ever Bright City",
+          "day": "Day 07",
+          "body": "A 1.5-kilometre pedestrian boulevard between the Giant Wild Goose Pagoda and Tang Paradise, built in the architectural language of the Tang dynasty and designed to be seen after dark. Once the lanterns come on the avenue is lit end to end: bronze groups of Tang poets and musicians, costumed performers in flowing silk, street theatre, calligraphers and tea houses. Xi'an was Chang'an — the largest city on earth in the Tang era — and this is its own tribute to that period.",
+          "hero": false
+        },
+        {
+          "key": "xian-city-wall",
+          "title": "The Ancient City Walls",
+          "day": "Day 08",
+          "body": "One of the most complete city walls anywhere in the world: 13.7 kilometres of Ming rampart, raised in 1370 on Tang foundations, ringing the old centre in an unbroken rectangle. Twelve metres high and wide enough at the top for four horses abreast, it is now a promenade — you can walk a stretch or hire a bicycle and ride the full circuit in around two hours, looking down into old courtyards on one side and the modern city on the other.",
+          "hero": false
+        },
+        {
+          "key": "wild-goose-pagoda",
+          "title": "Giant Wild Goose Pagoda",
+          "day": "Day 08",
+          "body": "Built in 652 AD at the heart of the Da Ci'en Temple to house the sutras the monk Xuanzang carried back from India — the seventeen-year pilgrimage that later inspired the novel Journey to the West. Xuanzang translated the texts here and supervised the pagoda's design himself. Seven storeys and 64 metres of tapering brick, still leaning very slightly, and still the symbol of the city. UNESCO listed in 2014 as part of the Silk Road.",
+          "hero": false
+        },
+        {
+          "key": "muslim-quarter",
+          "title": "The Muslim Quarter",
+          "day": "Day 08",
+          "body": "Home to Xi'an's Hui community, whose ancestors settled here as Silk Road traders more than 1,200 years ago. Beihuajue Lane and the streets around it are a dense grid of food stalls and small shops: roujiamo, hand-pulled biang biang noodles, yangrou paomo, persimmon cakes and cured beef. Tucked behind them is the Great Mosque, founded in 742 AD and built entirely in Chinese style — pavilions and courtyard gardens rather than domes.",
+          "hero": false
+        }
+      ]
+    },
+    {
+      "city": "Chongqing",
+      "entries": [
+        {
+          "key": "hongyadong",
+          "title": "Hongyadong",
+          "day": "",
+          "body": "Eleven storeys of stilted timber galleries built into the cliff face above the Jialing River, in the diaojiaolou style that once lined both banks. The complex opens onto solid ground at street level on two different floors — a fair summary of how Chongqing works. It is at its best after dark, when several thousand lanterns come on at once and the whole cliff reflects on the water below. Street-food floors sit at the bottom, teahouses and viewing terraces at the top.",
+          "hero": true
+        },
+        {
+          "key": "ciqikou",
+          "title": "Ciqikou Ancient Town",
+          "day": "Day 10",
+          "body": "A porcelain port on the Jialing River that has kept its Ming and Qing street plan: stone-paved lanes, timber shopfronts, tea houses and temple courtyards on the slope above the water. It shipped ceramics downriver for six centuries, which is where the name — 'porcelain port' — comes from. Come for the atmosphere and the snacks: chili-fried maweishi, hand-pulled malt candy, and Chongqing's famously fiery street food, at a gentler pace than the city centre.",
+          "hero": false
+        },
+        {
+          "key": "liziba",
+          "title": "Liziba Station",
+          "day": "Day 10",
+          "body": "Chongqing is built on cliffs above two rivers, and land is scarce enough that the Line 2 monorail was routed straight through floors six to eight of a nineteen-storey residential block. The station occupies the middle of the building; residents live above and below it, and noise-damping engineering keeps the trains to roughly the sound of a dishwasher. A short stop, and one of the most photographed pieces of urban engineering in China.",
+          "hero": false
+        },
+        {
+          "key": "jiefangbei",
+          "title": "Jiefangbei",
+          "day": "Day 10",
+          "body": "The commercial heart of the Yuzhong Peninsula, named for the Liberation Monument at its centre — raised in 1947 and once the tallest structure in the city, now standing barely shoulder-high to the towers around it. The pedestrian streets radiating from it are Chongqing at full volume: department stores, neon, hotpot restaurants stacked several floors up, and a good place to simply watch the pace of the city after dark.",
+          "hero": false
+        },
+        {
+          "key": "dazu-rock-carvings",
+          "title": "The Dazu Rock Carvings",
+          "day": "Day 11",
+          "body": "About two hours from the city, some 50,000 figures are carved into the hillsides here, cut between the 9th and 13th centuries. What makes Dazu unusual is that Buddhist, Taoist and Confucian subjects appear side by side — rare anywhere in China. The finest grouping is at Baodingshan, where a continuous narrative frieze runs along a U-shaped cliff, some figures several metres tall, with original pigment still visible. UNESCO listed, 1999.",
+          "hero": false
+        }
+      ]
+    },
+    {
+      "city": "Shanghai",
+      "entries": [
+        {
+          "key": "huangpu-cruise",
+          "title": "The Huangpu River by Night",
+          "day": "",
+          "body": "The journey closes where China looks forward. Two centuries face each other across the Huangpu — fifty-two heritage buildings along the Bund, raised when Shanghai was the busiest port in Asia, and opposite them the towers of Lujiazui, none of which existed before 1990. The evening cruise puts you on the water between the two, roughly an hour from the Yangpu Bridge down to the Nanpu Bridge, with the whole waterfront lit. It is the single clearest way to read the city.",
+          "hero": true
+        },
+        {
+          "key": "yu-garden",
+          "title": "Yu Garden",
+          "day": "Day 13",
+          "body": "Laid out from 1559 by a Ming official as a retreat for his parents, and a masterclass in Jiangnan garden design: two hectares divided by dragon-crested walls into six scenes, so the whole is never visible at once. Rockeries, carp ponds, pavilions and the Exquisite Jade Rock, a porous boulder said to have been destined for an emperor's garden. The bazaar outside has traded on this spot for centuries.",
+          "hero": false
+        },
+        {
+          "key": "the-bund",
+          "title": "The Bund",
+          "day": "Day 13",
+          "body": "Fifty-two heritage buildings run for a mile and a half along the west bank of the Huangpu — neoclassical banks, art deco hotels and trading houses raised between the 1880s and the 1930s, when Shanghai was the busiest port in Asia. The promenade in front of them is the city's front room, busiest in the evening when the facades are floodlit and Pudong lights up across the water. A short walk, and the best place to feel the two Shanghais at once.",
+          "hero": false
+        },
+        {
+          "key": "oriental-pearl-tower",
+          "title": "The Oriental Pearl Tower",
+          "day": "Day 13",
+          "body": "The tower that announced Pudong: finished in 1994, when the far bank of the Huangpu was still largely farmland and warehouses. Eleven linked spheres rise 468 metres, and the observation decks — including a glass floor 259 metres up — give the clearest read of how the city is put together, the Bund's stone frontage on one bank and Lujiazui's towers on the other.",
+          "hero": false
+        }
+      ]
+    }
+  ]
+}
