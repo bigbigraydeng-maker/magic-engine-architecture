@@ -82,5 +82,40 @@
     "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
     "source": "https://commons.wikimedia.org/wiki/File:2014.11.15.191338_Shanghai_International_Conference_Center_ship_night_Shanghai.jpg",
     "note": "resized to 1150px wide, re-encoded JPEG q68"
+  },
+  "the-bund": {
+    "author": "Ding Kezhong",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:DSC00244%E5%A4%96%E6%BB%A9%E5%A4%9C%E6%99%AF.jpg",
+    "note": "resized to 1400px wide, re-encoded JPEG q58"
+  },
+  "nanjing-road": {
+    "author": "Hermann Luyken",
+    "license": "CC0",
+    "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+    "source": "https://commons.wikimedia.org/wiki/File:2014.11.15.181406_Nanjing_Road_Pedestrian_Zone_Shanghai.jpg",
+    "note": "resized to 1400px wide, re-encoded JPEG q58"
+  },
+  "yangtze-gorges": {
+    "author": "User:Vmenkov",
+    "license": "CC BY-SA 3.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0",
+    "source": "https://commons.wikimedia.org/wiki/File:QuYuan-Xiling-Gorge-5008.jpg",
+    "note": "resized to 1400px wide, re-encoded JPEG q58"
+  },
+  "zhujiajiao": {
+    "author": "Chensiyuan",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0",
+    "source": "https://commons.wikimedia.org/wiki/File:1_zhujiajiao_ancient_water_town_2023.jpg",
+    "note": "resized to 1400px wide, re-encoded JPEG q58"
+  },
+  "xian-bell-tower": {
+    "author": "xiquinhosilva",
+    "license": "CC BY 2.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+    "source": "https://commons.wikimedia.org/wiki/File:Xi%27an_Bell_Tower_-_54075117224.jpg",
+    "note": "resized to 1400px wide, re-encoded JPEG q58"
   }
 }

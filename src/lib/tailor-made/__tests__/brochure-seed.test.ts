@@ -142,12 +142,22 @@ describe('createBrochureFromItinerary', () => {
     expect(img(city.blocks[0])).toBe(`${HERO_PREFIX}chongqing`)
   })
 
-  it('城市本身就不在图库里时才真的留空，不拿别的城市的照片凑', () => {
-    // 宜昌（长江三峡）图库里没有 —— 配一张别处的照片，客人一眼看出是套模板
+  it('宜昌 / 长江三峡有图了 —— 补图前这一城整页是空的', () => {
     const brochure = createBrochureFromItinerary(
       build(['Yichang'], [
-        { day: 1, route: 'Yichang', body: 'Board your Yangtze River cruise this afternoon.' },
+        { day: 1, route: 'Yichang', body: 'Board your Yangtze River cruise this afternoon and sail into the Three Gorges.' },
         { day: 2, route: 'Yichang', body: 'A day on the river.' },
+      ])
+    )
+    expect(brochure.cities[0].hero.image).toBe(`${HERO_PREFIX}yangtze-gorges`)
+  })
+
+  it('城市本身就不在图库里时才真的留空，不拿别的城市的照片凑', () => {
+    // 哈尔滨图库里没有 —— 配一张别处的照片，客人一眼看出是套模板
+    const brochure = createBrochureFromItinerary(
+      build(['Harbin'], [
+        { day: 1, route: 'Harbin', body: 'Arrive and settle in for the evening.' },
+        { day: 2, route: 'Harbin', body: 'A day at leisure.' },
       ])
     )
     expect(brochure.cities[0].hero.image).toBe('')
