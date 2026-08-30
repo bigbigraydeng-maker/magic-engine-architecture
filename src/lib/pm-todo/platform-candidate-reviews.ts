@@ -59,4 +59,9 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '跨源交叉验证与对照实验设计（用独立数据源互证结论 · 用对照组排除替代解释）',
     reviewDate: '2026-09-30',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'AI 单页站生成器（事实采集 → AI 文案 → 模板渲染 → 静态发布）',
+    reviewDate: '2026-09-30',
+  },
 ]
