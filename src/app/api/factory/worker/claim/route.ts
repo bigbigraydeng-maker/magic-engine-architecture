@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
     const { data: clipRows, error: clipErr } = await supabaseAdmin
       .from('video_clips')
       .select('id, storage_url')
-      .in('id', [...clipIds])
+      .in('id', Array.from(clipIds))
     if (clipErr) {
       return NextResponse.json({ error: `clip lookup failed: ${clipErr.message}` }, { status: 500 })
     }
