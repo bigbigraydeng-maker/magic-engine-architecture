@@ -6,7 +6,12 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { FACTORY_BUCKET, isWorkerAuthorized, workerClientWhitelist } from '@/lib/factory/worker-guard'
+import {
+  FACTORY_BUCKET,
+  isWorkerAuthorized,
+  workerClaimClientIds,
+  workerClientWhitelist,
+} from '@/lib/factory/worker-guard'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -34,19 +39,27 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  let body: Record<string, unknown> = {}
+  let parsedBody: unknown
   try {
-    body = (await req.json()) as Record<string, unknown>
+    parsedBody = await req.json()
   } catch {
-    // body 可选:worker_id 缺省用 host 标识
+    return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 })
   }
+  if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
+    return NextResponse.json({ error: 'body must be a JSON object' }, { status: 400 })
+  }
+  const body = parsedBody as Record<string, unknown>
   const workerId = typeof body.worker_id === 'string' && body.worker_id.trim()
     ? body.worker_id.trim()
     : 'local-mac'
+  const claimClientIds = workerClaimClientIds(body, whitelist)
+  if (!claimClientIds) {
+    return NextResponse.json({ error: 'client_id is required and must be allowlisted' }, { status: 403 })
+  }
 
   const { data, error } = await supabaseAdmin.rpc('factory_claim_work_order', {
     p_worker_id: workerId,
-    p_client_ids: whitelist,
+    p_client_ids: claimClientIds,
   })
   if (error) {
     return NextResponse.json({ error: `claim rpc failed: ${error.message}` }, { status: 500 })
@@ -58,7 +71,11 @@ export async function POST(req: NextRequest) {
   }
 
   const workOrderId = row.work_order_id as string
-  const clientId = row.client_id as string
+  const clientId = row.client_id
+  if (typeof clientId !== 'string'
+    || !claimClientIds.some((id) => id.toLowerCase() === clientId.toLowerCase())) {
+    return NextResponse.json({ error: 'claim returned a client outside the requested scope' }, { status: 500 })
+  }
   const brief = (row.brief ?? {}) as Record<string, unknown>
 
   // clip URL 清单:brief.segments[].clip_ids → 签名下载 URL
@@ -75,7 +92,7 @@ export async function POST(req: NextRequest) {
     const { data: clipRows, error: clipErr } = await supabaseAdmin
       .from('video_clips')
       .select('id, storage_url')
-      .in('id', [...clipIds])
+      .in('id', Array.from(clipIds))
     if (clipErr) {
       return NextResponse.json({ error: `clip lookup failed: ${clipErr.message}` }, { status: 500 })
     }

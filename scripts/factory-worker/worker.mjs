@@ -34,6 +34,7 @@ const ENV = loadEnv()
 const API_BASE = ENV.FACTORY_API_BASE || 'https://app.magicengine.com.au'
 const WORKER_TOKEN = ENV.FACTORY_WORKER_TOKEN || ''
 const WORKER_ID = ENV.FACTORY_WORKER_ID || `mac-${hostname()}`
+const TARGET_CLIENT_ID = ENV.FACTORY_WORKER_TARGET_CLIENT_ID?.trim() || ''
 const MUAPI_KEY = ENV.MUAPI_API_KEY || ''
 // OPENAI_KEY 已移除:A2 起文案由 ME 后端按 master_brief 生成(brief.copy),worker 不再写文案
 // B3:引擎指向 MagicLab_Studio 权威版(治没音乐/素材糙),brandkit 按客户走(治装配层 CTS 尾巴)。
@@ -98,9 +99,22 @@ async function api(path, method = 'POST', body) {
 }
 
 async function claimOne() {
-  const r = await api('/api/factory/worker/claim', 'POST', { worker_id: WORKER_ID })
+  const r = await api('/api/factory/worker/claim', 'POST', buildClaimBody(WORKER_ID, TARGET_CLIENT_ID))
   if (!r.ok) throw new Error(`claim ${r.status}: ${JSON.stringify(r.json)}`)
-  return r.json.claimed ? r.json : null
+  if (!r.json.claimed) return null
+  if (!claimMatchesTarget(r.json, TARGET_CLIENT_ID)) {
+    throw new Error('claim 返回了目标客户之外的工单,已停止且未开始生成')
+  }
+  return r.json
+}
+
+export function buildClaimBody(workerId, targetClientId) {
+  return { worker_id: workerId, client_id: targetClientId }
+}
+
+export function claimMatchesTarget(claim, targetClientId) {
+  return typeof claim?.client_id === 'string'
+    && claim.client_id.toLowerCase() === targetClientId.toLowerCase()
 }
 
 async function heartbeat(woId, costSoFar) {
@@ -419,6 +433,10 @@ async function processOrder(wo) {
 async function main() {
   if (!WORKER_TOKEN) {
     console.error('FATAL: FACTORY_WORKER_TOKEN 未配置(scripts/factory-worker/.env)')
+    process.exit(1)
+  }
+  if (!TARGET_CLIENT_ID) {
+    console.error('FATAL: FACTORY_WORKER_TARGET_CLIENT_ID 未配置,拒绝跨客户领取')
     process.exit(1)
   }
   const loop = process.argv.includes('--loop')

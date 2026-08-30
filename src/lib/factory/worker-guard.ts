@@ -42,6 +42,20 @@ export function workerClientWhitelist(): string[] | null {
   return ids.length > 0 ? ids : null
 }
 
+/**
+ * 单客户 claim 范围。目标客户必须显式提供且已在服务端白名单内。
+ * 返回 null 表示调用方缺失、提供非法或越权的 client_id，路由必须 fail-closed。
+ */
+export function workerClaimClientIds(
+  body: Record<string, unknown>,
+  whitelist: string[],
+): string[] | null {
+  const requested = body['client_id']
+  if (typeof requested !== 'string' || requested.trim().length === 0) return null
+  const matched = whitelist.find((id) => id.toLowerCase() === requested.trim().toLowerCase())
+  return matched ? [matched] : null
+}
+
 /** track 值 → bucket 目录名(spec §6.1 路径用连字符,DB track 用下划线) */
 export function trackFolder(track: string): string | null {
   if (track === 'a_real') return 'a-real'
