@@ -46,6 +46,13 @@ export const META_PAGE_SCOPES = [
   // 2026-08-04 讲课片发布就卡在「读得到、发不出去」。
   // 已经连过的客户(CTS/Roman)只做收件箱同步,不受影响;要发内容的客户重新点一次「连接 Meta」即可。
   'pages_manage_posts',
+  // 读即时表单里的潜在客户必须有这一条。没有它,`meta-leads-sync` 每小时照跑,
+  // 但 leadgen_forms 一个表单都列不出来 —— 2026-08-21 起 4 个客户(CTS/Roman/
+  // Magic Lab Class/NZCPE)全线断供 9 天,CTS 一家就漏掉 45 条线索、NZ$736 白花。
+  // `src/lib/meta/lead-forms.ts` 的注释 2026-07-30 就预见过「不保证已经有」,
+  // 但这条权限一直没进过本清单,所以点「连接 Meta」永远修不好线索同步。
+  // 已经连过的客户要重新点一次「连接 Meta」才能拿到它。
+  'leads_retrieval',
 ] as const
 
 /**
