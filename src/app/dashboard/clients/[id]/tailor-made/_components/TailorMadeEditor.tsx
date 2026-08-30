@@ -1,5 +1,6 @@
 'use client';
 
+import ItineraryAudit from './ItineraryAudit';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   blankDay,
@@ -452,6 +453,10 @@ export default function TailorMadeEditor({
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         {/* ---------- 左：AI 对话 + 校对 ---------- */}
         <div className="space-y-4">
+          {/* 空字段体检。模板遇到缺字段是渲染成空白、不报错，8 页里人眼看不出来 ——
+              CTS-2026-0025 就这样带着两处空白发给了客户。见 lib/tailor-made/audit.ts */}
+          <ItineraryAudit payload={payload} />
+
           {/* 第一步：两份文件。这是甲方描述的真实起点 ——
               「他们会先输入 2 个信息：航班信息 pdf 和每日行程文本文件」。
               以前上传入口埋在「逐项校对」里，等于没有。 */}
