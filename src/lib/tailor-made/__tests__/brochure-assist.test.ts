@@ -95,9 +95,15 @@ describe('assistBrochure', () => {
     await expect(assistBrochure({ brochure: sample(), instruction: '全部重写' })).rejects.toThrow(/太多|分两次/)
   })
 
-  it('一条都没改成时报错，不假装成功', async () => {
+  it('一条都没改成时如实返回说明，不当成错误抛出去', async () => {
+    // 顾问问「图片怎么不显示」时模型会正确地回答而不是改文字。
+    // 抛异常会让界面渲染成红色报错，看着像系统崩了。
     mockCreate.mockResolvedValue(reply({ edits: [], note: '价格类内容我不能写' }))
-    await expect(assistBrochure({ brochure: sample(), instruction: '把价格写进去' })).rejects.toThrow(/价格/)
+    const before = sample()
+    const out = await assistBrochure({ brochure: before, instruction: '把价格写进去' })
+    expect(out.changed).toEqual([])
+    expect(out.note).toContain('价格')
+    expect(out.brochure).toEqual(before) // 原样返回，一个字都没动
   })
 
   it('空指令直接挡掉，不浪费一次调用', async () => {

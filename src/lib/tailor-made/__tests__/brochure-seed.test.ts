@@ -7,7 +7,13 @@
 
 import { describe, it, expect } from 'vitest'
 import { createBrochureFromItinerary } from '../brochure-seed'
-import { HERO_PREFIX } from '../brochure-types'
+import { HERO_PREFIX, isBrochureCard, type BrochureBlock } from '../brochure-types'
+
+/** 取卡片的图；不是景点卡片就是用例写错了 */
+function img(block: BrochureBlock): string {
+  if (!isBrochureCard(block)) throw new Error('expected an image card')
+  return block.image
+}
 import { createBlankItinerary, type TailorMadeDay, type TailorMadeItinerary } from '../types'
 
 function build(route: string[], days: Partial<TailorMadeDay>[]): TailorMadeItinerary {
@@ -79,6 +85,72 @@ describe('createBrochureFromItinerary', () => {
       ])
     )
     expect(brochure.cities[0].blocks).toHaveLength(0)
+  })
+
+  /**
+   * 第一版把卡片图一律留空，打开是十几张空灰块 —— 顾问的第一反应是「这东西坏了」，
+   * 不是「我该配图了」。PM 2026-08-30 在后台截图反馈。
+   */
+  it('卡片按当天写了什么配图，图库里有的地标优先', () => {
+    const brochure = createBrochureFromItinerary(
+      build(['Beijing'], [
+        { day: 1, route: 'Beijing', body: 'Arrive and settle in, then a first look around the city.' },
+        { day: 2, route: 'Beijing', body: 'Today head out to the magnificent Great Wall at Mutianyu.' },
+        { day: 3, route: 'Beijing', body: "Tian'anmen Square, then the Forbidden City." },
+      ])
+    )
+    const beijing = brochure.cities[0]
+    // 长城那天正文最长，升为整版大图 —— 大图也按内容配，不退回泛泛的北京城景
+    expect(beijing.hero.image).toBe(`${HERO_PREFIX}great-wall`)
+    // 抵达日没写到具体地标，落回本城通用照；故宫那天配故宫
+    expect(img(beijing.blocks[0])).toBe(`${HERO_PREFIX}beijing`)
+    expect(img(beijing.blocks[1])).toBe(`${HERO_PREFIX}forbidden-city`)
+  })
+
+  /**
+   * 中转日「Chongqing → Shanghai」的正文里有 "Transfer to Chongqing airport"。
+   * 按正文匹配会给**上海**那页配一张重庆的照片 —— 真实数据 CTS-2026-0026 上发生过。
+   */
+  it('不拿别的城市的照片配图，宁可用本城通用照', () => {
+    const brochure = createBrochureFromItinerary(
+      build(['Chongqing', 'Shanghai'], [
+        { day: 1, route: 'Chongqing', body: 'Ciqikou and Hongyadong along the river.' },
+        { day: 2, route: 'Chongqing → Shanghai', body: 'Transfer to Chongqing airport for your flight to Shanghai.' },
+        { day: 3, route: 'Shanghai', body: 'Yu Garden and the Oriental Pearl Tower.' },
+      ])
+    )
+    const shanghai = brochure.cities[1]
+    // 这张卡片在上海那一页，正文提到重庆机场 —— 必须是上海的图
+    expect(shanghai.blocks.map(img)).not.toContain(`${HERO_PREFIX}chongqing`)
+    expect(shanghai.blocks.every((b) => img(b) === `${HERO_PREFIX}shanghai`)).toBe(true)
+  })
+
+  /**
+   * 一度为了避免跟大图撞图而把卡片留空，结果 11 张空了 8 张 ——
+   * 为了躲一个小瑕疵制造了一个大问题。
+   */
+  it('允许跟本城大图重复，不为了躲撞图把卡片留空', () => {
+    const brochure = createBrochureFromItinerary(
+      build(['Chongqing'], [
+        { day: 1, route: 'Chongqing', body: 'A long first day taking in the river and the city from above.' },
+        { day: 2, route: 'Chongqing', body: 'A quieter second day.' },
+      ])
+    )
+    const city = brochure.cities[0]
+    expect(city.hero.image).toBe(`${HERO_PREFIX}chongqing`)
+    expect(img(city.blocks[0])).toBe(`${HERO_PREFIX}chongqing`)
+  })
+
+  it('城市本身就不在图库里时才真的留空，不拿别的城市的照片凑', () => {
+    // 宜昌（长江三峡）图库里没有 —— 配一张别处的照片，客人一眼看出是套模板
+    const brochure = createBrochureFromItinerary(
+      build(['Yichang'], [
+        { day: 1, route: 'Yichang', body: 'Board your Yangtze River cruise this afternoon.' },
+        { day: 2, route: 'Yichang', body: 'A day on the river.' },
+      ])
+    )
+    expect(brochure.cities[0].hero.image).toBe('')
+    expect(img(brochure.cities[0].blocks[0])).toBe('')
   })
 
   it('大图按城市自动选，存的是名字不是几百 KB 的图', () => {
