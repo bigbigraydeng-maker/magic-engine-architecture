@@ -5,6 +5,23 @@
 
 ---
 
+### 2026-08-30（CTS 线索断流 —— 两条独立管道同时哑，PR [#1259](https://github.com/bigbigraydeng-maker/magic-engine/pull/1259) + [#1261](https://github.com/bigbigraydeng-maker/magic-engine/pull/1261)）
+
+**发生了什么**：CTS 反馈 Google 线索表格不更新，而 Meta 后台明明有新人进来。查出来是**两条互不相干的管道同时断**，症状一样、成因无关：
+
+1. **Google 表格（8/26 断，4 天）** —— Meta 的表格集成挂在 8/27 误建的一张**空表单**上；正在投放的表单（`1328741742716400`）指向的表格标签页**在表里根本不存在**。Meta 界面全程显示「已连接」绿对勾，只有「上次推送潜在客户信息的时间」这一个字段说了实话。已重建集成（`…-copy (v1)` → `Sheet1`）+ 从广告后台导出补录 19 人进 Sheet1 第 477–495 行。**顺手取消了「自动为今后的表单创建集成」** —— 它的真实含义是「每复制一次表单就新建一个标签页」，正是本次事故的成因。
+2. **ME 后台（8/21 断，9 天，4 个客户）** —— `meta-leads-sync` 每小时照常跑，但 CTS / Roman HU / Magic Lab Class / NZCPE 2026 **全部取数失败**、`leadsIngested` 恒为 0。根因不是 cron，是 `META_PAGE_SCOPES` **从来没申请过 `leads_retrieval`**；8/21 前靠 env 里手工建的系统用户令牌，那把钥匙一失效就全断。
+
+**本次上线的两个修复**：
+- **#1259** `leads_retrieval` 加进 `META_PAGE_SCOPES` —— 此前点「连接 Meta」永远修不好线索同步（8/23 已有人白点过一次 CTS）。⚠️ 只对新授权生效，已连客户须重点一次。
+- **#1261** cron 告警说人话 —— 日报**本来每天都在发**（`failed_count=4` 命中条件），但邮件里是 24 行「meta-leads-sync 4 failed —」，一个字没说是什么事。新增 `summariseFailures()`，按报错原文**去重**后写进 `error_message`（去重是关键：一把令牌失效时 N 家报错相同，不去重会把邮件仅有的 200 字符刷满同一句）。7 个单测用生产真实报错原文，变异验证两轮。
+
+**贯穿三处的同一种病 —— 状态标记撒谎**：Meta 的「已连接」绿对勾 · `cron_run_logs.status='completed'`（真相在 `failed_count` 和 `summary.results[].error`）· `platform_oauth_connections.status='active'`（三家令牌其实已失效）。**判断这类集成死活，只认最近一次真实数据的时间戳，不认健康标记。**
+
+**未完成**：4 个客户重新授权 + 补回存量线索，见 [ROADMAP.md](../ROADMAP.md) `ML-RECONNECT-1/2`。
+
+---
+
 ### 2026-08-28（Tailor Made 长行程生成失败修复 —— 输出截断 + CF 代理超时两层根因，PR [#1212](https://github.com/bigbigraydeng-maker/magic-engine/pull/1212) + [#1226](https://github.com/bigbigraydeng-maker/magic-engine/pull/1226)）
 
 **发生了什么**：CTS 顾问给一份 27 天的「China Panorama」出行程单，后台报 `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`。查生产库发现更严重的一面：`tailor_made_itineraries` 里 `CTS-2026-0024`（终端客户 Shirley Gordon & Steven Birchall）**已经存进去了一份只有 2 天的草稿**——不是生成失败没存，是把写了一半的行程当成功结果静默落库了。状态还是 `draft` 没发出去，未造成对外事故。

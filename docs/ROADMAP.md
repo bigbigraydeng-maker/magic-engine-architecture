@@ -754,3 +754,17 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **P.G.3** 澄清 skill 在五道 Build Gate 中的位置为 Gate 0 / Pre-Gate —— 子牙终审问题 5。SKILL.md 现在"红线 6"与"与既有治理机制的关系"表两处对 skill 从属关系的表述矛盾（一说是 Gate 4 前置子步骤，一说强化 Gate 2）。改成"Gate 0 / Pre-Gate，不替代任何后续 Gate，分歧走 owner 仲裁"。
 - [ ] **P.G.4** 抽 `docs/registry/pillars.md` 作为 6 支柱唯一名单来源 —— 子牙终审问题 6。当前 SKILL.md、CLAUDE.md 两处硬编码"SEO / 社媒 / 广告 / 口碑 / AI 可见度 / 竞品"，跟 skill 自己声明的"支柱数量是 PM 拍板项"直接冲突。建仓后 skill、CLAUDE.md、其他引用点全部改成引用 registry 文件。同类还有五道 Build Gate 顺序 / 客户名单，可一并统一到 `docs/registry/` 下。
 - [ ] **P.G.5** 平台候选复查治理界面 —— Codex 复审 P2 遗留意见。当前 `platform_candidate_review_due` 待办的 href 指向 GitHub `blob` 只读页面，PM/FDE 收到待办后要同时改 `docs/registry/platform-candidates.md` 表 + `src/lib/pm-todo/platform-candidate-reviews.ts` 数组，非技术收件人做不了。要么建一个真正的治理界面（可以直接更新证据 + 推下次复查日），要么把 `platform-candidate-reviews.ts` 里的日期改为从 markdown 表自动派生。当前 workaround：接到待办后回一句 "把 X 候选复查日推到 YYYY-MM-DD"，由 agent 帮改两处并提 PR。
+
+---
+
+## 🔴 Meta 线索管道 · 4 客户断供未恢复 📋 2026-08-30 登记
+
+> 背景：CTS 反馈 Google 线索表格不更新，排查出**两条独立管道同时断**。表格那条当天已修完并补录；ME 这条**代码已修但尚未生效**，等人工重新授权。完整事故记录见 memory `project-me-meta-leads-sync-token-dead`。
+
+**已完成**：`leads_retrieval` 权限已加进 `META_PAGE_SCOPES`（[#1259](https://github.com/bigbigraydeng-maker/magic-engine/pull/1259)，已合）· cron 告警不再只报破折号（[#1261](https://github.com/bigbigraydeng-maker/magic-engine/pull/1261)，已合）· CTS 表格自动写入已重接 + 补录 19 人。
+
+- [ ] 🔴 **ML-RECONNECT-1 四个客户重新授权 Meta（唯一挡住线索恢复的一步，需 PM 本人点）** —— `platform_oauth_connections` 实测四家 `scopes` **全部不含 `leads_retrieval`**：CTS Tours NZ `c0000000…`(授权于 08-23) · Roman HU `e7465ac7…`(07-31) · Magic Lab Class `377468af…`(08-04) · NZCPE 2026 `3f3617f5…`(08-14)。#1259 上线后到 ME 后台逐个点「连接 Meta」，授权页会多出「访问潜在客户信息」，必须勾上。
+  ⚠️ **顺序不能反**：08-23 已经有人在没有该权限的情况下重连过 CTS 一次，白点了一遍还没人知道为什么不行。
+  ⚠️ Meta 对**曾被拒绝过**的权限会默默不再显示；授权页上看不到该项时，走 `buildAuthUrl(..., rerequest=true)`（`src/lib/meta-oauth/client.ts`）强制重问。
+- [ ] **ML-RECONNECT-2 重连后补回存量** —— 手动触发一次 `/api/cron/meta-leads-sync`，把 8/22 起漏掉的线索灌进 ME（仅 CTS 一家 Meta 侧就有 45 条 / NZ$735.87，其余三家未统计）。补完核验 `contact_touchpoints` 里 `source='meta_lead_form'` 的日期是否续上。
+- [ ] **ML-STATUS-1 `platform_oauth_connections.status` 是死字段** —— 四家实测全写 `active`，其中三家令牌早已被 Facebook 判失效（Graph 190/460）。没有任何地方在取数失败后回写 `status='expired'`。今天同一种病撞见三次（Meta 集成绿对勾 / `cron_run_logs.status=completed` / 这个 `active`），**任何"我很健康"的状态标记都不可信**。修法建议：leads-sync / messenger-sync 遇 190/460 时回写 status + `error_message`，让 ME 后台能显示"这个客户的 Meta 连接已失效，请重连"。
