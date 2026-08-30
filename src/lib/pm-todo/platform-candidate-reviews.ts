@@ -34,4 +34,24 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: 'Current-Sponsored Competitor Discovery（当前活跃广告主实时发现 + diff 竞品清单）',
     reviewDate: '2026-09-28',
   },
+  {
+    name: '创作者专属 collection + 独立 UTM（每个合作创作者一个可归因落地页）',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: '内容排产输入从"想主题"改成"读客户 products.json 上新 feed"',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: '促销走购物车层折扣叠加、不批量改 `compare_at_price`',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: '电商 SEO 检测方向：aggregateRating 空评分 / hreflang 适用性判断 / sitemap 内部垃圾过滤',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: 'AI agent 能否直接购买（Shopify UCP / agents.md 是否平台默认开放）作为 AI 可见度测量口径候选维度',
+    reviewDate: '2026-09-30',
+  },
 ]
