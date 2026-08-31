@@ -64,4 +64,9 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: 'AI 单页站生成器（事实采集 → AI 文案 → 模板渲染 → 静态发布）',
     reviewDate: '2026-09-30',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'Governed Lead-Reply Agent（结构化事实驱动的广告留资对话生成 + 发送前防幻觉/禁用清单校验引擎，接管 Messenger/WhatsApp 等渠道的黑箱平台自带 AI 客服）',
+    reviewDate: '2026-09-15',
+  },
 ]
