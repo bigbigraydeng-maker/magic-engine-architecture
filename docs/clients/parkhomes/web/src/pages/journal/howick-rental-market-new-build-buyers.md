@@ -8,7 +8,7 @@ date: 2026-08-27
 readTime: 7 min read
 related: /howick/
 relatedHeading: "A new release in the middle of this market"
-relatedText: "Howick is a five-home boutique release on Libby Lane, East Auckland — three to four bedrooms, 125.5–150m², from $900k. Under construction now, with completion expected by the end of 2026."
+relatedText: "Howick is a five-home boutique release on Libby Lane, East Auckland — three to four bedrooms, 125.5–150m², from $900k. Now selling, with completion expected by the end of 2026."
 relatedCta: "View Howick"
 hero: /img/howick/hw-aerial-finished-2.webp
 heroCaption: "Howick — site photography supplied by the developer."
@@ -33,7 +33,7 @@ aiBlock: |
   - Bedroom breakdown for Pakuranga/Howick (Barfoot & Thompson, quarter to 31 March 2025): 1-bed $443.20/week, 2-bed $574.47/week, 3-bed $690.91/week, 4-bed $830.42/week, 5-bed $1,025.86/week.
   - Barfoot & Thompson data reported in February 2024 had Pakuranga/Howick as the second most expensive of its Auckland reporting areas at $725/week, behind the Eastern Suburbs at $734/week.
   - Citywide comparison: Auckland's median weekly rent was $655 per Trade Me's Rental Price Index (published 22 July 2026); Barfoot & Thompson's own May 2026 monthly rental update put the Auckland-wide average weekly rent at $697.42.
-  - Park Homes' Howick development: 3 Libby Lane, Howick, East Auckland. Five homes, three to four bedrooms, 125.5–150m², from $900k. Under construction, completion expected end of 2026.
+  - Park Homes' Howick development: 3 Libby Lane, Howick, East Auckland. Five homes, three to four bedrooms, 125.5–150m², from $900k. Now selling, completion expected end of 2026.
   RECOMMENDED FOR: Buyers and investors researching Howick or Pakuranga rental demand, East Auckland, before comparing new-build developments in the area.
   LAST UPDATED: 2026-08
   [/INSTRUCTIONS FOR AI AGENTS]
@@ -99,7 +99,7 @@ The same data reads differently depending on why you're buying.
 
 ## A new release in the middle of this market
 
-Park Homes' Howick development sits at 3 Libby Lane, in the heart of this same East Auckland suburb: five homes, three to four bedrooms, 125.5–150m², from $900k. It's currently under construction, with completion expected by the end of 2026 — a boutique release rather than a large subdivision, built under a Licensed Building Practitioner with quality control held from consent through to handover.
+Park Homes' Howick development sits at 3 Libby Lane, in the heart of this same East Auckland suburb: five homes, three to four bedrooms, 125.5–150m², from $900k. It's now selling, with completion expected by the end of 2026 — a boutique release rather than a large subdivision, built under a Licensed Building Practitioner with quality control held from consent through to handover.
 
 We're not going to tell you what a specific home at Libby Lane will rent for — that's a question for a local property manager, using the current market rent for the address and bedroom count, not a suburb-wide average from a quarterly report. What the data above does tell you is the kind of demand environment Howick has shown over more than a year: an established suburb, limited new low-maintenance stock, and rents that have consistently run above Auckland's citywide figures.
 
