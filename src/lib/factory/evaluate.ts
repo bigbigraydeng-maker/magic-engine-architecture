@@ -11,7 +11,12 @@ import { FACTORY_ANGLE_DEDUPE_DAYS } from './constants'
 import { generateAdCopy } from './copy-generator'
 import { compactCreativeProfile, parseVerifiedCta, projectCreativeProfile } from './client-config'
 import { decideSignal, pickFactoryGoal } from './strategist'
-import { detectContentGoal, getViralClipDirective } from '@/lib/reels/viral-style-advisor'
+import {
+  detectContentGoal,
+  getViralClipDirective,
+  getViralVisualPlan,
+  type ViralVisualPlan,
+} from '@/lib/reels/viral-style-advisor'
 import {
   assertRecipeBriefComplete,
   buildFullRecipeBrief,
@@ -318,19 +323,32 @@ async function persistDecision(
       return { outcome: 'rejected', reject_reason: picked.rejection }
     }
     let visualDirective: string | null = null
+    let visualPlan: ViralVisualPlan | null = null
+    const contentGoal = detectContentGoal({
+      offer: (signal.evidence?.['verified_offer'] ? 'offer' : null) ?? clientOffer?.price_from ?? null,
+      campaign_angle: draft.angle,
+      channel_goal: goal?.primary_metric_key ?? null,
+    })
     try {
       if (industry) {
-        visualDirective = await getViralClipDirective(
-          industry,
-          detectContentGoal({
-            offer: (signal.evidence?.['verified_offer'] ? 'offer' : null) ?? clientOffer?.price_from ?? null,
-            campaign_angle: draft.angle,
-            channel_goal: goal?.primary_metric_key ?? null,
-          }),
-        )
+        if (creativeRecipe.requires_viral_visual_plan) {
+          visualPlan = await getViralVisualPlan(industry, contentGoal, {
+            campaignAngle: draft.angle,
+            maxContinuousI2vSeconds: Math.max(...creativeRecipe.segments.map((segment) => segment.duration_hint_s)),
+            overlayRoles: creativeRecipe.text_overlay_roles,
+          })
+          visualDirective = visualPlan?.prompt_directive ?? null
+        } else {
+          visualDirective = await getViralClipDirective(industry, contentGoal)
+        }
       }
     } catch (e) {
       console.error(`[factory] recipe visual director failed (signal ${signal.id}): ${e instanceof Error ? e.message : e}`)
+    }
+    if (creativeRecipe.requires_viral_visual_plan && !visualPlan) {
+      throw new RecipeConfigError(
+        `creative_recipe "${creativeRecipe.id}" requires an auditable Viral V2 visual plan; no compatible references were available`,
+      )
     }
     // 生成结构化 recipe copy 的兜底:evaluate 里没有专用生成器,用 angle 造一句 hook + 一句 CTA;
     // 若后端 A2 生成了 fullBrief 相关文案,worker 完成后 receipt 会用真实播放的 hookText/ctaText。
@@ -341,6 +359,7 @@ async function persistDecision(
       sourceImageUrl: picked.sources[0],
       sourceImageUrls: picked.sources,
       visualDirective,
+      visualPlan,
       creativeProfile,
       copy,
       ctaFacts: verifiedCta,

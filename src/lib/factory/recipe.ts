@@ -15,6 +15,7 @@
 //   digest 硬绑定到 replanned recipe,禁止「静默换个新 recipe 但没吃掉最新意见」
 
 import { createHash } from 'node:crypto'
+import type { ViralVisualPlan } from '@/lib/reels/viral-style-advisor'
 
 export const WINNER_RECIPE_IDS = [
   'single_image_i2v_pullback_12s',
@@ -84,6 +85,8 @@ export interface WinnerRecipe {
   readonly watermark_y: number
   /** facts_stack 把电话/价格/出发/网址分行，禁止一条超长 CTA 被缩成小字。 */
   readonly endcard_fact_layout: 'inline' | 'facts_stack'
+  /** Viral V2 plans must carry auditable reference evidence before any provider claim. */
+  readonly requires_viral_visual_plan?: true
 }
 
 const SINGLE_IMAGE_I2V_PULLBACK_12S: WinnerRecipe = Object.freeze({
@@ -192,6 +195,7 @@ const MULTI_IMAGE_I2V_MULTICUT_9S: WinnerRecipe = Object.freeze({
   source_image_mode: 'distinct',
   watermark_y: 120,
   endcard_fact_layout: 'facts_stack',
+  requires_viral_visual_plan: true,
 })
 
 const REGISTRY: Record<WinnerRecipeId, WinnerRecipe> = Object.freeze({
@@ -990,6 +994,10 @@ export function assertRecipeBriefComplete(brief: unknown, recipe: WinnerRecipe):
   if ((recipe.cta_facts_required?.length ?? 0) > 0) {
     assertRecipeCtaFacts(b.cta_facts, recipe)
   }
+  if (recipe.requires_viral_visual_plan) {
+    const director = b.visual_director as { viral_visual_plan?: unknown } | null | undefined
+    assertViralVisualPlan(director?.viral_visual_plan)
+  }
   // 延续 plan shape 检查(段/plan/idempotency/source 同图/max_new_clips)。
   assertRecipePlanShape(brief, recipe)
   // R5:idempotency_key 必须已经是 deterministic(evaluate 传 signal.id ns),
@@ -1014,6 +1022,8 @@ export interface FullRecipeBriefInput {
   sourceImageUrls?: readonly string[]
   /** ME Viral Video 提取的 prompt-safe 视觉结构，不含他人文案/画面。 */
   visualDirective?: string | null
+  /** Viral V2 evidence receipt; required by recipes that opt into the V2 gate. */
+  visualPlan?: ViralVisualPlan | null
   creativeProfile: Record<string, unknown> // 已经过 client-config compact
   copy: RecipeCopyInput | MulticutRecipeCopyInput
   /** client-scoped verified facts；仅声明了 cta_facts_required 的 recipe 使用。 */
@@ -1041,6 +1051,7 @@ export interface FullRecipeBriefInput {
  * 结构化 copy 与 receipt 元数据;不再走「insert queued → patch」这条竞态窗口(R5)。
  */
 export function buildFullRecipeBrief(input: FullRecipeBriefInput): Record<string, unknown> {
+  if (input.recipe.requires_viral_visual_plan) assertViralVisualPlan(input.visualPlan)
   const plan = buildRecipePlan({
     recipe: input.recipe,
     angle: input.angle,
@@ -1083,6 +1094,7 @@ export function buildFullRecipeBrief(input: FullRecipeBriefInput): Record<string
       watermark_y: input.recipe.watermark_y,
       endcard_fact_layout: input.recipe.endcard_fact_layout,
       ...(input.visualDirective ? { viral_style_directive: input.visualDirective } : {}),
+      ...(input.visualPlan ? { viral_visual_plan: input.visualPlan } : {}),
     },
   }
   if (ctaFacts) brief.cta_facts = ctaFacts
@@ -1091,4 +1103,26 @@ export function buildFullRecipeBrief(input: FullRecipeBriefInput): Record<string
     brief.review_feedback_digest = input.reviewFeedbackDigest.trim()
   }
   return brief
+}
+
+export function assertViralVisualPlan(value: unknown): asserts value is ViralVisualPlan {
+  const plan = value as Partial<ViralVisualPlan> | null | undefined
+  const fail = (detail: string): never => {
+    throw new Error(`${RECIPE_ERR.PLAN_INVALID}: viral_visual_plan ${detail}`)
+  }
+  if (!plan || typeof plan !== 'object' || plan.schema_version !== 1) fail('missing or schema_version != 1')
+  const checked = plan as Partial<ViralVisualPlan>
+  if (!Array.isArray(checked.reference_ids) || checked.reference_ids.length === 0
+      || checked.reference_ids.some((id) => typeof id !== 'string' || id.trim().length === 0)) {
+    fail('reference_ids missing/empty')
+  }
+  const referenceCount = (checked.reference_ids as string[]).length
+  if (!Array.isArray(checked.references) || checked.references.length !== referenceCount) {
+    fail('references must match reference_ids')
+  }
+  for (const field of ['selection_reason', 'hook_pattern', 'edit_rhythm', 'overlay_pattern', 'prompt_directive'] as const) {
+    if (typeof checked[field] !== 'string' || checked[field]!.trim().length === 0) fail(`${field} missing/empty`)
+  }
+  if (!Array.isArray(checked.shot_grammar) || checked.shot_grammar.length === 0) fail('shot_grammar missing/empty')
+  if (!Array.isArray(checked.prohibited_patterns) || checked.prohibited_patterns.length === 0) fail('prohibited_patterns missing/empty')
 }

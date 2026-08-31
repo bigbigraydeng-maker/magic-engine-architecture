@@ -159,9 +159,13 @@ test('Ray review is fully correlated and cannot publish', () => {
   assert.throws(() => validateReviewData({ ...review, no_publish: false }, data, candidate), /no_publish=true/)
   assert.throws(() => validateReviewData({ ...review, work_order_id: 'other' }, data, candidate), /work_order_id mismatch/)
   const expression = reviewMatchExpression()
-  for (const field of ['request_id', 'client_id', 'recipe_id', 'work_order_id']) {
+  for (const field of ['request_id', 'client_id', 'recipe_id']) {
     assert.match(expression, new RegExp(`event\\.data\\.${field} == async\\.data\\.${field}`))
   }
+  // work_order_id is created by the generation step, so it cannot exist on the
+  // original request event used by Inngest's pre-wake expression. It is still
+  // checked fail-closed above, after the review event wakes the function.
+  assert.doesNotMatch(expression, /event\.data\.work_order_id/)
 })
 
 test('events are CTS-scoped and workflow source has no publish operation', () => {

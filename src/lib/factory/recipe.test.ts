@@ -61,6 +61,7 @@ describe('recipe timeline formula(R1)', () => {
     expect(MULTI_IMAGE.source_image_mode).toBe('distinct')
     expect(MULTI_IMAGE.watermark_y).toBe(120)
     expect(MULTI_IMAGE.endcard_fact_layout).toBe('facts_stack')
+    expect(MULTI_IMAGE.requires_viral_visual_plan).toBe(true)
   })
   it('recipe max_final_dur = 12.0', () => {
     expect(RECIPE.max_final_dur).toBe(12.0)
@@ -261,6 +262,52 @@ describe('multicut copy + CTA facts', () => {
       copy: { hook: 'Beyond China', middle: 'See the story unfold' },
       keyNamespace: NS,
     })).toThrow(/CTA_FACTS_MISSING/)
+  })
+})
+
+describe('Viral V2 recipe audit gate', () => {
+  const visualPlan = {
+    schema_version: 1 as const,
+    reference_ids: ['viral-ref-1'],
+    references: [{ id: 'viral-ref-1', score: 4.7, hook_type: 'visual surprise', techniques: ['dynamic reveal'] }],
+    selection_reason: 'semantic client and campaign fit; reach secondary',
+    hook_pattern: 'visual surprise',
+    shot_grammar: ['dynamic reveal'],
+    edit_rhythm: 'multi-cut; every continuous I2V shot <= 2.6s',
+    overlay_pattern: 'hook + middle; short distinct lines',
+    prohibited_patterns: ['static-photo slideshow'],
+    prompt_directive: 'viral-v2 travel brand; open with visual surprise; dynamic reveal',
+  }
+  const facts = { phone: '09 123 4567', url: 'example.com', departure: 'October 2026' }
+
+  it('persists auditable reference IDs and selection logic in the executable brief', () => {
+    const brief = buildFullRecipeBrief({
+      recipe: MULTI_IMAGE,
+      angle: 'China beyond the postcard',
+      sourceImageUrl: SOURCE,
+      sourceImageUrls: [SOURCE, 'https://cdn.example.com/two.jpg', 'https://cdn.example.com/three.jpg'],
+      visualDirective: visualPlan.prompt_directive,
+      visualPlan,
+      creativeProfile: {},
+      copy: { hook: 'Beyond the postcard', middle: 'Meet the real China' },
+      ctaFacts: facts,
+      keyNamespace: NS,
+    })
+    expect((brief.visual_director as { viral_visual_plan: unknown }).viral_visual_plan).toEqual(visualPlan)
+    expect(() => assertRecipeBriefComplete(brief, MULTI_IMAGE)).not.toThrow()
+  })
+
+  it('refuses a Viral V2 recipe before provider work when its plan receipt is missing', () => {
+    expect(() => buildFullRecipeBrief({
+      recipe: MULTI_IMAGE,
+      angle: 'China',
+      sourceImageUrl: SOURCE,
+      sourceImageUrls: [SOURCE, 'https://cdn.example.com/two.jpg', 'https://cdn.example.com/three.jpg'],
+      creativeProfile: {},
+      copy: { hook: 'Beyond China', middle: 'Meet the real China' },
+      ctaFacts: facts,
+      keyNamespace: NS,
+    })).toThrow(/viral_visual_plan/)
   })
 })
 
