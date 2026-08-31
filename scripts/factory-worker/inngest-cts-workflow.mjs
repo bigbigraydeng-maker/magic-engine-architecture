@@ -232,7 +232,6 @@ export function reviewMatchExpression() {
     'event.data.request_id == async.data.request_id',
     'event.data.client_id == async.data.client_id',
     'event.data.recipe_id == async.data.recipe_id',
-    'event.data.work_order_id == async.data.work_order_id',
     'async.data.schema_version == 1',
     'async.data.no_publish == true',
     '(async.data.verdict == "pass" || async.data.verdict == "fail")',
