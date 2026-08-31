@@ -3,7 +3,15 @@
 // 只测纯函数,不跑 main() 主循环(worker.mjs 入口已加 import.meta.url 守卫)。
 
 import { describe, expect, it } from 'vitest'
-import { buildClaimBody, buildSrt, claimMatchesTarget, resolveCopy } from './worker.mjs'
+import {
+  assertNoRecipeIntentInvalidReason,
+  buildClaimBody,
+  buildSrt,
+  claimMatchesTarget,
+  heartbeat,
+  probeLoudnessLufs,
+  resolveCopy,
+} from './worker.mjs'
 
 const ROLES = ['hook', 'middle', 'middle', 'middle', 'middle', 'middle', 'middle', 'cta']
 const WO = {
@@ -24,6 +32,41 @@ describe('buildClaimBody — 可选单客户 claim', () => {
     expect(claimMatchesTarget({ client_id: 'client-1' }, 'client-1')).toBe(true)
     expect(claimMatchesTarget({ client_id: 'client-2' }, 'client-1')).toBe(false)
     expect(claimMatchesTarget({}, 'client-1')).toBe(false)
+  })
+})
+
+describe('heartbeat — provider 前 hard gate', () => {
+  const response = (status, body) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => body,
+  })
+
+  it.each([500, 503])('HTTP %i → fail-closed', async (status) => {
+    await expect(heartbeat('wo-1', 0, async () => response(status, '{"error":"down"}')))
+      .rejects.toThrow(/HEARTBEAT_FAILED.*non-2xx/)
+  })
+
+  it('畸形 JSON → fail-closed', async () => {
+    await expect(heartbeat('wo-1', 0, async () => response(200, '{bad')))
+      .rejects.toThrow(/HEARTBEAT_FAILED.*malformed JSON/)
+  })
+
+  it('缺 abort 或 ok 确认 → fail-closed', async () => {
+    await expect(heartbeat('wo-1', 0, async () => response(200, '{"ok":true}')))
+      .rejects.toThrow(/response must confirm/)
+    await expect(heartbeat('wo-1', 0, async () => response(200, '{"abort":false}')))
+      .rejects.toThrow(/response must confirm/)
+  })
+
+  it('网络异常 → fail-closed', async () => {
+    await expect(heartbeat('wo-1', 0, async () => { throw new Error('offline') }))
+      .rejects.toThrow(/HEARTBEAT_FAILED.*offline/)
+  })
+
+  it('只有 {ok:true, abort:boolean} 才通过', async () => {
+    await expect(heartbeat('wo-1', 0, async () => response(200, '{"ok":true,"abort":false}')))
+      .resolves.toMatchObject({ ok: true, abort: false })
   })
 })
 
@@ -48,6 +91,47 @@ describe('resolveCopy — #1218 angle 兜底不许满屏复读', () => {
     const wo = { angle: 'x', brief: { segments: [{ role: 'hook' }, { role: 'middle' }], copy: backendCopy } }
     const copy = resolveCopy(wo)
     expect(copy).toBe(backendCopy)
+  })
+})
+
+describe('probeLoudnessLufs — ffmpeg ebur128 stderr 捕获(exec 修复)', () => {
+  it('runner 返回 stderr 摘要 → 解析出真实 LUFS(execFileSync 曾丢 stderr → 全变 -70)', () => {
+    const runner = () => ({
+      stderr: 'Integrated loudness:\n    I:   -19.3 LUFS\n    Threshold: -29.2 LUFS',
+      stdout: '',
+    })
+    expect(probeLoudnessLufs('/x/song.mp3', runner)).toBe(-19.3)
+  })
+  it('摘要落在 stdout(仍能命中,不假设走哪个流)', () => {
+    const runner = () => ({
+      stderr: '',
+      stdout: 'Integrated loudness:\n    I:         -22.4 LUFS',
+    })
+    expect(probeLoudnessLufs('/x/song.mp3', runner)).toBe(-22.4)
+  })
+  it('runner 抛错(把 stderr 挂在 error 上)→ 也能解析,不吞掉真实摘要', () => {
+    const runner = () => {
+      const e = new Error('nonzero exit')
+      e.stderr = 'Integrated loudness:\n    I:   -14.1 LUFS'
+      throw e
+    }
+    expect(probeLoudnessLufs('/x/song.mp3', runner)).toBe(-14.1)
+  })
+  it('无输出 → -70 兜底(视作静音,让 BGM/final gate reject)', () => {
+    expect(probeLoudnessLufs('/x/song.mp3', () => ({ stderr: '', stdout: '' }))).toBe(-70)
+  })
+})
+
+describe('assertNoRecipeIntentInvalidReason — recipe_intent 解析失败必须在 provider 之前拒', () => {
+  it('reason=null / 空串 → 无操作(legacy + 合法 recipe 都能继续)', () => {
+    expect(() => assertNoRecipeIntentInvalidReason(null)).not.toThrow()
+    expect(() => assertNoRecipeIntentInvalidReason('')).not.toThrow()
+    expect(() => assertNoRecipeIntentInvalidReason('   ')).not.toThrow()
+    expect(() => assertNoRecipeIntentInvalidReason(undefined)).not.toThrow()
+  })
+  it('reason=非空 → 抛 WINNER_RECIPE_CONFIG_INVALID', () => {
+    expect(() => assertNoRecipeIntentInvalidReason('creative_recipe.version 缺失'))
+      .toThrow(/WINNER_RECIPE_CONFIG_INVALID/)
   })
 })
 
