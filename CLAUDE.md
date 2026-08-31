@@ -5,6 +5,7 @@
 **产品定义必读**：[ME Product Definition](./docs/strategy/ME_PRODUCT_DEFINITION.md) —— **产品定位、IMPACT、DAPE、Connector、Build vs Connect 与行业版本的最高优先级定义；冲突时以它为准。**
 **每次开新会话先读**：[docs/STATE.md](./docs/STATE.md)（系统现状）→ [docs/ROADMAP.md](./docs/ROADMAP.md)（要做什么）。
 **平台化必读**：[ME2 Reuse & Platformization Principle](./docs/roadmap/2026-08-19-me2-platformization-principle.md) —— **所有开发窗口、Work Package、Claude Code/Codex 会话都受它约束。**
+**平台层级门必挂 skill**：[`.claude/skills/me-platform-tier-gate/`](./.claude/skills/me-platform-tier-gate/SKILL.md) —— **Claude Code 会话每次开工前必先调用 `Skill me-platform-tier-gate` 加载**（`Skill` 调用接口仅 Claude Code 提供）；**Codex 会话没有 `Skill` 调用接口，改为直接阅读 `SKILL.md` 全文并遵循其判据 / 红线 / 输出格式**。两种入口下，任何提议新增能力线 / 支柱 / capability / 智能层 / 分析层 / Build vs Connect vs Buy 决策 / 客户新需求判断"ME 要不要自己做"，都必须先输出 Tier Classification Report 再继续。跳过 = 治理失职。
 **必读规则**：[`~/.claude/rules/coding-style.md`](~/.claude/rules/coding-style.md) · [`~/.claude/rules/development-workflow.md`](~/.claude/rules/development-workflow.md)
 
 ---
@@ -52,7 +53,10 @@ Magic Engine 的目标是**一个共享平台 + 多个垂直版本**。真实客
 
 行业差异进入 **Industry Playbook / Profile / Policy**；客户差异进入 **client configuration / approved evidence / private memory**。未来 **ME Real Estate / ME Travel** 应建立在同一底层平台上，而不是复制一套新系统。
 
-每个开发任务开工前必须依次通过：
+**这道闸不只管写代码。** 调研、分析、写文档、跑一次性探针脚本——只要**要调外部 API 或数据源**，就先查 [`docs/STATE.md` §5 外部服务](./docs/STATE.md) 的「已有封装」列，或直接 `ls src/lib/ | grep -i <provider>`。
+scratchpad 里的临时脚本**同样受约束**：它不会进仓库，但它对平台能力的错误认知会留在你的判断里（2026-08-30 实例：调研时手写脚本直调 DataForSEO 与 AI 可见度，而封装早已存在，错误认知污染了之后两轮架构判断）。
+
+每个任务开工前必须依次通过：
 
 1. **Repository Fact Gate**：先 `git fetch origin`，Current State Audit 第一行必须报告 `remote fetched at + exact main SHA`；没有 SHA，审计不成立。
 2. **Domain Semantics Gate**：确认所谓“通用”模块内部没有把首个客户/行业语义硬编码成平台规则。`clientId` 参数化不等于语义通用。

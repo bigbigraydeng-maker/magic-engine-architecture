@@ -14,14 +14,134 @@ export type ContentGoal = 'brand' | 'sales' | 'ugc' | 'education'
  * Returns a formatted style guidance block, or null if no done references exist.
  * References are ordered by view_count desc — most viral examples weigh heaviest.
  */
-const FIELDS = 'style_description, style_tags, key_techniques, persona_fit, view_count, video_title, channel_title, opening_hook'
+const FIELDS = 'id, style_description, style_tags, key_techniques, persona_fit, view_count, video_title, channel_title, opening_hook'
 
-interface ViralRef {
+export interface ViralRef {
+  id?: string | null
+  video_title?: string | null
   style_description?: string | null
   style_tags?: string[] | null
   key_techniques?: string[] | null
   view_count?: number | null
   opening_hook?: { type?: string; script?: string; feel?: string } | null
+}
+
+export interface ViralPlanContext {
+  campaignAngle?: string | null
+  maxContinuousI2vSeconds: number
+  overlayRoles?: readonly string[]
+}
+
+export interface ViralVisualPlan {
+  schema_version: 1
+  reference_ids: string[]
+  references: Array<{
+    id: string
+    score: number
+    hook_type: string | null
+    techniques: string[]
+  }>
+  selection_reason: string
+  hook_pattern: string
+  shot_grammar: string[]
+  edit_rhythm: string
+  overlay_pattern: string
+  prohibited_patterns: string[]
+  prompt_directive: string
+}
+
+const AUDIO_ONLY = /audio|sound|music|voice|voiceover|narration|asmr|song|beat/i
+const UNSUITABLE_VISUAL = /dance|choreograph|meme|prank|reaction|talking[ -]?head|instagram vs\.? reality|static[ -]?camera/i
+const STRONG_VISUAL = /cinematic|dynamic|reveal|close[ -]?up|fast[ -]?cut|text[ -]?overlay|destination|landscape|architecture|detail|zoom|drone|tracking|parallax/i
+
+function normalizedWords(value: string): string[] {
+  return value.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []
+}
+
+/**
+ * Rank by client/campaign fit first and reach second. This deliberately avoids
+ * treating the most-viewed dance/meme as a suitable travel-ad art director.
+ */
+export function rankViralRefs(refs: ViralRef[], context: ViralPlanContext): ViralRef[] {
+  const angleWords = new Set(normalizedWords(context.campaignAngle ?? ''))
+  return refs
+    .filter((ref) => typeof ref.id === 'string' && ref.id.trim().length > 0)
+    .map((ref, index) => ({ ref, index, score: scoreViralRef(ref, angleWords) }))
+    .filter(({ score }) => score >= 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(({ ref }) => ref)
+}
+
+function scoreViralRef(ref: ViralRef, angleWords: Set<string>): number {
+  const text = [
+    ref.video_title,
+    ref.style_description,
+    ...(ref.style_tags ?? []),
+    ...(ref.key_techniques ?? []),
+    ref.opening_hook?.type,
+    ref.opening_hook?.feel,
+  ].filter(Boolean).join(' ').toLowerCase()
+  let value = Math.min(9, Math.log10(Math.max(1, ref.view_count ?? 1))) * 0.1
+  if (STRONG_VISUAL.test(text)) value += 4
+  if (UNSUITABLE_VISUAL.test(text)) value -= 8
+  for (const word of Array.from(angleWords)) if (text.includes(word)) value += 0.5
+  return Math.round(value * 100) / 100
+}
+
+export function buildViralVisualPlan(
+  refs: ViralRef[],
+  industry: string,
+  contentGoal: ContentGoal,
+  context: ViralPlanContext,
+): ViralVisualPlan | null {
+  if (!Number.isFinite(context.maxContinuousI2vSeconds) || context.maxContinuousI2vSeconds <= 0) return null
+  const selected = rankViralRefs(refs, context).slice(0, 3)
+  if (selected.length === 0) return null
+
+  const visualTechniques = selected
+    .flatMap((ref) => ref.key_techniques ?? [])
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value && !AUDIO_ONLY.test(value) && !UNSUITABLE_VISUAL.test(value))
+  const shotGrammar = Array.from(new Set(visualTechniques)).slice(0, 4)
+  if (shotGrammar.length === 0) return null
+  const hookPattern = selected
+    .map((ref) => ref.opening_hook?.type?.trim().toLowerCase())
+    .find((value) => value && !UNSUITABLE_VISUAL.test(value)) ?? 'visual-surprise'
+  const overlayRoles = context.overlayRoles?.length ? context.overlayRoles.join(' + ') : 'hook only'
+  const maxSeconds = Math.round(context.maxContinuousI2vSeconds * 10) / 10
+  const angleWords = new Set(normalizedWords(context.campaignAngle ?? ''))
+  const promptDirective = [
+    `viral-v2 ${industry} ${contentGoal}`,
+    `open with ${hookPattern}`,
+    `shot grammar: ${shotGrammar.join(', ')}`,
+    `each continuous I2V shot <= ${maxSeconds}s`,
+    'use distinct source composition per cut',
+  ].join('; ')
+
+  return {
+    schema_version: 1,
+    reference_ids: selected.map((ref) => ref.id!.trim()),
+    references: selected.map((ref) => ({
+      id: ref.id!.trim(),
+      score: scoreViralRef(ref, angleWords),
+      hook_type: ref.opening_hook?.type?.trim().toLowerCase() ?? null,
+      techniques: (ref.key_techniques ?? [])
+        .map((value) => value.trim().toLowerCase())
+        .filter((value) => value && !AUDIO_ONLY.test(value))
+        .slice(0, 4),
+    })),
+    selection_reason: `semantic fit for ${industry}/${contentGoal} and dynamic visual compatibility; view count used only as a secondary signal`,
+    hook_pattern: hookPattern,
+    shot_grammar: shotGrammar,
+    edit_rhythm: `multi-cut; every continuous I2V shot <= ${maxSeconds}s`,
+    overlay_pattern: `${overlayRoles}; short distinct lines, never copied from a reference`,
+    prohibited_patterns: [
+      `continuous I2V shot longer than ${maxSeconds}s`,
+      'static-photo slideshow or Ken Burns motion',
+      'copied reference wording or scene recreation',
+    ],
+    prompt_directive: promptDirective,
+  }
 }
 
 /**
@@ -60,6 +180,39 @@ export async function fetchViralRefs(
     .order('view_count', { ascending: false, nullsFirst: false })
     .limit(5)
   return (fallback ?? []) as ViralRef[]
+}
+
+async function fetchViralPlanRefs(industry: string, contentGoal: ContentGoal): Promise<ViralRef[]> {
+  const exact = await supabaseAdmin
+    .from('viral_reference_library')
+    .select(FIELDS)
+    .eq('industry', industry)
+    .eq('analysis_status', 'done')
+    .eq('content_goal', contentGoal)
+    .eq('is_learnable', true)
+    .eq('is_our_video', false)
+    .order('view_count', { ascending: false, nullsFirst: false })
+    .limit(25)
+  if (exact.data && exact.data.length > 0) return exact.data as ViralRef[]
+  const fallback = await supabaseAdmin
+    .from('viral_reference_library')
+    .select(FIELDS)
+    .eq('industry', industry)
+    .eq('analysis_status', 'done')
+    .eq('is_learnable', true)
+    .eq('is_our_video', false)
+    .order('view_count', { ascending: false, nullsFirst: false })
+    .limit(25)
+  return (fallback.data ?? []) as ViralRef[]
+}
+
+export async function getViralVisualPlan(
+  industry: string,
+  contentGoal: ContentGoal,
+  context: ViralPlanContext,
+): Promise<ViralVisualPlan | null> {
+  const refs = await fetchViralPlanRefs(industry, contentGoal)
+  return buildViralVisualPlan(refs, industry, contentGoal, context)
 }
 
 export async function getViralStyleHint(
@@ -156,7 +309,6 @@ export async function getViralClipDirective(
   // 剔掉纯声音类手法:这段字最终喂给 image-to-video 模型,只能描述画面。
   // 实库里 travel 前三高频就有 "meme-audio-integration" —— 喂进画面提示词是纯噪音。
   // 只排明确属于声音的,不做主观好坏判断(那属于人的编辑决定,不是这里该猜的)。
-  const AUDIO_ONLY = /audio|sound|music|voice|voiceover|narration|asmr|song|beat/i
   const isVisual = (t: string) => !AUDIO_ONLY.test(t)
 
   const hooks = topBy(refs.map((r) => r.opening_hook?.type ?? '').filter(Boolean), 1)

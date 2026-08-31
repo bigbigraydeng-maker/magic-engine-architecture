@@ -55,6 +55,8 @@ scripts/p30-s1-*-output.json
 scripts/p30-s4-*-output.json
 .mcp-*.mjs
 scripts/factory-worker/.env
+scripts/factory-worker/.inngest-pilot/
+scripts/factory-worker/node_modules/
 .dev.vars
 
 # Playwright 输出

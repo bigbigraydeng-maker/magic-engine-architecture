@@ -5,13 +5,15 @@
  * 是最热的客人被漏掉、或者根本没反应的人被当成热的去打扰。
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   datacenterFromKey,
   toPercent,
   normaliseCampaign,
   mergeActivity,
   MailchimpError,
+  subscribeMember,
+  type SubscribeMemberInput,
 } from '../client'
 
 describe('key 里的数据中心', () => {
@@ -116,5 +118,234 @@ describe('合并「谁打开了」和「谁点了」', () => {
 
   it('两边都空 → 空数组，不炸', () => {
     expect(mergeActivity([], [])).toEqual([])
+  })
+})
+
+describe('subscribeMember —— 唯一的写路径', () => {
+  const baseInput = (over: Partial<SubscribeMemberInput> = {}): SubscribeMemberInput => ({
+    apiKey: 'key123-us19',
+    audienceId: 'dda97b7e61',
+    email: 'chris@example.com',
+    firstName: 'Chris',
+    lastName: 'Brown',
+    source: 'Meta Lead Form',
+    tag: 'meta-lead',
+    ...over,
+  })
+
+  function mockFetch(responses: Array<{ status: number; body?: unknown }>) {
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    const fake = vi.fn(async (url: string | URL, init: RequestInit = {}) => {
+      const next = responses.shift()
+      if (!next) throw new Error('unexpected extra fetch call')
+      calls.push({ url: String(url), init })
+      return {
+        status: next.status,
+        json: async () => next.body ?? {},
+        text: async () => JSON.stringify(next.body ?? {}),
+      } as unknown as Response
+    })
+    return { fake: fake as unknown as typeof fetch, calls }
+  }
+
+  it('200 → subscribed，请求打对 URL + Basic auth + status subscribed + SOURCE merge field', async () => {
+    const { fake, calls } = mockFetch([{ status: 200, body: { id: 'abc' } }])
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+
+    expect(res).toEqual({ status: 'subscribed' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe('https://us19.api.mailchimp.com/3.0/lists/dda97b7e61/members')
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers.Authorization).toMatch(/^Basic /)
+    const body = JSON.parse(calls[0].init.body as string) as Record<string, unknown>
+    expect(body.email_address).toBe('chris@example.com')
+    expect(body.status).toBe('subscribed')
+    expect(body.merge_fields).toEqual({
+      FNAME: 'Chris',
+      LNAME: 'Brown',
+      SOURCE: 'Meta Lead Form',
+    })
+    expect(body.tags).toEqual(['meta-lead'])
+  })
+
+  it('400 title=Member Exists → already_member（**不**再打第二次去 PATCH / 重新订阅）', async () => {
+    const { fake, calls } = mockFetch([
+      { status: 400, body: { title: 'Member Exists', status: 400 } },
+    ])
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+
+    expect(res).toEqual({ status: 'already_member' })
+    expect(calls).toHaveLength(1)
+  })
+
+  it('400 其它 title → failed，reason 分类且带 providerStatus', async () => {
+    const { fake } = mockFetch([
+      { status: 400, body: { title: 'Invalid Resource', detail: 'merge field SOURCE does not exist' } },
+    ])
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+
+    expect(res.status).toBe('failed')
+    expect(res).toMatchObject({ providerStatus: 400 })
+  })
+
+  it('缺 SOURCE merge field 场景（Mailchimp 400 "merge field required"）→ failed:missing_merge_field', async () => {
+    const { fake } = mockFetch([
+      { status: 400, body: { title: 'The merge field SOURCE is required' } },
+    ])
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+
+    expect(res).toMatchObject({
+      status: 'failed',
+      reason: 'missing_merge_field',
+      providerStatus: 400,
+    })
+  })
+
+  it('429 → failed:rate_limited', async () => {
+    const { fake } = mockFetch([{ status: 429 }])
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+    expect(res).toMatchObject({ status: 'failed', reason: 'rate_limited', providerStatus: 429 })
+  })
+
+  it('503 → failed:provider_5xx', async () => {
+    const { fake } = mockFetch([{ status: 503 }])
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+    expect(res).toMatchObject({ status: 'failed', reason: 'provider_5xx', providerStatus: 503 })
+  })
+
+  it('401 → failed:auth', async () => {
+    const { fake } = mockFetch([{ status: 401 }])
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+    expect(res).toMatchObject({ status: 'failed', reason: 'auth', providerStatus: 401 })
+  })
+
+  it('404 audience 不存在 → failed:audience_not_found', async () => {
+    const { fake } = mockFetch([{ status: 404 }])
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+    expect(res).toMatchObject({
+      status: 'failed',
+      reason: 'audience_not_found',
+      providerStatus: 404,
+    })
+  })
+
+  it('fetch 抛异常（网络/超时）→ failed:network_error retryable，不抛出', async () => {
+    const fake = vi.fn(async () => {
+      throw new Error('ETIMEDOUT')
+    }) as unknown as typeof fetch
+
+    const res = await subscribeMember(baseInput({ fetchImpl: fake }))
+    expect(res).toEqual({ status: 'failed', reason: 'network_error', retryable: true })
+  })
+
+  it('缺 apiKey → skipped:no_api_key（一次 provider 调用都不发起）', async () => {
+    const fake = vi.fn() as unknown as typeof fetch
+    const res = await subscribeMember(baseInput({ apiKey: '', fetchImpl: fake }))
+    expect(res).toEqual({ status: 'skipped', reason: 'no_api_key' })
+    expect(fake).not.toHaveBeenCalled()
+  })
+
+  it('缺 audienceId → skipped:no_audience_id', async () => {
+    const fake = vi.fn() as unknown as typeof fetch
+    const res = await subscribeMember(baseInput({ audienceId: '', fetchImpl: fake }))
+    expect(res).toEqual({ status: 'skipped', reason: 'no_audience_id' })
+    expect(fake).not.toHaveBeenCalled()
+  })
+
+  it('邮箱不合法 → skipped:invalid_email，一次 provider 调用都不发起', async () => {
+    const fake = vi.fn() as unknown as typeof fetch
+    const res = await subscribeMember(baseInput({ email: 'not-an-email', fetchImpl: fake }))
+    expect(res).toEqual({ status: 'skipped', reason: 'invalid_email' })
+    expect(fake).not.toHaveBeenCalled()
+  })
+
+  it('key 格式错（末尾没数据中心后缀）→ skipped:bad_api_key_format', async () => {
+    const fake = vi.fn() as unknown as typeof fetch
+    const res = await subscribeMember(baseInput({ apiKey: 'no-dc-suffix-here', fetchImpl: fake }))
+    expect(res).toEqual({ status: 'skipped', reason: 'bad_api_key_format' })
+    expect(fake).not.toHaveBeenCalled()
+  })
+
+  it('firstName / lastName / tag 为空时不写进 payload', async () => {
+    const { fake, calls } = mockFetch([{ status: 200 }])
+    await subscribeMember(
+      baseInput({ firstName: null, lastName: null, tag: undefined, fetchImpl: fake }),
+    )
+    const body = JSON.parse(calls[0].init.body as string) as Record<string, unknown>
+    expect(body.merge_fields).toEqual({ SOURCE: 'Meta Lead Form' })
+    expect(body).not.toHaveProperty('tags')
+  })
+
+  // ── Remediation V2：POST 超时 + retryable 分类 ─────────────────────────
+
+  it('POST 挂起 → AbortSignal 拉起 TimeoutError → failed:timeout + retryable=true', async () => {
+    // AbortSignal.timeout 触发时 fetch 抛出 name==='TimeoutError' 的错误。
+    // 这里我们直接模拟被 abort：等 signal 触发后按 TimeoutError reject。
+    const hungFetch = ((_url: string | URL, init: RequestInit = {}) =>
+      new Promise((_, reject) => {
+        const signal = init.signal
+        if (!signal) return
+        if (signal.aborted) {
+          const err = new Error('The operation timed out.')
+          err.name = 'TimeoutError'
+          reject(err)
+          return
+        }
+        signal.addEventListener('abort', () => {
+          const err = new Error('The operation timed out.')
+          err.name = 'TimeoutError'
+          reject(err)
+        })
+      })) as unknown as typeof fetch
+
+    const res = await subscribeMember(baseInput({ fetchImpl: hungFetch, timeoutMs: 30 }))
+    expect(res).toEqual({ status: 'failed', reason: 'timeout', retryable: true })
+  })
+
+  it('POST fetch 抛 AbortError → 也归成 timeout（同一根因，不同引擎/版本命名不同）', async () => {
+    const abortFetch = (async () => {
+      const err = new Error('The operation was aborted.')
+      err.name = 'AbortError'
+      throw err
+    }) as unknown as typeof fetch
+
+    const res = await subscribeMember(baseInput({ fetchImpl: abortFetch, timeoutMs: 100 }))
+    expect(res).toMatchObject({ status: 'failed', reason: 'timeout', retryable: true })
+  })
+
+  it('429 / 5xx / network_error 全部带 retryable=true；auth / 校验 / 404 带 retryable=false', async () => {
+    // 429
+    let { fake } = mockFetch([{ status: 429 }])
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: true,
+    })
+    // 503
+    ;({ fake } = mockFetch([{ status: 503 }]))
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: true,
+    })
+    // network error
+    const netFail = (async () => {
+      throw new Error('ECONNRESET')
+    }) as unknown as typeof fetch
+    expect(await subscribeMember(baseInput({ fetchImpl: netFail }))).toMatchObject({
+      reason: 'network_error',
+      retryable: true,
+    })
+    // 401
+    ;({ fake } = mockFetch([{ status: 401 }]))
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: false,
+    })
+    // 404
+    ;({ fake } = mockFetch([{ status: 404 }]))
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: false,
+    })
+    // 400 validation
+    ;({ fake } = mockFetch([{ status: 400, body: { title: 'Invalid Resource' } }]))
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: false,
+    })
   })
 })

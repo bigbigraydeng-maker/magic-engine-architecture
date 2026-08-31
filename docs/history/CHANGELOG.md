@@ -5,6 +5,28 @@
 
 ---
 
+### 2026-08-28（Tailor Made 长行程生成失败修复 —— 输出截断 + CF 代理超时两层根因，PR [#1212](https://github.com/bigbigraydeng-maker/magic-engine/pull/1212) + [#1226](https://github.com/bigbigraydeng-maker/magic-engine/pull/1226)）
+
+**发生了什么**：CTS 顾问给一份 27 天的「China Panorama」出行程单，后台报 `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`。查生产库发现更严重的一面：`tailor_made_itineraries` 里 `CTS-2026-0024`（终端客户 Shirley Gordon & Steven Birchall）**已经存进去了一份只有 2 天的草稿**——不是生成失败没存，是把写了一半的行程当成功结果静默落库了。状态还是 `draft` 没发出去，未造成对外事故。
+
+**两层根因（症状相同、成因无关，必须分别修）**：
+1. **输出截断**：`extractItinerary()` 的 `max_tokens` 写死 8192，是按 20 天团的量级定的（代码原注释就写着 20 天团「常跑 60-120s」，说明本来就贴着上限）。27 天撑爆上限后，Anthropic 仍会把**被截断前已生成的那部分** `tool_use.input` 当合法结果返回——所以拿到的是「前 2 天」而不是报错。
+2. **CF 代理超时**：`app.magicengine.com.au` 走 Cloudflare 代理（`dig` 出来是 CF anycast IP），对被代理请求约 100 秒掐断。27 天团实测生成要 100-180 秒（本机拿真实文件跑通：转录 5876 字符 → 抽取 115.7 秒 → 27 天全出），同步等一个 HTTP 响应必然被掐，浏览器收到 CF 自己的 HTML 错误页，`res.json()` 报的就是那句 `Unexpected token '<'`。**PR #1212 只修了第一层，部署后甲方复测仍然失败，才挖出第二层。**
+
+**修复**：
+- #1212：`max_tokens` 8192 → 16000，并加硬闸 `stop_reason === 'max_tokens'` 直接抛错——这份文件是要发给终端客户的，宁可报错重来也绝不把半截行程当完整的存下去。同一道闸补给 `pdfToText()`（PDF 转录端截断是独立的坑，截断后喂给抽取链的原料本身就是残的，且当时没走 `bypassGateway`）。
+- #1226：`import`/`extract` 从「同步等 AI 写完」改成「建任务立刻回 202 + 前端轮询」，复用仓库已有的 `public_scan_jobs` 套路，不新造一套。新表 `tailor_made_jobs`（`FOR ALL TO service_role`，落库后用**匿名身份写入探针**实测被 `42501` 拒绝，确认没重蹈 2026-08-03 那次 118 条策略泄露）。配套新增 `tailor-made-jobs-sweeper` cron（照抄 `blog-stuck-generating-sweeper`，兜底 Render 重启留下的僵尸任务）。
+
+**客户交付**：`CTS-2026-0024` 已手工补回完整 27 天并渲染出 PDF 交付甲方（顾问联系方式 / 出行人数 / 6 段国内航班号原文未提供，按「不许编」规则留空待人工补）。
+
+**质量闸**：子牙（架构）+ 魏征（挑刺）对两个 PR 各审一轮，Codex 对 #1226 审两轮共 12 条意见——修 10 条、延后 2 条（已开 [#1234](https://github.com/bigbigraydeng-maker/magic-engine/issues/1234) / [#1235](https://github.com/bigbigraydeng-maker/magic-engine/issues/1235) 跟踪，未只留在 PR 评论里）。其中两条关键：`createOrReuseJob` 前的 `getItinerary()` 落在 try/catch 外，一次 DB 抖动就会原样复现本次要修的 HTML 错误页故障；`markCompleted()` 失败日志原样 `JSON.stringify(result)` 会把终端客户姓名、顾问电话邮箱、订位号、价格写进 Render 日志，改为脱敏摘要。新增 13 个用例，每个关键断言都做过「故意改坏源码确认测试真的会红」的验证。生产上线后用 cron 路由带密钥实测 `{"swept":0}`，确认新代码与新表在生产真的连通。
+
+**已知延后**：`persistIfUnchanged()` 的乐观锁仍是「先读后写」两条查询（[#1234](https://github.com/bigbigraydeng-maker/magic-engine/issues/1234)）；轮询遇到瞬时 5xx 直接终止不重试（[#1235](https://github.com/bigbigraydeng-maker/magic-engine/issues/1235)）。`tailor-made-jobs-sweeper` 未接 healthchecks.io（无权限新建 check）。
+
+**Reuse Statement**：复用 `public_scan_jobs` 的建任务→后台跑→轮询套路、`blog-stuck-generating-sweeper` 的 sweeper 模板、`render.yaml` 的 `fromGroup: me-shared-cron-secret` 密钥模板、既有 `requireDashboardClientAccess` / `getItinerary` / `saveItinerary`。新增的 `tailor_made_jobs` 表与 `src/lib/tailor-made/jobs.ts` 是**平台共享**：按 `client_id` 参数化，无 CTS 语义硬编码，任何用 tailor-made 的客户都走同一套。无行业/客户专属逻辑写入 shared runtime。
+
+---
+
 ### 2026-08-23（AI Visibility Tracker OpenAI 引擎模型退役静默失效修复，PR [#1167](https://github.com/bigbigraydeng-maker/magic-engine/pull/1167)）
 
 **发生了什么**：闽商潜在客户批量诊断任务中意外发现，`src/lib/ai-tracker/runners/openai.ts` 写死的 `gpt-4o-search-preview`（AI Visibility Tracker 每周一 cron `ai-tracker-weekly` 的 OpenAI 侧模型）被 OpenAI 于 2026-07-23 整族退役，现场 canary 实测全系列变体（含带日期快照与滚动别名）一律 404。查生产 Supabase：openai 引擎最后一次成功记录停在 2026-08-17（上周一），2026-08-17 之后到发现时为止零记录——说明本周一（08-24 01:00 UTC）的 cron 还没跑过，是抢在下一次触发前修复的，**未真正命中生产**。cron 路由是 fire-and-forget（202 立即返回）+ orchestrator 对单次 runner 失败有 try/catch 兜底，healthchecks.io 只在 curl 拿到 202 时 ping 成功，不会因为下游任务失败报警——是本条铁律要求专门核实、单独排查的一类静默失效。

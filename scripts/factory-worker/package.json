@@ -1,0 +1,17 @@
+{
+  "name": "@magic-engine/factory-worker",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.4.0"
+  },
+  "scripts": {
+    "inngest:pilot": "node inngest-pilot.mjs",
+    "inngest:cts": "node inngest-cts-workflow.mjs",
+    "test:pilot": "node --test inngest-pilot.test.mjs",
+    "test:cts": "node --test inngest-cts-workflow.test.mjs worker-inngest-bridge.test.mjs"
+  },
+  "dependencies": {
+    "inngest": "3.54.0"
+  }
+}

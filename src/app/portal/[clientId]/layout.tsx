@@ -9,13 +9,31 @@ interface Props {
 }
 
 export default async function PortalLayout({ children, params }: Props) {
-  // P29.B.1 — portal routes unified into dashboard; 308 permanent redirect
-  permanentRedirect(`/dashboard/clients/${params.clientId}`)
-
   const headerStore = headers()
   const allowedClientId = headerStore.get('x-allowed-client-id')
+  const tier = headerStore.get('x-user-tier')
 
-  // Middleware already enforces this; keep the server-side guard for direct hits.
+  // Default P29.B.1 behaviour: portal routes were unified into dashboard,
+  // so every visitor is 308ed into /dashboard/clients/<id>. The exception
+  // — added because portal-tier is the ONLY tier the dashboard middleware
+  // rejects, and unconditionally redirecting them here dead-ends them at
+  // /unauthorized — is a portal-tier visitor whose middleware already
+  // scoped them to exactly this clientId. In that (and only that) case,
+  // render the existing portal workspace instead. Both, dashboard, fde,
+  // client, direct hits without headers, and any mismatched clientId all
+  // still take the pre-existing dashboard permanentRedirect path.
+  const isPortalTierOnExactClient =
+    tier === 'portal_only' && allowedClientId === params.clientId
+  if (!isPortalTierOnExactClient) {
+    permanentRedirect(`/dashboard/clients/${params.clientId}`)
+  }
+
+  // Defence-in-depth: if middleware somehow did not scope the request
+  // (a direct hit that bypassed the matcher, a misconfigured deploy),
+  // fail closed instead of rendering a portal for whichever client_id
+  // the URL says. Membership missing / wrong / unknown / query-failed
+  // never reaches here as portal_only because middleware only emits
+  // that tier for a valid portal row on this exact clientId.
   if (!allowedClientId || allowedClientId !== params.clientId) {
     redirect('/unauthorized')
   }

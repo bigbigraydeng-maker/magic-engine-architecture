@@ -9,9 +9,27 @@ import { buildPromptHint } from './narrative-beats'
 import { supabaseAdmin } from '@/lib/supabase'
 import { FACTORY_ANGLE_DEDUPE_DAYS } from './constants'
 import { generateAdCopy } from './copy-generator'
-import { compactCreativeProfile, projectCreativeProfile } from './client-config'
+import { compactCreativeProfile, parseVerifiedCta, projectCreativeProfile } from './client-config'
 import { decideSignal, pickFactoryGoal } from './strategist'
-import { detectContentGoal, getViralClipDirective } from '@/lib/reels/viral-style-advisor'
+import {
+  detectContentGoal,
+  getViralClipDirective,
+  getViralVisualPlan,
+  type ViralVisualPlan,
+} from '@/lib/reels/viral-style-advisor'
+import {
+  assertRecipeBriefComplete,
+  buildFullRecipeBrief,
+  parseFactoryRecipeConfig,
+  pickRecipeSourcesOrReject,
+  RecipeConfigError,
+  resolveRecipe,
+  type MulticutRecipeCopyInput,
+  type RecipeCopyInput,
+  type RecipeCtaFacts,
+  type WinnerRecipe,
+} from './recipe'
+import { FACTORY_CLIP_UNIT_COST_USD, FACTORY_ORDER_BUDGET_CAP_USD } from './constants'
 import type { AdCopy, DemandSignal, Decision, GateContext, GoalSlice, VerifiedOffer } from './types'
 import type { MasterBrief } from '@/types/magic-engine'
 
@@ -40,6 +58,9 @@ async function loadContext(
   fullBrief: MasterBrief | null
   industry: string | null
   creativeProfile: Record<string, unknown>
+  creativeRecipe: WinnerRecipe | null
+  verifiedCta: RecipeCtaFacts | null
+  sourceImagePool: readonly string[]
 }> {
   const now = new Date()
   const since = new Date(now.getTime() - FACTORY_ANGLE_DEDUPE_DAYS * 86_400_000).toISOString()
@@ -210,12 +231,23 @@ async function loadContext(
     // 同行业爆款节奏基线(只有数字)。样本不足/查询失败 = null → 选配方走原逻辑。
     rhythmHint,
   }
+  // 版本化 winner recipe(合同 5469105522 §1)+ 严格解析(R2):
+  // PM 在 ME 配置页选了 recipe → id + version 必须都存在且匹配注册,任何不合法一律 throw,
+  // evaluateSignal 外层 catch 会把 signal 收敛为 rejected(gate_data_unavailable),
+  // 而不是静默走 legacy 路径 —— 静默降级正是当前 CTS 队列走偏方向的根因。
+  let creativeRecipe: WinnerRecipe | null = null
+  const parsed = parseFactoryRecipeConfig(factoryConfig['creative_recipe'])
+  if (parsed) creativeRecipe = resolveRecipe(parsed.id)
+
   return {
     ctx,
     fullBrief: fullBrief ?? null,
     industry: (client?.industry as string | null) ?? null,
     // 出片风格:PM 在 ME 配置页填的,建单时注入 brief 下发给 worker(见 persistDecision)
     creativeProfile: compactCreativeProfile(projectCreativeProfile(factoryConfig['creative_profile'])),
+    creativeRecipe,
+    verifiedCta: parseVerifiedCta(factoryConfig['verified_cta']),
+    sourceImagePool,
   }
 }
 
@@ -246,6 +278,11 @@ function parseVerifiedOffer(raw: unknown): VerifiedOffer | null {
   return offer.price_from || offer.was_price || offer.discount || offer.offer_expiry ? offer : null
 }
 
+type PersistOutcome =
+  | { outcome: 'accepted'; work_order_id: string }
+  | { outcome: 'rejected'; reject_reason: string }
+  | { outcome: 'expired' }
+
 async function persistDecision(
   signal: DemandSignal,
   decision: Decision,
@@ -254,23 +291,93 @@ async function persistDecision(
   creativeProfile: Record<string, unknown>,
   goal: GateContext['goal'],
   clientOffer: VerifiedOffer | null, // B4:客户级持久 offer,signal 无 override 时用它
-): Promise<string | null> {
+  creativeRecipe: WinnerRecipe | null,
+  verifiedCta: RecipeCtaFacts | null,
+  sourceImagePool: readonly string[],
+): Promise<PersistOutcome> {
   if (decision.outcome === 'expired') {
     await supabaseAdmin.from('content_demand_signals').update({ status: 'expired' }).eq('id', signal.id)
-    return null
+    return { outcome: 'expired' }
   }
   if (decision.outcome === 'rejected') {
+    const reason = decision.detail ? `${decision.reason}: ${decision.detail}` : decision.reason
     await supabaseAdmin
       .from('content_demand_signals')
-      .update({
-        status: 'rejected',
-        reject_reason: decision.detail ? `${decision.reason}: ${decision.detail}` : decision.reason,
-      })
+      .update({ status: 'rejected', reject_reason: reason })
       .eq('id', signal.id)
-    return null
+    return { outcome: 'rejected', reject_reason: reason }
   }
 
   const draft = decision.workOrder
+
+  // R5:recipe 路径的完整可执行 brief 必须在 insert 之前构造完毕。缺源图 = 用不了 recipe,
+  // typed rejection(不再 accepted with undefined work_order_id · R6)。
+  let recipeBriefApplied: Record<string, unknown> | null = null
+  if (creativeRecipe) {
+    const picked = pickRecipeSourcesOrReject(sourceImagePool, creativeRecipe)
+    if ('rejection' in picked) {
+      await supabaseAdmin
+        .from('content_demand_signals')
+        .update({ status: 'rejected', reject_reason: picked.rejection })
+        .eq('id', signal.id)
+      return { outcome: 'rejected', reject_reason: picked.rejection }
+    }
+    let visualDirective: string | null = null
+    let visualPlan: ViralVisualPlan | null = null
+    const contentGoal = detectContentGoal({
+      offer: (signal.evidence?.['verified_offer'] ? 'offer' : null) ?? clientOffer?.price_from ?? null,
+      campaign_angle: draft.angle,
+      channel_goal: goal?.primary_metric_key ?? null,
+    })
+    try {
+      if (industry) {
+        if (creativeRecipe.requires_viral_visual_plan) {
+          visualPlan = await getViralVisualPlan(industry, contentGoal, {
+            campaignAngle: draft.angle,
+            maxContinuousI2vSeconds: Math.max(...creativeRecipe.segments.map((segment) => segment.duration_hint_s)),
+            overlayRoles: creativeRecipe.text_overlay_roles,
+          })
+          visualDirective = visualPlan?.prompt_directive ?? null
+        } else {
+          visualDirective = await getViralClipDirective(industry, contentGoal)
+        }
+      }
+    } catch (e) {
+      console.error(`[factory] recipe visual director failed (signal ${signal.id}): ${e instanceof Error ? e.message : e}`)
+    }
+    if (creativeRecipe.requires_viral_visual_plan && !visualPlan) {
+      throw new RecipeConfigError(
+        `creative_recipe "${creativeRecipe.id}" requires an auditable Viral V2 visual plan; no compatible references were available`,
+      )
+    }
+    // 生成结构化 recipe copy 的兜底:evaluate 里没有专用生成器,用 angle 造一句 hook + 一句 CTA;
+    // 若后端 A2 生成了 fullBrief 相关文案,worker 完成后 receipt 会用真实播放的 hookText/ctaText。
+    const copy = buildRecipeCopyFromAngle(draft.angle, creativeRecipe)
+    recipeBriefApplied = buildFullRecipeBrief({
+      recipe: creativeRecipe,
+      angle: draft.angle,
+      sourceImageUrl: picked.sources[0],
+      sourceImageUrls: picked.sources,
+      visualDirective,
+      visualPlan,
+      creativeProfile,
+      copy,
+      ctaFacts: verifiedCta,
+      // R5:signal.id 是 pre-insert deterministic namespace(evaluate 拿到 signal 时它已存在),
+      // idempotency key 一次落库就已经稳定,不再走「insert queued → patch」竞态窗口。
+      keyNamespace: `sig_${signal.id}`,
+      aspectRatio: '9:16',
+      notes: '',
+      attribution: goal ? { goal_id: draft.goal_id, expected_metric: goal.primary_metric_key } : null,
+      clipUnitCostUsd: FACTORY_CLIP_UNIT_COST_USD,
+      budgetCapUsd: FACTORY_ORDER_BUDGET_CAP_USD,
+    })
+    draft.brief = { ...draft.brief, ...recipeBriefApplied }
+    draft.clip_links = []
+    // R5 defense-in-depth:即便 buildFullRecipeBrief 未来被绕过,只要走这条路径就必须 pass。
+    // 任何 claim-critical 字段缺失都会 throw,外层 catch → 信号 rejected(recipe_config_invalid)。
+    assertRecipeBriefComplete(draft.brief, creativeRecipe)
+  }
   const { clip_links, ...orderFields } = draft
   const { data: order, error: insErr } = await supabaseAdmin
     .from('content_work_orders')
@@ -281,69 +388,55 @@ async function persistDecision(
 
   // insert 之后任何一步失败 → 工单收敛为 failed,不留孤儿 queued 单被 worker 烧钱(魏征 M1-F4)
   try {
-    // A2 脑子收回后端:按 master_brief 品牌接地生成广告文案存进 brief.copy,worker 不再自己写。
-    // best-effort:失败(LLM/查 brief)不阻塞建单,copy 缺省时 worker 有品牌无关兜底。
-    let copy: AdCopy | undefined
-    try {
-      if (fullBrief) {
-        copy = await generateAdCopy({
-          brief: fullBrief,
-          angle: draft.angle,
-          rationale: draft.rationale_one_liner,
-          segmentRoles: draft.brief.segments.map((s) => s.role),
-          expectedMetric: goal?.primary_metric_key, // B3:CTA 导向圈定 Goal 北极星(诸葛亮硬验收)
-          // B4:单条活动 signal.evidence 可覆盖;否则用客户级持久 offer
-          verifiedOffer: parseVerifiedOffer(signal.evidence?.['verified_offer']) ?? clientOffer,
-        })
+    // R5:recipe 路径 brief 已在 insert 之前 shape-完整(deterministic idempotency key = sig_<signal.id>),
+    // 不需要 post-insert patch;narrative-beats / viral directive / A2 copy 都是 legacy 分支的东西。
+    if (!recipeBriefApplied) {
+      // A2:按 master_brief 品牌接地生成广告文案;best-effort。
+      let copy: AdCopy | undefined
+      try {
+        if (fullBrief) {
+          copy = await generateAdCopy({
+            brief: fullBrief,
+            angle: draft.angle,
+            rationale: draft.rationale_one_liner,
+            segmentRoles: draft.brief.segments.map((s) => s.role),
+            expectedMetric: goal?.primary_metric_key,
+            verifiedOffer: parseVerifiedOffer(signal.evidence?.['verified_offer']) ?? clientOffer,
+          })
+        }
+      } catch (e) {
+        console.error(`[factory] copy gen failed (signal ${signal.id}): ${e instanceof Error ? e.message : e}`)
       }
-    } catch (e) {
-      console.error(`[factory] copy gen failed (signal ${signal.id}): ${e instanceof Error ? e.message : e}`)
-    }
 
-    // B0 归因桩:每条产出天生挂对 Goal + 北极星指标(goal 在 accepted 分支必非 null,gate1 已过)。
-    const attribution = goal
-      ? { goal_id: draft.goal_id, expected_metric: goal.primary_metric_key }
-      : undefined
-    // 爆款配方接回工厂:按客户行业查参考库,把「开场钩子 + 高频手法」揉进每个 clip 的
-    // 生成提示词。爆款库(606 条)本就是为工厂做的,但一直只挂在 reels 那条产线上,
-    // 工厂选角度/写提示词时根本不查 —— 有配方,厨房没用。
-    // best-effort:查不到参考(行业为空/该行业无样本)就保持原提示词不变,绝不阻塞建单。
-    let clipDirective: string | null = null
-    try {
-      if (industry) {
-        clipDirective = await getViralClipDirective(
-          industry,
-          // 有真促销数字 = 走转化向的参考;否则品牌向。复用 reels 那套判定,不另立规则。
-          detectContentGoal({
-            offer: (signal.evidence?.['verified_offer'] ? 'offer' : null) ?? clientOffer?.price_from ?? null,
-            campaign_angle: draft.angle,
-            channel_goal: goal?.primary_metric_key ?? null,
-          }),
-        )
+      const attribution = goal
+        ? { goal_id: draft.goal_id, expected_metric: goal.primary_metric_key }
+        : undefined
+
+      let clipDirective: string | null = null
+      try {
+        if (industry) {
+          clipDirective = await getViralClipDirective(
+            industry,
+            detectContentGoal({
+              offer: (signal.evidence?.['verified_offer'] ? 'offer' : null) ?? clientOffer?.price_from ?? null,
+              campaign_angle: draft.angle,
+              channel_goal: goal?.primary_metric_key ?? null,
+            }),
+          )
+        }
+      } catch (e) {
+        console.error(`[factory] viral directive failed (signal ${signal.id}): ${e instanceof Error ? e.message : e}`)
       }
-    } catch (e) {
-      console.error(`[factory] viral directive failed (signal ${signal.id}): ${e instanceof Error ? e.message : e}`)
-    }
 
-    // idempotency_key 占位符 → 真实工单 id(魏征 M1-F3:跨工单 key 碰撞会让 worker 张冠李戴复用 clip)
-    const needsIdemResolve = draft.brief.clip_generation_plan.length > 0
-    const resolvedBrief = {
-      ...draft.brief,
-      ...(needsIdemResolve
-        ? {
-            clip_generation_plan: draft.brief.clip_generation_plan.map((p, i) => ({
-              ...p,
-              idempotency_key: p.idempotency_key.replace('{work_order_id}', order.id),
-              // worker 把 prompt_hint 原样喂给 i2v 模型,所以配方必须落在这里才真正生效。
-              // ⚠️ 「开场钩子」那半句只给第一段:拼给每一段的话,中段和结尾也会被要求
-              // 拍成开场镜头,一条片子里出现三四个开场感画面,节奏直接毁掉。
-              //
-              // 🔴 叙事位置插在风格**前面**(PM 2026-08-03 看片反馈:结尾出现施工画面,
-              //    而前一镜已经是装好的成品)。真因是每个镜头独立瞎编 —— 提示词从没说过
-              //    「你是第几拍、前面演过什么」,而风格里那句 process-reveal 正是把
-              //    施工画面带进结尾的元凶。让约束先说话。
-              prompt_hint: (() => {
-                const withBeat = buildPromptHint({
+      const needsIdemResolve = draft.brief.clip_generation_plan.length > 0
+      const resolvedBrief = {
+        ...draft.brief,
+        ...(needsIdemResolve
+          ? {
+              clip_generation_plan: draft.brief.clip_generation_plan.map((p, i) => ({
+                ...p,
+                idempotency_key: p.idempotency_key.replace('{work_order_id}', order.id),
+                prompt_hint: buildPromptHint({
                   base: p.prompt_hint,
                   role: p.segment_role,
                   index: i,
@@ -351,24 +444,21 @@ async function persistDecision(
                   styleDirective: clipDirective
                     ? (i === 0 ? clipDirective : stripHookClause(clipDirective))
                     : null,
-                })
-                return withBeat
-              })(),
-            })),
-          }
-        : {}),
-      ...(copy ? { copy } : {}),
-      ...(attribution ? { attribution } : {}),
-      ...(clipDirective ? { viral_style_directive: clipDirective } : {}),
-      // 风格下发:worker 优先用它,本地 factory_profile.json 仅在这里为空时兜底。
-      // 空对象不写 —— 否则 worker 会以为 ME 显式要求「全用引擎默认」,把本地配置也盖掉。
-      ...(Object.keys(creativeProfile).length > 0 ? { creative_profile: creativeProfile } : {}),
+                }),
+              })),
+            }
+          : {}),
+        ...(copy ? { copy } : {}),
+        ...(attribution ? { attribution } : {}),
+        ...(clipDirective ? { viral_style_directive: clipDirective } : {}),
+        ...(Object.keys(creativeProfile).length > 0 ? { creative_profile: creativeProfile } : {}),
+      }
+      const { error: upErr } = await supabaseAdmin
+        .from('content_work_orders')
+        .update({ brief: resolvedBrief })
+        .eq('id', order.id)
+      if (upErr) throw new Error(`brief resolve/copy/attribution update failed: ${upErr.message}`)
     }
-    const { error: upErr } = await supabaseAdmin
-      .from('content_work_orders')
-      .update({ brief: resolvedBrief })
-      .eq('id', order.id)
-    if (upErr) throw new Error(`brief resolve/copy/attribution update failed: ${upErr.message}`)
 
     if (clip_links.length > 0) {
       const { error: linkErr } = await supabaseAdmin
@@ -390,7 +480,28 @@ async function persistDecision(
     throw e
   }
 
-  return order.id
+  return { outcome: 'accepted', work_order_id: order.id }
+}
+
+/**
+ * evaluate-side 兜底 copy 生成:后端 A2 生成器不吃 recipe hook/CTA 格式,先给出保底
+ * 结构化文案(短 hook + 独立 CTA),失败/超限一律由 validateRecipeCopy 抛,不吞不缩。
+ * 未来接入 recipe-aware LLM 生成器时替换这里即可。
+ */
+function buildRecipeCopyFromAngle(
+  angle: string,
+  recipe: WinnerRecipe,
+): RecipeCopyInput | MulticutRecipeCopyInput {
+  const raw = typeof angle === 'string' && angle.trim() ? angle.trim() : 'brand story'
+  const allWords = raw.match(/[A-Za-z][A-Za-z'’-]*/g) ?? []
+  const hook = allWords.slice(0, 6).join(' ') || raw.slice(0, 20)
+  if (recipe.text_overlay_roles?.includes('middle')) {
+    const candidate = allWords.slice(6, 12).join(' ') || 'See the story unfold'
+    const middle = candidate.toLowerCase() === hook.toLowerCase() ? 'See the story unfold' : candidate
+    return { hook, middle }
+  }
+  // hook 与 CTA 必须不同(validateRecipeCopy 强约束)
+  return { hook, cta: 'Learn more' }
 }
 
 export interface EvaluateResult {
@@ -414,24 +525,34 @@ export async function evaluateSignal(signalId: string): Promise<EvaluateResult> 
 
     await supabaseAdmin.from('content_demand_signals').update({ status: 'evaluating' }).eq('id', signalId)
 
-    const { ctx, fullBrief, industry, creativeProfile } = await loadContext(signal as DemandSignal)
+    const { ctx, fullBrief, industry, creativeProfile, creativeRecipe, verifiedCta, sourceImagePool } =
+      await loadContext(signal as DemandSignal)
     const decision = decideSignal(ctx)
-    const orderId = await persistDecision(signal as DemandSignal, decision, fullBrief, industry, creativeProfile, ctx.goal, ctx.verifiedOffer)
-
-    if (decision.outcome === 'accepted') {
-      return { outcome: 'accepted', work_order_id: orderId ?? undefined }
+    const persisted = await persistDecision(
+      signal as DemandSignal,
+      decision,
+      fullBrief,
+      industry,
+      creativeProfile,
+      ctx.goal,
+      ctx.verifiedOffer,
+      creativeRecipe,
+      verifiedCta,
+      sourceImagePool,
+    )
+    if (persisted.outcome === 'accepted') {
+      return { outcome: 'accepted', work_order_id: persisted.work_order_id }
     }
-    if (decision.outcome === 'rejected') {
-      return {
-        outcome: 'rejected',
-        reject_reason: decision.detail ? `${decision.reason}: ${decision.detail}` : decision.reason,
-      }
+    if (persisted.outcome === 'rejected') {
+      return { outcome: 'rejected', reject_reason: persisted.reject_reason }
     }
     return { outcome: 'expired' }
   } catch (e) {
-    // fail-closed(护栏 4):装配/落库异常一律 reject,绝不放行;收敛动作本身失败也不上抛
+    // fail-closed(护栏 4):装配/落库异常一律 reject,绝不放行;收敛动作本身失败也不上抛。
+    // recipe 配置非法(R2)也走这里 → 出片队列不会静默走 legacy 分支。
     const msg = e instanceof Error ? e.message : String(e)
-    const reason = `gate_data_unavailable: ${msg.slice(0, 300)}`
+    const prefix = e instanceof RecipeConfigError ? 'recipe_config_invalid' : 'gate_data_unavailable'
+    const reason = `${prefix}: ${msg.slice(0, 300)}`
     try {
       await supabaseAdmin
         .from('content_demand_signals')

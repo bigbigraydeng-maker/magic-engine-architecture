@@ -123,6 +123,8 @@ export interface TailorMadeRecord {
   trip_title: string;
   status: TailorMadeStatus;
   payload: TailorMadeItinerary;
+  /** 画册（选配）。null = 这份报价单还没做画册。见 ./brochure-types */
+  brochure: import('./brochure-types').TailorMadeBrochure | null;
   consultant_name: string | null;
   consultant_email: string | null;
   sent_at: string | null;
@@ -131,7 +133,7 @@ export interface TailorMadeRecord {
 }
 
 /** 列表页用的精简行（不带 payload，避免列表接口传一堆 JSON） */
-export type TailorMadeSummary = Omit<TailorMadeRecord, 'payload'>;
+export type TailorMadeSummary = Omit<TailorMadeRecord, 'payload' | 'brochure'>;
 
 export const TAILOR_MADE_STATUS_LABEL: Record<TailorMadeStatus, string> = {
   draft: '草稿',

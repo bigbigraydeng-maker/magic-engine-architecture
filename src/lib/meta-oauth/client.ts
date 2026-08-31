@@ -46,6 +46,20 @@ export const META_PAGE_SCOPES = [
   // 2026-08-04 讲课片发布就卡在「读得到、发不出去」。
   // 已经连过的客户(CTS/Roman)只做收件箱同步,不受影响;要发内容的客户重新点一次「连接 Meta」即可。
   'pages_manage_posts',
+  // 读即时表单里的潜在客户必须有这一条。没有它,`meta-leads-sync` 每小时照跑,
+  // 但 leadgen_forms 一个表单都列不出来 —— 2026-08-21 起 4 个客户(CTS/Roman/
+  // Magic Lab Class/NZCPE)全线断供 9 天,CTS 一家就漏掉 45 条线索、NZ$736 白花。
+  // `src/lib/meta/lead-forms.ts` 的注释 2026-07-30 就预见过「不保证已经有」,
+  // 但这条权限一直没进过本清单,所以点「连接 Meta」永远修不好线索同步。
+  // 已经连过的客户要重新点一次「连接 Meta」才能拿到它。
+  'leads_retrieval',
+  // 列出主页的即时表单必须有这一条。`lead-forms.ts` 的注释说 `pages_show_list`
+  // 或 `pages_manage_ads` 二选一即可 —— **那句是错的**。2026-08-30 加完
+  // leads_retrieval 重新授权后，生产 cron 报的仍是一字不变的
+  // `(#200) Requires pages_manage_ads permission to manage the object`,
+  // 而当时 token 已经带着 pages_show_list。Graph 要的就是这一条,没有替代品。
+  // 教训:注释与生产报错冲突时,信报错。
+  'pages_manage_ads',
 ] as const
 
 /**
