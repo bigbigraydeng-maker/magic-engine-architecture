@@ -8,6 +8,12 @@ import { createHash } from 'node:crypto'
 export const RECIPE_ID = 'single_image_i2v_pullback_12s'
 export const RECIPE_VERSION = 1
 
+// P21.J.M2.v2 — CTS 视觉反馈:三段 I2V(hook/middle/cta)+ 端卡,展示总时长 8.5-9.5s。
+// provider 出片仍按 5s 生成(gen_duration_s),装配层用 duration_hint_s 裁剪展示时长,
+// 两者分开表达,plan/receipt 两侧分别按各自口径校验(不许用展示时长冒充生成时长,反之亦然)。
+export const RECIPE_ID_MULTICUT = 'single_image_i2v_multicut_9s'
+export const RECIPE_VERSION_MULTICUT = 1
+
 /**
  * 权威 recipe descriptor。
  * final duration = 2*5 + 2.7 - 2*0.35 = 12.0(精确到 recipe max_final_dur,无 renderer 兜底裁剪)。
@@ -50,6 +56,60 @@ export const WINNER_RECIPES = Object.freeze({
     min_bgm_input_loudness_lufs: -50,
     // cta → endcard 的过渡（renderer 支持;必须与 segments[1].transition 同名以保证 receipt 真实）
     endcard_transition: 'dissolve',
+  }),
+  [RECIPE_ID_MULTICUT]: Object.freeze({
+    id: RECIPE_ID_MULTICUT,
+    version: RECIPE_VERSION_MULTICUT,
+    label: '单图 · 三镜头速切 9 秒',
+    segments: Object.freeze([
+      Object.freeze({
+        role: 'hook',
+        duration_hint_s: 2.6,
+        gen_duration_s: 5.0,
+        motion_type: 'push_in',
+        camera_action: 'focus / push-in cinematic close-up',
+        transition: 'fade',
+        prompt_keyword: 'push-in',
+      }),
+      Object.freeze({
+        role: 'middle',
+        duration_hint_s: 2.6,
+        gen_duration_s: 5.0,
+        // renderer/provider 只认 push_in / pull_back;没有 'drift' 这个受支持的运镜,
+        // 不发明契约没有的值 —— 用 pull_back 表达"缓慢揭示"语义。
+        motion_type: 'pull_back',
+        camera_action: 'slow reveal / pull-back cinematic drift',
+        transition: 'fade',
+        prompt_keyword: 'pull-back',
+      }),
+      Object.freeze({
+        role: 'cta',
+        duration_hint_s: 2.6,
+        gen_duration_s: 5.0,
+        motion_type: 'pull_back',
+        camera_action: 'pull-back / reveal wide cinematic shot',
+        transition: 'dissolve',
+        prompt_keyword: 'pull-back',
+      }),
+    ]),
+    // 3*2.6 + 2.2 - 3*0.3 = 9.1(落 8.5-9.5 展示窗口中段,各段展示 2.6s ≤4.0s 且落 2.0-3.2s 偏好区间)
+    endcard_dur: 2.2,
+    xfade: 0.3,
+    min_final_dur: 8.9,
+    max_final_dur: 9.3,
+    hook_max_words_en: 6,
+    hook_max_chars_cjk: 12,
+    caption_mode: 'short_big',
+    tts_enabled: false,
+    kenburns: false,
+    min_loudness_lufs: -55,
+    min_bgm_input_loudness_lufs: -50,
+    endcard_transition: 'dissolve',
+    // 只有 hook / middle 段真实带可见文字叠层;cta 段是纯运镜,不重复 brand hook。
+    text_overlay_roles: Object.freeze(['hook', 'middle']),
+    // CTA 端卡必须来自客户已验证事实(factory_config.verified_cta 风格约定),不得硬编任何客户数字。
+    cta_facts_required: Object.freeze(['phone', 'url', 'departure']),
+    cta_facts_optional: Object.freeze(['price']),
   }),
 })
 
@@ -238,15 +298,31 @@ export function assertRecipeBriefComplete(brief, recipe) {
     )
   }
   const copy = b.copy
-  const hookOk = copy && typeof copy.hook === 'string' && copy.hook.trim().length > 0
-  const ctaOk = copy && typeof copy.cta === 'string' && copy.cta.trim().length > 0
-  if (!hookOk || !ctaOk) {
-    throw new Error(
-      'WINNER_RECIPE_PLAN_INVALID: brief.copy.hook / cta missing (recipe brief must be shape-complete before insert)',
-    )
+  const usesMulticutCopy = Array.isArray(recipe.text_overlay_roles) && recipe.text_overlay_roles.includes('middle')
+  if (usesMulticutCopy) {
+    const hookOk = copy && typeof copy.hook === 'string' && copy.hook.trim().length > 0
+    const middleOk = copy && typeof copy.middle === 'string' && copy.middle.trim().length > 0
+    if (!hookOk || !middleOk) {
+      throw new Error(
+        'WINNER_RECIPE_PLAN_INVALID: brief.copy.hook / middle missing (recipe brief must be shape-complete before insert)',
+      )
+    }
+  } else {
+    const hookOk = copy && typeof copy.hook === 'string' && copy.hook.trim().length > 0
+    const ctaOk = copy && typeof copy.cta === 'string' && copy.cta.trim().length > 0
+    if (!hookOk || !ctaOk) {
+      throw new Error(
+        'WINNER_RECIPE_PLAN_INVALID: brief.copy.hook / cta missing (recipe brief must be shape-complete before insert)',
+      )
+    }
   }
   if (!('creative_profile' in b) || typeof b.creative_profile !== 'object' || b.creative_profile === null) {
     throw new Error('WINNER_RECIPE_PLAN_INVALID: brief.creative_profile missing')
+  }
+  // 客户已验证 CTA 事实(phone/url/departure 必填、price 可选)必须在任何 provider 调用之前齐全;
+  // 与 factory_config.verified_offer 同一惯例:client-scoped、缺即拒,不发明兜底数字。
+  if (Array.isArray(recipe.cta_facts_required) && recipe.cta_facts_required.length > 0) {
+    assertRecipeCtaFacts(b.cta_facts, recipe)
   }
   assertRecipePlanShape(brief, recipe)
   const plan = Array.isArray(b.clip_generation_plan) ? b.clip_generation_plan : []
@@ -358,6 +434,40 @@ export function assertRecipeProfileConstraints(profile, recipe) {
   }
 }
 
+/**
+ * P21.J.M2.v2 CTA 端卡真事实闸:required 全部非空字符串才通过,否则 fail-closed
+ * (WINNER_RECIPE_CTA_FACTS_MISSING)。不接受硬编数字/网址进 shared runtime——
+ * 只接受由 client-scoped brief.cta_facts(源头 factory_config.verified_cta 惯例)携带的值。
+ */
+export function assertRecipeCtaFacts(rawFacts, recipe) {
+  const required = Array.isArray(recipe.cta_facts_required) ? recipe.cta_facts_required : []
+  if (required.length === 0) return null
+  const facts = rawFacts && typeof rawFacts === 'object' ? rawFacts : {}
+  const out = {}
+  for (const key of required) {
+    const v = facts[key]
+    if (typeof v !== 'string' || v.trim().length === 0) {
+      throw new Error(
+        `WINNER_RECIPE_CTA_FACTS_MISSING: required CTA fact "${key}" missing/empty for recipe "${recipe.id}"`,
+      )
+    }
+    out[key] = v.trim()
+  }
+  for (const key of (recipe.cta_facts_optional || [])) {
+    const v = facts[key]
+    if (typeof v === 'string' && v.trim().length > 0) out[key] = v.trim()
+  }
+  return out
+}
+
+/** 端卡文案:required 字段按声明顺序拼接,optional(如 price)只在有值时追加。确定性可测。 */
+export function formatCtaFactsLine(facts, recipe) {
+  const parts = []
+  for (const key of (recipe.cta_facts_required || [])) if (facts?.[key]) parts.push(String(facts[key]))
+  for (const key of (recipe.cta_facts_optional || [])) if (facts?.[key]) parts.push(String(facts[key]))
+  return parts.join(' · ')
+}
+
 // ── 结构化文案(R9) ───────────────────────────────────────────────────────────
 
 const WORKER_EMOJI_RE = /[\p{Extended_Pictographic}]/u
@@ -376,21 +486,41 @@ function workerCountGraphemes(text) {
   return Array.from(text).length
 }
 
+function pickCopyField(v, name) {
+  if (typeof v !== 'string') throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} must be string`)
+  const t = v.trim()
+  if (t.length === 0) throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} empty`)
+  if (/[\r\n]/.test(t)) throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} must be single-line`)
+  if (WORKER_EMOJI_RE.test(t)) throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} contains emoji`)
+  if (/^[\s\p{P}\p{S}\d]+$/u.test(t)) {
+    throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} numeric/punct-only`)
+  }
+  return t
+}
+
+function assertCopyTextWithinLimits(text, name, recipe) {
+  if (workerIsCjk(text)) {
+    const n = workerCountGraphemes(text)
+    if (n > recipe.hook_max_chars_cjk) {
+      throw new Error(
+        `WINNER_RECIPE_COPY_INVALID: ${name} exceeds ${recipe.hook_max_chars_cjk} CJK graphemes ("${text}")`,
+      )
+    }
+  } else {
+    const w = (text.match(/[A-Za-z][A-Za-z'’-]*/g) ?? []).length
+    if (w > recipe.hook_max_words_en) {
+      throw new Error(
+        `WINNER_RECIPE_COPY_INVALID: ${name} exceeds ${recipe.hook_max_words_en} EN words ("${text}")`,
+      )
+    }
+  }
+}
+
 export function validateRecipeCopy(input, recipe) {
   if (!input || typeof input !== 'object') {
     throw new Error('WINNER_RECIPE_COPY_INVALID: copy missing')
   }
-  const pick = (v, name) => {
-    if (typeof v !== 'string') throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} must be string`)
-    const t = v.trim()
-    if (t.length === 0) throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} empty`)
-    if (/[\r\n]/.test(t)) throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} must be single-line`)
-    if (WORKER_EMOJI_RE.test(t)) throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} contains emoji`)
-    if (/^[\s\p{P}\p{S}\d]+$/u.test(t)) {
-      throw new Error(`WINNER_RECIPE_COPY_INVALID: ${name} numeric/punct-only`)
-    }
-    return t
-  }
+  const pick = pickCopyField
   const hook = pick(input.hook, 'hook')
   const cta = pick(input.cta, 'cta')
   if (hook.toLowerCase() === cta.toLowerCase()) {
@@ -421,6 +551,33 @@ export function validateRecipeCopy(input, recipe) {
     }
   }
   return { hook, cta }
+}
+
+/**
+ * multicut(v2)专用文案校验:hook + middle(不再有自由文案 cta —— 端卡改由
+ * assertRecipeCtaFacts 的已验证事实生成)。middle 禁止复读 brand hook(要求 #3)。
+ */
+export function validateMulticutCopy(input, recipe) {
+  if (!input || typeof input !== 'object') {
+    throw new Error('WINNER_RECIPE_COPY_INVALID: copy missing')
+  }
+  const hook = pickCopyField(input.hook, 'hook')
+  const middle = pickCopyField(input.middle, 'middle')
+  if (hook.toLowerCase() === middle.toLowerCase()) {
+    throw new Error('WINNER_RECIPE_COPY_INVALID: middle must not repeat the brand hook')
+  }
+  if (Array.isArray(input.segments) && input.segments.length > 0) {
+    throw new Error('WINNER_RECIPE_COPY_INVALID: recipe forbids segment-array copy')
+  }
+  const endcard = input.endcard
+  if (endcard && (endcard.vo != null || endcard.offer != null || endcard.url != null || endcard.cta != null)) {
+    throw new Error(
+      'WINNER_RECIPE_COPY_INVALID: recipe forbids endcard extras (cta/vo/offer/url) — endcard must come from verified CTA facts',
+    )
+  }
+  assertCopyTextWithinLimits(hook, 'hook', recipe)
+  assertCopyTextWithinLimits(middle, 'middle', recipe)
+  return { hook, middle }
 }
 
 // ── BGM(R10):music_library.json + profile.music_pool + 响度探测 ─────────────
@@ -675,6 +832,8 @@ export function buildRecipeAssembleConfig({
   localPaths,
   hookText,
   ctaText,
+  captionsByRole,
+  ctaFacts,
   bgmAbsPath,
   brandKit,
   outputPath,
@@ -685,15 +844,22 @@ export function buildRecipeAssembleConfig({
       `WINNER_RECIPE_ASSEMBLE_INVALID: localPaths count ${localPaths?.length} != recipe segments ${recipe.segments.length}`,
     )
   }
+  // v1 默认只有 hook 带字幕;v2(multicut)recipe.text_overlay_roles=['hook','middle'] → 两段都真实
+  // 落进 assemble 的 segment.caption,渲染器按段的 ss/dur 窗口铺字,不是只挂在 metadata 里。
+  const overlayRoles = Array.isArray(recipe.text_overlay_roles) ? recipe.text_overlay_roles : ['hook']
+  const captions = captionsByRole || (hookText != null ? { hook: hookText } : {})
   const segments = recipe.segments.map((s, i) => ({
     src: localPaths[i],
     ss: 0,
     dur: s.duration_hint_s,
     motion_type: s.motion_type,
-    ...(i === 0 ? { caption: hookText } : {}),
+    ...(overlayRoles.includes(s.role) && captions[s.role] ? { caption: captions[s.role] } : {}),
     // 首段无「入场 transition」;后续段的 transition = 上一段的 out（真实入场切法）
     ...(i === 0 ? {} : { transition: recipe.segments[i - 1].transition }),
   }))
+  // v2:端卡文案改由已验证 CTA 事实(phone/url/departure[/price])拼出,不接受自由文案冒充。
+  const hasCtaFacts = Array.isArray(recipe.cta_facts_required) && recipe.cta_facts_required.length > 0
+  const endcardCta = hasCtaFacts ? formatCtaFactsLine(ctaFacts || {}, recipe) : ctaText
   return {
     output: outputPath,
     brand_kit: brandKit,
@@ -706,16 +872,27 @@ export function buildRecipeAssembleConfig({
     ...(profile?.endcard_panel != null ? { endcard_panel: profile.endcard_panel } : {}),
     segments,
     // endcard.transition = renderer 支持的入场切法(=最后一段 out 的同名值)
-    endcard: { cta: ctaText, transition: recipe.endcard_transition },
+    endcard: {
+      cta: endcardCta,
+      transition: recipe.endcard_transition,
+      ...(hasCtaFacts ? { facts: ctaFacts || {} } : {}),
+    },
     recipe: { id: recipe.id, version: recipe.version },
   }
 }
 
 /**
  * receipt payload:reflect **真实探测** 数据,不再上传 raw brief.segments。
- * 每段带 provider evidence + actual_duration_s;音乐用 portable id;final 用探测值。
+ * 每段带 provider evidence + actual_duration_s(对齐 provider 生成时长,非展示裁剪时长);
+ * 音乐用 portable id;final 用探测值。
  */
-export function buildExecutedReceipt({ recipe, hookText, ctaText, sourceImageUrl, executed, music, final }) {
+export function buildExecutedReceipt({
+  recipe, hookText, ctaText, captionsByRole, ctaFacts, sourceImageUrl, executed, music, final,
+}) {
+  const overlayRoles = Array.isArray(recipe.text_overlay_roles) ? recipe.text_overlay_roles : ['hook']
+  const captions = captionsByRole || (hookText != null ? { hook: hookText } : {})
+  const hasCtaFacts = Array.isArray(recipe.cta_facts_required) && recipe.cta_facts_required.length > 0
+  const endcardCta = hasCtaFacts ? formatCtaFactsLine(ctaFacts || {}, recipe) : ctaText
   return {
     recipe: { id: recipe.id, version: recipe.version },
     motion: false,
@@ -723,7 +900,9 @@ export function buildExecutedReceipt({ recipe, hookText, ctaText, sourceImageUrl
     segments: recipe.segments.map((s, i) => ({
       role: s.role,
       planned_duration_s: s.duration_hint_s,
-      actual_duration_s: executed[i]?.actual_duration_s ?? s.duration_hint_s,
+      // provider 生成时长优先(gen_duration_s);legacy recipe 没这字段则退回展示时长(v1 两者相等)。
+      gen_duration_s: s.gen_duration_s ?? s.duration_hint_s,
+      actual_duration_s: executed[i]?.actual_duration_s ?? (s.gen_duration_s ?? s.duration_hint_s),
       motion_type: s.motion_type,
       camera_action: s.camera_action,
       transition_out: s.transition,
@@ -733,13 +912,14 @@ export function buildExecutedReceipt({ recipe, hookText, ctaText, sourceImageUrl
         name: executed[i]?.provider ?? 'muapi',
         request_id: executed[i]?.request_id ?? '',
       },
-      caption: i === 0 ? hookText : '',
+      caption: overlayRoles.includes(s.role) ? (captions[s.role] || '') : '',
     })),
     endcard: {
       planned_duration_s: recipe.endcard_dur,
-      cta: ctaText,
+      cta: endcardCta,
       // blocker 6:receipt 真实反映 assemble config 里的入场切法（不许声称"没用过"的过渡）
       transition_in: recipe.endcard_transition,
+      ...(hasCtaFacts ? { facts: ctaFacts || {} } : {}),
     },
     music: { id: music.portableId, source: music.source, loudness_lufs: music.loudnessLufs },
     xfade: recipe.xfade,
@@ -747,9 +927,14 @@ export function buildExecutedReceipt({ recipe, hookText, ctaText, sourceImageUrl
   }
 }
 
-/** SRT 只对 hook 段出一条字幕。 */
-export function buildExecutedSrt({ recipe, hookText }) {
-  const dur = recipe.segments[0].duration_hint_s
+/**
+ * SRT:对 recipe.text_overlay_roles 命中的每一段各出一条字幕,起止时间按展示时长(duration_hint_s)
+ * 累计推进(与 v1 的隐式约定一致:不补偿 xfade 重叠,只保证段间时间轴单调递增、互不重叠)。
+ * v1(未声明 text_overlay_roles)行为不变:只对 hook 段出一条,签名向后兼容(hookText 仍可单传)。
+ */
+export function buildExecutedSrt({ recipe, hookText, captionsByRole }) {
+  const overlayRoles = Array.isArray(recipe.text_overlay_roles) ? recipe.text_overlay_roles : ['hook']
+  const captions = captionsByRole || (hookText != null ? { hook: hookText } : {})
   const fmt = (s) => {
     const h = String(Math.floor(s / 3600)).padStart(2, '0')
     const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0')
@@ -757,7 +942,19 @@ export function buildExecutedSrt({ recipe, hookText }) {
     const ms = String(Math.round((s % 1) * 1000)).padStart(3, '0')
     return `${h}:${m}:${ss},${ms}`
   }
-  return `1\n${fmt(0)} --> ${fmt(dur)}\n${hookText}\n\n`
+  let t = 0
+  let out = ''
+  let n = 1
+  for (let i = 0; i < recipe.segments.length; i++) {
+    const spec = recipe.segments[i]
+    const dur = spec.duration_hint_s
+    const text = overlayRoles.includes(spec.role) ? captions[spec.role] : null
+    if (text) {
+      out += `${n++}\n${fmt(t)} --> ${fmt(t + dur)}\n${text}\n\n`
+    }
+    t += dur
+  }
+  return out
 }
 
 /**
@@ -829,9 +1026,19 @@ export function assertRecipeReceipt(payload, recipe) {
     if (s.source_image_url !== firstSource) {
       fail(`receipt.segments[${i}].source_image_url must reuse first entry`)
     }
+    // v2:provider 生成时长(gen_duration_s)与展示裁剪时长(duration_hint_s)分开校验;
+    // v1 没有 gen_duration_s 字段,退回展示时长(两者相等,行为不变)。
+    const expectedActualS = typeof spec.gen_duration_s === 'number' ? spec.gen_duration_s : spec.duration_hint_s
     if (typeof s.actual_duration_s !== 'number'
-      || Math.abs(s.actual_duration_s - spec.duration_hint_s) > 0.6) {
-      fail(`receipt.segments[${i}].actual_duration_s off contract`)
+      || Math.abs(s.actual_duration_s - expectedActualS) > 0.6) {
+      fail(`receipt.segments[${i}].actual_duration_s off contract (expected ~${expectedActualS}s generated)`)
+    }
+    if (typeof spec.gen_duration_s === 'number'
+      && (typeof s.gen_duration_s !== 'number' || s.gen_duration_s !== spec.gen_duration_s)) {
+      fail(`receipt.segments[${i}].gen_duration_s expected ${spec.gen_duration_s}`)
+    }
+    if (s.planned_duration_s !== spec.duration_hint_s) {
+      fail(`receipt.segments[${i}].planned_duration_s expected ${spec.duration_hint_s} (display duration)`)
     }
     if (!s.provider
       || typeof s.provider.name !== 'string' || s.provider.name.trim().length === 0
@@ -841,6 +1048,12 @@ export function assertRecipeReceipt(payload, recipe) {
     if (s.transition_out !== spec.transition) {
       fail(`receipt.segments[${i}].transition_out expected "${spec.transition}"`)
     }
+    // 要求可见字层的段(hook/middle):receipt.caption 必须真非空,不能只在别处留痕。
+    if (Array.isArray(recipe.text_overlay_roles) && recipe.text_overlay_roles.includes(spec.role)) {
+      if (typeof s.caption !== 'string' || s.caption.trim().length === 0) {
+        fail(`receipt.segments[${i}].caption required (non-empty) for text-overlay role "${spec.role}"`)
+      }
+    }
   }
   if (!rec.endcard || rec.endcard.planned_duration_s !== recipe.endcard_dur) {
     fail('receipt.endcard.planned_duration_s mismatch')
@@ -848,6 +1061,19 @@ export function assertRecipeReceipt(payload, recipe) {
   // blocker 6:endcard.transition_in 必须 == recipe.endcard_transition
   if (rec.endcard.transition_in !== recipe.endcard_transition) {
     fail(`receipt.endcard.transition_in must equal recipe.endcard_transition (${recipe.endcard_transition})`)
+  }
+  // v2:CTA 端卡必须来自已验证客户事实,receipt 必须携带并校验,不接受空心 cta 字符串糊弄。
+  if (Array.isArray(recipe.cta_facts_required) && recipe.cta_facts_required.length > 0) {
+    const facts = rec.endcard.facts
+    if (!facts || typeof facts !== 'object') fail('receipt.endcard.facts missing (recipe requires verified CTA facts)')
+    for (const key of recipe.cta_facts_required) {
+      if (typeof facts[key] !== 'string' || facts[key].trim().length === 0) {
+        fail(`receipt.endcard.facts.${key} missing/empty (required CTA fact)`)
+      }
+    }
+    if (typeof rec.endcard.cta !== 'string' || rec.endcard.cta.trim().length === 0) {
+      fail('receipt.endcard.cta missing (must be rendered from verified CTA facts)')
+    }
   }
   if (typeof rec.xfade !== 'number' || rec.xfade !== recipe.xfade) {
     fail(`receipt.xfade must equal recipe.xfade (${recipe.xfade})`)

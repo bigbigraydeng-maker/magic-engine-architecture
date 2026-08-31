@@ -9,7 +9,7 @@ import { buildPromptHint } from './narrative-beats'
 import { supabaseAdmin } from '@/lib/supabase'
 import { FACTORY_ANGLE_DEDUPE_DAYS } from './constants'
 import { generateAdCopy } from './copy-generator'
-import { compactCreativeProfile, projectCreativeProfile } from './client-config'
+import { compactCreativeProfile, parseVerifiedCta, projectCreativeProfile } from './client-config'
 import { decideSignal, pickFactoryGoal } from './strategist'
 import { detectContentGoal, getViralClipDirective } from '@/lib/reels/viral-style-advisor'
 import {
@@ -19,6 +19,9 @@ import {
   pickRecipeSourceOrReject,
   RecipeConfigError,
   resolveRecipe,
+  type MulticutRecipeCopyInput,
+  type RecipeCopyInput,
+  type RecipeCtaFacts,
   type WinnerRecipe,
 } from './recipe'
 import { FACTORY_CLIP_UNIT_COST_USD, FACTORY_ORDER_BUDGET_CAP_USD } from './constants'
@@ -51,6 +54,7 @@ async function loadContext(
   industry: string | null
   creativeProfile: Record<string, unknown>
   creativeRecipe: WinnerRecipe | null
+  verifiedCta: RecipeCtaFacts | null
   sourceImagePool: readonly string[]
 }> {
   const now = new Date()
@@ -237,6 +241,7 @@ async function loadContext(
     // 出片风格:PM 在 ME 配置页填的,建单时注入 brief 下发给 worker(见 persistDecision)
     creativeProfile: compactCreativeProfile(projectCreativeProfile(factoryConfig['creative_profile'])),
     creativeRecipe,
+    verifiedCta: parseVerifiedCta(factoryConfig['verified_cta']),
     sourceImagePool,
   }
 }
@@ -282,6 +287,7 @@ async function persistDecision(
   goal: GateContext['goal'],
   clientOffer: VerifiedOffer | null, // B4:客户级持久 offer,signal 无 override 时用它
   creativeRecipe: WinnerRecipe | null,
+  verifiedCta: RecipeCtaFacts | null,
   sourceImagePool: readonly string[],
 ): Promise<PersistOutcome> {
   if (decision.outcome === 'expired') {
@@ -313,13 +319,14 @@ async function persistDecision(
     }
     // 生成结构化 recipe copy 的兜底:evaluate 里没有专用生成器,用 angle 造一句 hook + 一句 CTA;
     // 若后端 A2 生成了 fullBrief 相关文案,worker 完成后 receipt 会用真实播放的 hookText/ctaText。
-    const copy = buildRecipeCopyFromAngle(draft.angle)
+    const copy = buildRecipeCopyFromAngle(draft.angle, creativeRecipe)
     recipeBriefApplied = buildFullRecipeBrief({
       recipe: creativeRecipe,
       angle: draft.angle,
       sourceImageUrl: picked.source,
       creativeProfile,
       copy,
+      ctaFacts: verifiedCta,
       // R5:signal.id 是 pre-insert deterministic namespace(evaluate 拿到 signal 时它已存在),
       // idempotency key 一次落库就已经稳定,不再走「insert queued → patch」竞态窗口。
       keyNamespace: `sig_${signal.id}`,
@@ -445,11 +452,20 @@ async function persistDecision(
  * 结构化文案(短 hook + 独立 CTA),失败/超限一律由 validateRecipeCopy 抛,不吞不缩。
  * 未来接入 recipe-aware LLM 生成器时替换这里即可。
  */
-function buildRecipeCopyFromAngle(angle: string): { hook: string; cta: string } {
+function buildRecipeCopyFromAngle(
+  angle: string,
+  recipe: WinnerRecipe,
+): RecipeCopyInput | MulticutRecipeCopyInput {
   const raw = typeof angle === 'string' && angle.trim() ? angle.trim() : 'brand story'
-  const words = (raw.match(/[A-Za-z][A-Za-z'’-]*/g) ?? []).slice(0, 6).join(' ') || raw.slice(0, 20)
+  const allWords = raw.match(/[A-Za-z][A-Za-z'’-]*/g) ?? []
+  const hook = allWords.slice(0, 6).join(' ') || raw.slice(0, 20)
+  if (recipe.text_overlay_roles?.includes('middle')) {
+    const candidate = allWords.slice(6, 12).join(' ') || 'See the story unfold'
+    const middle = candidate.toLowerCase() === hook.toLowerCase() ? 'See the story unfold' : candidate
+    return { hook, middle }
+  }
   // hook 与 CTA 必须不同(validateRecipeCopy 强约束)
-  return { hook: words, cta: 'Learn more' }
+  return { hook, cta: 'Learn more' }
 }
 
 export interface EvaluateResult {
@@ -473,7 +489,7 @@ export async function evaluateSignal(signalId: string): Promise<EvaluateResult> 
 
     await supabaseAdmin.from('content_demand_signals').update({ status: 'evaluating' }).eq('id', signalId)
 
-    const { ctx, fullBrief, industry, creativeProfile, creativeRecipe, sourceImagePool } =
+    const { ctx, fullBrief, industry, creativeProfile, creativeRecipe, verifiedCta, sourceImagePool } =
       await loadContext(signal as DemandSignal)
     const decision = decideSignal(ctx)
     const persisted = await persistDecision(
@@ -485,6 +501,7 @@ export async function evaluateSignal(signalId: string): Promise<EvaluateResult> 
       ctx.goal,
       ctx.verifiedOffer,
       creativeRecipe,
+      verifiedCta,
       sourceImagePool,
     )
     if (persisted.outcome === 'accepted') {

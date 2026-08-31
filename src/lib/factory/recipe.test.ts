@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertClientRecipeIntentMatchesBrief,
+  assertRecipeCtaFacts,
   assertRecipeBriefComplete,
   assertRecipeBudget,
   assertRecipePlanShape,
@@ -21,11 +22,13 @@ import {
   RecipeConfigError,
   resolveRecipe,
   validateRecipeCopy,
+  validateMulticutCopy,
   WINNER_RECIPE_IDS,
   winnerRecipeFromBrief,
 } from './recipe'
 
 const RECIPE = resolveRecipe('single_image_i2v_pullback_12s')!
+const MULTICUT = resolveRecipe('single_image_i2v_multicut_9s')!
 const SOURCE = 'https://cdn.example.com/hero.jpg'
 const NS = 'sig_test-signal-id'
 
@@ -45,6 +48,12 @@ describe('recipe timeline formula(R1)', () => {
     const d = computeRecipeFinalDuration(RECIPE)
     expect(Math.round(d * 1000) / 1000).toBe(12.0)
     expect(d).toBeLessThanOrEqual(RECIPE.max_final_dur)
+  })
+  it('multicut = 9.1s，3 段展示均不超过 4s，provider 生成 5s', () => {
+    expect(Math.round(computeRecipeFinalDuration(MULTICUT) * 10) / 10).toBe(9.1)
+    expect(MULTICUT.segments).toHaveLength(3)
+    expect(MULTICUT.segments.every((segment) => segment.duration_hint_s <= 4)).toBe(true)
+    expect(MULTICUT.segments.every((segment) => segment.gen_duration_s === 5)).toBe(true)
   })
   it('recipe max_final_dur = 12.0', () => {
     expect(RECIPE.max_final_dur).toBe(12.0)
@@ -182,6 +191,49 @@ describe('validateRecipeCopy(R9)', () => {
   })
 })
 
+describe('multicut copy + CTA facts', () => {
+  const facts = { phone: '09 123 4567', url: 'example.com', departure: 'October 2026' }
+
+  it('hook + middle 独立且端卡事实齐全 → 通过', () => {
+    expect(validateMulticutCopy({ hook: 'Go beyond ordinary', middle: 'See China differently' }, MULTICUT))
+      .toEqual({ hook: 'Go beyond ordinary', middle: 'See China differently' })
+    expect(assertRecipeCtaFacts(facts, MULTICUT)).toEqual(facts)
+  })
+
+  it('middle 复读或 CTA required 缺失 → 拒', () => {
+    expect(() => validateMulticutCopy({ hook: 'Go further', middle: 'Go further' }, MULTICUT))
+      .toThrow(/must not repeat/)
+    expect(() => assertRecipeCtaFacts({ phone: '09 123 4567' }, MULTICUT))
+      .toThrow(/url/)
+  })
+
+  it('buildFullRecipeBrief 原子写入 multicut copy + verified CTA', () => {
+    const brief = buildFullRecipeBrief({
+      recipe: MULTICUT,
+      angle: 'China beyond the postcard',
+      sourceImageUrl: SOURCE,
+      creativeProfile: { caption_mode: 'short_big' },
+      copy: { hook: 'Beyond the postcard', middle: 'Meet the real China' },
+      ctaFacts: facts,
+      keyNamespace: NS,
+    })
+    expect(brief.copy).toEqual({ hook: 'Beyond the postcard', middle: 'Meet the real China' })
+    expect(brief.cta_facts).toEqual(facts)
+    expect(() => assertRecipeBriefComplete(brief, MULTICUT)).not.toThrow()
+  })
+
+  it('multicut 缺 verified CTA → build 阶段 fail-closed', () => {
+    expect(() => buildFullRecipeBrief({
+      recipe: MULTICUT,
+      angle: 'China',
+      sourceImageUrl: SOURCE,
+      creativeProfile: {},
+      copy: { hook: 'Beyond China', middle: 'See the story unfold' },
+      keyNamespace: NS,
+    })).toThrow(/CTA_FACTS_MISSING/)
+  })
+})
+
 describe('assertRecipeBudget(R7)', () => {
   it('max_new_clips < segments → 拒', () => {
     expect(() =>
@@ -289,8 +341,11 @@ describe('assertRecipeReceipt — 生产 receipt validator(R12)', () => {
 })
 
 describe('WINNER_RECIPE_IDS — 白名单闸', () => {
-  it('只登记了 single_image_i2v_pullback_12s', () => {
-    expect(WINNER_RECIPE_IDS).toEqual(['single_image_i2v_pullback_12s'])
+  it('只登记当前两条冻结 recipe', () => {
+    expect(WINNER_RECIPE_IDS).toEqual([
+      'single_image_i2v_pullback_12s',
+      'single_image_i2v_multicut_9s',
+    ])
   })
 })
 

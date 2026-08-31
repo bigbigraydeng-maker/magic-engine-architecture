@@ -16,12 +16,26 @@
 
 import { createHash } from 'node:crypto'
 
-export const WINNER_RECIPE_IDS = ['single_image_i2v_pullback_12s'] as const
+export const WINNER_RECIPE_IDS = [
+  'single_image_i2v_pullback_12s',
+  'single_image_i2v_multicut_9s',
+] as const
 export type WinnerRecipeId = (typeof WINNER_RECIPE_IDS)[number]
+export type RecipeSegmentRole = 'hook' | 'middle' | 'cta'
+export type RecipeCtaFactKey = 'phone' | 'url' | 'departure' | 'price'
+
+export interface RecipeCtaFacts {
+  phone: string
+  url: string
+  departure: string
+  price?: string
+}
 
 export interface RecipeSegmentSpec {
-  readonly role: 'hook' | 'middle' | 'cta'
+  readonly role: RecipeSegmentRole
   readonly duration_hint_s: number
+  /** provider 生成时长；缺失时与展示时长相同。 */
+  readonly gen_duration_s?: number
   readonly motion_type: 'push_in' | 'pull_back'
   /** 落进 prompt_hint 的相机动作原文,worker 断言 prompt 里真的带这串(case-insensitive) */
   readonly camera_action: string
@@ -58,6 +72,11 @@ export interface WinnerRecipe {
   readonly min_bgm_input_loudness_lufs: number
   /** 端卡 transition into endcard;renderer 拿它铺 cta→endcard;必须是 renderer 支持的名称 */
   readonly endcard_transition: string
+  /** 需要真实可见文字叠层的分段；缺失保持 v1 仅 hook 的行为。 */
+  readonly text_overlay_roles?: readonly RecipeSegmentRole[]
+  /** 端卡必须携带的客户级已验证事实；缺失表示沿用自由 CTA 文案。 */
+  readonly cta_facts_required?: readonly RecipeCtaFactKey[]
+  readonly cta_facts_optional?: readonly RecipeCtaFactKey[]
 }
 
 const SINGLE_IMAGE_I2V_PULLBACK_12S: WinnerRecipe = Object.freeze({
@@ -100,8 +119,60 @@ const SINGLE_IMAGE_I2V_PULLBACK_12S: WinnerRecipe = Object.freeze({
   endcard_transition: 'dissolve',
 })
 
+const SINGLE_IMAGE_I2V_MULTICUT_9S: WinnerRecipe = Object.freeze({
+  id: 'single_image_i2v_multicut_9s',
+  version: 1,
+  label: '单图 · 三镜头速切 9 秒',
+  segments: Object.freeze([
+    Object.freeze({
+      role: 'hook' as const,
+      duration_hint_s: 2.6,
+      gen_duration_s: 5.0,
+      motion_type: 'push_in' as const,
+      camera_action: 'focus / push-in cinematic close-up',
+      transition: 'fade',
+      prompt_keyword: 'push-in',
+    }),
+    Object.freeze({
+      role: 'middle' as const,
+      duration_hint_s: 2.6,
+      gen_duration_s: 5.0,
+      motion_type: 'pull_back' as const,
+      camera_action: 'slow reveal / pull-back cinematic drift',
+      transition: 'fade',
+      prompt_keyword: 'pull-back',
+    }),
+    Object.freeze({
+      role: 'cta' as const,
+      duration_hint_s: 2.6,
+      gen_duration_s: 5.0,
+      motion_type: 'pull_back' as const,
+      camera_action: 'pull-back / reveal wide cinematic shot',
+      transition: 'dissolve',
+      prompt_keyword: 'pull-back',
+    }),
+  ]),
+  // 3*2.6 + 2.2 - 3*0.3 = 9.1 秒；每个连续 I2V 展示 2.6 秒。
+  endcard_dur: 2.2,
+  xfade: 0.3,
+  min_final_dur: 8.9,
+  max_final_dur: 9.3,
+  caption_mode: 'short_big',
+  tts_enabled: false,
+  kenburns: false,
+  hook_max_words_en: 6,
+  hook_max_chars_cjk: 12,
+  min_loudness_lufs: -55,
+  min_bgm_input_loudness_lufs: -50,
+  endcard_transition: 'dissolve',
+  text_overlay_roles: Object.freeze(['hook', 'middle'] as const),
+  cta_facts_required: Object.freeze(['phone', 'url', 'departure'] as const),
+  cta_facts_optional: Object.freeze(['price'] as const),
+})
+
 const REGISTRY: Record<WinnerRecipeId, WinnerRecipe> = Object.freeze({
   single_image_i2v_pullback_12s: SINGLE_IMAGE_I2V_PULLBACK_12S,
+  single_image_i2v_multicut_9s: SINGLE_IMAGE_I2V_MULTICUT_9S,
 })
 
 export function resolveRecipe(id: unknown): WinnerRecipe | null {
@@ -229,6 +300,11 @@ export interface RecipeCopyInput {
   cta: string
 }
 
+export interface MulticutRecipeCopyInput {
+  hook: string
+  middle: string
+}
+
 // 表情符号:tsconfig 目标不支持 /u 属性类。用固定 BMP 范围 + 常见 emoji 前缀近似检查。
 // 覆盖 U+1F300–U+1FAFF(surrogate pair) 与常见 dingbats;够拦「hi 🎉」类绕过。
 const EMOJI_RE = /\uD83C[\uDF00-\uDFFF]|\uD83D[\uDC00-\uDE4F\uDE80-\uDEFF]|\uD83E[\uDD00-\uDDFF]|[☀-➿]/
@@ -243,6 +319,36 @@ function countGraphemes(text: string): number {
   return Array.from(text).length
 }
 
+function pickRecipeCopyField(v: unknown, name: string): string {
+  if (typeof v !== 'string') throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} must be string`)
+  const trimmed = v.trim()
+  if (trimmed.length === 0) throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} is empty`)
+  if (/[\r\n]/.test(trimmed)) throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} must be single-line`)
+  if (EMOJI_RE.test(trimmed)) throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} contains emoji`)
+  if (!/[A-Za-z一-鿿぀-ヿ]/.test(trimmed)) {
+    throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} is numeric/punct-only`)
+  }
+  return trimmed
+}
+
+function assertRecipeCopyWithinLimits(text: string, name: string, recipe: WinnerRecipe): void {
+  if (isCjkText(text)) {
+    const chars = countGraphemes(text)
+    if (chars > recipe.hook_max_chars_cjk) {
+      throw new Error(
+        `${RECIPE_ERR.COPY_INVALID}: ${name} exceeds ${recipe.hook_max_chars_cjk} CJK graphemes (got ${chars}: "${text}")`,
+      )
+    }
+    return
+  }
+  const words = (text.match(/[A-Za-z][A-Za-z'’-]*/g) ?? []).length
+  if (words > recipe.hook_max_words_en) {
+    throw new Error(
+      `${RECIPE_ERR.COPY_INVALID}: ${name} exceeds ${recipe.hook_max_words_en} EN words (got ${words}: "${text}")`,
+    )
+  }
+}
+
 /**
  * recipe 路径下的文案强约束(合同 §5 defect#R9):
  * - hook / CTA 都必须非空、单行、无 emoji / 无纯数字
@@ -254,21 +360,8 @@ export function validateRecipeCopy(input: unknown, recipe: WinnerRecipe): Recipe
     throw new Error(`${RECIPE_ERR.COPY_INVALID}: copy is missing`)
   }
   const c = input as { hook?: unknown; cta?: unknown; segments?: unknown; endcard?: unknown }
-  const pick = (v: unknown, name: string): string => {
-    if (typeof v !== 'string') throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} must be string`)
-    const trimmed = v.trim()
-    if (trimmed.length === 0) throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} is empty`)
-    if (/[\r\n]/.test(trimmed)) throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} must be single-line`)
-    if (EMOJI_RE.test(trimmed)) throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} contains emoji`)
-    // 纯数字 / 只有数字与标点视作数字绕过(如 "$99")。
-    // 不使用 Unicode property escape，保持与仓库当前 TS target 兼容。
-    if (!/[A-Za-z一-鿿぀-ヿ]/.test(trimmed)) {
-      throw new Error(`${RECIPE_ERR.COPY_INVALID}: ${name} is numeric/punct-only`)
-    }
-    return trimmed
-  }
-  const hook = pick(c.hook, 'hook')
-  const cta = pick(c.cta, 'cta')
+  const hook = pickRecipeCopyField(c.hook, 'hook')
+  const cta = pickRecipeCopyField(c.cta, 'cta')
   if (hook.toLowerCase() === cta.toLowerCase()) {
     throw new Error(`${RECIPE_ERR.COPY_INVALID}: hook and cta must differ`)
   }
@@ -280,28 +373,59 @@ export function validateRecipeCopy(input: unknown, recipe: WinnerRecipe): Recipe
   if (endcard && (endcard.vo != null || endcard.offer != null || endcard.url != null)) {
     throw new Error(`${RECIPE_ERR.COPY_INVALID}: recipe forbids endcard.vo/offer/url extras`)
   }
-  for (const [text, name] of [
-    [hook, 'hook'],
-    [cta, 'cta'],
-  ] as const) {
-    if (isCjkText(text)) {
-      const chars = countGraphemes(text)
-      if (chars > recipe.hook_max_chars_cjk) {
-        throw new Error(
-          `${RECIPE_ERR.COPY_INVALID}: ${name} exceeds ${recipe.hook_max_chars_cjk} CJK graphemes (got ${chars}: "${text}")`,
-        )
-      }
-    } else {
-      const words = (text.match(/[A-Za-z][A-Za-z'’-]*/g) ?? []).length
-      if (words > recipe.hook_max_words_en) {
-        throw new Error(
-          `${RECIPE_ERR.COPY_INVALID}: ${name} exceeds ${recipe.hook_max_words_en} EN words (got ${words}: "${text}")`,
-        )
-      }
-    }
-  }
+  assertRecipeCopyWithinLimits(hook, 'hook', recipe)
+  assertRecipeCopyWithinLimits(cta, 'cta', recipe)
   // 数字/emoji 检查已在 pick 内串内匹配;这里不再引用 DIGIT_RE(避免 TS unused-symbol)。
   return { hook, cta }
+}
+
+/** 三镜头 recipe 的两段可见文案；端卡只使用已验证 CTA 事实。 */
+export function validateMulticutCopy(input: unknown, recipe: WinnerRecipe): MulticutRecipeCopyInput {
+  if (!input || typeof input !== 'object') {
+    throw new Error(`${RECIPE_ERR.COPY_INVALID}: copy is missing`)
+  }
+  const c = input as { hook?: unknown; middle?: unknown; segments?: unknown; endcard?: unknown }
+  const hook = pickRecipeCopyField(c.hook, 'hook')
+  const middle = pickRecipeCopyField(c.middle, 'middle')
+  if (hook.toLowerCase() === middle.toLowerCase()) {
+    throw new Error(`${RECIPE_ERR.COPY_INVALID}: middle must not repeat the brand hook`)
+  }
+  if (Array.isArray(c.segments) && c.segments.length > 0) {
+    throw new Error(`${RECIPE_ERR.COPY_INVALID}: recipe forbids segment-array copy`)
+  }
+  const endcard = c.endcard as Record<string, unknown> | undefined
+  if (endcard && (endcard.cta != null || endcard.vo != null || endcard.offer != null || endcard.url != null)) {
+    throw new Error(
+      `${RECIPE_ERR.COPY_INVALID}: recipe forbids endcard extras (cta/vo/offer/url) — endcard must come from verified CTA facts`,
+    )
+  }
+  assertRecipeCopyWithinLimits(hook, 'hook', recipe)
+  assertRecipeCopyWithinLimits(middle, 'middle', recipe)
+  return { hook, middle }
+}
+
+/** 只接收客户级已验证 CTA；缺 required 字段即 fail-closed。 */
+export function assertRecipeCtaFacts(raw: unknown, recipe: WinnerRecipe): RecipeCtaFacts | null {
+  const required = recipe.cta_facts_required ?? []
+  if (required.length === 0) return null
+  const facts = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {}
+  const out: Partial<Record<RecipeCtaFactKey, string>> = {}
+  for (const key of required) {
+    const value = facts[key]
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(
+        `WINNER_RECIPE_CTA_FACTS_MISSING: required CTA fact "${key}" missing/empty for recipe "${recipe.id}"`,
+      )
+    }
+    out[key] = value.trim()
+  }
+  for (const key of recipe.cta_facts_optional ?? []) {
+    const value = facts[key]
+    if (typeof value === 'string' && value.trim().length > 0) out[key] = value.trim()
+  }
+  return out as RecipeCtaFacts
 }
 
 // ── server-side planner ───────────────────────────────────────────────────────
@@ -605,8 +729,9 @@ export function assertRecipeBudget(inputs: RecipeBudgetInputs): { projectedCostU
 // ── receipt validator(R12)────────────────────────────────────────────────────
 
 export interface RecipeExecutedSegment {
-  role: 'hook' | 'middle' | 'cta'
+  role: RecipeSegmentRole
   planned_duration_s: number
+  gen_duration_s?: number
   actual_duration_s: number
   motion_type: 'push_in' | 'pull_back'
   camera_action: string
@@ -623,7 +748,12 @@ export interface RecipeExecutedReceipt {
   tts: false
   segments: RecipeExecutedSegment[]
   /** blocker 6:endcard.transition_in 必须等于 recipe.endcard_transition —— renderer 真实用的切法 */
-  endcard: { planned_duration_s: number; cta: string; transition_in: string }
+  endcard: {
+    planned_duration_s: number
+    cta: string
+    transition_in: string
+    facts?: RecipeCtaFacts
+  }
   music: { id: string; source: 'library' | 'pool'; loudness_lufs: number }
   xfade: number
   final: { duration_s: number; loudness_lufs: number }
@@ -660,8 +790,15 @@ export function assertRecipeReceipt(payload: unknown, recipe: WinnerRecipe): voi
     if (s.source_image_url !== firstSource) {
       fail(`receipt.segments[${i}].source_image_url must reuse first entry`)
     }
-    if (typeof s.actual_duration_s !== 'number' || Math.abs(s.actual_duration_s - spec.duration_hint_s) > 0.6) {
-      fail(`receipt.segments[${i}].actual_duration_s off contract`)
+    const expectedActual = spec.gen_duration_s ?? spec.duration_hint_s
+    if (typeof s.actual_duration_s !== 'number' || Math.abs(s.actual_duration_s - expectedActual) > 0.6) {
+      fail(`receipt.segments[${i}].actual_duration_s off contract (expected ~${expectedActual}s generated)`)
+    }
+    if (spec.gen_duration_s !== undefined && s.gen_duration_s !== spec.gen_duration_s) {
+      fail(`receipt.segments[${i}].gen_duration_s expected ${spec.gen_duration_s}`)
+    }
+    if (s.planned_duration_s !== spec.duration_hint_s) {
+      fail(`receipt.segments[${i}].planned_duration_s expected ${spec.duration_hint_s} (display duration)`)
     }
     // provider evidence — 需要真实非空的 name + request_id(空字符串等于没证据)
     if (!s.provider
@@ -674,6 +811,10 @@ export function assertRecipeReceipt(payload: unknown, recipe: WinnerRecipe): voi
     if (s.transition_out !== expectedTransition) {
       fail(`receipt.segments[${i}].transition_out expected "${expectedTransition}"`)
     }
+    if (recipe.text_overlay_roles?.includes(spec.role)
+        && (typeof s.caption !== 'string' || s.caption.trim().length === 0)) {
+      fail(`receipt.segments[${i}].caption required (non-empty) for text-overlay role "${spec.role}"`)
+    }
   }
   if (!rec.endcard || rec.endcard.planned_duration_s !== recipe.endcard_dur) {
     fail('receipt.endcard.planned_duration_s mismatch')
@@ -682,6 +823,12 @@ export function assertRecipeReceipt(payload: unknown, recipe: WinnerRecipe): voi
   // 没在 assemble config 里用的过渡（"claiming unused transitions" 防御）
   if (rec.endcard.transition_in !== recipe.endcard_transition) {
     fail(`receipt.endcard.transition_in must equal recipe.endcard_transition (${recipe.endcard_transition})`)
+  }
+  if ((recipe.cta_facts_required?.length ?? 0) > 0) {
+    assertRecipeCtaFacts(rec.endcard.facts, recipe)
+    if (typeof rec.endcard.cta !== 'string' || rec.endcard.cta.trim().length === 0) {
+      fail('receipt.endcard.cta missing (must be rendered from verified CTA facts)')
+    }
   }
   if (typeof rec.xfade !== 'number' || rec.xfade !== recipe.xfade) {
     fail(`receipt.xfade must equal recipe.xfade (${recipe.xfade})`)
@@ -749,16 +896,28 @@ export function assertRecipeBriefComplete(brief: unknown, recipe: WinnerRecipe):
       `${RECIPE_ERR.PLAN_INVALID}: brief.creative_recipe missing/mismatch (expected ${recipe.id} v${recipe.version})`,
     )
   }
-  const copy = b.copy as { hook?: unknown; cta?: unknown } | null | undefined
+  const copy = b.copy as { hook?: unknown; middle?: unknown; cta?: unknown } | null | undefined
   const hookOk = copy && typeof copy.hook === 'string' && copy.hook.trim().length > 0
-  const ctaOk = copy && typeof copy.cta === 'string' && copy.cta.trim().length > 0
-  if (!hookOk || !ctaOk) {
-    throw new Error(
-      `${RECIPE_ERR.PLAN_INVALID}: brief.copy.hook / cta missing (recipe brief must be shape-complete before insert)`,
-    )
+  if (recipe.text_overlay_roles?.includes('middle')) {
+    const middleOk = copy && typeof copy.middle === 'string' && copy.middle.trim().length > 0
+    if (!hookOk || !middleOk) {
+      throw new Error(
+        `${RECIPE_ERR.PLAN_INVALID}: brief.copy.hook / middle missing (recipe brief must be shape-complete before insert)`,
+      )
+    }
+  } else {
+    const ctaOk = copy && typeof copy.cta === 'string' && copy.cta.trim().length > 0
+    if (!hookOk || !ctaOk) {
+      throw new Error(
+        `${RECIPE_ERR.PLAN_INVALID}: brief.copy.hook / cta missing (recipe brief must be shape-complete before insert)`,
+      )
+    }
   }
   if (!('creative_profile' in b) || typeof b.creative_profile !== 'object' || b.creative_profile === null) {
     throw new Error(`${RECIPE_ERR.PLAN_INVALID}: brief.creative_profile missing`)
+  }
+  if ((recipe.cta_facts_required?.length ?? 0) > 0) {
+    assertRecipeCtaFacts(b.cta_facts, recipe)
   }
   // 延续 plan shape 检查(段/plan/idempotency/source 同图/max_new_clips)。
   assertRecipePlanShape(brief, recipe)
@@ -782,7 +941,9 @@ export interface FullRecipeBriefInput {
   angle: string
   sourceImageUrl: string
   creativeProfile: Record<string, unknown> // 已经过 client-config compact
-  copy: RecipeCopyInput
+  copy: RecipeCopyInput | MulticutRecipeCopyInput
+  /** client-scoped verified facts；仅声明了 cta_facts_required 的 recipe 使用。 */
+  ctaFacts?: RecipeCtaFacts | null
   /** R5:deterministic 前缀。必须。evaluate 传 signal.id。 */
   keyNamespace: string
   aspectRatio?: '9:16'
@@ -812,7 +973,12 @@ export function buildFullRecipeBrief(input: FullRecipeBriefInput): Record<string
     sourceImageUrl: input.sourceImageUrl,
     keyNamespace: input.keyNamespace,
   })
-  const copy = validateRecipeCopy(input.copy, input.recipe)
+  const copy = input.recipe.text_overlay_roles?.includes('middle')
+    ? validateMulticutCopy(input.copy, input.recipe)
+    : validateRecipeCopy(input.copy, input.recipe)
+  const ctaFacts = (input.recipe.cta_facts_required?.length ?? 0) > 0
+    ? assertRecipeCtaFacts(input.ctaFacts, input.recipe)
+    : null
   if (input.budgetCapUsd != null && input.clipUnitCostUsd != null) {
     assertRecipeBudget({
       budgetCapUsd: input.budgetCapUsd,
@@ -836,6 +1002,7 @@ export function buildFullRecipeBrief(input: FullRecipeBriefInput): Record<string
     aspect_ratio: input.aspectRatio ?? '9:16',
     notes: input.notes ?? '',
   }
+  if (ctaFacts) brief.cta_facts = ctaFacts
   if (input.attribution) brief.attribution = input.attribution
   if (typeof input.reviewFeedbackDigest === 'string' && input.reviewFeedbackDigest.trim().length > 0) {
     brief.review_feedback_digest = input.reviewFeedbackDigest.trim()

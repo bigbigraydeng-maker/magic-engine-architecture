@@ -66,16 +66,36 @@ describe('shape agreement — TS vs MJS registry(R13)', () => {
   it('mjs registry 键集 = WINNER_RECIPE_IDS', () => {
     expect(Object.keys(mjsRegistry).sort()).toEqual([...WINNER_RECIPE_IDS].sort())
   })
+  it('每条 recipe 的 descriptor（含 v2 扩展字段）逐字段一致', () => {
+    for (const id of WINNER_RECIPE_IDS) {
+      const t = tsResolveRecipe(id)!
+      const m = mjsResolveRecipe(id)
+      expect(t).not.toBeNull()
+      expect(m).not.toBeNull()
+      for (const key of [
+        'id', 'version', 'label', 'endcard_dur', 'xfade', 'min_final_dur', 'max_final_dur',
+        'caption_mode', 'tts_enabled', 'kenburns', 'hook_max_words_en', 'hook_max_chars_cjk',
+        'min_loudness_lufs', 'min_bgm_input_loudness_lufs', 'endcard_transition',
+      ] as const) {
+        expect(t[key]).toEqual(m[key])
+      }
+      expect(t.text_overlay_roles ?? []).toEqual(m.text_overlay_roles ?? [])
+      expect(t.cta_facts_required ?? []).toEqual(m.cta_facts_required ?? [])
+      expect(t.cta_facts_optional ?? []).toEqual(m.cta_facts_optional ?? [])
+      expect(t.segments).toEqual(m.segments)
+    }
+  })
   it('两侧 buildRecipePlan 在相同输入下产出完全一致的 plan', () => {
-    const recipe = tsResolveRecipe('single_image_i2v_pullback_12s')!
     const source = 'https://cdn.example.com/x.jpg'
     const ns = 'sig_agreement'
-    const t = tsBuildRecipePlan({ recipe, angle: 'brand story', sourceImageUrl: source, keyNamespace: ns })
-    const m = mjsBuildRecipePlan({ recipe: mjsResolveRecipe('single_image_i2v_pullback_12s'), angle: 'brand story', sourceImageUrl: source, keyNamespace: ns })
-    expect(t.segments).toEqual(m.segments)
-    expect(t.clip_generation_plan).toEqual(m.clip_generation_plan)
-    expect(t.creative_recipe).toEqual(m.creative_recipe)
-    expect(t.max_new_clips).toBe(m.max_new_clips)
+    for (const id of WINNER_RECIPE_IDS) {
+      const t = tsBuildRecipePlan({ recipe: tsResolveRecipe(id)!, angle: 'brand story', sourceImageUrl: source, keyNamespace: ns })
+      const m = mjsBuildRecipePlan({ recipe: mjsResolveRecipe(id), angle: 'brand story', sourceImageUrl: source, keyNamespace: ns })
+      expect(t.segments).toEqual(m.segments)
+      expect(t.clip_generation_plan).toEqual(m.clip_generation_plan)
+      expect(t.creative_recipe).toEqual(m.creative_recipe)
+      expect(t.max_new_clips).toBe(m.max_new_clips)
+    }
   })
   it('两侧 computeRecipeFinalDuration 精确 12.0', () => {
     const recipe = tsResolveRecipe('single_image_i2v_pullback_12s')!
