@@ -4,10 +4,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   RECIPE_ID,
+  RECIPE_ID_MULTICUT,
   RECIPE_VERSION,
   assertClientRecipeIntentMatchesBrief,
   assertPerCallBudget,
   assertRecipeBriefComplete,
+  assertRecipeCtaFacts,
   assertRecipeBudget,
   assertRecipePlanShape,
   assertRecipeProfileConstraints,
@@ -27,12 +29,14 @@ import {
   pickRecipeSourceOrReject,
   resolveRecipe,
   resolveRecipeBgm,
+  validateMulticutCopy,
   validateRecipeCopy,
   verifyFinalMedia,
   winnerRecipeFromBrief,
 } from './creative-recipe.mjs'
 
 const RECIPE = resolveRecipe(RECIPE_ID)
+const MULTICUT = resolveRecipe(RECIPE_ID_MULTICUT)
 const SOURCE = 'https://cdn.example.com/product.jpg'
 const NS = 'sig_abc123'
 
@@ -60,6 +64,44 @@ describe('recipe timeline formula(R1)', () => {
     expect(RECIPE.max_final_dur).toBe(12.0)
     expect(RECIPE.endcard_dur).toBe(2.7)
     expect(RECIPE.xfade).toBe(0.35)
+  })
+})
+
+describe('multicut 9s recipe', () => {
+  const facts = { phone: '09 123 4567', url: 'example.com', departure: 'October 2026' }
+
+  it('三段展示 ≤4s，provider 生成 5s，final=9.1s', () => {
+    expect(MULTICUT.segments).toHaveLength(3)
+    expect(MULTICUT.segments.every((segment) => segment.duration_hint_s <= 4)).toBe(true)
+    expect(MULTICUT.segments.every((segment) => segment.gen_duration_s === 5)).toBe(true)
+    expect(Math.round(computeRecipeFinalDuration(MULTICUT) * 10) / 10).toBe(9.1)
+  })
+
+  it('hook/middle 与 CTA facts 都 fail-closed', () => {
+    expect(validateMulticutCopy({ hook: 'Beyond the postcard', middle: 'Meet the real China' }, MULTICUT))
+      .toEqual({ hook: 'Beyond the postcard', middle: 'Meet the real China' })
+    expect(() => validateMulticutCopy({ hook: 'Same line', middle: 'Same line' }, MULTICUT))
+      .toThrow(/must not repeat/)
+    expect(assertRecipeCtaFacts(facts, MULTICUT)).toEqual(facts)
+    expect(() => assertRecipeCtaFacts({ phone: '09 123 4567' }, MULTICUT)).toThrow(/url/)
+  })
+
+  it('assemble 真携带两段文字与已验证端卡事实', () => {
+    const cfg = buildRecipeAssembleConfig({
+      recipe: MULTICUT,
+      profile: {},
+      localPaths: ['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4'],
+      captionsByRole: { hook: 'Beyond the postcard', middle: 'Meet the real China' },
+      ctaFacts: facts,
+      bgmAbsPath: '/tmp/music.mp3',
+      brandKit: '/tmp/brandkit',
+      outputPath: '/tmp/final.mp4',
+    })
+    expect(cfg.segments.map((segment) => segment.caption ?? '')).toEqual([
+      'Beyond the postcard', 'Meet the real China', '',
+    ])
+    expect(cfg.endcard.facts).toEqual(facts)
+    expect(cfg.endcard.cta).toContain('09 123 4567')
   })
 })
 

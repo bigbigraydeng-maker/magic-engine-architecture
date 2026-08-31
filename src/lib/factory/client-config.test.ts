@@ -23,7 +23,7 @@ const CTS_LIKE = {
 describe('projectFactoryConfig — 投影', () => {
   it('空配置 → 全 null / false,不抛', () => {
     expect(projectFactoryConfig({})).toEqual({
-      publish_target: null, factory_goal_id: null, verified_offer: null,
+      publish_target: null, factory_goal_id: null, verified_offer: null, verified_cta: null,
       allow_b_track_landmark_ads: false, auto_order_enabled: false,
       creative_profile: EMPTY_CREATIVE_PROFILE,
       creative_recipe: null,
@@ -45,6 +45,36 @@ describe('projectFactoryConfig — 投影', () => {
 
   it('促销只有截止日没有价格 → null(没价格的促销钩子没意义)', () => {
     expect(projectFactoryConfig({ verified_offer: { offer_expiry: '31 July' } }).verified_offer).toBeNull()
+  })
+
+  it('端卡事实必须 phone/url/departure 齐全；price 可选', () => {
+    const complete = {
+      phone: '09 123 4567', url: 'example.com', departure: 'October 2026', price: 'From $1,999',
+    }
+    expect(projectFactoryConfig({ verified_cta: complete }).verified_cta).toEqual(complete)
+    expect(projectFactoryConfig({ verified_cta: { phone: '09 123 4567' } }).verified_cta).toBeNull()
+  })
+})
+
+describe('verified_cta — 客户级端卡事实', () => {
+  it('完整事实可保存，空字段拒绝', () => {
+    const good = mergeFactoryConfig({}, {
+      verified_cta: { phone: '09 123 4567', url: 'example.com', departure: 'October 2026' },
+    })
+    expect(good.ok && good.config.verified_cta).toEqual({
+      phone: '09 123 4567', url: 'example.com', departure: 'October 2026',
+    })
+    expect(mergeFactoryConfig({}, {
+      verified_cta: { phone: '09 123 4567', url: '', departure: 'October 2026' },
+    }).ok).toBe(false)
+  })
+
+  it('null 删除，body 未提及则保留', () => {
+    const existing = { verified_cta: { phone: '1', url: 'x', departure: 'd' } }
+    const kept = mergeFactoryConfig(existing, { allow_b_track_landmark_ads: false })
+    expect(kept.ok && kept.config.verified_cta).toEqual(existing.verified_cta)
+    const cleared = mergeFactoryConfig(existing, { verified_cta: null })
+    expect(cleared.ok && 'verified_cta' in cleared.config).toBe(false)
   })
 })
 

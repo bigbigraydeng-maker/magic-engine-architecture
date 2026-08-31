@@ -10,7 +10,7 @@
 //        node scripts/factory-worker/worker.mjs --loop    # 持续轮询(默认 30s)
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -23,6 +23,7 @@ import {
   assertPerCallBudget,
   assertRecipeBriefComplete,
   assertRecipeBudget,
+  assertRecipeCtaFacts,
   assertRecipePlanShape,
   assertRecipeProfileConstraints,
   assertRecipeReceipt,
@@ -37,6 +38,7 @@ import {
   parseLufsFromEbur128,
   resolveRecipeBgm,
   validateRecipeCopy,
+  validateMulticutCopy,
   verifyFinalMedia,
   winnerRecipeFromBrief,
 } from './creative-recipe.mjs'
@@ -49,7 +51,12 @@ function loadEnv() {
   if (existsSync(envPath)) {
     for (const line of readFileSync(envPath, 'utf8').split('\n')) {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/)
-      if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+      if (m) {
+        const value = m[2].replace(/^["']|["']$/g, '')
+        // An empty worktree placeholder must not erase a secret injected by
+        // launchd / --env-file from the canonical local secret source.
+        if (value !== '' || env[m[1]] === undefined) env[m[1]] = value
+      }
     }
   }
   return env
@@ -106,6 +113,12 @@ function brandkitFor(clientId) {
 }
 const MUAPI_SLUG = ENV.MUAPI_KLING_SLUG || 'kling-v2.1-standard-i2v'
 const CLIP_UNIT_COST = Number(ENV.FACTORY_CLIP_UNIT_COST_USD || '0.225')
+// Homebrew lives at /usr/local on Intel Macs and /opt/homebrew on Apple Silicon;
+// Render images normally expose ffmpeg through /usr/bin. Let execFile resolve PATH
+// by default, while keeping an explicit override for restricted launchd environments.
+const FFPROBE_BIN = ENV.FACTORY_FFPROBE_PATH || 'ffprobe'
+const FFMPEG_BIN = ENV.FACTORY_FFMPEG_PATH || 'ffmpeg'
+const PYTHON_BIN = ENV.FACTORY_PYTHON_PATH || 'python3'
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
@@ -401,7 +414,7 @@ function resolveBgm(profile, brandKit) {
 function probeClipDuration(p) {
   try {
     const out = execFileSync(
-      '/usr/local/bin/ffprobe',
+      FFPROBE_BIN,
       ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', p],
     ).toString().trim()
     const d = parseFloat(out)
@@ -439,7 +452,7 @@ function assemble(wo, localPaths, copy, tmp) {
   }
   const cfgPath = join(tmp, 'promo.json')
   writeFileSync(cfgPath, JSON.stringify(cfg, null, 2))
-  execFileSync('python3', [MAKE_PROMO, cfgPath], { stdio: 'inherit' })
+  execFileSync(PYTHON_BIN, [MAKE_PROMO, cfgPath], { stdio: 'inherit' })
   if (!existsSync(out)) throw new Error('make_promo 未产出 final.mp4')
   return out
 }
@@ -591,8 +604,29 @@ export async function runRecipeSequence({ wo, recipe, tmp, deps }) {
   })
   logFn?.(`  BGM: ${music.portableId} (${music.source}, ${music.loudnessLufs.toFixed(1)} LUFS)`)
 
-  // 6. 结构化 hook + CTA(禁 angle 兜底 · R9)
-  const { hook: hookText, cta: ctaText } = validateRecipeCopy(wo.brief.copy, recipe)
+  // 6. 结构化文案(禁 angle 兜底 · R9)。multicut(text_overlay_roles 含 'middle')走
+  // hook+middle 校验并构建 captionsByRole;legacy 保持 hookText/ctaText 原路径不变。
+  const usesMulticutCopy = Array.isArray(recipe.text_overlay_roles) && recipe.text_overlay_roles.includes('middle')
+  let hookText
+  let ctaText
+  let captionsByRole
+  if (usesMulticutCopy) {
+    const { hook, middle } = validateMulticutCopy(wo.brief.copy, recipe)
+    hookText = hook
+    captionsByRole = { hook, middle }
+  } else {
+    const { hook, cta } = validateRecipeCopy(wo.brief.copy, recipe)
+    hookText = hook
+    ctaText = cta
+  }
+
+  // 6b. CTA 事实(client-scoped verified facts)—— 必须在任何 provider 调用之前 fail-closed。
+  // assertRecipeBriefComplete(步骤 0)已对 recipe.cta_facts_required 非空的 recipe 校验过一遍
+  // brief.cta_facts;这里复用同一断言函数(单一真源,不重复写第二套逻辑)取回已验证的 facts
+  // 供 assemble/receipt 使用。
+  const ctaFacts = Array.isArray(recipe.cta_facts_required) && recipe.cta_facts_required.length > 0
+    ? assertRecipeCtaFacts(wo.brief.cta_facts, recipe)
+    : null
 
   // 7. budget gate(R7 pre-provider)
   assertRecipeBudget({
@@ -629,19 +663,21 @@ export async function runRecipeSequence({ wo, recipe, tmp, deps }) {
         `WINNER_RECIPE_UPLOAD_MISSING: 生成 clip 无上传通道(key=${plan.idempotency_key})`,
       )
     }
-    logFn?.(`  生成 seg[${i}] ${plan.motion_type} via provider (${spec.duration_hint_s}s)…`)
+    // gen_duration_s = provider 应生成的真实时长;legacy recipe 没这字段则退回展示时长(v1 两者相等)。
+    const genDurationS = spec.gen_duration_s ?? spec.duration_hint_s
+    logFn?.(`  生成 seg[${i}] ${plan.motion_type} via provider (${genDurationS}s)…`)
     const gen = await providerFn({
       plan,
       sourceImageUrl: plan.source_image_url,
-      durationSeconds: spec.duration_hint_s,
+      durationSeconds: genDurationS,
       recipe,
     })
     const dst = tmpJoin(tmp, `seg_${i}.mp4`)
     writeFileFn(dst, gen.buf)
     const clipDur = probeDurationFn(dst)
-    if (!Number.isFinite(clipDur) || clipDur < spec.duration_hint_s - 0.5) {
+    if (!Number.isFinite(clipDur) || clipDur < genDurationS - 0.5) {
       throw new Error(
-        `WINNER_RECIPE_I2V_UNDERRUN: seg[${i}] 时长不足 (${clipDur ?? '未探测'}s < ${spec.duration_hint_s}s)`,
+        `WINNER_RECIPE_I2V_UNDERRUN: seg[${i}] 时长不足 (${clipDur ?? '未探测'}s < ${genDurationS}s)`,
       )
     }
     localPaths.push(dst)
@@ -682,6 +718,8 @@ export async function runRecipeSequence({ wo, recipe, tmp, deps }) {
     localPaths,
     hookText,
     ctaText,
+    captionsByRole,
+    ctaFacts,
     bgmAbsPath: music.absPath,
     brandKit,
     outputPath,
@@ -703,6 +741,8 @@ export async function runRecipeSequence({ wo, recipe, tmp, deps }) {
     recipe,
     hookText,
     ctaText,
+    captionsByRole,
+    ctaFacts,
     sourceImageUrl,
     executed,
     music,
@@ -759,8 +799,23 @@ async function processRecipeOrder(wo, tmp, recipe) {
       probeDurationFn: probeClipDuration,
       probeLoudnessFn: probeLoudnessLufs,
       hashFileFn: sha256File,
-      execAssembleFn: ({ cfgPath }) => {
-        execFileSync('python3', [MAKE_PROMO, cfgPath], { stdio: 'inherit' })
+      execAssembleFn: ({ cfgPath, outputPath }) => {
+        execFileSync(PYTHON_BIN, [MAKE_PROMO, cfgPath], { stdio: 'inherit' })
+        // 30fps muxing can leave one trailing frame (12.033s for a 12.000s
+        // recipe). Normalize only that tiny quantization overflow; larger
+        // overruns still reach verifyFinalMedia and fail closed.
+        const assembledDuration = probeClipDuration(outputPath)
+        if (assembledDuration > recipe.max_final_dur
+            && assembledDuration <= recipe.max_final_dur + 0.05) {
+          const normalized = `${outputPath}.duration-normalized.mp4`
+          execFileSync(FFMPEG_BIN, [
+            '-y', '-v', 'error', '-i', outputPath,
+            '-t', String(recipe.max_final_dur - (1 / 30)),
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+            '-c:a', 'aac', '-b:a', '192k', normalized,
+          ])
+          renameSync(normalized, outputPath)
+        }
       },
       completeFn: async (payload) => await api(`/api/factory/worker/${wo.work_order_id}/complete`, 'POST', payload),
       // TS 侧 assertRecipeReceipt 的字段等价实现从 creative-recipe.mjs 直出;
@@ -800,7 +855,7 @@ export function assertNoRecipeIntentInvalidReason(reason) {
 export function probeHasAudio(path) {
   try {
     const out = execFileSync(
-      '/usr/local/bin/ffprobe',
+      FFPROBE_BIN,
       ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', path],
     ).toString().trim()
     return out.split('\n').some((line) => line.trim() === 'audio')
@@ -832,7 +887,7 @@ export function probeLoudnessLufs(path, runner = defaultFfmpegLoudnessRunner) {
 
 function defaultFfmpegLoudnessRunner(path) {
   const r = spawnSync(
-    '/usr/local/bin/ffmpeg',
+    FFMPEG_BIN,
     ['-hide_banner', '-nostats', '-i', path, '-af', 'ebur128=peak=true', '-f', 'null', '-'],
     { encoding: 'utf8' },
   )

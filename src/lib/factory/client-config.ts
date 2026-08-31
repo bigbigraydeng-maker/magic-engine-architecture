@@ -10,12 +10,18 @@
  *   publish_target             → publish/publish-worker.ts resolveTarget()
  *   factory_goal_id            → evaluate.ts → strategist.ts pickFactoryGoal()
  *   verified_offer             → evaluate.ts(B4 客户级持久真促销)
+ *   verified_cta               → evaluate.ts → recipe brief → worker 端卡(客户级已验证联系方式)
  *   allow_b_track_landmark_ads → evaluate.ts + complete-work-order.ts(护栏 6 豁免)
  *   creative_recipe            → evaluate.ts(P21.J.M2 版本化 winner recipe:合同 5469105522 §1
  *                                          单图 · 推近 + 拉远 12 秒,配了 = 走强约束 recipe 路径)
  */
 
-import { parseFactoryRecipeConfig, WINNER_RECIPE_IDS, type WinnerRecipeId } from './recipe'
+import {
+  parseFactoryRecipeConfig,
+  WINNER_RECIPE_IDS,
+  type RecipeCtaFacts,
+  type WinnerRecipeId,
+} from './recipe'
 
 /** 只有 facebook 有真实 adapter;publer 在 publish-worker.ts 仍是注释状态。
  *  放开别的平台 = 配了个必然 markFailed('no_adapter') 的目标。 */
@@ -61,6 +67,8 @@ export interface FactoryConfigView {
   publish_target: { platform: string; page_id: string } | null
   factory_goal_id: string | null
   verified_offer: { price_from: string; offer_expiry: string } | null
+  /** 端卡客户事实；phone/url/departure 必须同时存在，price 可选。 */
+  verified_cta: RecipeCtaFacts | null
   allow_b_track_landmark_ads: boolean
   /** 自动排产开关(factory-order-scheduler 读)。默认关 —— 自动下单 = 自动花钱。 */
   auto_order_enabled: boolean
@@ -82,6 +90,18 @@ function asTrimmed(v: unknown): string | null {
   return typeof v === 'string' && v.trim().length > 0 ? v.trim().slice(0, MAX_TEXT) : null
 }
 
+export function parseVerifiedCta(raw: unknown): RecipeCtaFacts | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null
+  const cta = raw as Record<string, unknown>
+  const phone = asTrimmed(cta.phone)
+  const url = asTrimmed(cta.url)
+  const departure = asTrimmed(cta.departure)
+  if (!phone || !url || !departure) return null
+  const price = asTrimmed(cta.price)
+  return { phone, url, departure, ...(price ? { price } : {}) }
+}
+
 /** 库里的 jsonb → UI 认识的形状。脏数据一律降级成 null,不把半个对象抛给前端。 */
 export function projectFactoryConfig(raw: unknown): FactoryConfigView {
   const cfg = (raw ?? {}) as Record<string, unknown>
@@ -100,6 +120,7 @@ export function projectFactoryConfig(raw: unknown): FactoryConfigView {
     verified_offer: priceFrom
       ? { price_from: priceFrom, offer_expiry: asTrimmed(vo?.offer_expiry) ?? '' }
       : null,
+    verified_cta: parseVerifiedCta(cfg.verified_cta),
     allow_b_track_landmark_ads: cfg.allow_b_track_landmark_ads === true,
     auto_order_enabled: cfg.auto_order_enabled === true,
     creative_profile: projectCreativeProfile(cfg.creative_profile),
@@ -185,6 +206,18 @@ export function mergeFactoryConfig(
       delete next.verified_offer
     } else {
       next.verified_offer = { price_from: priceFrom, offer_expiry: asTrimmed(vo?.offer_expiry) ?? '' }
+    }
+  }
+
+  if ('verified_cta' in body) {
+    if (body.verified_cta === null) {
+      delete next.verified_cta
+    } else {
+      const parsed = parseVerifiedCta(body.verified_cta)
+      if (!parsed) {
+        return { ok: false, error: '端卡信息要同时填写电话、网址和出发时间；价格可以留空' }
+      }
+      next.verified_cta = parsed
     }
   }
 
