@@ -57,8 +57,8 @@ export const projects = [
   {
     slug: 'howick',
     name: 'Howick',
-    status: 'Under Construction',
-    pill: 'pill-build',
+    status: 'Now Selling',
+    pill: 'pill-sell',
     eyebrow: 'Howick · East Auckland',
     tagline: 'Modern Comfort in a Well-Established Community',
     cardLine: 'Five homes on Libby Lane, Howick.',
