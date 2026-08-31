@@ -4,6 +4,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { approveBudgetWithinCap } from './review-actions'
+import { computeReviewFeedbackDigest, RecipeConfigError, winnerRecipeFromBrief } from './recipe'
 import type { ReviewRejectCategory } from './types'
 
 export interface ReviewApplyResult {
@@ -91,6 +92,43 @@ export async function applyQualityReject(
   if (!upd || upd.length === 0) return { ok: false, status: 409, error: 'work order no longer in_review' }
 
   const brief = (wo!.brief ?? {}) as Record<string, unknown>
+  // recipe 单被打回:清掉 stale creative_recipe/plan,打上结构化 replan-required marker。
+  // worker 遇到 marker 会在任何 provider 之前 fail-closed,直到服务端产出新的合法 plan(合同 R3/R4)。
+  // 无 recipe 的普通单:继承 review_feedback 直接进 queued,legacy 行为不变。
+  let originallyHadRecipe = false
+  try {
+    originallyHadRecipe = winnerRecipeFromBrief(brief) !== null
+  } catch (e) {
+    // brief 里恰好带非法 creative_recipe:视作确实有 recipe(把它当 recipe 单处理,强制 replan)
+    if (e instanceof RecipeConfigError) originallyHadRecipe = true
+    else throw e
+  }
+  const newBrief: Record<string, unknown> = {
+    ...brief,
+    review_feedback: feedback.slice(0, 2000),
+    review_feedback_by: reviewer,
+    reopened_from: id,
+  }
+  if (originallyHadRecipe) {
+    // 保留旧 recipe 供审计,但从 top-level 抹掉,worker/evaluate 都不再拿到可用 recipe
+    newBrief.previous_creative_recipe = brief.creative_recipe ?? null
+    delete newBrief.creative_recipe
+    // 同时清 stale 计划字段,避免 assertRecipePlanShape 拿旧 plan 走通
+    delete newBrief.clip_generation_plan
+    delete newBrief.segments
+    delete newBrief.max_new_clips
+    newBrief.recipe_replan_required = true
+    newBrief.recipe_replan_reason = feedback.slice(0, 400)
+    // R3 硬绑定:把当前 feedback 的 sha256 digest 落进 brief。任何后续 replanner 必须把
+    // digest 明确 ack 进 creative_recipe.acknowledged_review_feedback_digest,不然 worker 侧
+    // assertRecipeReplanAcknowledged 会 fail-closed —— 阻止「静默换个新 recipe 但没吃反馈」。
+    newBrief.review_feedback_digest = computeReviewFeedbackDigest(feedback)
+  }
+  // blocker 3:frozen contract —— worker 不许从 free-text feedback 里 infer plan。
+  // recipe 单 reopen 时不要落回 'queued'（那样 worker 会抢单跑一个 doomed order）;
+  // 落进已有的非可认领状态 'dead_letter' 并写 recipe_replan_required,等服务端明确 replan 后
+  // 再由服务端创建新的 queued 单。legacy 单保持原行为(queued)。
+  const reopenStatus = originallyHadRecipe ? 'dead_letter' : 'queued'
   const { data: reopened, error: insErr } = await supabase
     .from('content_work_orders')
     .insert({
@@ -103,15 +141,29 @@ export async function applyQualityReject(
       angle: wo!.angle,
       angle_source: wo!.angle_source,
       rationale_one_liner: wo!.rationale_one_liner,
-      brief: { ...brief, review_feedback: feedback.slice(0, 2000), review_feedback_by: reviewer, reopened_from: id },
+      brief: newBrief,
       budget_cap_usd: wo!.budget_cap_usd,
       source_ad_id: wo!.source_ad_id,
-      status: 'queued',
+      status: reopenStatus,
     })
     .select('id')
     .single()
   if (insErr) return { ok: false, status: 500, error: `reopen insert failed: ${insErr.message}` }
-  return { ok: true, status: 200, data: { status: 'review_rejected', reopened_work_order_id: reopened.id } }
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      status: 'review_rejected',
+      reopened_work_order_id: reopened.id,
+      reopened_status: reopenStatus,
+      recipe_replan_required: originallyHadRecipe,
+      // truthful:recipe 单 park 在 dead_letter,等 server 显式 replan 才建新 queued
+      parked_pending_replan: originallyHadRecipe,
+      review_feedback_digest: originallyHadRecipe
+        ? (newBrief.review_feedback_digest as string)
+        : null,
+    },
+  }
 }
 
 /** 打回·预算不对:只改投放预算回 in_review 二次确认,不重生产 */
