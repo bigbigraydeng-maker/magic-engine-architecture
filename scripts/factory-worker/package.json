@@ -7,7 +7,9 @@
   },
   "scripts": {
     "inngest:pilot": "node inngest-pilot.mjs",
-    "test:pilot": "node --test inngest-pilot.test.mjs"
+    "inngest:cts": "node inngest-cts-workflow.mjs",
+    "test:pilot": "node --test inngest-pilot.test.mjs",
+    "test:cts": "node --test inngest-cts-workflow.test.mjs worker-inngest-bridge.test.mjs"
   },
   "dependencies": {
     "inngest": "3.54.0"
