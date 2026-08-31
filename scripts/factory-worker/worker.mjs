@@ -106,6 +106,15 @@ function brandkitFor(clientId) {
 }
 const MUAPI_SLUG = ENV.MUAPI_KLING_SLUG || 'kling-v2.1-standard-i2v'
 const CLIP_UNIT_COST = Number(ENV.FACTORY_CLIP_UNIT_COST_USD || '0.225')
+// Inngest one-candidate workflow can impose a stricter per-run ceiling than the
+// work-order budget.  Missing means legacy/manual worker behaviour is unchanged.
+const ORCHESTRATOR_MAX_PROVIDER_USD = ENV.FACTORY_ORCHESTRATOR_MAX_PROVIDER_USD === undefined
+  ? null
+  : Number(ENV.FACTORY_ORCHESTRATOR_MAX_PROVIDER_USD)
+const ORCHESTRATOR_REQUIRED_RECIPE_ID = ENV.FACTORY_ORCHESTRATOR_REQUIRED_RECIPE_ID || null
+const ORCHESTRATOR_REQUIRED_RECIPE_VERSION = ENV.FACTORY_ORCHESTRATOR_REQUIRED_RECIPE_VERSION === undefined
+  ? null
+  : Number(ENV.FACTORY_ORCHESTRATOR_REQUIRED_RECIPE_VERSION)
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
@@ -862,19 +871,88 @@ async function main() {
     process.exit(1)
   }
   const loop = process.argv.includes('--loop')
+  const jsonResult = process.argv.includes('--json-result')
   const intervalMs = Number(ENV.FACTORY_POLL_INTERVAL_MS || '30000')
   log(`worker 启动 id=${WORKER_ID} api=${API_BASE} loop=${loop}`)
   do {
     try {
-      const wo = await claimOne()
-      if (wo) await processOrder(wo)
-      else if (loop) log('无 queued 工单,等待…')
-      else { log('无 queued 工单,退出'); break }
+      const result = await runOneOrder()
+      if (jsonResult) console.log(`FACTORY_WORKER_RESULT ${JSON.stringify(result)}`)
+      if (!result.claimed && loop) log('无 queued 工单,等待…')
+      else if (!result.claimed) { log('无 queued 工单,退出'); break }
     } catch (e) {
       log('循环异常:', e.message)
+      if (jsonResult) {
+        console.log(`FACTORY_WORKER_RESULT ${JSON.stringify({ claimed: false, ok: false, error: e.message })}`)
+      }
     }
     if (loop) await new Promise((r) => setTimeout(r, intervalMs))
   } while (loop)
+}
+
+/**
+ * One deterministic claim/process unit for the Inngest Connect wrapper.
+ * It deliberately does not retry: content_work_orders already owns retry and
+ * dead-letter semantics, while Inngest owns the outer durable run.
+ */
+export async function runOneOrder({
+  claimFn = claimOne,
+  processFn = processOrder,
+  failFn = failOrder,
+  orchestratorMaxProviderUsd = ORCHESTRATOR_MAX_PROVIDER_USD,
+  requiredRecipeId = ORCHESTRATOR_REQUIRED_RECIPE_ID,
+  requiredRecipeVersion = ORCHESTRATOR_REQUIRED_RECIPE_VERSION,
+} = {}) {
+  const wo = await claimFn()
+  if (!wo) return { claimed: false, ok: true }
+  const workOrderBudget = Number(wo.budget_cap_usd)
+  if (requiredRecipeId !== null) {
+    const actualRecipe = wo.brief?.creative_recipe
+    const versionMatches = requiredRecipeVersion === null
+      || (Number.isFinite(requiredRecipeVersion) && Number(actualRecipe?.version) === requiredRecipeVersion)
+    if (actualRecipe?.id !== requiredRecipeId || !versionMatches) {
+      await failFn(
+        wo.work_order_id,
+        `INNGEST_RECIPE_SCOPE_GATE: expected ${requiredRecipeId} v${String(requiredRecipeVersion)}, got ${String(actualRecipe?.id)} v${String(actualRecipe?.version)}`,
+        false,
+      )
+      return {
+        claimed: true,
+        ok: false,
+        work_order_id: wo.work_order_id,
+        client_id: wo.client_id,
+        error: 'recipe_scope_gate',
+      }
+    }
+  }
+  if (orchestratorMaxProviderUsd !== null) {
+    if (!Number.isFinite(orchestratorMaxProviderUsd) || orchestratorMaxProviderUsd <= 0) {
+      throw new Error('FACTORY_ORCHESTRATOR_MAX_PROVIDER_USD must be a finite positive number')
+    }
+    if (!Number.isFinite(workOrderBudget) || workOrderBudget > orchestratorMaxProviderUsd) {
+      await failFn(
+        wo.work_order_id,
+        `INNGEST_PROVIDER_BUDGET_GATE: work order $${String(wo.budget_cap_usd)} exceeds run cap $${orchestratorMaxProviderUsd}`,
+        false,
+      )
+      return {
+        claimed: true,
+        ok: false,
+        work_order_id: wo.work_order_id,
+        client_id: wo.client_id,
+        error: 'provider_budget_gate',
+      }
+    }
+  }
+  const processed = await processFn(wo)
+  return {
+    claimed: true,
+    ok: processed === true || processed?.ok === true,
+    work_order_id: wo.work_order_id,
+    client_id: wo.client_id,
+    actual_cost_usd: Number(processed?.cost ?? 0),
+    status: processed === true || processed?.ok === true ? 'in_review' : 'failed',
+  }
 }
 
 // #1218:守住入口 —— 只在直接执行本文件时跑主循环。测试要 import resolveCopy/buildSrt

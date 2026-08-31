@@ -21,6 +21,59 @@ cp scripts/factory-worker/.env.example scripts/factory-worker/.env
 
 `.env` 已 gitignore,只留本地,绝不进 Render/仓库。
 
+## Inngest Cloud dry-run pilot (#1280)
+
+This pilot is isolated from the production factory worker. It never imports `worker.mjs`,
+calls a provider, reads or writes Supabase, uploads media, or invokes review/publish APIs.
+
+```bash
+npm ci --prefix scripts/factory-worker --legacy-peer-deps --ignore-scripts
+INNGEST_PILOT_CRASH_AFTER_EFFECT=1 node scripts/factory-worker/inngest-pilot.mjs connect
+node scripts/factory-worker/inngest-pilot.mjs start
+node scripts/factory-worker/inngest-pilot.mjs connect
+node scripts/factory-worker/inngest-pilot.mjs duplicate
+node scripts/factory-worker/inngest-pilot.mjs review pass
+```
+
+The pilot uses an outbound Connect worker with concurrency 1. It sends opaque IDs only,
+stores atomic receipts in `~/Library/Application Support/Magic Engine/inngest-pilot/`,
+and permits only one start, one duplicate probe, and one review. It does not modify the
+existing LaunchAgent.
+
+For the crash/restart acceptance run, start Connect with the crash flag, send `start`,
+and wait for that worker process to terminate immediately after the local effect receipt.
+Restart Connect **without** the crash flag, then send the duplicate probe and review.
+Connect remains active until interrupted with `Ctrl-C`; keep exactly one Connect process.
+
+Acceptance requires both the local receipts and Inngest Dashboard to show one admitted
+run, `effect_count=1`, `provider_calls=0`, `production_writes=0`, and a final
+`dry_run_complete` pass verdict. Never delete or reset pilot state to repeat a run; a new
+run requires a new approved task/version and state directory.
+
+## Inngest CTS production relay
+
+The production relay is deliberately narrower than the factory worker: one configured
+client, one registered recipe, one candidate, provider cost at or below the configured
+cap, and `no_publish=true`. It uses Inngest Connect with concurrency 1, checkpoints the
+code gate and generation separately, then waits up to seven days for Ray's correlated
+pass/fail event without holding local compute.
+
+```bash
+npm run test:cts --prefix scripts/factory-worker
+npm run inngest:cts --prefix scripts/factory-worker -- connect
+npm run inngest:cts --prefix scripts/factory-worker -- start
+npm run inngest:cts --prefix scripts/factory-worker -- review pass
+```
+
+The worker additionally verifies the claimed order has the exact configured client,
+recipe id/version, and budget before any provider call. If
+`single_image_i2v_multicut_9s` is not registered in the checked-out code, `start` ends as
+`blocked_code_gate`; it never falls back to the old 12-second or legacy renderer. A
+correct recipe order must already be queued by the existing factory scheduler. Local
+receipts live in `~/Library/Application Support/Magic Engine/inngest-cts-workflow/`.
+`FACTORY_WORKER_TOKEN` is required only when the code gate passes and generation starts;
+the relay can therefore report a missing/unregistered recipe without production access.
+
 ## 运行
 
 ```bash
