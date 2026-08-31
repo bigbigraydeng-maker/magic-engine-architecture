@@ -214,7 +214,16 @@ export const projects = [
     ],
     footerAddress: 'Greenview · 10–12 Reynolds Rd, Pokihui',
     group: 'coming',
-    images: [],
+    // Client-supplied renders (2026-08-31). A third supplied photo (active
+    // earthworks) is excluded from public display per the no-construction-
+    // imagery policy applied sitewide to Riverside/Howick — kept on disk
+    // unreferenced (gv-earthworks-unused.webp) rather than shown.
+    hero: '/img/greenview/gv-render-1.webp',
+    card: '/img/greenview/gv-render-1.webp',
+    images: [
+      { src: '/img/greenview/gv-render-1.webp', alt: 'Greenview — artist’s impression', wide: true },
+      { src: '/img/greenview/gv-render-2.webp', alt: 'Greenview — artist’s impression' },
+    ],
   },
 ];
 
