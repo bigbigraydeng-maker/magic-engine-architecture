@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   RECIPE_ID,
   RECIPE_ID_MULTICUT,
+  RECIPE_ID_MULTI_IMAGE,
   RECIPE_VERSION,
   assertClientRecipeIntentMatchesBrief,
   assertPerCallBudget,
@@ -37,6 +38,7 @@ import {
 
 const RECIPE = resolveRecipe(RECIPE_ID)
 const MULTICUT = resolveRecipe(RECIPE_ID_MULTICUT)
+const MULTI_IMAGE = resolveRecipe(RECIPE_ID_MULTI_IMAGE)
 const SOURCE = 'https://cdn.example.com/product.jpg'
 const NS = 'sig_abc123'
 
@@ -102,6 +104,31 @@ describe('multicut 9s recipe', () => {
     ])
     expect(cfg.endcard.facts).toEqual(facts)
     expect(cfg.endcard.cta).toContain('09 123 4567')
+  })
+})
+
+describe('Candidate 4 multi-image visual contract', () => {
+  const facts = {
+    phone: '0800 287 888',
+    url: 'ctstours.co.nz/china',
+    departure: '15 Oct 2026',
+    price: 'From NZD $3,480',
+  }
+  it('三张图、上方 logo、分层大字端卡全部进入真实 renderer config', () => {
+    const cfg = buildRecipeAssembleConfig({
+      recipe: MULTI_IMAGE,
+      profile: {},
+      localPaths: ['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4'],
+      captionsByRole: { hook: 'China, closer than ever', middle: 'Beyond the postcard' },
+      ctaFacts: facts,
+      bgmAbsPath: '/tmp/music.mp3',
+      brandKit: '/tmp/brandkit',
+      outputPath: '/tmp/final.mp4',
+    })
+    expect(cfg.watermark_y).toBe(120)
+    expect(cfg.endcard.cta).toBe(facts.phone)
+    expect(cfg.endcard.offer).toEqual([facts.price, facts.departure])
+    expect(cfg.endcard.url).toBe(facts.url)
   })
 })
 

@@ -745,7 +745,8 @@ export async function runRecipeSequence({ wo, recipe, tmp, deps }) {
   })
 
   // 10. 生产 receipt validator(R12)
-  const sourceImageUrl = wo.brief.clip_generation_plan[0].source_image_url
+  const sourceImageUrls = wo.brief.clip_generation_plan.map((p) => p.source_image_url)
+  const sourceImageUrl = sourceImageUrls[0]
   const receipt = buildExecutedReceipt({
     recipe,
     hookText,
@@ -753,6 +754,7 @@ export async function runRecipeSequence({ wo, recipe, tmp, deps }) {
     captionsByRole,
     ctaFacts,
     sourceImageUrl,
+    sourceImageUrls,
     executed,
     music,
     final: finalProbed,
@@ -767,7 +769,11 @@ export async function runRecipeSequence({ wo, recipe, tmp, deps }) {
     Buffer.from(JSON.stringify(receipt, null, 2)),
     'application/json',
   )
-  await uploadSignedFn(wo.uploads.srt.signed_url, Buffer.from(buildExecutedSrt({ recipe, hookText })), 'text/plain')
+  await uploadSignedFn(
+    wo.uploads.srt.signed_url,
+    Buffer.from(buildExecutedSrt({ recipe, hookText, captionsByRole })),
+    'text/plain',
+  )
 
   const caption = [hookText, ctaText].filter(Boolean).join(' · ')
   // blocker 1:recipe 单必须把 executed receipt 明文附在 complete body,server 会用共享
