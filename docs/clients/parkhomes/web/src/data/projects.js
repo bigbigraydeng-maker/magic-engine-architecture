@@ -64,7 +64,7 @@ export const projects = [
     cardLine: 'Five homes on Libby Lane, Howick.',
     listLine: 'Five homes on Libby Lane, Howick. Three to four bedrooms, 125.5–150m².',
     price: 'From $900k',
-    metaDescription: 'Five architecturally considered homes in Howick, East Auckland. Three to four bedrooms, 125.5–150m², from $900k. Under construction now.',
+    metaDescription: 'Five architecturally considered homes in Howick, East Auckland. Three to four bedrooms, 125.5–150m², from $900k. Now selling.',
     heading: 'Modern comfort in a well-established community',
     // Official copy — from parkhomes.nz/projects
     intro: [
@@ -215,9 +215,10 @@ export const projects = [
     footerAddress: 'Greenview · 10–12 Reynolds Rd, Pokihui',
     group: 'coming',
     // Client-supplied renders (2026-08-31). A third supplied photo (active
-    // earthworks) is excluded from public display per the no-construction-
-    // imagery policy applied sitewide to Riverside/Howick — kept on disk
-    // unreferenced (gv-earthworks-unused.webp) rather than shown.
+    // earthworks) is excluded per the no-construction-imagery policy applied
+    // sitewide to Riverside/Howick — deliberately not added to public/, since
+    // anything under public/ is served at a guessable URL regardless of
+    // whether the site code references it (Codex review, PR #1291).
     hero: '/img/greenview/gv-render-1.webp',
     card: '/img/greenview/gv-render-1.webp',
     images: [
