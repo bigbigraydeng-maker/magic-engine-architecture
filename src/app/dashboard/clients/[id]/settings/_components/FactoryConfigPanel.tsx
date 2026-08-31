@@ -42,6 +42,7 @@ interface Config {
 const RECIPE_OPTIONS: ReadonlyArray<{ value: string; label: string; version: number }> = [
   { value: 'single_image_i2v_pullback_12s', label: '单图 · 推近 + 拉远 12 秒 (v1)', version: 1 },
   { value: 'single_image_i2v_multicut_9s', label: '单图 · 三镜头速切 9 秒 (v1)', version: 1 },
+  { value: 'multi_image_i2v_multicut_9s', label: '多图 · 三镜头速切 9 秒 (v1)', version: 1 },
 ]
 
 /** 字段名跟装配脚本真正读的键一致(worker.mjs assemble)。改名前先看那边。 */

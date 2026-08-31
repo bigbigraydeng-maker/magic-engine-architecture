@@ -16,7 +16,7 @@ import {
   assertRecipeBriefComplete,
   buildFullRecipeBrief,
   parseFactoryRecipeConfig,
-  pickRecipeSourceOrReject,
+  pickRecipeSourcesOrReject,
   RecipeConfigError,
   resolveRecipe,
   type MulticutRecipeCopyInput,
@@ -309,7 +309,7 @@ async function persistDecision(
   // typed rejection(不再 accepted with undefined work_order_id · R6)。
   let recipeBriefApplied: Record<string, unknown> | null = null
   if (creativeRecipe) {
-    const picked = pickRecipeSourceOrReject(sourceImagePool, creativeRecipe)
+    const picked = pickRecipeSourcesOrReject(sourceImagePool, creativeRecipe)
     if ('rejection' in picked) {
       await supabaseAdmin
         .from('content_demand_signals')
@@ -317,13 +317,30 @@ async function persistDecision(
         .eq('id', signal.id)
       return { outcome: 'rejected', reject_reason: picked.rejection }
     }
+    let visualDirective: string | null = null
+    try {
+      if (industry) {
+        visualDirective = await getViralClipDirective(
+          industry,
+          detectContentGoal({
+            offer: (signal.evidence?.['verified_offer'] ? 'offer' : null) ?? clientOffer?.price_from ?? null,
+            campaign_angle: draft.angle,
+            channel_goal: goal?.primary_metric_key ?? null,
+          }),
+        )
+      }
+    } catch (e) {
+      console.error(`[factory] recipe visual director failed (signal ${signal.id}): ${e instanceof Error ? e.message : e}`)
+    }
     // 生成结构化 recipe copy 的兜底:evaluate 里没有专用生成器,用 angle 造一句 hook + 一句 CTA;
     // 若后端 A2 生成了 fullBrief 相关文案,worker 完成后 receipt 会用真实播放的 hookText/ctaText。
     const copy = buildRecipeCopyFromAngle(draft.angle, creativeRecipe)
     recipeBriefApplied = buildFullRecipeBrief({
       recipe: creativeRecipe,
       angle: draft.angle,
-      sourceImageUrl: picked.source,
+      sourceImageUrl: picked.sources[0],
+      sourceImageUrls: picked.sources,
+      visualDirective,
       creativeProfile,
       copy,
       ctaFacts: verifiedCta,
