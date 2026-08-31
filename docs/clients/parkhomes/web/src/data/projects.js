@@ -216,8 +216,9 @@ export const projects = [
     group: 'coming',
     // Client-supplied renders (2026-08-31). A third supplied photo (active
     // earthworks) is excluded from public display per the no-construction-
-    // imagery policy applied sitewide to Riverside/Howick — kept on disk
-    // unreferenced (gv-earthworks-unused.webp) rather than shown.
+    // imagery policy applied sitewide to Riverside/Howick — moved out of
+    // web/public (see ../../renders-raw/gv-earthworks-unused.webp) so it is
+    // not copied into the deployed site.
     hero: '/img/greenview/gv-render-1.webp',
     card: '/img/greenview/gv-render-1.webp',
     images: [
