@@ -64,7 +64,7 @@ export const projects = [
     cardLine: 'Five homes on Libby Lane, Howick.',
     listLine: 'Five homes on Libby Lane, Howick. Three to four bedrooms, 125.5–150m².',
     price: 'From $900k',
-    metaDescription: 'Five architecturally considered homes in Howick, East Auckland. Three to four bedrooms, 125.5–150m², from $900k. Under construction now.',
+    metaDescription: 'Five architecturally considered homes in Howick, East Auckland. Three to four bedrooms, 125.5–150m², from $900k — now selling.',
     heading: 'Modern comfort in a well-established community',
     // Official copy — from parkhomes.nz/projects
     intro: [
