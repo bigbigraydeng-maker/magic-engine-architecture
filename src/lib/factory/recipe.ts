@@ -500,7 +500,7 @@ export function buildRecipePlan(args: {
     .map((v) => v.trim())
   const requiredSources = recipe.source_image_mode === 'distinct' ? recipe.segments.length : 1
   const sources = recipe.source_image_mode === 'distinct'
-    ? [...new Set(requested)].slice(0, recipe.segments.length)
+    ? Array.from(new Set(requested)).slice(0, recipe.segments.length)
     : requested.slice(0, 1)
   if (sources.length < requiredSources) {
     throw new Error(
@@ -943,9 +943,9 @@ export function pickRecipeSourcesOrReject(
   pool: ReadonlyArray<string | null | undefined>,
   recipe: WinnerRecipe,
 ): RecipeSourcesPick {
-  const sources = [...new Set(pool
+  const sources = Array.from(new Set(pool
     .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-    .map((v) => v.trim()))]
+    .map((v) => v.trim())))
   const required = recipe.source_image_mode === 'distinct' ? recipe.segments.length : 1
   if (sources.length >= required) return { sources: sources.slice(0, required) }
   return {

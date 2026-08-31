@@ -1023,7 +1023,7 @@ export function buildExecutedSrt({ recipe, hookText, captionsByRole }) {
 /**
  * server-side planner(与 recipe.ts buildRecipePlan 对齐;由 shape-agreement 校验)。
  */
-export function buildRecipePlan({ recipe, angle, sourceImageUrl, sourceImageUrls, visualDirective, keyNamespace }) {
+export function buildRecipePlan({ recipe, angle, sourceImageUrl, sourceImageUrls, visualDirective = null, keyNamespace }) {
   const requested = (sourceImageUrls ?? [sourceImageUrl])
     .filter((v) => typeof v === 'string' && v.trim().length > 0)
     .map((v) => v.trim())
