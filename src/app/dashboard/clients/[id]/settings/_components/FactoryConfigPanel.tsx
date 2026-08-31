@@ -28,7 +28,14 @@ interface Config {
   allow_b_track_landmark_ads: boolean
   auto_order_enabled: boolean
   creative_profile: Style
+  /** 版本化 winner recipe(合同 5469105522 §1)。null = 走 legacy 分镜路径。 */
+  creative_recipe: { id: string; version: number } | null
 }
+
+/** 目前已注册的 recipe。新增 recipe = 平台层升级,必先走 me-platform-tier-gate。 */
+const RECIPE_OPTIONS: ReadonlyArray<{ value: string; label: string; version: number }> = [
+  { value: 'single_image_i2v_pullback_12s', label: '单图 · 推近 + 拉远 12 秒 (v1)', version: 1 },
+]
 
 /** 字段名跟装配脚本真正读的键一致(worker.mjs assemble)。改名前先看那边。 */
 interface Style {
@@ -76,6 +83,8 @@ interface Draft {
   captionMode: string
   xfade: string
   endcardPanel: 'default' | 'on' | 'off'
+  /** '' = 未配 recipe(legacy 路径);否则 = 已注册 recipe id */
+  recipeId: string
 }
 
 const toDraft = (c: Config): Draft => ({
@@ -92,6 +101,7 @@ const toDraft = (c: Config): Draft => ({
   captionMode: c.creative_profile?.caption_mode ?? '',
   xfade: c.creative_profile?.xfade != null ? String(c.creative_profile.xfade) : '',
   endcardPanel: c.creative_profile?.endcard_panel == null ? 'default' : (c.creative_profile.endcard_panel ? 'on' : 'off'),
+  recipeId: c.creative_recipe?.id ?? '',
 })
 
 const eqDraft = (a: Draft, b: Draft) =>
@@ -100,13 +110,14 @@ const eqDraft = (a: Draft, b: Draft) =>
   a.allowLandmark === b.allowLandmark &&
   a.autoOrder === b.autoOrder && a.music === b.music && a.musicMood === b.musicMood &&
   a.look === b.look && a.captionMode === b.captionMode && a.xfade === b.xfade &&
-  a.endcardPanel === b.endcardPanel
+  a.endcardPanel === b.endcardPanel && a.recipeId === b.recipeId
 
 export function FactoryConfigPanel({ clientId }: Props) {
   const [state, setState] = useState<PanelState>({ phase: 'loading' })
   const [draft, setDraft] = useState<Draft>(toDraft({
     publish_target: null, factory_goal_id: null, verified_offer: null,
     allow_b_track_landmark_ads: false, auto_order_enabled: false, creative_profile: EMPTY_STYLE,
+    creative_recipe: null,
   }))
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<string | null>(null)
@@ -156,6 +167,12 @@ export function FactoryConfigPanel({ clientId }: Props) {
             xfade: draft.xfade.trim() === '' ? null : Number(draft.xfade),
             endcard_panel: draft.endcardPanel === 'default' ? null : draft.endcardPanel === 'on',
           },
+          creative_recipe: draft.recipeId
+            ? {
+                id: draft.recipeId,
+                version: RECIPE_OPTIONS.find((r) => r.value === draft.recipeId)?.version ?? 1,
+              }
+            : null,
         }),
       })
       const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
@@ -373,6 +390,28 @@ export function FactoryConfigPanel({ clientId }: Props) {
             音乐文件要放在制作机的共享音乐目录里;找不到时会按上面的情绪自动挑一首。
             白字 logo(如 Oztop)结尾卡要选<span className="font-medium text-slate-600">「不套」</span>,否则字会看不见。
           </p>
+        </div>
+
+        {/* 出片配方 —— 版本化 winner recipe(合同 5469105522 §1)。选了 recipe = 走强约束路径:
+            单张源图 + 推近 / 拉远 两段 5s I2V + ~2.8s 结尾卡 + 转场 0.35 → 成片 10–12s。 */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">出片配方(可选)</p>
+          <p className="mt-0.5 text-xs text-slate-400">
+            默认<span className="font-medium text-slate-600">「不选」</span> = 走通用分镜路径(多段库存 + 生成拼)。
+            选了配方 = <span className="font-medium text-slate-600">strict 单图 · 推近 + 拉远 12 秒</span>,
+            系统直接按配方出片,任何不符(缺源图 / 时长 / 字幕格式)一律 fail-closed,不冒充成品发出去。
+          </p>
+          <select
+            value={draft.recipeId}
+            onChange={(e) => setDraft((d) => ({ ...d, recipeId: e.target.value }))}
+            disabled={saving}
+            className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+          >
+            <option value="">不选(默认 · 通用分镜)</option>
+            {RECIPE_OPTIONS.map((r) => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </select>
         </div>
 
         {/* 自动排产 —— 这是唯一会自动花钱的开关,放在最显眼处并写清楚代价 */}

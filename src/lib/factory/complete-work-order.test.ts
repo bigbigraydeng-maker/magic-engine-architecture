@@ -14,6 +14,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { completeWorkOrder } from './complete-work-order'
+import { resolveRecipe } from './recipe'
 
 type Resp = { table: string; data: unknown; error: unknown }
 type Filter = { table: string; method: string; args: unknown[] }
@@ -64,6 +65,54 @@ const PARAMS = {
   newClips: [],
 }
 
+const RECIPE = resolveRecipe('single_image_i2v_pullback_12s')!
+const SOURCE = 'https://cdn.example.com/client-source.jpg'
+const RECIPE_WO = {
+  ...WO,
+  brief: {
+    creative_recipe: { id: RECIPE.id, version: RECIPE.version },
+    clip_generation_plan: RECIPE.segments.map((s, i) => ({
+      segment_role: s.role,
+      position: i,
+      source_image_url: SOURCE,
+    })),
+  },
+}
+const RECIPE_CLIPS = RECIPE.segments.map((s, i) => ({
+  storage_url: `clips/b-generated/c-1/wo-1_${s.role}_${i}.mp4`,
+  track: 'b_generated',
+  scene_tag: 'client_source_derived',
+  duration_seconds: s.duration_hint_s,
+  idempotency_key: `sig-1:${s.role}:${i}`,
+  motion_type: s.motion_type,
+  source_meta: { recipe: RECIPE.id, request_id: `req-${i}` },
+}))
+const RECIPE_RECEIPT = {
+  recipe: { id: RECIPE.id, version: RECIPE.version },
+  motion: false,
+  tts: false,
+  segments: RECIPE.segments.map((s, i) => ({
+    role: s.role,
+    planned_duration_s: s.duration_hint_s,
+    actual_duration_s: s.duration_hint_s,
+    motion_type: s.motion_type,
+    camera_action: s.camera_action,
+    transition_out: s.transition,
+    clip_source: 'ai_i2v',
+    source_image_url: SOURCE,
+    provider: { name: 'muapi', request_id: `req-${i}` },
+    caption: i === 0 ? 'Discover China' : '',
+  })),
+  endcard: {
+    planned_duration_s: RECIPE.endcard_dur,
+    cta: 'Learn more',
+    transition_in: RECIPE.endcard_transition,
+  },
+  music: { id: 'epic-a', source: 'library', loudness_lufs: -18 },
+  xfade: RECIPE.xfade,
+  final: { duration_s: 12, loudness_lufs: -20 },
+}
+
 const okClient = (o: Record<string, unknown> = {}): Resp =>
   ({ table: 'clients', data: { brand_redline_phrases: [], factory_config: {}, ...o }, error: null })
 const okBrief: Resp = { table: 'master_briefs', data: { excluded_topics: [] }, error: null }
@@ -99,6 +148,75 @@ describe('completeWorkOrder — 交付落点(防管道断裂)', () => {
     // 没有这两条,任何 worker 都能覆盖任意状态的工单(包括已 approved 的)
     expect(woFilters).toContainEqual({ table: 'content_work_orders', method: 'eq', args: ['claimed_by', 'worker-1'] })
     expect(woFilters).toContainEqual({ table: 'content_work_orders', method: 'in', args: ['status', ['claimed', 'producing']] })
+  })
+})
+
+describe('completeWorkOrder — recipe receipt 服务端边界', () => {
+  it('replan marker 壳单即使没有 creative_recipe 也无条件 422，数据库零查询', async () => {
+    const { db, consumed } = mockSupabase([])
+    const r = await completeWorkOrder(db, {
+      ...PARAMS,
+      wo: {
+        ...WO,
+        brief: {
+          recipe_replan_required: true,
+          review_feedback: '声音和节奏需要重做',
+        },
+      },
+    })
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.status).toBe(422)
+    expect(!r.ok && r.error).toMatch(/recipe replan required/)
+    expect(consumed()).toBe(0)
+  })
+
+  it('recipe 单缺 receipt → 422，数据库零查询', async () => {
+    const { db, consumed } = mockSupabase([])
+    const r = await completeWorkOrder(db, {
+      ...PARAMS,
+      wo: RECIPE_WO,
+      newClips: RECIPE_CLIPS,
+    })
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.status).toBe(422)
+    expect(!r.ok && r.error).toMatch(/recipe_receipt required/)
+    expect(consumed()).toBe(0)
+  })
+
+  it('receipt provider request_id 与 new_clips 不一致 → 422', async () => {
+    const { db, consumed } = mockSupabase([])
+    const badClips = RECIPE_CLIPS.map((c, i) =>
+      i === 0 ? { ...c, source_meta: { ...c.source_meta, request_id: 'forged' } } : c,
+    )
+    const r = await completeWorkOrder(db, {
+      ...PARAMS,
+      wo: RECIPE_WO,
+      newClips: badClips,
+      recipeReceipt: RECIPE_RECEIPT,
+    })
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.status).toBe(422)
+    expect(!r.ok && r.error).toMatch(/request_id/)
+    expect(consumed()).toBe(0)
+  })
+
+  it('完整 receipt + 两段真实 I2V metadata → 才允许进入 in_review', async () => {
+    const { db, updates } = mockSupabase([
+      okClient(),
+      okBrief,
+      { table: 'video_clips', data: [], error: null },
+      { table: 'video_clips', data: [{ id: 'clip-1' }, { id: 'clip-2' }], error: null },
+      okUpdate,
+    ])
+    const r = await completeWorkOrder(db, {
+      ...PARAMS,
+      wo: RECIPE_WO,
+      newClips: RECIPE_CLIPS,
+      recipeReceipt: RECIPE_RECEIPT,
+    })
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.status).toBe('in_review')
+    expect(updates.find((u) => u.table === 'content_work_orders')?.payload.status).toBe('in_review')
   })
 })
 
