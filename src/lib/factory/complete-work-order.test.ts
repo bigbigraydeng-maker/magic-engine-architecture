@@ -218,6 +218,81 @@ describe('completeWorkOrder — recipe receipt 服务端边界', () => {
     expect(r.ok && r.status).toBe('in_review')
     expect(updates.find((u) => u.table === 'content_work_orders')?.payload.status).toBe('in_review')
   })
+
+  it('多图 recipe 按段核对各自源图，三张不同图片可进入 in_review', async () => {
+    const recipe = resolveRecipe('multi_image_i2v_multicut_9s')!
+    const sources = recipe.segments.map((_, i) => `https://cdn.example.com/client-source-${i}.jpg`)
+    const wo = {
+      ...WO,
+      brief: {
+        creative_recipe: { id: recipe.id, version: recipe.version },
+        clip_generation_plan: recipe.segments.map((s, i) => ({
+          segment_role: s.role,
+          position: i,
+          source_image_url: sources[i],
+        })),
+      },
+    }
+    const clips = recipe.segments.map((s, i) => ({
+      storage_url: `clips/b-generated/c-1/wo-1_${s.role}_${i}.mp4`,
+      track: 'b_generated',
+      scene_tag: 'client_source_derived',
+      duration_seconds: s.duration_hint_s,
+      idempotency_key: `sig-multi:${s.role}:${i}`,
+      motion_type: s.motion_type,
+      source_meta: { recipe: recipe.id, request_id: `req-multi-${i}` },
+    }))
+    const receipt = {
+      recipe: { id: recipe.id, version: recipe.version },
+      motion: false,
+      tts: false,
+      segments: recipe.segments.map((s, i) => ({
+        role: s.role,
+        planned_duration_s: s.duration_hint_s,
+        actual_duration_s: s.gen_duration_s ?? s.duration_hint_s,
+        gen_duration_s: s.gen_duration_s,
+        motion_type: s.motion_type,
+        camera_action: s.camera_action,
+        transition_out: s.transition,
+        clip_source: 'ai_i2v',
+        source_image_url: sources[i],
+        provider: { name: 'muapi', request_id: `req-multi-${i}` },
+        caption: i === 0 ? 'China, closer than ever' : i === 1 ? 'Beyond the postcard' : '',
+      })),
+      endcard: {
+        planned_duration_s: recipe.endcard_dur,
+        cta: 'Book your China journey',
+        transition_in: recipe.endcard_transition,
+        facts: {
+          phone: '0800 287 888',
+          url: 'https://www.ctstours.co.nz/tours/china/discovery/beijing-xian',
+          departure: '15 Oct 2026',
+          price: 'From NZD $3,480',
+        },
+      },
+      music: { id: 'Jade River Journey.mp3', source: 'library', loudness_lufs: -18 },
+      xfade: recipe.xfade,
+      final: { duration_s: 9.1, loudness_lufs: -20 },
+    }
+    const { db, updates } = mockSupabase([
+      okClient({ factory_config: { allow_b_track_landmark_ads: true } }),
+      okBrief,
+      { table: 'video_clips', data: [], error: null },
+      { table: 'video_clips', data: clips.map((_, i) => ({ id: `clip-${i + 1}` })) , error: null },
+      okUpdate,
+    ])
+
+    const r = await completeWorkOrder(db, {
+      ...PARAMS,
+      wo,
+      newClips: clips,
+      recipeReceipt: receipt,
+    })
+
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.status).toBe('in_review')
+    expect(updates.find((u) => u.table === 'content_work_orders')?.payload.status).toBe('in_review')
+  })
 })
 
 describe('completeWorkOrder — 红线复扫', () => {

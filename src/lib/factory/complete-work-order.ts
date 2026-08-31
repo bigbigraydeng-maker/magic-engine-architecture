@@ -45,7 +45,7 @@ export interface CompleteParams {
  * - brief 有 creative_recipe → 必须携带 receipt,且必须通过 shared assertRecipeReceipt
  * - new_clips 数量必须等于 recipe.segments 数
  * - receipt.recipe.id/version 必须匹配 brief.creative_recipe
- * - receipt.segments[i].source_image_url 必须等于 brief.clip_generation_plan[0].source_image_url
+ * - receipt.segments[i].source_image_url 必须等于 brief.clip_generation_plan[i].source_image_url
  * - new_clips[i].source_meta.recipe 必须携带 recipe.id;source_meta.request_id 必须与 receipt provider 对齐
  */
 function assertRecipeCompletion(
@@ -85,12 +85,12 @@ function assertRecipeCompletion(
   const plan = Array.isArray(briefObj.clip_generation_plan)
     ? (briefObj.clip_generation_plan as Array<Record<string, unknown>>)
     : []
-  const expectedSource = plan[0]?.source_image_url
   const rec = recipeReceipt as { segments?: Array<Record<string, unknown>> }
   const segs = Array.isArray(rec.segments) ? rec.segments : []
   for (let i = 0; i < segs.length; i++) {
+    const expectedSource = plan[i]?.source_image_url
     if (segs[i]?.source_image_url !== expectedSource) {
-      return { ok: false, error: `recipe_receipt.segments[${i}].source_image_url != brief plan source (${String(expectedSource)})` }
+      return { ok: false, error: `recipe_receipt.segments[${i}].source_image_url != brief plan[${i}] source (${String(expectedSource)})` }
     }
   }
   for (let i = 0; i < newClips.length; i++) {
