@@ -352,6 +352,26 @@ export interface SanityIssue {
   fix_suggestion: string
 }
 
+/** A non-fatal data gap that must travel with the persisted report. */
+export type DiscoveryWarningStage = 'seed_enrichment' | 'domain_metrics'
+
+export interface DiscoveryWarning {
+  stage: DiscoveryWarningStage
+  /** Provider task code when one was returned. Kept internal; UI shows message only. */
+  error_code?: number
+  message: string
+}
+
+export interface DiscoveryReportMeta {
+  model: string
+  tool_calls: number
+  cost_usd: number
+  duration_ms: number
+  truncated: boolean
+  /** Optional so every report persisted before this contract remains valid. */
+  warnings?: DiscoveryWarning[]
+}
+
 // ─── Top-level report ─────────────────────────────────────────────────────────
 
 export interface DiscoveryReport {
@@ -490,13 +510,7 @@ export interface DiscoveryReport {
   advanced?: AdvancedDiscoveryPayload | null
 
   /** Run telemetry — written by agent.ts, not by Claude */
-  meta: {
-    model: string
-    tool_calls: number
-    cost_usd: number
-    duration_ms: number
-    truncated: boolean              // true if hit tool-call cap before finishing
-  }
+  meta: DiscoveryReportMeta
 }
 
 // ─── Advanced discovery ───────────────────────────────────────────────────────

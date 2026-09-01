@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getKeywordsForSite, getKeywordIdeas, bulkKeywordVolume } from '../labs'
+import {
+  DataForSeoTaskError,
+  getKeywordsForSite,
+  getKeywordIdeas,
+  bulkKeywordVolume,
+} from '../labs'
 
 vi.mock('@/lib/validation-utils', () => ({ validateEnvVar: () => 'test' }))
 
@@ -125,7 +130,10 @@ describe('bulkKeywordVolume — 端点必须是真实存在的那个', () => {
         }],
       }),
     } as Response))
-    await expect(bulkKeywordVolume(['test'])).rejects.toThrow(/40210/)
+    const promise = bulkKeywordVolume(['test'])
+    await expect(promise).rejects.toThrow(/40210/)
+    await expect(promise).rejects.toBeInstanceOf(DataForSeoTaskError)
+    await expect(promise).rejects.toMatchObject({ errorCode: 40210 })
   })
 
   // 严格路径决策的锁：畸形响应（网关抢答、代理裁剪）里 status_code 缺失
