@@ -333,21 +333,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       }
 
       case 'start_render': {
-        // 魏征 M4:已排发/已发布的内容不许再悄悄换片——发出去的必须和审过的是同一条
-        if (loaded.post.status === 'scheduled' || loaded.post.status === 'published') {
-          return NextResponse.json({ error: '这条已经进发布了，不能再重做。真要换，先联系我们把它撤下来' }, { status: 409 })
-        }
-        const production = loaded.production
-        if (!production?.method) {
-          return NextResponse.json({ error: '先选制作方式(自己录 / 数字人)' }, { status: 400 })
-        }
-        if (production.method === 'self_record' && !production.recording_url) {
-          return NextResponse.json({ error: '还没有上传你录的视频' }, { status: 400 })
-        }
         // 🔴 2026-09-02：讲课式做片管线(content_factory_render_jobs → 旧 Render worker)已退役，
         // 没有 worker 消费这张表了。讲课式当前无客户在用(PM 口径 2026-09-02)，此按钮先返回明确
         // 错误而不是悄悄排一个永远没人处理的任务；后续讲课式会重做成"边走边讲"模式，走的是独立的
         // walk-talk-proof.ts 配方(不依赖这条旧队列)，到时候这里要接新的入口，不是恢复旧的。
+        // 放在最前面：不能等用户选完制作方式、传完录像才告知——那样白费一次上传(Codex round1 P2)。
         return NextResponse.json(
           { error: '讲课式出片管线已退役，暂不可用；讲课式内容近期会改版为"边走边讲"模式' },
           { status: 410 },

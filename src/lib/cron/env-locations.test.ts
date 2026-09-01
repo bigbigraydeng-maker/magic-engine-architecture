@@ -446,16 +446,18 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
     expect(() => envReadsIn('const { A, ...rest } = process.env', 'probe.ts')).toThrow(/无法静态判定/)
   })
 
-  // 🔴 2026-09-02：唯一的 worker 服务 content-factory-render-worker 已退役（旧拼片管线，
-  // 出片已转本机 scripts/factory-worker），render.yaml 现在零个 type:worker。下面这组
-  // 「worker ↔ ENV.md」一致性审计在没有审计对象时没意义，先跳过而不是让它假红 ——
-  // 等下一个 worker 服务出现（比如讲课式改版「边走边讲」要另起一个）再自动跑起来，
-  // 不用手动改回来：判据是 workers.length，不是写死的开关。
-  describe.skipIf(workers.length === 0)('worker 服务存在时的一致性审计', () => {
-
+  // 🔴 2026-09-02：content-factory-render-worker 已退役（旧拼片管线，出片已转本机
+  //    scripts/factory-worker），render.yaml 里摘掉了这个 type:worker 服务声明。
+  //    但 scripts/render-worker/{Dockerfile,worker.ts} 本身还留在仓库（清理是后续任务），
+  //    所以下面这条解析器管线测试直接钉死这个固定夹具的路径，不再从 render.yaml /
+  //    `workers` 数组取——它验证的是「递归 import 解析器本身好不好使」，跟 render.yaml
+  //    里现在有没有、有哪个 worker 无关。这样以后任意新 worker（哪怕跟这条拼片管线
+  //    完全无关，比如讲课式「边走边讲」）加进 render.yaml 时，不会被这条断言拽着
+  //    去断言它的闭包里必须有 scene-plan.ts / Anthropic / Muapi ——那是这条已退役
+  //    管线的私有事实，不是所有 worker 的共性（Codex round1 P2）。
   it('前提成立：依赖闭包是递归的，相对路径和别名都跟得到（Codex thread L664）', () => {
-    const entry = entrypointOf(workers[0].dockerfilePath)
-    expect(entry, '拿不到 worker 入口，下面几条等于没跑').not.toBeNull()
+    const entry = entrypointOf('scripts/render-worker/Dockerfile')
+    expect(entry, '拿不到夹具 worker 入口，下面几条等于没跑').not.toBeNull()
     const closure = moduleClosure(entry!)
 
     // 空转保护：只有入口一个文件 = 解析链断了，不是「它真的什么都不 import」
@@ -475,6 +477,13 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
     // 反向对照：不在这条链上的变量不许被误判成读得到
     expect(readsVia(entry!, 'THIS_ENV_DOES_NOT_EXIST_ANYWHERE')).toEqual([])
   })
+
+  // 🔴 2026-09-02：唯一的 worker 服务 content-factory-render-worker 已退役，render.yaml
+  // 现在零个 type:worker。下面这组通用的「worker ↔ ENV.md」一致性审计（不含任何这条旧
+  // 管线专属的断言，全部走 `workers` / `labelled` 动态取值）在没有审计对象时没意义，先跳过
+  // 而不是让它假红 —— 等下一个 worker 服务出现再自动跑起来，不用手动改回来：判据是
+  // workers.length，不是写死的开关。
+  describe.skipIf(workers.length === 0)('worker 服务存在时的一致性审计', () => {
 
   it('前提成立：render.yaml 解析到了 worker，ENV.md 里也确实有点名 worker 的标注', () => {
     expect(workers.length).toBeGreaterThan(0)
