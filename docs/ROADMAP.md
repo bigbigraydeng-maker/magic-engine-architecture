@@ -754,3 +754,26 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **P.G.3** 澄清 skill 在五道 Build Gate 中的位置为 Gate 0 / Pre-Gate —— 子牙终审问题 5。SKILL.md 现在"红线 6"与"与既有治理机制的关系"表两处对 skill 从属关系的表述矛盾（一说是 Gate 4 前置子步骤，一说强化 Gate 2）。改成"Gate 0 / Pre-Gate，不替代任何后续 Gate，分歧走 owner 仲裁"。
 - [ ] **P.G.4** 抽 `docs/registry/pillars.md` 作为 6 支柱唯一名单来源 —— 子牙终审问题 6。当前 SKILL.md、CLAUDE.md 两处硬编码"SEO / 社媒 / 广告 / 口碑 / AI 可见度 / 竞品"，跟 skill 自己声明的"支柱数量是 PM 拍板项"直接冲突。建仓后 skill、CLAUDE.md、其他引用点全部改成引用 registry 文件。同类还有五道 Build Gate 顺序 / 客户名单，可一并统一到 `docs/registry/` 下。
 - [ ] **P.G.5** 平台候选复查治理界面 —— Codex 复审 P2 遗留意见。当前 `platform_candidate_review_due` 待办的 href 指向 GitHub `blob` 只读页面，PM/FDE 收到待办后要同时改 `docs/registry/platform-candidates.md` 表 + `src/lib/pm-todo/platform-candidate-reviews.ts` 数组，非技术收件人做不了。要么建一个真正的治理界面（可以直接更新证据 + 推下次复查日），要么把 `platform-candidate-reviews.ts` 里的日期改为从 markdown 表自动派生。当前 workaround：接到待办后回一句 "把 X 候选复查日推到 YYYY-MM-DD"，由 agent 帮改两处并提 PR。
+
+---
+
+## ME 会员制度五档 · 免费 / $39 / $199 / $499 / 定制 📋 2026-08-31 PM 拍板，四张合同票均为 SPEC DRAFT
+
+> 分档尺子是**「谁在干活」**（PM 原话，从旧三档沿用）：免费=系统搭好你自己用 · $39=系统把你摆出去 · $199=AI 替你干活 · $499=AI 替你花钱干活 · 定制=真人接管。
+> **旧的 NZ$500 起步版 / NZ$2,500 高级企业版固定报价已于 2026-08-31 全部作废**（PR [#1279](https://github.com/bigbigraydeng-maker/magic-engine/pull/1279) 把 `docs/registry/pricing-playbook-enterprise-fde.md` 标为 RETIRED）。**定制 / Enterprise 档 case by case 逐单报价，代码与对外材料一律不挂数字。** 已签客户不受影响。
+> 落地顺序是「先给客户一个网站和一个邮箱」，依赖 [#1269](https://github.com/bigbigraydeng-maker/magic-engine/issues/1269)（OpenSRS 域名 + 邮箱，Phase 0 未动）。
+
+**四张票全部是 SPEC DRAFT —— 没有 `BUILD CONTROL — GO BUILD` 之前任何窗口不许动手。**
+
+- [ ] **[#1273](https://github.com/bigbigraydeng-maker/magic-engine/issues/1273)** [风险 B] AI 单页站生成器 —— 免费档与 $39 档的第一块砖。
+      🔴 **技术路线已冻结：AI 只出结构化 JSON，绝不出 HTML。** 版面由模板决定。AI 吐 HTML 则每次结构不同 → 没法断言 noindex / 角标 / 无编造事实 → 扫街跑几百个会坏掉几十个而无从定位。多样性靠「模板 × 配色 × 首屏版式」的**可枚举组合**，不靠 AI 即兴。
+      🔴 **别重造**：`src/lib/tailor-made/` 已经是同形状流水线（AI 抽结构化数据 → 归一化 → 注入 HTML 模板 → 出成品，生产在跑行程单与画册），换的是对象不是形状。配套复用 `diagnostic/report-generator.ts` · `images/unsplash.ts` · `factory/stock-pipeline.ts` · `brief/jina.ts`。
+      ⚠️ **最大短板是配图**：没有商家真实照片只能用图库，同一条街几家同业配到同一张图会直接毁掉扫街杀伤力，必须按行业 + 氛围选并去重。
+      平台候选「AI 单页站生成器」已登记 `docs/registry/platform-candidates.md`（PR #1278 已合并）。
+- [ ] **[#1274](https://github.com/bigbigraydeng-maker/magic-engine/issues/1274)** [风险 A] 免费档 —— 认领、隔离与永不删除的生命周期。免费站边界：永久能用能发链接，但 **noindex 不收录 + 带 ME 角标 + 无邮箱 + 无自有域名** —— 这四条正是 $39 档的卖点。
+- [ ] **[#1275](https://github.com/bigbigraydeng-maker/magic-engine/issues/1275)** [风险 A] $39 订阅与四项解锁 —— **用 Stripe Billing，禁止自建订阅状态机**（承接 [#1122](https://github.com/bigbigraydeng-maker/magic-engine/issues/1122) 的 Build Control 决议）。$39 含自有域名 + **公司邮箱 1 个，第 2 个起 $9/月/箱**。`src/types/magic-engine.ts:7` 的 `ClientPlan` 需对齐五档，且 `custom` 档不许在代码里挂任何价格数字。
+- [ ] **[#1276](https://github.com/bigbigraydeng-maker/magic-engine/issues/1276)** [风险 A] 扫街预建站管道 —— 先把网站做好再去谈。口径：**不公开 · 一商家一链接 · 只用公开事实 · 不用商家照片和 logo**。
+
+**🔴 唯一卡住的数字**：CTS + Oztop 过去 30 天真实外部 API 消耗（美元）仍未到手（v0.4 就要求过）。**在它到位之前 $199 / $499 的具体额度不许写进代码**；任一档毛利 < 40% 就得调额度或加价。免费档与 $39 档不受此约束，可以先跑。
+
+**⚠️ 对外仍挂着已作废的旧价**：公开收费页 `magic-engine-pricing.pages.dev` 还显示 NZ$500 / NZ$2,500 三档。源码不在当前主力 Mac 上（线上是 37KB 自包含 HTML，可 curl 抓下来当基线重建）。改页面前先解决 Cloudflare 账号权限：该项目在 `hello@magicengine.cloud` 名下，本机 wrangler 登录身份看不到它。
