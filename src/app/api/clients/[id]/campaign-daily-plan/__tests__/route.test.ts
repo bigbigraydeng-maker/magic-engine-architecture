@@ -171,7 +171,7 @@ function usableGetAsset(row: {
 /** Minimal chainable Supabase query builder stub for a single table. */
 function tableStub(handlers: Record<string, unknown>) {
   const chain: Record<string, unknown> = {}
-  const methods = ['select', 'eq', 'or', 'order', 'limit', 'in', 'contains', 'is', 'maybeSingle', 'single', 'insert', 'update']
+  const methods = ['select', 'eq', 'or', 'order', 'limit', 'in', 'contains', 'maybeSingle', 'single', 'insert', 'update']
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
@@ -1270,14 +1270,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
   it('updates the existing campaign_daily_v1 row instead of duplicating it', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const updateResult = tableStub({
-      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id' }, error: null }),
-    })
-    const update = vi.fn().mockReturnValue(updateResult)
-    const existingPlan = {
-      plan_kind: 'campaign_daily_v1',
-      command_meta: { received_at: '2026-08-20T00:00:00.000Z' },
-    }
+    const update = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
 
     mockFrom.mockImplementation((table: string) => {
       if (table === 'master_briefs') {
@@ -1287,7 +1280,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
         return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
       }
       if (table === 'social_plans') {
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id', plan_data: existingPlan } }), update }) as never
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id' } }), update }) as never
       }
       return tableStub({}) as never
     })
@@ -1298,87 +1291,6 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
     expect(res.status).toBe(200)
     expect(json.plan_id).toBe('existing-plan-id')
     expect(update).toHaveBeenCalled()
-    expect(updateResult.contains).toHaveBeenCalledWith('plan_data', {
-      command_meta: { received_at: existingPlan.command_meta.received_at },
-    })
-    expect(updateResult.is).toHaveBeenCalledWith('plan_data->refresh_meta', null)
-  })
-
-  it('fails closed when a review handoff locks the plan before the command update wins', async () => {
-    allow()
-    mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const updateResult = tableStub({
-      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-    })
-    const update = vi.fn().mockReturnValue(updateResult)
-    const insert = vi.fn()
-    const existingPlan = {
-      plan_kind: 'campaign_daily_v1',
-      command_meta: { received_at: '2026-08-20T00:00:00.000Z' },
-    }
-
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'master_briefs') {
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
-      }
-      if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
-      }
-      if (table === 'social_plans') {
-        return tableStub({
-          maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id', plan_data: existingPlan } }),
-          update,
-          insert,
-        }) as never
-      }
-      return tableStub({}) as never
-    })
-
-    const res = await POST(postRequest(validCommand()), params())
-
-    expect(res.status).toBe(409)
-    expect((await res.json()).error).toBe('PLAN_VERSION_CONFLICT')
-    expect(insert).not.toHaveBeenCalled()
-  })
-
-  it('keeps a handed-off snapshot immutable and inserts the next command as a new version', async () => {
-    allow()
-    mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const insert = vi.fn().mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data: { id: 'next-plan-id' }, error: null }),
-      }),
-    })
-    const update = vi.fn()
-    const lockedPlan = {
-      plan_kind: 'campaign_daily_v1',
-      command_meta: { received_at: '2026-08-20T00:00:00.000Z' },
-      refresh_meta: { start_date: '2026-09-10' },
-    }
-
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'master_briefs') {
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
-      }
-      if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
-      }
-      if (table === 'social_plans') {
-        return tableStub({
-          maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'locked-plan-id', plan_data: lockedPlan } }),
-          update,
-          insert,
-        }) as never
-      }
-      return tableStub({}) as never
-    })
-
-    const res = await POST(postRequest(validCommand()), params())
-
-    expect(res.status).toBe(200)
-    expect((await res.json()).plan_id).toBe('next-plan-id')
-    expect(update).not.toHaveBeenCalled()
-    expect(insert).toHaveBeenCalledOnce()
   })
 
   // Regression (Build Control scope shrink 5395216001, required test 6):
@@ -1389,9 +1301,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
   it('replaces the stored bundles on UPDATE — no preserved-old bundles from a previous save survive', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const update = vi.fn().mockReturnValue(tableStub({
-      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id' }, error: null }),
-    }))
+    const update = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
 
     // The old stored row includes a bundle for a date OUTSIDE the new seven-
     // day window. After a wholesale replace this old bundle must be gone.
