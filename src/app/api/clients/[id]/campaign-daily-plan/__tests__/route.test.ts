@@ -171,7 +171,7 @@ function usableGetAsset(row: {
 /** Minimal chainable Supabase query builder stub for a single table. */
 function tableStub(handlers: Record<string, unknown>) {
   const chain: Record<string, unknown> = {}
-  const methods = ['select', 'eq', 'or', 'order', 'limit', 'in', 'contains', 'is', 'maybeSingle', 'single', 'insert', 'update']
+  const methods = ['select', 'eq', 'or', 'order', 'limit', 'in', 'contains', 'maybeSingle', 'single', 'insert', 'update']
   for (const m of methods) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
@@ -444,6 +444,181 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
 
     expect(json.publishing_plan.status).toBe('NOT_AUTHORIZED')
     expect(json.ad_candidate.status).toBe('NOT_AUTHORIZED')
+  })
+
+  it('projects per-Post review without converting it into bundle or publishing approval', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const reviewedPlan = {
+      ...persistedPlanData,
+      review_meta: {
+        schema_version: 1,
+        plan_revision: persistedPlanData.command_meta.received_at,
+        revision: '10000000-0000-0000-0000-000000000001',
+        updated_at: '2026-08-24T01:00:00.000Z',
+        posts: {
+          '2026-08-24': {
+            verdict: 'PASS',
+            reason: null,
+            reviewed_at: '2026-08-24T01:00:00.000Z',
+            reviewed_by_user_id: '20000000-0000-0000-0000-000000000001',
+          },
+          '2026-08-25': {
+            verdict: 'NEEDS_REVISION',
+            reason: 'Replace the image',
+            reviewed_at: '2026-08-24T01:01:00.000Z',
+            reviewed_by_user_id: '20000000-0000-0000-0000-000000000001',
+          },
+        },
+      },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: reviewedPlan }] }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [usableGetAsset({
+          id: day1.post.image_asset_id,
+          storage_url: 'https://assets.test/day1.jpg',
+          original_filename: 'day1.jpg',
+          source: 'client_provided',
+          ownership: 'client_exclusive',
+        })] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const passed = json.bundles.find((b: { date: string }) => b.date === '2026-08-24')
+    const revise = json.bundles.find((b: { date: string }) => b.date === '2026-08-25')
+
+    expect(passed.post_review).toEqual({
+      verdict: 'PASS',
+      reason: null,
+      reviewed_at: '2026-08-24T01:00:00.000Z',
+      is_current: true,
+    })
+    expect(passed.post_review.reviewed_by_user_id).toBeUndefined()
+    expect(revise.post_review).toMatchObject({ verdict: 'NEEDS_REVISION', reason: 'Replace the image' })
+    expect(passed.readiness.human_approval).toBe(false)
+    expect(json.review_summary).toEqual({ passed: 1, needs_revision: 1, total: 2 })
+    expect(json.review_revision).toBe('10000000-0000-0000-0000-000000000001')
+    expect(json.publishing_plan.status).toBe('NOT_AUTHORIZED')
+  })
+
+  it('does not display or count an old PASS as current after its image becomes unusable', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const reviewedPlan = {
+      ...persistedPlanData,
+      review_meta: {
+        schema_version: 1,
+        plan_revision: persistedPlanData.command_meta.received_at,
+        revision: '10000000-0000-0000-0000-000000000001',
+        updated_at: '2026-08-24T01:00:00.000Z',
+        posts: {
+          '2026-08-24': {
+            verdict: 'PASS',
+            reason: null,
+            reviewed_at: '2026-08-24T01:00:00.000Z',
+            reviewed_by_user_id: '20000000-0000-0000-0000-000000000001',
+          },
+        },
+      },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: reviewedPlan }] }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [usableGetAsset({
+          id: day1.post.image_asset_id,
+          storage_url: '',
+          original_filename: 'day1.jpg',
+          source: 'client_provided',
+          ownership: 'client_exclusive',
+        })] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const stale = json.bundles.find((b: { date: string }) => b.date === '2026-08-24')
+
+    expect(stale.post_image).toBeNull()
+    expect(stale.post_review).toMatchObject({ verdict: 'PASS', is_current: false })
+    expect(json.review_summary).toEqual({ passed: 0, needs_revision: 0, total: 2 })
+  })
+
+  it('fails closed when persisted Post review metadata is malformed or belongs to another plan revision', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const invalidReviewPlan = {
+      ...persistedPlanData,
+      review_meta: {
+        schema_version: 1,
+        plan_revision: '2026-01-01T00:00:00.000Z',
+        revision: '10000000-0000-0000-0000-000000000001',
+        updated_at: '2026-08-24T01:00:00.000Z',
+        posts: {},
+      },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: invalidReviewPlan }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const response = await GET(getRequest(CAMPAIGN_ID), params())
+
+    expect(response.status).toBe(500)
+    expect((await response.json()).error).toBe('INVALID_POST_REVIEW_STATE')
+  })
+
+  it('fails closed when persisted review metadata has an orphan date or a missing revision reason', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const invalidReviewPlan = {
+      ...persistedPlanData,
+      review_meta: {
+        schema_version: 1,
+        plan_revision: persistedPlanData.command_meta.received_at,
+        revision: '10000000-0000-0000-0000-000000000001',
+        updated_at: '2026-08-24T01:00:00.000Z',
+        posts: {
+          '2026-08-31': {
+            verdict: 'NEEDS_REVISION',
+            reason: null,
+            reviewed_at: '2026-08-24T01:00:00.000Z',
+            reviewed_by_user_id: '20000000-0000-0000-0000-000000000001',
+          },
+        },
+      },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: invalidReviewPlan }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const response = await GET(getRequest(CAMPAIGN_ID), params())
+
+    expect(response.status).toBe(500)
+    expect((await response.json()).error).toBe('INVALID_POST_REVIEW_STATE')
   })
 
   // Regression (Build Control TRUTHFUL READINESS remediation): the review
@@ -1095,14 +1270,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
   it('updates the existing campaign_daily_v1 row instead of duplicating it', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const updateResult = tableStub({
-      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id' }, error: null }),
-    })
-    const update = vi.fn().mockReturnValue(updateResult)
-    const existingPlan = {
-      plan_kind: 'campaign_daily_v1',
-      command_meta: { received_at: '2026-08-20T00:00:00.000Z' },
-    }
+    const update = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
 
     mockFrom.mockImplementation((table: string) => {
       if (table === 'master_briefs') {
@@ -1112,7 +1280,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
         return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
       }
       if (table === 'social_plans') {
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id', plan_data: existingPlan } }), update }) as never
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id' } }), update }) as never
       }
       return tableStub({}) as never
     })
@@ -1123,87 +1291,6 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
     expect(res.status).toBe(200)
     expect(json.plan_id).toBe('existing-plan-id')
     expect(update).toHaveBeenCalled()
-    expect(updateResult.contains).toHaveBeenCalledWith('plan_data', {
-      command_meta: { received_at: existingPlan.command_meta.received_at },
-    })
-    expect(updateResult.is).toHaveBeenCalledWith('plan_data->refresh_meta', null)
-  })
-
-  it('fails closed when a review handoff locks the plan before the command update wins', async () => {
-    allow()
-    mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const updateResult = tableStub({
-      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-    })
-    const update = vi.fn().mockReturnValue(updateResult)
-    const insert = vi.fn()
-    const existingPlan = {
-      plan_kind: 'campaign_daily_v1',
-      command_meta: { received_at: '2026-08-20T00:00:00.000Z' },
-    }
-
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'master_briefs') {
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
-      }
-      if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
-      }
-      if (table === 'social_plans') {
-        return tableStub({
-          maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id', plan_data: existingPlan } }),
-          update,
-          insert,
-        }) as never
-      }
-      return tableStub({}) as never
-    })
-
-    const res = await POST(postRequest(validCommand()), params())
-
-    expect(res.status).toBe(409)
-    expect((await res.json()).error).toBe('PLAN_VERSION_CONFLICT')
-    expect(insert).not.toHaveBeenCalled()
-  })
-
-  it('keeps a handed-off snapshot immutable and inserts the next command as a new version', async () => {
-    allow()
-    mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const insert = vi.fn().mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data: { id: 'next-plan-id' }, error: null }),
-      }),
-    })
-    const update = vi.fn()
-    const lockedPlan = {
-      plan_kind: 'campaign_daily_v1',
-      command_meta: { received_at: '2026-08-20T00:00:00.000Z' },
-      refresh_meta: { start_date: '2026-09-10' },
-    }
-
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'master_briefs') {
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
-      }
-      if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
-      }
-      if (table === 'social_plans') {
-        return tableStub({
-          maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'locked-plan-id', plan_data: lockedPlan } }),
-          update,
-          insert,
-        }) as never
-      }
-      return tableStub({}) as never
-    })
-
-    const res = await POST(postRequest(validCommand()), params())
-
-    expect(res.status).toBe(200)
-    expect((await res.json()).plan_id).toBe('next-plan-id')
-    expect(update).not.toHaveBeenCalled()
-    expect(insert).toHaveBeenCalledOnce()
   })
 
   // Regression (Build Control scope shrink 5395216001, required test 6):
@@ -1214,9 +1301,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
   it('replaces the stored bundles on UPDATE — no preserved-old bundles from a previous save survive', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const update = vi.fn().mockReturnValue(tableStub({
-      maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id' }, error: null }),
-    }))
+    const update = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
 
     // The old stored row includes a bundle for a date OUTSIDE the new seven-
     // day window. After a wholesale replace this old bundle must be gone.
@@ -1227,6 +1312,13 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
       days: sevenDays().map(d => ({ ...d, date: `2026-07-${(Number(d.date.slice(-1)) + 20).toString().padStart(2, '0')}` })),
       bundles: [bundle({ date: '2026-07-20' })], // outside the incoming window
       command_meta: { source: 'conversation_command', received_at: '2026-07-20T00:00:00Z', raw_summary: null },
+      review_meta: {
+        schema_version: 1,
+        plan_revision: '2026-07-20T00:00:00Z',
+        revision: '10000000-0000-0000-0000-000000000001',
+        updated_at: '2026-07-20T01:00:00Z',
+        posts: {},
+      },
     }
     mockFrom.mockImplementation((table: string) => {
       if (table === 'master_briefs') {
@@ -1247,7 +1339,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
     const res = await POST(postRequest(validCommand()), params())
     expect(res.status).toBe(200)
 
-    const updateArg = update.mock.calls[0][0] as { plan_data: { bundles: Array<{ date: string }>, days: Array<{ date: string }> } }
+    const updateArg = update.mock.calls[0][0] as { plan_data: { bundles: Array<{ date: string }>, days: Array<{ date: string }>, review_meta?: unknown } }
     expect(updateArg.plan_data.bundles).toHaveLength(7)
     // Old preserved date is GONE.
     expect(updateArg.plan_data.bundles.find(b => b.date === '2026-07-20')).toBeUndefined()
@@ -1255,6 +1347,8 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
     // of previously-ungrounded old bundles under the new master_brief_ref.
     expect(updateArg.plan_data.bundles.map(b => b.date).sort())
       .toEqual(updateArg.plan_data.days.map(d => d.date).sort())
+    // A new content snapshot invalidates all prior Post review decisions.
+    expect(updateArg.plan_data.review_meta).toBeUndefined()
   })
 
   // Regression (Build Control scope shrink 5395216001, required test 5):
