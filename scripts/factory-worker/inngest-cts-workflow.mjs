@@ -24,6 +24,7 @@ import { resolveRecipe, computeRecipeFinalDuration } from './creative-recipe.mjs
 export const CTS_WORKFLOW_SCHEMA_VERSION = 1
 export const CTS_REQUEST_EVENT = 'me/factory.cts-candidate.requested'
 export const CTS_REVIEW_EVENT = 'me/factory.cts-candidate.reviewed'
+export const CTS_REVIEW_MATCH_FIELD = 'data.request_id'
 export const CTS_WORKFLOW_VERSION = 'cts-one-candidate-v1'
 
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -227,17 +228,6 @@ export function validateReviewData(data, request, candidate) {
   return { ...request, work_order_id: candidate.work_order_id, verdict: data.verdict }
 }
 
-export function reviewMatchExpression() {
-  return [
-    'event.data.request_id == async.data.request_id',
-    'event.data.client_id == async.data.client_id',
-    'event.data.recipe_id == async.data.recipe_id',
-    'async.data.schema_version == 1',
-    'async.data.no_publish == true',
-    '(async.data.verdict == "pass" || async.data.verdict == "fail")',
-  ].join(' && ')
-}
-
 export function createCtsWorkflowFunction(client, scope, receiptDir, env, adapters = {}) {
   const runWorker = adapters.runWorker ?? ((request) => runCandidateWorker(request, env))
   return client.createFunction(
@@ -270,7 +260,7 @@ export function createCtsWorkflowFunction(client, scope, receiptDir, env, adapte
       const reviewed = await step.waitForEvent('wait-for-ray-review', {
         event: CTS_REVIEW_EVENT,
         timeout: '7d',
-        if: reviewMatchExpression(),
+        match: CTS_REVIEW_MATCH_FIELD,
       })
       if (!reviewed) return { status: 'review_timed_out', request_id: request.request_id, work_order_id: candidate.work_order_id }
       const review = await step.run('validate-ray-review', () => validateReviewData(reviewed.data, request, candidate))

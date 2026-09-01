@@ -7,11 +7,12 @@ import test from 'node:test'
 import {
   CTS_REQUEST_EVENT,
   CTS_REVIEW_EVENT,
+  CTS_REVIEW_MATCH_FIELD,
   createRequestData,
+  createCtsWorkflowFunction,
   parseWorkerResult,
   persistReceipt,
   requireWorkflowEnv,
-  reviewMatchExpression,
   runCandidateWorker,
   validateRecipeCodeGate,
   validateRequestData,
@@ -46,6 +47,26 @@ function recipe(overrides = {}) {
     tts_enabled: false,
     kenburns: false,
     ...overrides,
+  }
+}
+
+function captureWorkflowHandler(capture) {
+  return {
+    createFunction: (_options, _trigger, handler) => {
+      capture.handler = handler
+      return handler
+    },
+  }
+}
+
+function candidateReceipt() {
+  return {
+    claimed: true,
+    ok: true,
+    client_id: CLIENT,
+    work_order_id: 'wo-1',
+    actual_cost_usd: 0.675,
+    status: 'in_review',
   }
 }
 
@@ -157,15 +178,53 @@ test('Ray review is fully correlated and cannot publish', () => {
   }
   assert.equal(validateReviewData(review, data, candidate).verdict, 'pass')
   assert.throws(() => validateReviewData({ ...review, no_publish: false }, data, candidate), /no_publish=true/)
-  assert.throws(() => validateReviewData({ ...review, work_order_id: 'other' }, data, candidate), /work_order_id mismatch/)
-  const expression = reviewMatchExpression()
-  for (const field of ['request_id', 'client_id', 'recipe_id']) {
-    assert.match(expression, new RegExp(`event\\.data\\.${field} == async\\.data\\.${field}`))
+  for (const field of ['request_id', 'client_id', 'recipe_id', 'work_order_id']) {
+    assert.throws(
+      () => validateReviewData({ ...review, [field]: 'other' }, data, candidate),
+      new RegExp(`${field} mismatch`),
+    )
   }
-  // work_order_id is created by the generation step, so it cannot exist on the
-  // original request event used by Inngest's pre-wake expression. It is still
-  // checked fail-closed above, after the review event wakes the function.
-  assert.doesNotMatch(expression, /event\.data\.work_order_id/)
+  assert.equal(CTS_REVIEW_MATCH_FIELD, 'data.request_id')
+})
+
+test('workflow wakes by request id then validates the full review fail-closed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cts-inngest-review-match-'))
+  try {
+    const capture = {}
+    createCtsWorkflowFunction(captureWorkflowHandler(capture), SCOPE, dir, {}, {
+      runWorker: candidateReceipt,
+    })
+    const data = request()
+    const review = {
+      schema_version: 1,
+      no_publish: true,
+      request_id: data.request_id,
+      client_id: data.client_id,
+      recipe_id: data.recipe_id,
+      work_order_id: 'wo-1',
+      verdict: 'pass',
+    }
+    let waitOptions
+    const step = {
+      run: async (_id, fn) => await fn(),
+      waitForEvent: async (_id, options) => {
+        waitOptions = options
+        return { data: review }
+      },
+    }
+
+    const result = await capture.handler({ event: { data }, step })
+
+    assert.deepEqual(waitOptions, {
+      event: CTS_REVIEW_EVENT,
+      timeout: '7d',
+      match: 'data.request_id',
+    })
+    assert.equal(result.status, 'visual_pass_no_publish')
+    assert.equal(result.verdict, 'pass')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('events are CTS-scoped and workflow source has no publish operation', () => {
