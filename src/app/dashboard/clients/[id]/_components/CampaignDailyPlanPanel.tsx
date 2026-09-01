@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import Link from 'next/link'
 
 interface Props {
   clientId: string
@@ -53,6 +54,15 @@ interface DailyPlanResponse {
   bundles: DailyBundle[]
   publishing_plan: { conversion_goal: string | null; destination: 'UNKNOWN'; status: 'NOT_AUTHORIZED' }
   ad_candidate: { creative_ref: string | null; goal: string; audience: string; destination: string; budget: string; status: 'NOT_AUTHORIZED' } | null
+  plan_id: string | null
+  plan_revision: string | null
+}
+
+interface ReviewHandoffResponse {
+  success: boolean
+  error?: string
+  posts?: { created: number; existing: number }
+  review_path?: string
 }
 
 const GROUNDING_LABEL: Record<DailyPlanResponse['grounding']['status'], string> = {
@@ -76,20 +86,39 @@ function isDaySelectable(day: DailyPlanResponse['days'][number], bundleDates: Se
   )
 }
 
+function tomorrowBrowserIso(): string {
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  return [
+    tomorrow.getFullYear(),
+    String(tomorrow.getMonth() + 1).padStart(2, '0'),
+    String(tomorrow.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
 export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   const [data, setData] = useState<DailyPlanResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [postExpanded, setPostExpanded] = useState(false)
+  const [reviewStartDate, setReviewStartDate] = useState('')
+  const [minimumStartDate, setMinimumStartDate] = useState('')
+  const [handingOff, setHandingOff] = useState(false)
+  const [handoffMessage, setHandoffMessage] = useState('')
+  const [reviewPath, setReviewPath] = useState('')
+  const handoffAbort = useRef<AbortController | null>(null)
+  const loadSequence = useRef(0)
 
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current
     setLoading(true)
     setError('')
     try {
       const res = await fetch(`/api/clients/${clientId}/campaign-daily-plan?campaign_id=${campaignId}`)
       const json = await res.json()
       if (!json.success) throw new Error(json.error ?? '加载失败')
+      if (sequence !== loadSequence.current) return
       setData(json)
       // Default to the first selectable day so Ray always lands on real content when it exists.
       const bundleDates = new Set((json.bundles as DailyBundle[] | undefined)?.map(b => b.date) ?? [])
@@ -97,13 +126,67 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
       setSelectedDate(firstSelectable?.date ?? json.days?.[0]?.date ?? null)
       setPostExpanded(false)
     } catch (err) {
-      setError((err as Error).message)
+      if (sequence === loadSequence.current) setError((err as Error).message)
     } finally {
-      setLoading(false)
+      if (sequence === loadSequence.current) setLoading(false)
     }
   }, [clientId, campaignId])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    handoffAbort.current?.abort()
+    const tomorrow = tomorrowBrowserIso()
+    setMinimumStartDate(tomorrow)
+    setReviewStartDate(tomorrow)
+    setHandoffMessage('')
+    setReviewPath('')
+    setHandingOff(false)
+    return () => handoffAbort.current?.abort()
+  }, [clientId, campaignId])
+
+  const handoffPosts = useCallback(async () => {
+    if (!data?.plan_id || !data.plan_revision) {
+      setHandoffMessage('✗ 当前没有可送审的完整七日计划')
+      return
+    }
+
+    handoffAbort.current?.abort()
+    const controller = new AbortController()
+    handoffAbort.current = controller
+    setHandingOff(true)
+    setHandoffMessage('')
+    setReviewPath('')
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign-daily-plan/save-posts-to-board`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaign_id: campaignId,
+          plan_id: data.plan_id,
+          expected_revision: data.plan_revision,
+          start_date: reviewStartDate,
+        }),
+        signal: controller.signal,
+      })
+      const json = await res.json() as ReviewHandoffResponse
+      if (controller.signal.aborted || handoffAbort.current !== controller) return
+      if (!json.success) throw new Error(json.error ?? '送审失败')
+      setHandoffMessage(`✓ 已送入审核队列：新建 ${json.posts?.created ?? 0} 条，已有 ${json.posts?.existing ?? 0} 条`)
+      setReviewPath(json.review_path ?? '')
+      await load()
+    } catch (err) {
+      if (
+        (err as Error).name !== 'AbortError' &&
+        !controller.signal.aborted &&
+        handoffAbort.current === controller
+      ) {
+        setHandoffMessage(`✗ ${(err as Error).message}；未获得发布授权，可安全重试`)
+      }
+    } finally {
+      if (handoffAbort.current === controller) setHandingOff(false)
+    }
+  }, [campaignId, clientId, data?.plan_id, data?.plan_revision, load, reviewStartDate])
 
   const selectedBundle = useMemo(
     () => data?.bundles.find(b => b.date === selectedDate) ?? null,
@@ -131,6 +214,42 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
       </div>
 
       <div className="px-4 py-4 space-y-5">
+        <div className="rounded-lg border border-me-ochre/20 bg-me-ivory/60 p-3">
+          <p className="text-xs font-semibold text-me-charcoal/70">刷新七日并送审</p>
+          <p className="mt-1 text-[11px] text-me-charcoal/50">
+            只平移现有七日文案与图片，并把 7 条 Facebook Post 放进人工审核队列；不会生成 Story/Reel，也不会发布。
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              type="date"
+              aria-label="七日计划开始日期"
+              min={minimumStartDate}
+              value={reviewStartDate}
+              onChange={event => setReviewStartDate(event.target.value)}
+              className="rounded-lg border border-black/15 bg-white px-2.5 py-1.5 text-xs text-me-charcoal/80"
+            />
+            <button
+              type="button"
+              disabled={handingOff || !data.plan_id || !data.plan_revision}
+              onClick={handoffPosts}
+              className="rounded-lg bg-me-ochre px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {handingOff ? '正在送审…' : '刷新七日并送审'}
+            </button>
+            <span className="text-[10px] font-medium text-me-charcoal/45">发布：NOT_AUTHORIZED</span>
+          </div>
+          {handoffMessage && (
+            <p className={`mt-2 text-xs ${handoffMessage.startsWith('✓') ? 'text-[#5C8A4A]' : 'text-[#C2453A]'}`}>
+              {handoffMessage}
+            </p>
+          )}
+          {reviewPath && (
+            <Link href={reviewPath} className="mt-1 inline-block text-xs font-medium text-me-ochre hover:underline">
+              打开 Launch Hub 审核这 7 条 Post →
+            </Link>
+          )}
+        </div>
+
         {/* 7-day grid — every day with content is selectable */}
         <div>
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">七日排期</p>
