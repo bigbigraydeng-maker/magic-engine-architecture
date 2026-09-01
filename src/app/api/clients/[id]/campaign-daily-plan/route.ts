@@ -94,6 +94,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         publishing_plan: buildPublishingPlan(null),
         ad_candidate: null,
         plan_id: null,
+        plan_revision: null,
       })
     }
 
@@ -233,6 +234,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       publishing_plan: buildPublishingPlan(campaign),
       ad_candidate: buildAdCandidate(firstReelBundle),
       plan_id: planRow?.id ?? null,
+      // The handoff action binds to the exact stored command snapshot. A
+      // refresh never changes this value, so a lost response can retry safely;
+      // a later content command changes it and makes the old page fail closed.
+      plan_revision: planData?.command_meta?.received_at ?? null,
     })
   } catch (err: unknown) {
     return NextResponse.json({ success: false, error: errorMessage(err) }, { status: 500 })
@@ -336,7 +341,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const { data: existing } = await supabaseAdmin
       .from('social_plans')
-      .select('id')
+      .select('id, plan_data')
       .eq('client_id', clientId)
       .eq('campaign_id', cmd.campaign_id)
       .contains('plan_data', { plan_kind: CAMPAIGN_DAILY_PLAN_KIND })
@@ -367,14 +372,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     let planId: string
-    if (existing?.id) {
-      const { error } = await supabaseAdmin
+    const existingPlan = existing?.plan_data as CampaignDailyPlanData | null | undefined
+    const existingRevision = existingPlan?.command_meta?.received_at
+
+    if (existing?.id && existingRevision && !existingPlan?.refresh_meta) {
+      // The review handoff uses the same revision + refresh_meta pair as its
+      // linearisation point. A new command may replace an unlocked snapshot,
+      // but it must never overwrite a snapshot after handoff has claimed it.
+      // If either side wins between our read and write, this CAS returns no
+      // row and the caller must reload instead of silently clobbering it.
+      const { data: updated, error } = await supabaseAdmin
         .from('social_plans')
         .update({ plan_data: planData })
         .eq('id', existing.id)
+        .eq('client_id', clientId)
+        .eq('campaign_id', cmd.campaign_id)
+        .contains('plan_data', { command_meta: { received_at: existingRevision } })
+        .is('plan_data->refresh_meta', null)
+        .select('id')
+        .maybeSingle()
       if (error) throw error
+      if (!updated) {
+        return NextResponse.json(
+          { success: false, error: 'PLAN_VERSION_CONFLICT' },
+          { status: 409 }
+        )
+      }
       planId = existing.id
     } else {
+      // A handed-off row is immutable audit history. The next complete
+      // command starts a new version instead of overwriting the snapshot
+      // already used to create review drafts.
       const { data: inserted, error } = await supabaseAdmin
         .from('social_plans')
         .insert({
