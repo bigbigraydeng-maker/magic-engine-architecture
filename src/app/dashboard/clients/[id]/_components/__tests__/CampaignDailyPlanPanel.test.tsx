@@ -10,7 +10,7 @@
  * whatever was already on screen.
  */
 import React from 'react'
-import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { CampaignDailyPlanPanel } from '../CampaignDailyPlanPanel'
 
@@ -317,130 +317,136 @@ describe('CampaignDailyPlanPanel — conversion goal vs publishing destination (
   })
 })
 
-describe('CampaignDailyPlanPanel — explicit Post-only review handoff', () => {
-  it('binds the action to the loaded plan revision and shows a review link without publishing', async () => {
-    const planPayload = {
+describe('CampaignDailyPlanPanel — inline Facebook Post review (#1308)', () => {
+  function reviewPayload(postReview: null | Record<string, unknown> = null) {
+    return {
       success: true,
-      campaign: { id: CAMPAIGN_ID, title: 'Christmas Campaign', offer: null, primary_cta: 'Enquire Now' },
+      campaign: { id: CAMPAIGN_ID, title: 'Christmas Campaign', offer: null, primary_cta: 'lead_form_submit' },
       grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
       days: daysGrid(['2026-08-24']),
-      bundles: [],
-      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
+      bundles: [{
+        date: '2026-08-24',
+        post: {
+          hook: 'Review this Post',
+          body: 'Post body',
+          cta: 'Enquire Now',
+          image_asset_id: 'asset-1',
+          cta_url: 'https://example.test/tour',
+        },
+        story: { frames: [{ order: 1, copy: 'f1' }, { order: 2, copy: 'f2' }, { order: 3, copy: 'f3' }, { order: 4, copy: 'f4' }] },
+        reel: { brief: 'brief', script: 'script', caption: 'caption', source_asset_ids: [], media_status: 'NO_MEDIA' },
+        readiness: readiness(),
+        provenance: [],
+        post_image: null,
+        post_review: postReview,
+      }],
+      publishing_plan: { conversion_goal: 'lead_form_submit', destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
       ad_candidate: null,
-      plan_id: 'f166a5c0-b2df-478c-8b04-1168ef2d3641',
-      plan_revision: '2026-08-24T03:00:00.000Z',
+      plan_id: 'b0000000-0000-0000-0000-000000000001',
+      plan_revision: '2026-09-01T15:00:04.513Z',
+      review_revision: postReview ? '10000000-0000-0000-0000-000000000001' : null,
+      review_summary: {
+        passed: postReview?.verdict === 'PASS' && postReview.is_current !== false ? 1 : 0,
+        needs_revision: postReview?.verdict === 'NEEDS_REVISION' ? 1 : 0,
+        total: 1,
+      },
     }
-    global.fetch = vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => planPayload })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          success: true,
-          posts: { created: 7, existing: 0 },
-          review_path: `/dashboard/content?client=${CLIENT_ID}&status=draft&highlight=post-1`,
-        }),
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => planPayload }) as unknown as typeof fetch
+  }
+
+  it('keeps review in the Post card and explicitly separates it from publishing authorization', async () => {
+    mockFetchOnce(reviewPayload())
 
     render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
-    const action = await screen.findByRole('button', { name: '刷新七日并送审' })
-    fireEvent.change(screen.getByLabelText('七日计划开始日期'), { target: { value: '2026-09-10' } })
-    fireEvent.click(action)
 
-    expect(await screen.findByText('✓ 已送入审核队列：新建 7 条，已有 0 条')).toBeInTheDocument()
-    const requestInit = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[1][1] as RequestInit
+    await screen.findByText('Facebook Post 审核')
+    expect(screen.getByText('Post 通过')).toBeInTheDocument()
+    expect(screen.getByText('Post 需修改')).toBeInTheDocument()
+    expect(screen.getByText(/不代表事实核验、Story\/Reel 通过、生成、排期、Provider 或发布授权/)).toBeInTheDocument()
+    expect(screen.getByText('NOT_AUTHORIZED')).toBeInTheDocument()
+    expect(screen.queryByText(/Launch Hub/i)).not.toBeInTheDocument()
+    expect(document.querySelector('a[href*="/dashboard/content"]')).toBeNull()
+  })
+
+  it('requires a revision reason, then PATCHes the exact loaded plan and reloads the inline state', async () => {
+    const first = reviewPayload()
+    const reviewed = reviewPayload({
+      verdict: 'NEEDS_REVISION',
+      reason: 'Use a stronger opening line',
+      reviewed_at: '2026-09-01T15:05:00.000Z',
+      is_current: true,
+    })
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => first })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true, changed: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => reviewed }) as unknown as typeof fetch
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+    await screen.findByText('Facebook Post 审核')
+
+    fireEvent.click(screen.getByText('Post 需修改'))
+    expect(await screen.findByText('请先写明需要修改的原因。')).toBeInTheDocument()
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+
+    fireEvent.change(screen.getByPlaceholderText('如需修改，请写明原因'), {
+      target: { value: 'Use a stronger opening line' },
+    })
+    fireEvent.click(screen.getByText('Post 需修改'))
+
+    await screen.findByText('上次反馈：Use a stronger opening line')
+    expect(global.fetch).toHaveBeenCalledTimes(3)
+    const patchCall = vi.mocked(global.fetch).mock.calls[1]
+    expect(patchCall[0]).toBe(`/api/clients/${CLIENT_ID}/campaign-daily-plan/post-review`)
+    const requestInit = patchCall[1] as RequestInit
+    expect(requestInit.method).toBe('PATCH')
     expect(JSON.parse(requestInit.body as string)).toEqual({
       campaign_id: CAMPAIGN_ID,
-      plan_id: planPayload.plan_id,
-      expected_revision: planPayload.plan_revision,
-      start_date: '2026-09-10',
+      plan_id: first.plan_id,
+      expected_plan_revision: first.plan_revision,
+      expected_review_revision: null,
+      date: '2026-08-24',
+      verdict: 'NEEDS_REVISION',
+      reason: 'Use a stronger opening line',
     })
-    expect(screen.getByRole('link', { name: /打开 Launch Hub 审核这 7 条 Post/ })).toHaveAttribute(
-      'href',
-      `/dashboard/content?client=${CLIENT_ID}&status=draft&highlight=post-1`,
-    )
-    expect(screen.getByText('发布：NOT_AUTHORIZED')).toBeInTheDocument()
   })
 
-  it('does not show an old client review link after the panel switches client mid-request', async () => {
-    const responseFor = (campaignId: string) => ({
-      success: true,
-      campaign: { id: campaignId, title: campaignId, offer: null, primary_cta: null },
-      grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
-      days: daysGrid([]),
-      bundles: [],
-      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
-      ad_candidate: null,
-      plan_id: 'f166a5c0-b2df-478c-8b04-1168ef2d3641',
-      plan_revision: '2026-08-24T03:00:00.000Z',
-    })
-    let resolveOldRequest!: (value: { ok: true; json: () => Promise<unknown> }) => void
-    const oldRequest = new Promise<{ ok: true; json: () => Promise<unknown> }>(resolve => {
-      resolveOldRequest = resolve
-    })
-    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
-      const href = String(url)
-      if (init?.method === 'POST') return oldRequest
-      const campaign = new URL(href, 'http://localhost').searchParams.get('campaign_id') ?? CAMPAIGN_ID
-      return Promise.resolve({ ok: true, json: async () => responseFor(campaign) })
-    }) as unknown as typeof fetch
+  it('shows a persisted PASS as expired when current asset validation no longer holds', async () => {
+    mockFetchOnce(reviewPayload({
+      verdict: 'PASS',
+      reason: null,
+      reviewed_at: '2026-09-01T15:05:00.000Z',
+      is_current: false,
+    }))
 
-    const { rerender } = render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
-    fireEvent.click(await screen.findByRole('button', { name: '刷新七日并送审' }))
-    rerender(<CampaignDailyPlanPanel clientId="other-client" campaignId="other-campaign" />)
-    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(3))
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
 
-    await act(async () => {
-      resolveOldRequest({
-        ok: true,
-        json: async () => ({
-          success: true,
-          posts: { created: 7, existing: 0 },
-          review_path: `/dashboard/content?client=${CLIENT_ID}&highlight=old-post`,
-        }),
-      })
-      await oldRequest
-    })
-
-    expect(screen.queryByText(/已送入审核队列/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /打开 Launch Hub/ })).not.toBeInTheDocument()
+    await screen.findByText('已失效，需重审')
+    expect(screen.getByText('Post 已通过 0/1')).toBeInTheDocument()
+    expect(screen.queryByText('已通过')).not.toBeInTheDocument()
   })
 
-  it('ignores an old client failure and re-enables the new client action even if abort is ignored', async () => {
-    const responseFor = (campaignId: string) => ({
-      success: true,
-      campaign: { id: campaignId, title: campaignId, offer: null, primary_cta: null },
-      grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
-      days: daysGrid([]),
-      bundles: [],
-      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
-      ad_candidate: null,
-      plan_id: 'f166a5c0-b2df-478c-8b04-1168ef2d3641',
-      plan_revision: '2026-08-24T03:00:00.000Z',
+  it('ignores an old client GET that resolves after the panel switches clients', async () => {
+    let resolveOld: ((value: { ok: true; json: () => Promise<unknown> }) => void) | undefined
+    const oldResponse = new Promise<{ ok: true; json: () => Promise<unknown> }>(resolve => {
+      resolveOld = resolve
     })
-    let resolveOldRequest!: (value: { ok: true; json: () => Promise<unknown> }) => void
-    const oldRequest = new Promise<{ ok: true; json: () => Promise<unknown> }>(resolve => {
-      resolveOldRequest = resolve
-    })
-    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
-      if (init?.method === 'POST') return oldRequest
-      const campaign = new URL(String(url), 'http://localhost').searchParams.get('campaign_id') ?? CAMPAIGN_ID
-      return Promise.resolve({ ok: true, json: async () => responseFor(campaign) })
-    }) as unknown as typeof fetch
+    const oldPayload = reviewPayload()
+    oldPayload.bundles[0].post.hook = 'OLD CLIENT POST'
+    const newPayload = reviewPayload()
+    newPayload.bundles[0].post.hook = 'NEW CLIENT POST'
+    global.fetch = vi.fn()
+      .mockImplementationOnce(() => oldResponse)
+      .mockResolvedValueOnce({ ok: true, json: async () => newPayload }) as unknown as typeof fetch
 
     const { rerender } = render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
-    fireEvent.click(await screen.findByRole('button', { name: '刷新七日并送审' }))
-    rerender(<CampaignDailyPlanPanel clientId="other-client" campaignId="other-campaign" />)
+    rerender(<CampaignDailyPlanPanel clientId="d0000000-0000-0000-0000-000000000000" campaignId="campaign-new" />)
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: '刷新七日并送审' })).toBeEnabled()
-    })
+    await screen.findByText('NEW CLIENT POST')
     await act(async () => {
-      resolveOldRequest({ ok: true, json: async () => ({ success: false, error: 'OLD_CLIENT_FAILURE' }) })
-      await oldRequest
+      resolveOld?.({ ok: true, json: async () => oldPayload })
+      await oldResponse
     })
 
-    expect(screen.queryByText(/OLD_CLIENT_FAILURE/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '刷新七日并送审' })).toBeEnabled()
+    expect(screen.getByText('NEW CLIENT POST')).toBeInTheDocument()
+    expect(screen.queryByText('OLD CLIENT POST')).not.toBeInTheDocument()
   })
 })
