@@ -64,4 +64,8 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: 'AI 单页站生成器（事实采集 → AI 文案 → 模板渲染 → 静态发布）',
     reviewDate: '2026-09-30',
   },
+  {
+    name: 'AU/NZ 本地商业目录批量登记 SOP（NAP 文案模板 + 目录清单，供未来客户 onboarding 复用）',
+    reviewDate: '2026-10-02',
+  },
 ]

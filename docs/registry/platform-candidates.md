@@ -75,6 +75,7 @@
 | 跨客户舆情监控引擎 | L1 Capability | AI 可见度 + 竞品 支柱 | CTS | 旅游 | 1/2 行业（仅 CTS） | candidate | 2026-08-27 | 2026-09-27 | happy-cori-796b21 worktree | 来自 HBay 诊断报告能力线 04 |
 -->
 
+| AU/NZ 本地商业目录批量登记 SOP（NAP 文案模板 + 目录清单，供未来客户 onboarding 复用）| L2 Playbook（候选 · 证据极弱）| SEO 支柱（本地引用 / NAP 一致性） | Magic Engine 自己（Customer Zero，非付费客户提出）| 跨行业（AU/NZ 中小企业通用，非行业特定）| 0/2 客户复制（仅 ME 自己用过一次；Business Networking NZ 一条 listing 已提交待审）| candidate | 2026-09-02 | 2026-10-02 | dazzling-benz-6e6da3 worktree | 2026-09-02 实测 6 个目录（Google Business Profile / Bing Places / Yellow Pages AU / Hotfrog / True Local / StartLocal）——**仅 GBP 有公开 API 且 ME 已接入**（`src/lib/gbp/location.ts`/`publisher.ts`/`auth.ts`），但该 API 只能管理**已验证**的 location，不能代客户绕过 Google 的人工验证（明信片/电话/视频）新建 listing；其余 5 个均无公开 API，只能人工/浏览器逐个提交表单，且多数还要求先开平台账号（Google/Microsoft/站内账号）才能新增或认领 listing，本会话按安全规则不能替 PM 完成账号创建这一步。**结论：不构成可编码的 Capability**，最多是可复用的客户 onboarding checklist（NAP 文案模板 + 目录清单 + "哪些需要客户自己开账号"提示），价值上限有限，暂不建议投入开发，仅作观察候选 |
 *（第一条候选：HBay VI 视觉资产生成。Low bar 登记 · 待复查日 2026-09-27 由 L1 owner 评估晋升成熟度。）*
 
 ---
