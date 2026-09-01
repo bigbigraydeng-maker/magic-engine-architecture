@@ -26,8 +26,10 @@ import type { ClaudeDocInput } from '@/lib/anthropic/client'
 import type { GeneratePlanRequest } from '@/lib/marketing-plan/types'
 import type { MasterBrief } from '@/types/magic-engine'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
+import { detectKind, docxToText, plainToText } from '@/lib/tailor-made/read-source'
 
 const CAMPAIGN_BUCKET = 'campaign-uploads'
+const MAX_CAMPAIGN_FILE_CHARS = 50_000
 
 export const maxDuration = 90  // Plan 生成耗时较长（Claude 大 token 输出）
 
@@ -102,14 +104,24 @@ export async function POST(
             .from(CAMPAIGN_BUCKET)
             .download(storagePath)
           if (!data || error) continue
-          const buffer = Buffer.from(await data.arrayBuffer())
           const filename = storagePath.split('/').pop() ?? storagePath
-          const isPdf = storagePath.toLowerCase().endsWith('.pdf')
-          campaignDocs.push({
-            type: isPdf ? 'pdf' : 'text',
-            content: isPdf ? buffer.toString('base64') : buffer.toString('utf-8'),
-            filename,
-          })
+          const source = await data.arrayBuffer()
+          const kind = detectKind(filename, data.type)
+          if (kind === 'pdf') {
+            campaignDocs.push({ type: 'pdf', content: Buffer.from(source).toString('base64'), filename })
+          } else if (kind === 'docx') {
+            campaignDocs.push({
+              type: 'text',
+              content: (await docxToText(source)).slice(0, MAX_CAMPAIGN_FILE_CHARS),
+              filename,
+            })
+          } else if (kind === 'text') {
+            campaignDocs.push({
+              type: 'text',
+              content: (await plainToText(source)).slice(0, MAX_CAMPAIGN_FILE_CHARS),
+              filename,
+            })
+          }
         } catch {
           // non-fatal — campaign text fields still provide context
         }
