@@ -82,6 +82,15 @@ export interface CampaignDailyPlanData {
     received_at: string
     raw_summary: string | null
   }
+  /** Added only by the explicit review handoff. The original command_meta and
+   *  grounding reference stay unchanged so refreshed dates never pretend the
+   *  old copy was regenerated or re-grounded. */
+  refresh_meta?: {
+    start_date: string
+    end_date: string
+    original_dates: string[]
+    applied_at: string
+  }
 }
 
 // ─── Inbound command schema (Section A — conversation-command persistence seam) ──

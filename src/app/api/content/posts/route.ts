@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { requirePaidClientAccess } from '@/lib/auth/client-access'
+import { guardGlobalAdmin } from '@/lib/auth/require-admin'
 
 // GET /api/content/posts?client_id=&status=
 export async function GET(req: NextRequest) {
@@ -8,14 +10,22 @@ export async function GET(req: NextRequest) {
     const clientId = searchParams.get('client_id')
     const status = searchParams.get('status')
 
-    // 自动把过期的 scheduled 翻成 published — Publer 已经发出去了，我们的状态机跟上
-    // status='scheduled' 且 scheduled_at < now() → status='published'
-    // → DB trigger 20260518000003 自动把关联 execution_item mark completed
-    await supabaseAdmin
-      .from('content_posts')
-      .update({ status: 'published', published_at: new Date().toISOString() })
-      .eq('status', 'scheduled')
-      .lt('scheduled_at', new Date().toISOString())
+    // API routes are outside middleware. A client-scoped board must prove
+    // paid access to that exact client; only a true global admin may request
+    // the cross-client aggregate view.
+    if (clientId) {
+      const access = await requirePaidClientAccess(clientId)
+      if (!access.ok) {
+        return NextResponse.json({ error: access.error }, { status: access.status })
+      }
+    } else {
+      const guard = await guardGlobalAdmin()
+      if (guard) return guard
+    }
+
+    // This GET is deliberately read-only. Provider callbacks / explicit
+    // publishing actions own status transitions; opening a review board must
+    // never mark any customer's scheduled content as published.
 
     let query = supabaseAdmin
       .from('content_posts')
@@ -39,15 +49,17 @@ export async function GET(req: NextRequest) {
 
     const posts = (data ?? []) as Array<{
       id: string
+      client_id: string
       [k: string]: unknown
     }>
+    const postOwnerById = new Map(posts.map(post => [post.id, post.client_id]))
 
     // 附带每篇 post 的视觉资产（final 优先，否则最新 ready）
     let assetByPost: Record<string, { url: string; type: string }> = {}
     if (posts.length > 0) {
       const { data: assetRows } = await supabaseAdmin
         .from('visual_assets')
-        .select('post_id, storage_url, asset_type, is_final, generation_status, created_at')
+        .select('post_id, client_id, storage_url, asset_type, is_final, generation_status, created_at')
         .in('post_id', posts.map(p => p.id))
         .eq('generation_status', 'ready')
         .not('storage_url', 'is', null)
@@ -55,9 +67,9 @@ export async function GET(req: NextRequest) {
         .order('created_at', { ascending: false })
 
       for (const row of (assetRows ?? []) as Array<{
-        post_id: string; storage_url: string; asset_type: string; is_final: boolean
+        post_id: string; client_id: string; storage_url: string; asset_type: string; is_final: boolean
       }>) {
-        if (!assetByPost[row.post_id]) {
+        if (row.client_id === postOwnerById.get(row.post_id) && !assetByPost[row.post_id]) {
           assetByPost[row.post_id] = { url: row.storage_url, type: row.asset_type }
         }
       }

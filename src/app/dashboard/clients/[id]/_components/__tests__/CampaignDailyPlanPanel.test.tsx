@@ -10,7 +10,7 @@
  * whatever was already on screen.
  */
 import React from 'react'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { CampaignDailyPlanPanel } from '../CampaignDailyPlanPanel'
 
@@ -314,5 +314,133 @@ describe('CampaignDailyPlanPanel — conversion goal vs publishing destination (
 
     // Publish authorisation stays NOT_AUTHORIZED.
     expect(screen.getByText('NOT_AUTHORIZED')).toBeInTheDocument()
+  })
+})
+
+describe('CampaignDailyPlanPanel — explicit Post-only review handoff', () => {
+  it('binds the action to the loaded plan revision and shows a review link without publishing', async () => {
+    const planPayload = {
+      success: true,
+      campaign: { id: CAMPAIGN_ID, title: 'Christmas Campaign', offer: null, primary_cta: 'Enquire Now' },
+      grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
+      days: daysGrid(['2026-08-24']),
+      bundles: [],
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
+      ad_candidate: null,
+      plan_id: 'f166a5c0-b2df-478c-8b04-1168ef2d3641',
+      plan_revision: '2026-08-24T03:00:00.000Z',
+    }
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => planPayload })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          posts: { created: 7, existing: 0 },
+          review_path: `/dashboard/content?client=${CLIENT_ID}&status=draft&highlight=post-1`,
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => planPayload }) as unknown as typeof fetch
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+    const action = await screen.findByRole('button', { name: '刷新七日并送审' })
+    fireEvent.change(screen.getByLabelText('七日计划开始日期'), { target: { value: '2026-09-10' } })
+    fireEvent.click(action)
+
+    expect(await screen.findByText('✓ 已送入审核队列：新建 7 条，已有 0 条')).toBeInTheDocument()
+    const requestInit = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[1][1] as RequestInit
+    expect(JSON.parse(requestInit.body as string)).toEqual({
+      campaign_id: CAMPAIGN_ID,
+      plan_id: planPayload.plan_id,
+      expected_revision: planPayload.plan_revision,
+      start_date: '2026-09-10',
+    })
+    expect(screen.getByRole('link', { name: /打开 Launch Hub 审核这 7 条 Post/ })).toHaveAttribute(
+      'href',
+      `/dashboard/content?client=${CLIENT_ID}&status=draft&highlight=post-1`,
+    )
+    expect(screen.getByText('发布：NOT_AUTHORIZED')).toBeInTheDocument()
+  })
+
+  it('does not show an old client review link after the panel switches client mid-request', async () => {
+    const responseFor = (campaignId: string) => ({
+      success: true,
+      campaign: { id: campaignId, title: campaignId, offer: null, primary_cta: null },
+      grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
+      days: daysGrid([]),
+      bundles: [],
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
+      ad_candidate: null,
+      plan_id: 'f166a5c0-b2df-478c-8b04-1168ef2d3641',
+      plan_revision: '2026-08-24T03:00:00.000Z',
+    })
+    let resolveOldRequest!: (value: { ok: true; json: () => Promise<unknown> }) => void
+    const oldRequest = new Promise<{ ok: true; json: () => Promise<unknown> }>(resolve => {
+      resolveOldRequest = resolve
+    })
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url)
+      if (init?.method === 'POST') return oldRequest
+      const campaign = new URL(href, 'http://localhost').searchParams.get('campaign_id') ?? CAMPAIGN_ID
+      return Promise.resolve({ ok: true, json: async () => responseFor(campaign) })
+    }) as unknown as typeof fetch
+
+    const { rerender } = render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+    fireEvent.click(await screen.findByRole('button', { name: '刷新七日并送审' }))
+    rerender(<CampaignDailyPlanPanel clientId="other-client" campaignId="other-campaign" />)
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(3))
+
+    await act(async () => {
+      resolveOldRequest({
+        ok: true,
+        json: async () => ({
+          success: true,
+          posts: { created: 7, existing: 0 },
+          review_path: `/dashboard/content?client=${CLIENT_ID}&highlight=old-post`,
+        }),
+      })
+      await oldRequest
+    })
+
+    expect(screen.queryByText(/已送入审核队列/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /打开 Launch Hub/ })).not.toBeInTheDocument()
+  })
+
+  it('ignores an old client failure and re-enables the new client action even if abort is ignored', async () => {
+    const responseFor = (campaignId: string) => ({
+      success: true,
+      campaign: { id: campaignId, title: campaignId, offer: null, primary_cta: null },
+      grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
+      days: daysGrid([]),
+      bundles: [],
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
+      ad_candidate: null,
+      plan_id: 'f166a5c0-b2df-478c-8b04-1168ef2d3641',
+      plan_revision: '2026-08-24T03:00:00.000Z',
+    })
+    let resolveOldRequest!: (value: { ok: true; json: () => Promise<unknown> }) => void
+    const oldRequest = new Promise<{ ok: true; json: () => Promise<unknown> }>(resolve => {
+      resolveOldRequest = resolve
+    })
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') return oldRequest
+      const campaign = new URL(String(url), 'http://localhost').searchParams.get('campaign_id') ?? CAMPAIGN_ID
+      return Promise.resolve({ ok: true, json: async () => responseFor(campaign) })
+    }) as unknown as typeof fetch
+
+    const { rerender } = render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+    fireEvent.click(await screen.findByRole('button', { name: '刷新七日并送审' }))
+    rerender(<CampaignDailyPlanPanel clientId="other-client" campaignId="other-campaign" />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '刷新七日并送审' })).toBeEnabled()
+    })
+    await act(async () => {
+      resolveOldRequest({ ok: true, json: async () => ({ success: false, error: 'OLD_CLIENT_FAILURE' }) })
+      await oldRequest
+    })
+
+    expect(screen.queryByText(/OLD_CLIENT_FAILURE/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '刷新七日并送审' })).toBeEnabled()
   })
 })

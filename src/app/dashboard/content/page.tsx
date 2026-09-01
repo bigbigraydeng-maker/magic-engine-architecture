@@ -227,6 +227,10 @@ export default function ContentBoardPage() {
   const [batchPubRunning, setBatchPubRunning] = useState(false);
   const [batchPubMsg, setBatchPubMsg] = useState('');
   const handledHighlightRef = useRef<string | null>(null);
+  const postsFetchAbortRef = useRef<AbortController | null>(null);
+  const postsFetchSequenceRef = useRef(0);
+  const executionFetchAbortRef = useRef<AbortController | null>(null);
+  const modalPostIdRef = useRef<string | null>(null);
 
 
   useEffect(() => {
@@ -234,6 +238,10 @@ export default function ContentBoardPage() {
   }, []);
 
   const fetchPosts = useCallback(async () => {
+    postsFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    postsFetchAbortRef.current = controller;
+    const sequence = ++postsFetchSequenceRef.current;
     setLoading(true);
     setSelectedIds(new Set());
     setBatchMsg('');
@@ -243,15 +251,32 @@ export default function ContentBoardPage() {
       // Calendar mode: always fetch approved+scheduled so dates are populated
       const statusToFetch = viewMode === 'calendar' ? 'approved,scheduled' : selectedStatus;
       if (statusToFetch) params.set('status', statusToFetch);
-      const res = await fetch(`/api/content/posts?${params}`);
+      const res = await fetch(`/api/content/posts?${params}`, { signal: controller.signal });
       const json = await res.json();
+      if (controller.signal.aborted || sequence !== postsFetchSequenceRef.current) return;
       setPosts(json.posts ?? []);
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError' && sequence === postsFetchSequenceRef.current) {
+        setPosts([]);
+      }
     } finally {
-      setLoading(false);
+      if (sequence === postsFetchSequenceRef.current) setLoading(false);
     }
   }, [selectedClient, selectedStatus, viewMode]);
 
-  useEffect(() => { fetchPosts(); }, [fetchPosts]);
+  useEffect(() => {
+    fetchPosts();
+    return () => postsFetchAbortRef.current?.abort();
+  }, [fetchPosts]);
+
+  useEffect(() => () => executionFetchAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    executionFetchAbortRef.current?.abort();
+    modalPostIdRef.current = null;
+    setModalPost(null);
+    setExecItems([]);
+  }, [selectedClient]);
 
   // Poll image generation status
   useEffect(() => {
@@ -391,6 +416,10 @@ export default function ContentBoardPage() {
   // ── Modal helpers ─────────────────────────────────────────────────────────
 
   const primeModal = useCallback((post: ContentPost) => {
+    executionFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    executionFetchAbortRef.current = controller;
+    modalPostIdRef.current = post.id;
     setModalPost(post);
     setEditMode(false);
     setEditTitle(post.title);
@@ -411,10 +440,12 @@ export default function ContentBoardPage() {
     setPendingPostId(null);
     // Fire-and-forget: 拉取该客户的执行项给关联下拉框用
     setExecItems([]);
-    fetch(`/api/clients/${post.client_id}/execution`)
+    fetch(`/api/clients/${post.client_id}/execution`, { signal: controller.signal })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
-        if (d?.items) setExecItems(d.items as ExecutionItemLite[]);
+        if (!controller.signal.aborted && executionFetchAbortRef.current === controller && modalPostIdRef.current === post.id && d?.items) {
+          setExecItems(d.items as ExecutionItemLite[]);
+        }
       })
       .catch(() => { /* 静默：拉取失败时降级为「无可关联项」*/ });
   }, []);
@@ -482,6 +513,8 @@ export default function ContentBoardPage() {
   };
 
   const closeModal = () => {
+    executionFetchAbortRef.current?.abort();
+    modalPostIdRef.current = null;
     setModalPost(null);
     setEditMode(false);
     setSaveMsg('');
