@@ -446,6 +446,13 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
     expect(() => envReadsIn('const { A, ...rest } = process.env', 'probe.ts')).toThrow(/无法静态判定/)
   })
 
+  // 🔴 2026-09-02：唯一的 worker 服务 content-factory-render-worker 已退役（旧拼片管线，
+  // 出片已转本机 scripts/factory-worker），render.yaml 现在零个 type:worker。下面这组
+  // 「worker ↔ ENV.md」一致性审计在没有审计对象时没意义，先跳过而不是让它假红 ——
+  // 等下一个 worker 服务出现（比如讲课式改版「边走边讲」要另起一个）再自动跑起来，
+  // 不用手动改回来：判据是 workers.length，不是写死的开关。
+  describe.skipIf(workers.length === 0)('worker 服务存在时的一致性审计', () => {
+
   it('前提成立：依赖闭包是递归的，相对路径和别名都跟得到（Codex thread L664）', () => {
     const entry = entrypointOf(workers[0].dockerfilePath)
     expect(entry, '拿不到 worker 入口，下面几条等于没跑').not.toBeNull()
@@ -591,4 +598,6 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
       ).toBeGreaterThan(0)
     },
   )
+
+  })
 })

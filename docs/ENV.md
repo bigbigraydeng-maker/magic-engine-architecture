@@ -27,9 +27,9 @@
 
 | 变量 | 用途 | 配在哪 | 登记 |
 |---|---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL（前端可见） | Render-web + worker `content-factory-render-worker` | ✅ |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 匿名 key | Render-web + worker `content-factory-render-worker` | ✅ |
-| `SUPABASE_SERVICE_ROLE_KEY` | 服务端全权 key — ME 全部数据访问走它（不用 end-user RLS） | Render-web + worker `content-factory-render-worker` | ✅ |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL（前端可见） | Render-web | ✅ |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 匿名 key | Render-web | ✅ |
+| `SUPABASE_SERVICE_ROLE_KEY` | 服务端全权 key — ME 全部数据访问走它（不用 end-user RLS） | Render-web | ✅ |
 | `CRON_SECRET` | 所有 `/api/cron/*` 的 Bearer 鉴权 | Render-web + 全部 cron + **GH** | ✅ |
 | `APP_URL` | 应用自身域名（邮件链接 / OAuth callback 拼接） | Render-web | ✅ |
 | `NEXT_PUBLIC_APP_URL` | 同上，前端可见版本 | Render-web | ✅ |
@@ -44,11 +44,11 @@
 
 | 变量 | 用途 | 配在哪 | 登记 |
 |---|---|---|---|
-| `OPENAI_API_KEY` | GPT-4o-mini 文案 / Vision / Realtime | Render-web + worker `content-factory-render-worker` | ✅ |
+| `OPENAI_API_KEY` | GPT-4o-mini 文案 / Vision / Realtime | Render-web | ✅ |
 | `OPENAI_BASE_URL` | 走 Cloudflare AI Gateway 代理（值已内联 render.yaml） | Render-web | ✅ |
-| `ANTHROPIC_API_KEY` | Claude Sonnet（Brief / 策略 / 诸葛亮）；worker 经 `render-pipeline → scene-plan → anthropic/client` 分镜时也要 | Render-web + worker `content-factory-render-worker` | ✅ |
+| `ANTHROPIC_API_KEY` | Claude Sonnet（Brief / 策略 / 诸葛亮） | Render-web | ✅ |
 | `ANTHROPIC_BASE_URL` | 走 Cloudflare AI Gateway 代理（值已内联 render.yaml） | Render-web | ✅ |
-| `CF_AIG_TOKEN` | Cloudflare AI Gateway 鉴权；跟 `ANTHROPIC_API_KEY` 同一条链，worker 也要 | Render-web + worker `content-factory-render-worker` | ✅ (仅 example) |
+| `CF_AIG_TOKEN` | Cloudflare AI Gateway 鉴权；跟 `ANTHROPIC_API_KEY` 同一条链 | Render-web | ✅ (仅 example) |
 | `PERPLEXITY_API_KEY` | AI 可见度追踪引擎之一 | Render-web | ✅ |
 | `GEMINI_API_KEY` | Google Gemini（AI 可见度追踪第 4 引擎） | Render-web | ❌ |
 | `AI_TRACKER_ENABLE_CLAUDE` | 开关：AI Tracker 是否跑 Claude 引擎 | Render-web | ❌ |
@@ -58,8 +58,8 @@
 | 变量 | 用途 | 配在哪 | 登记 |
 |---|---|---|---|
 | `ATLAS_CLOUD_API_KEY` | WaveSpeed 图片 + Seedance 视频（共用一把 key） | Render-web | 🔴 见下方 |
-| `MUAPI_API_KEY` | Muapi 图生视频（Visual Studio）；worker 经 `render-pipeline → broll-clip → muapi/client` 生成空镜时必需，缺了做片任务直接失败 | Render-web + worker `content-factory-render-worker` | ✅ |
-| `FACTORY_CJK_FONT` | 拼片烧中文字幕用的字体文件路径 —— 不设会 fallback 到 macOS 本机字体（`Arial Unicode.ttf`），在 Linux 容器里那个路径不存在 | worker `content-factory-render-worker`（`render.yaml` 里带默认值 `/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc`，Dockerfile 也 `ENV` 了一份，**不用手工配**） | ✅ |
+| `MUAPI_API_KEY` | Muapi 图生视频（Visual Studio） | Render-web | ✅ |
+| `FACTORY_CJK_FONT` | 🔴 已废弃（2026-09-02）—— 只被已退役的 `content-factory-render-worker` 读，现在没有任何服务读它。CTS/Oztop 拼片改走本机 `scripts/factory-worker`，字体在 make_promo.py 那边另配 | — | ❌ |
 | `HEYGEN_API_KEY` | 数字人头像视频 | Render-web | ✅ |
 | `HEYGEN_DEFAULT_AVATAR_ID` / `HEYGEN_DEFAULT_VOICE_ID` | HeyGen 默认形象/音色 | Render-web | ✅ |
 | `MODELSLAB_API_KEY` | Muapi 图/视频引擎（P21.J 后主用） | Render-web | ❌ |

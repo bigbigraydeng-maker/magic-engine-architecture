@@ -25,14 +25,11 @@ import {
   setSectionClip,
   type LectureMethod,
 } from '@/lib/factory/lecture-post'
-import { enqueueRenderJob } from '@/lib/factory/render-queue'
-import { loadLecturePrefs, recordRedoReason, saveLecturePrefs } from '@/lib/factory/lecture-learning'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120 // redo_section / regen_script 要等 Claude
 
 const BUCKET = 'content-factory'
-const ACTIVE_JOB_STATUSES = ['queued', 'planning', 'rendering', 'assembling']
 
 type Params = { params: { id: string; postId: string } }
 
@@ -347,34 +344,14 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         if (production.method === 'self_record' && !production.recording_url) {
           return NextResponse.json({ error: '还没有上传你录的视频' }, { status: 400 })
         }
-        const job = await latestJob(params.postId)
-        if (job && ACTIVE_JOB_STATUSES.includes(job.status)) {
-          return NextResponse.json({ error: '正在做片中，等这一条做完(或失败)再重来' }, { status: 409 })
-        }
-        // 打回重做：把旧的完成/失败任务标掉，再排新任务(enqueue 对非 failed 任务幂等)
-        await supabaseAdmin
-          .from('content_factory_render_jobs')
-          .update({ status: 'failed', error: '被重做替代', updated_at: new Date().toISOString() })
-          .eq('content_post_id', params.postId)
-          .neq('status', 'failed')
-        await supabaseAdmin
-          .from('content_posts')
-          .update({ status: 'approved' })
-          .eq('client_id', params.id)
-          .eq('id', params.postId)
-        const render = await enqueueRenderJob({ clientId: params.id, contentPostId: params.postId })
-
-        // 记一次打回原因(客户可不填)。同一个原因反复出现 = 系统该改的地方，不是客户该忍的
-        let suggestRule = false
-        if (body.redoReason?.trim()) {
-          try {
-            const prefs = await loadLecturePrefs(params.id)
-            const res = recordRedoReason(prefs.redoReasons, body.redoReason, new Date().toISOString())
-            await saveLecturePrefs(params.id, { redoReasons: res.reasons })
-            suggestRule = res.suggestRule
-          } catch { /* 记不上不影响重做 */ }
-        }
-        return NextResponse.json({ ok: true, render, suggestRule })
+        // 🔴 2026-09-02：讲课式做片管线(content_factory_render_jobs → 旧 Render worker)已退役，
+        // 没有 worker 消费这张表了。讲课式当前无客户在用(PM 口径 2026-09-02)，此按钮先返回明确
+        // 错误而不是悄悄排一个永远没人处理的任务；后续讲课式会重做成"边走边讲"模式，走的是独立的
+        // walk-talk-proof.ts 配方(不依赖这条旧队列)，到时候这里要接新的入口，不是恢复旧的。
+        return NextResponse.json(
+          { error: '讲课式出片管线已退役，暂不可用；讲课式内容近期会改版为"边走边讲"模式' },
+          { status: 410 },
+        )
       }
 
       default:
