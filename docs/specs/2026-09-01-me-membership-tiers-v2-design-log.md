@@ -1,5 +1,7 @@
 # ME 会员体系 v2 重新设计 · 进度记录（多轮 PM 对话滚动更新）
 
+> **别名"张居正"**：这场设计讨论对应的 skill（[`.claude/skills/me-membership-tier-design/`](../../.claude/skills/me-membership-tier-design/SKILL.md)）2026-09-02 起有了别名"张居正"，任意窗口打 `@张居正` / `召张居正` 即可续聊，等同 `/me-membership-tier-design`。取名逻辑同"张良 = me-platform-tier-gate"惯例。
+
 # Status
 
 **DESIGN IN PROGRESS — 非任务合同，不授权实施。** 这是产品负责人（Ray）与 Claude 的多轮设计讨论记录，用于跨会话续聊，不是 Issue、不需要 Build Control、不能直接拿去 GO BUILD。等设计定稿，再回填成 #1273-1276 的修订，或另开新 Issue。
