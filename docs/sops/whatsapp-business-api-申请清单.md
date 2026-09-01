@@ -31,7 +31,7 @@ Meta 现在**按条**计费，而且**按送达**算，不是按发送算。关�
 
 ⚠️ 澳新的具体单价 Meta 后台会直接显示，**走到那一步请截图给我**，我按真实数字核一遍上面的判断。
 
-> 官方定价页：https://whatsappbusiness.com/products/platform-pricing/
+> 官方定价页：https://business.whatsapp.com/products/platform-pricing
 
 ---
 
