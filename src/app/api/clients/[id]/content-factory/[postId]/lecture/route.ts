@@ -148,6 +148,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       captions?: string[]
       redoReason?: string
       instruction?: string
+      live?: boolean
+      platform?: string
     }
     const loaded = await loadLecturePost(params.id, params.postId)
     if (!loaded) return NextResponse.json({ error: '未找到该讲(或不是讲课式内容)' }, { status: 404 })
