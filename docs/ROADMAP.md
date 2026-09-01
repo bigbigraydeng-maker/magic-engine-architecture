@@ -95,7 +95,20 @@
 
 ---
 
-## 近期待办（跨 Phase 汇总）
+## 官网「免费体检」漏斗断流（2026-09-02 发现）
+
+**症状**：`magicengine.com.au/discover` 的免费体检——两步漏斗（`/api/scout` 存 lead → `/api/report` 补 email 发报告）——自上线起从未真正存过一条 lead，也从未真正发出过一封报告邮件。生产 Supabase `discovery_leads` 表核实为 0 行。
+
+**已确认根因（2026-09-02 直接调用 `/api/scout` 验证 `leadId` 前缀 = `demo-...`）**：`website/`（Cloudflare Pages 独立静态站，独立于本仓 Render 部署，独立 Cloudflare 账号）的生产环境**没有配置 `SUPABASE_URL` / `SUPABASE_SERVICE_KEY`**，导致 `website/functions/api/scout.js` 的 `storeLead()` 从未真正连接过 Supabase，一律返回假 `demo-` id；`website/functions/api/report.js` 据此拒绝发送报告邮件（"P0-A fix" 防御生效，符合设计但暴露了上游问题）。
+
+**已一并修复但非本次症状根因**（子牙+魏征 2 审通过，2026-09-02 已 apply）：`discovery_leads.email` 列建表起就是 `NOT NULL`，但 `scout.js` 插入时从不传 email（设计上是两步收集）——只要 Cloudflare 侧接上 Supabase，这条 NOT NULL 约束会立刻撞库产生新的 `fallback-` 失败。migration `20260902000001_discovery_leads_email_nullable.sql` 已放开该约束。
+
+- [ ] 🔴 **需 PM 在 Cloudflare 后台（独立账号，本仓无法访问）给 magicengine.com.au 的 Pages 项目补 `SUPABASE_URL`=`https://glbdnayojixmexgofbsd.supabase.co`、`SUPABASE_SERVICE_KEY`=（从 Render `magic-engine` 服务的 `SUPABASE_SERVICE_ROLE_KEY` 复制同一个值）→ Settings → Environment variables → Production，保存后触发一次重新部署
+- [ ] 补上后必须端到端验证：重新跑一次 `/discover` 全流程，确认 `leadId` 是真实 UUID、Supabase `discovery_leads` 真的新增一行、**且真的收到报告邮件**（不能只看页面显示"发送成功"——`report.js` 的 `sendEmail()` 在 `RESEND_API_KEY` 未配置时会静默跳过发送但仍返回 `{ok:true}`，需顺手确认这个 key 也配了）
+- [ ] 次要（魏征复审发现，非阻塞）：`discovery_leads` 表建表起没有任何 migration 显式 `enable row level security`/加 policy，虽然 service-role 调用不受 RLS 影响、暂无实际泄露，但应补一条独立 RLS migration 让它符合"新表必须 service-role 模板"的红线并消除账本漂移
+- [ ] 次要：`website/_headers` 对 `/api/*` 声明 `Access-Control-Allow-Origin: https://magicengine.com.au`，而各 Function 自己又各设 `Access-Control-Allow-Origin: *`——未验证 Cloudflare Pages 对两者如何合并，换一个 origin（如 `www` 子域名/`*.pages.dev` 预览域）访问不排除请求直接被 CORS 拦掉
+
+
 
 ### ME 产品动态自动发 LinkedIn（2026-08-20 建成，默认关闭）
 
