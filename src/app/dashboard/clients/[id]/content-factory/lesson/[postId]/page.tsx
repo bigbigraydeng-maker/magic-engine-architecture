@@ -81,6 +81,10 @@ function xhsWarnings(text: string): string[] {
 
 const ACTIVE_JOB = ['queued', 'planning', 'rendering', 'assembling']
 
+// 🔴 2026-09-02：讲课式做片管线已退役(见 lecture/route.ts start_render)，先在前端就说清楚、
+// 禁掉按钮——不能让用户选完制作方式、传完录像才在最后一步撞见 410(Codex round1 P2)。
+const RENDER_RETIRED_NOTICE = '讲课式出片管线已退役，暂不可用；讲课式内容近期会改版为「边走边讲」模式，敬请留意后续通知。'
+
 // 存储服务对单次直传的硬上限(超过会在传完那一刻被拒 = 进度条走到 98% 再失败)
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
@@ -649,6 +653,9 @@ export default function LectureWorkbenchPage() {
       <section className="bg-me-ivory border border-me-stone rounded-2xl p-4 mb-4">
         <h2 className="font-display font-semibold mb-1">② 这条片怎么做</h2>
         <p className="text-xs text-me-taupe mb-3">选好方式后点「开始做片」，系统自动加课件、配字幕、拼成上下分屏成片。</p>
+        <div className="text-xs text-status-rej bg-white border border-status-rej rounded-xl px-3 py-2 mb-3">
+          🔴 {RENDER_RETIRED_NOTICE}
+        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <button
@@ -737,7 +744,8 @@ export default function LectureWorkbenchPage() {
 
         <div className="flex flex-wrap items-center gap-3">
           <button
-            disabled={busy !== null || Boolean(jobActive) || !method || (method === 'self_record' && !hasRecording)}
+            disabled
+            title={RENDER_RETIRED_NOTICE}
             onClick={startRender}
             className="text-sm font-semibold text-white bg-status-track rounded-xl px-5 py-2.5 disabled:opacity-40"
           >
@@ -992,7 +1000,8 @@ export default function LectureWorkbenchPage() {
                 {data.post.status === 'scheduled' ? '已进发布' : data.post.status === 'published' ? '已发布' : busy === 'schedule' ? '处理中…' : '满意 · 去发布'}
               </button>
               <button
-                disabled={busy !== null || Boolean(jobActive)}
+                disabled
+                title={RENDER_RETIRED_NOTICE}
                 onClick={startRender}
                 className="text-sm text-me-charcoal border border-me-stone rounded-xl px-4 hover:border-me-ochre disabled:opacity-40"
               >
@@ -1009,7 +1018,7 @@ export default function LectureWorkbenchPage() {
           </>
         ) : (
           <p className="text-sm text-me-taupe py-4 text-center">
-            {jobActive ? '做片中… 做好了成片会出现在这里' : '还没有成片 — 在 ② 里选好方式，点「开始做片」'}
+            {jobActive ? '做片中… 做好了成片会出现在这里' : RENDER_RETIRED_NOTICE}
           </p>
         )}
       </section>

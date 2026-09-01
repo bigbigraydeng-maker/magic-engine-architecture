@@ -1,7 +1,6 @@
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { enqueueRenderJob } from '@/lib/factory/render-queue'
 import { scheduleSocialPost, resolveBoundPublerAccount } from '@/lib/flywheel/social-post-publish'
 import type { PublerAccount } from '@/lib/publer/client'
 import { LINKEDIN_PROGRESS_SOURCE, LINKEDIN_PROGRESS_PLATFORM } from '@/lib/linkedin-progress/constants'
@@ -114,14 +113,16 @@ export async function PATCH(
       })
     }
 
-    // 确认 = 建做片任务(流水线入口)。best-effort：建任务失败不回滚确认，只回报。
-    let render: { jobId: string | null; created: boolean; reason?: string; error?: string } | undefined
+    // 🔴 2026-09-02：旧 Render 拼片管线(enqueueRenderJob → content_factory_render_jobs)已退役，
+    // 没有 worker 再消费这张表。这条"确认"按钮从此**不会再自动触发出片**——
+    // content_work_orders 现在只服务广告成片工单(review-sync.ts 从 Airtable Winner Intake
+    // 建的)，不是这条普通内容的替代管线；本机 scripts/factory-worker 目前也没有从
+    // content_posts 自动建工单的桥。真要出片，这条内容此刻需要人工另外处理。
+    // 用 error(不是自造字段)是因为前端 page.tsx 只认 render.error 来判断要不要显示
+    // "建做片任务失败"，用别的字段名会被前端忽略、误显示成"正在做片"的假成功提示。
+    let render: { jobId: string | null; created: boolean; error?: string } | undefined
     if (body.action === 'confirm') {
-      try {
-        render = await enqueueRenderJob({ clientId: params.id, contentPostId: params.postId })
-      } catch (e) {
-        render = { jobId: null, created: false, error: e instanceof Error ? e.message : String(e) }
-      }
+      render = { jobId: null, created: false, error: '旧拼片管线已退役，出片暂无自动管线，需人工处理这条内容' }
     }
 
     return NextResponse.json({ post: data, render })
