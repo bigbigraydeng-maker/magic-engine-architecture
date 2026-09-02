@@ -13,6 +13,8 @@ export const RECIPE_VERSION = 1
 // 两者分开表达,plan/receipt 两侧分别按各自口径校验(不许用展示时长冒充生成时长,反之亦然)。
 export const RECIPE_ID_MULTICUT = 'single_image_i2v_multicut_9s'
 export const RECIPE_VERSION_MULTICUT = 1
+export const RECIPE_ID_MULTI_IMAGE = 'multi_image_i2v_multicut_9s'
+export const RECIPE_VERSION_MULTI_IMAGE = 1
 
 /**
  * 权威 recipe descriptor。
@@ -56,6 +58,9 @@ export const WINNER_RECIPES = Object.freeze({
     min_bgm_input_loudness_lufs: -50,
     // cta → endcard 的过渡（renderer 支持;必须与 segments[1].transition 同名以保证 receipt 真实）
     endcard_transition: 'dissolve',
+    source_image_mode: 'reuse',
+    watermark_y: 1716,
+    endcard_fact_layout: 'inline',
   }),
   [RECIPE_ID_MULTICUT]: Object.freeze({
     id: RECIPE_ID_MULTICUT,
@@ -110,6 +115,37 @@ export const WINNER_RECIPES = Object.freeze({
     // CTA 端卡必须来自客户已验证事实(factory_config.verified_cta 风格约定),不得硬编任何客户数字。
     cta_facts_required: Object.freeze(['phone', 'url', 'departure']),
     cta_facts_optional: Object.freeze(['price']),
+    source_image_mode: 'reuse',
+    watermark_y: 1716,
+    endcard_fact_layout: 'inline',
+  }),
+  [RECIPE_ID_MULTI_IMAGE]: Object.freeze({
+    id: RECIPE_ID_MULTI_IMAGE,
+    version: RECIPE_VERSION_MULTI_IMAGE,
+    label: '多图 · 三镜头速切 9 秒',
+    segments: Object.freeze([
+      Object.freeze({ role: 'hook', duration_hint_s: 2.6, gen_duration_s: 5.0, motion_type: 'push_in', camera_action: 'focus / push-in cinematic close-up', transition: 'fade', prompt_keyword: 'push-in' }),
+      Object.freeze({ role: 'middle', duration_hint_s: 2.6, gen_duration_s: 5.0, motion_type: 'pull_back', camera_action: 'slow reveal / pull-back cinematic drift', transition: 'fade', prompt_keyword: 'pull-back' }),
+      Object.freeze({ role: 'cta', duration_hint_s: 2.6, gen_duration_s: 5.0, motion_type: 'pull_back', camera_action: 'pull-back / reveal wide cinematic shot', transition: 'dissolve', prompt_keyword: 'pull-back' }),
+    ]),
+    endcard_dur: 2.2,
+    xfade: 0.3,
+    min_final_dur: 8.9,
+    max_final_dur: 9.3,
+    hook_max_words_en: 6,
+    hook_max_chars_cjk: 12,
+    caption_mode: 'short_big',
+    tts_enabled: false,
+    kenburns: false,
+    min_loudness_lufs: -55,
+    min_bgm_input_loudness_lufs: -50,
+    endcard_transition: 'dissolve',
+    text_overlay_roles: Object.freeze(['hook', 'middle']),
+    cta_facts_required: Object.freeze(['phone', 'url', 'departure']),
+    cta_facts_optional: Object.freeze(['price']),
+    source_image_mode: 'distinct',
+    watermark_y: 120,
+    endcard_fact_layout: 'facts_stack',
   }),
 })
 
@@ -282,6 +318,18 @@ export function pickRecipeSourceOrReject(pool, recipe) {
   }
 }
 
+export function pickRecipeSourcesOrReject(pool, recipe) {
+  const arr = Array.isArray(pool) ? pool : []
+  const sources = [...new Set(arr
+    .filter((v) => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => v.trim()))]
+  const required = recipe.source_image_mode === 'distinct' ? recipe.segments.length : 1
+  if (sources.length >= required) return { sources: sources.slice(0, required) }
+  return {
+    rejection: `gate_data_unavailable: creative_recipe "${recipe.id}" requires ≥${required} distinct client-owned or transformed source image(s), got ${sources.length}`,
+  }
+}
+
 /**
  * R5 brief completeness gate(pre-provider 双重验证):
  * 保证 claim-critical 字段齐(creative_recipe/copy/segments/plan/max_new_clips/creative_profile
@@ -387,8 +435,8 @@ export function assertRecipePlanShape(brief, recipe) {
     if (p.position !== i) {
       throw new Error(`WINNER_RECIPE_PLAN_INVALID: plan[${i}].position expected ${i}`)
     }
-    if (p.source_image_url !== firstSource) {
-      throw new Error(`WINNER_RECIPE_PLAN_INVALID: plan[${i}] must reuse the same source_image_url`)
+    if (typeof p.source_image_url !== 'string' || p.source_image_url.trim().length === 0) {
+      throw new Error(`WINNER_RECIPE_PLAN_INVALID: plan[${i}].source_image_url missing/empty`)
     }
     if (p.motion_type !== spec.motion_type) {
       throw new Error(
@@ -410,6 +458,13 @@ export function assertRecipePlanShape(brief, recipe) {
     if (!key) throw new Error(`WINNER_RECIPE_PLAN_INVALID: plan[${i}].idempotency_key missing`)
     if (seen.has(key)) throw new Error(`WINNER_RECIPE_PLAN_INVALID: duplicate idempotency_key "${key}"`)
     seen.add(key)
+  }
+  const sourceSet = new Set(plan.map((p) => String(p.source_image_url)))
+  if (recipe.source_image_mode === 'distinct' && sourceSet.size !== recipe.segments.length) {
+    throw new Error('WINNER_RECIPE_PLAN_INVALID: every segment must use a distinct source_image_url')
+  }
+  if (recipe.source_image_mode === 'reuse' && sourceSet.size !== 1) {
+    throw new Error('WINNER_RECIPE_PLAN_INVALID: all segments must reuse the same source_image_url')
   }
   if (Number(brief?.max_new_clips) !== recipe.segments.length) {
     throw new Error(
@@ -860,6 +915,7 @@ export function buildRecipeAssembleConfig({
   // v2:端卡文案改由已验证 CTA 事实(phone/url/departure[/price])拼出,不接受自由文案冒充。
   const hasCtaFacts = Array.isArray(recipe.cta_facts_required) && recipe.cta_facts_required.length > 0
   const endcardCta = hasCtaFacts ? formatCtaFactsLine(ctaFacts || {}, recipe) : ctaText
+  const stackedFacts = hasCtaFacts && recipe.endcard_fact_layout === 'facts_stack'
   return {
     output: outputPath,
     brand_kit: brandKit,
@@ -868,12 +924,17 @@ export function buildRecipeAssembleConfig({
     motion: false,
     xfade: recipe.xfade,
     endcard_dur: recipe.endcard_dur,
+    watermark_y: recipe.watermark_y,
     ...(profile?.look ? { look: profile.look } : {}),
     ...(profile?.endcard_panel != null ? { endcard_panel: profile.endcard_panel } : {}),
     segments,
     // endcard.transition = renderer 支持的入场切法(=最后一段 out 的同名值)
     endcard: {
-      cta: endcardCta,
+      cta: stackedFacts ? ctaFacts.phone : endcardCta,
+      ...(stackedFacts ? {
+        offer: [ctaFacts.price, ctaFacts.departure].filter(Boolean),
+        url: ctaFacts.url,
+      } : {}),
       transition: recipe.endcard_transition,
       ...(hasCtaFacts ? { facts: ctaFacts || {} } : {}),
     },
@@ -887,12 +948,14 @@ export function buildRecipeAssembleConfig({
  * 音乐用 portable id;final 用探测值。
  */
 export function buildExecutedReceipt({
-  recipe, hookText, ctaText, captionsByRole, ctaFacts, sourceImageUrl, executed, music, final,
+  recipe, hookText, ctaText, captionsByRole, ctaFacts, sourceImageUrl, sourceImageUrls, executed, music, final,
 }) {
   const overlayRoles = Array.isArray(recipe.text_overlay_roles) ? recipe.text_overlay_roles : ['hook']
   const captions = captionsByRole || (hookText != null ? { hook: hookText } : {})
   const hasCtaFacts = Array.isArray(recipe.cta_facts_required) && recipe.cta_facts_required.length > 0
-  const endcardCta = hasCtaFacts ? formatCtaFactsLine(ctaFacts || {}, recipe) : ctaText
+  const endcardCta = hasCtaFacts
+    ? (recipe.endcard_fact_layout === 'facts_stack' ? ctaFacts?.phone : formatCtaFactsLine(ctaFacts || {}, recipe))
+    : ctaText
   return {
     recipe: { id: recipe.id, version: recipe.version },
     motion: false,
@@ -907,7 +970,7 @@ export function buildExecutedReceipt({
       camera_action: s.camera_action,
       transition_out: s.transition,
       clip_source: 'ai_i2v',
-      source_image_url: sourceImageUrl,
+      source_image_url: sourceImageUrls?.[i] ?? sourceImageUrl,
       provider: {
         name: executed[i]?.provider ?? 'muapi',
         request_id: executed[i]?.request_id ?? '',
@@ -960,9 +1023,16 @@ export function buildExecutedSrt({ recipe, hookText, captionsByRole }) {
 /**
  * server-side planner(与 recipe.ts buildRecipePlan 对齐;由 shape-agreement 校验)。
  */
-export function buildRecipePlan({ recipe, angle, sourceImageUrl, keyNamespace }) {
-  if (typeof sourceImageUrl !== 'string' || sourceImageUrl.trim().length === 0) {
-    throw new Error('WINNER_RECIPE_SOURCE_MISSING: planner requires a concrete source image URL')
+export function buildRecipePlan({ recipe, angle, sourceImageUrl, sourceImageUrls, visualDirective = null, keyNamespace }) {
+  const requested = (sourceImageUrls ?? [sourceImageUrl])
+    .filter((v) => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => v.trim())
+  const required = recipe.source_image_mode === 'distinct' ? recipe.segments.length : 1
+  const sources = recipe.source_image_mode === 'distinct'
+    ? [...new Set(requested)].slice(0, recipe.segments.length)
+    : requested.slice(0, 1)
+  if (sources.length < required) {
+    throw new Error(`WINNER_RECIPE_SOURCE_MISSING: planner requires ${required} ${recipe.source_image_mode} source image(s), got ${sources.length}`)
   }
   const ns = typeof keyNamespace === 'string' ? keyNamespace.trim() : ''
   if (!ns) {
@@ -970,7 +1040,7 @@ export function buildRecipePlan({ recipe, angle, sourceImageUrl, keyNamespace })
       'WINNER_RECIPE_PLAN_INVALID: buildRecipePlan requires a non-empty keyNamespace (R5)',
     )
   }
-  const trimmed = sourceImageUrl.trim()
+  const directive = typeof visualDirective === 'string' && visualDirective.trim() ? visualDirective.trim() : null
   const safeAngle = typeof angle === 'string' && angle.trim() ? angle.trim() : 'brand-story'
   const woToken = ns
   const segments = recipe.segments.map((s) => ({
@@ -985,9 +1055,9 @@ export function buildRecipePlan({ recipe, angle, sourceImageUrl, keyNamespace })
     position: i,
     scene_tag: 'client_source_derived',
     motion_type: s.motion_type,
-    prompt_hint: `${safeAngle} — ${s.camera_action}, 9:16 vertical, cinematic realism`,
+    prompt_hint: `${safeAngle} — ${s.camera_action}, 9:16 vertical, cinematic realism${directive ? `; ${directive}` : ''}`,
     idempotency_key: `${woToken}:${s.role}:${i}`,
-    source_image_url: trimmed,
+    source_image_url: recipe.source_image_mode === 'distinct' ? sources[i] : sources[0],
     requires_source_resolution: false,
   }))
   return {
@@ -1023,8 +1093,8 @@ export function assertRecipeReceipt(payload, recipe) {
     if (!s || s.role !== spec.role) fail(`receipt.segments[${i}].role expected "${spec.role}"`)
     if (s.motion_type !== spec.motion_type) fail(`receipt.segments[${i}].motion_type mismatch`)
     if (s.clip_source !== 'ai_i2v') fail(`receipt.segments[${i}].clip_source must be "ai_i2v"`)
-    if (s.source_image_url !== firstSource) {
-      fail(`receipt.segments[${i}].source_image_url must reuse first entry`)
+    if (typeof s.source_image_url !== 'string' || s.source_image_url.trim().length === 0) {
+      fail(`receipt.segments[${i}].source_image_url missing`)
     }
     // v2:provider 生成时长(gen_duration_s)与展示裁剪时长(duration_hint_s)分开校验;
     // v1 没有 gen_duration_s 字段,退回展示时长(两者相等,行为不变)。
@@ -1054,6 +1124,13 @@ export function assertRecipeReceipt(payload, recipe) {
         fail(`receipt.segments[${i}].caption required (non-empty) for text-overlay role "${spec.role}"`)
       }
     }
+  }
+  const receiptSources = new Set(rec.segments.map((s) => s.source_image_url))
+  if (recipe.source_image_mode === 'distinct' && receiptSources.size !== recipe.segments.length) {
+    fail('receipt.segments must use distinct source_image_url values')
+  }
+  if (recipe.source_image_mode === 'reuse' && receiptSources.size !== 1) {
+    fail('receipt.segments must reuse one source_image_url')
   }
   if (!rec.endcard || rec.endcard.planned_duration_s !== recipe.endcard_dur) {
     fail('receipt.endcard.planned_duration_s mismatch')

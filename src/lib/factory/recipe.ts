@@ -15,10 +15,12 @@
 //   digest 硬绑定到 replanned recipe,禁止「静默换个新 recipe 但没吃掉最新意见」
 
 import { createHash } from 'node:crypto'
+import type { ViralVisualPlan } from '@/lib/reels/viral-style-advisor'
 
 export const WINNER_RECIPE_IDS = [
   'single_image_i2v_pullback_12s',
   'single_image_i2v_multicut_9s',
+  'multi_image_i2v_multicut_9s',
 ] as const
 export type WinnerRecipeId = (typeof WINNER_RECIPE_IDS)[number]
 export type RecipeSegmentRole = 'hook' | 'middle' | 'cta'
@@ -77,6 +79,14 @@ export interface WinnerRecipe {
   /** 端卡必须携带的客户级已验证事实；缺失表示沿用自由 CTA 文案。 */
   readonly cta_facts_required?: readonly RecipeCtaFactKey[]
   readonly cta_facts_optional?: readonly RecipeCtaFactKey[]
+  /** reuse = 每段复用同一底图；distinct = 每段必须使用不同底图。 */
+  readonly source_image_mode: 'reuse' | 'distinct'
+  /** 主片 watermark 顶边位置(px)，由 renderer 明确消费，避免客户 logo 跌入 UI 安全区。 */
+  readonly watermark_y: number
+  /** facts_stack 把电话/价格/出发/网址分行，禁止一条超长 CTA 被缩成小字。 */
+  readonly endcard_fact_layout: 'inline' | 'facts_stack'
+  /** Viral V2 plans must carry auditable reference evidence before any provider claim. */
+  readonly requires_viral_visual_plan?: true
 }
 
 const SINGLE_IMAGE_I2V_PULLBACK_12S: WinnerRecipe = Object.freeze({
@@ -117,6 +127,9 @@ const SINGLE_IMAGE_I2V_PULLBACK_12S: WinnerRecipe = Object.freeze({
   min_bgm_input_loudness_lufs: -50,
   // renderer 支持 dissolve(cta→endcard);与 segments[1].transition 语义对齐(cta 出场即入 endcard)
   endcard_transition: 'dissolve',
+  source_image_mode: 'reuse',
+  watermark_y: 1716,
+  endcard_fact_layout: 'inline',
 })
 
 const SINGLE_IMAGE_I2V_MULTICUT_9S: WinnerRecipe = Object.freeze({
@@ -168,11 +181,27 @@ const SINGLE_IMAGE_I2V_MULTICUT_9S: WinnerRecipe = Object.freeze({
   text_overlay_roles: Object.freeze(['hook', 'middle'] as const),
   cta_facts_required: Object.freeze(['phone', 'url', 'departure'] as const),
   cta_facts_optional: Object.freeze(['price'] as const),
+  source_image_mode: 'reuse',
+  watermark_y: 1716,
+  endcard_fact_layout: 'inline',
+})
+
+/** Candidate 4:三张不同客户/AI 衍生图，短 I2V 拼接；文字和品牌位置由合同锁定。 */
+const MULTI_IMAGE_I2V_MULTICUT_9S: WinnerRecipe = Object.freeze({
+  ...SINGLE_IMAGE_I2V_MULTICUT_9S,
+  id: 'multi_image_i2v_multicut_9s',
+  version: 1,
+  label: '多图 · 三镜头速切 9 秒',
+  source_image_mode: 'distinct',
+  watermark_y: 120,
+  endcard_fact_layout: 'facts_stack',
+  requires_viral_visual_plan: true,
 })
 
 const REGISTRY: Record<WinnerRecipeId, WinnerRecipe> = Object.freeze({
   single_image_i2v_pullback_12s: SINGLE_IMAGE_I2V_PULLBACK_12S,
   single_image_i2v_multicut_9s: SINGLE_IMAGE_I2V_MULTICUT_9S,
+  multi_image_i2v_multicut_9s: MULTI_IMAGE_I2V_MULTICUT_9S,
 })
 
 export function resolveRecipe(id: unknown): WinnerRecipe | null {
@@ -460,6 +489,8 @@ export function buildRecipePlan(args: {
   recipe: WinnerRecipe
   angle: string
   sourceImageUrl: string
+  sourceImageUrls?: readonly string[]
+  visualDirective?: string | null
   /**
    * idempotency key 前缀。**必须**在 insert 之前已稳定(通常 = signal.id 或已知 work_order_id)。
    * R5:禁止用 `{work_order_id}` 占位再 post-insert patch —— 那会让 queued brief 一度带占位符,
@@ -468,8 +499,17 @@ export function buildRecipePlan(args: {
   keyNamespace: string
 }): RecipePlan {
   const { recipe, sourceImageUrl } = args
-  if (typeof sourceImageUrl !== 'string' || sourceImageUrl.trim().length === 0) {
-    throw new Error(`${RECIPE_ERR.SOURCE_MISSING}: planner requires a concrete source image URL`)
+  const requested = (args.sourceImageUrls ?? [sourceImageUrl])
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => v.trim())
+  const requiredSources = recipe.source_image_mode === 'distinct' ? recipe.segments.length : 1
+  const sources = recipe.source_image_mode === 'distinct'
+    ? Array.from(new Set(requested)).slice(0, recipe.segments.length)
+    : requested.slice(0, 1)
+  if (sources.length < requiredSources) {
+    throw new Error(
+      `${RECIPE_ERR.SOURCE_MISSING}: planner requires ${requiredSources} ${recipe.source_image_mode} source image(s), got ${sources.length}`,
+    )
   }
   const ns = typeof args.keyNamespace === 'string' ? args.keyNamespace.trim() : ''
   if (!ns) {
@@ -477,7 +517,9 @@ export function buildRecipePlan(args: {
       `${RECIPE_ERR.PLAN_INVALID}: buildRecipePlan requires a non-empty keyNamespace (deterministic pre-insert; use signal.id or work_order_id)`,
     )
   }
-  const trimmed = sourceImageUrl.trim()
+  const directive = typeof args.visualDirective === 'string' && args.visualDirective.trim()
+    ? args.visualDirective.trim()
+    : null
   const safeAngle =
     typeof args.angle === 'string' && args.angle.trim().length > 0 ? args.angle.trim() : 'brand-story'
   const woToken = ns
@@ -493,9 +535,9 @@ export function buildRecipePlan(args: {
     position: i,
     scene_tag: 'client_source_derived',
     motion_type: s.motion_type,
-    prompt_hint: `${safeAngle} — ${s.camera_action}, 9:16 vertical, cinematic realism`,
+    prompt_hint: `${safeAngle} — ${s.camera_action}, 9:16 vertical, cinematic realism${directive ? `; ${directive}` : ''}`,
     idempotency_key: `${woToken}:${s.role}:${i}`,
-    source_image_url: trimmed,
+    source_image_url: recipe.source_image_mode === 'distinct' ? sources[i] : sources[0],
     requires_source_resolution: false,
   }))
   return {
@@ -564,8 +606,8 @@ export function assertRecipePlanShape(brief: unknown, recipe: WinnerRecipe): voi
         `${RECIPE_ERR.PLAN_INVALID}: plan[${i}].motion_type expected "${spec.motion_type}"`,
       )
     }
-    if (p.source_image_url !== firstSource) {
-      throw new Error(`${RECIPE_ERR.PLAN_INVALID}: plan[${i}] must reuse the same source_image_url`)
+    if (typeof p.source_image_url !== 'string' || p.source_image_url.trim().length === 0) {
+      throw new Error(`${RECIPE_ERR.PLAN_INVALID}: plan[${i}].source_image_url missing/empty`)
     }
     if (p.requires_source_resolution !== false) {
       throw new Error(
@@ -584,6 +626,13 @@ export function assertRecipePlanShape(brief: unknown, recipe: WinnerRecipe): voi
       throw new Error(`${RECIPE_ERR.PLAN_INVALID}: duplicate idempotency_key "${key}"`)
     }
     seenKeys.add(key)
+  }
+  const sourceSet = new Set(plan.map((p) => String(p.source_image_url)))
+  if (recipe.source_image_mode === 'distinct' && sourceSet.size !== recipe.segments.length) {
+    throw new Error(`${RECIPE_ERR.PLAN_INVALID}: every segment must use a distinct source_image_url`)
+  }
+  if (recipe.source_image_mode === 'reuse' && sourceSet.size !== 1) {
+    throw new Error(`${RECIPE_ERR.PLAN_INVALID}: all segments must reuse the same source_image_url`)
   }
   if (Number(b.max_new_clips) !== recipe.segments.length) {
     throw new Error(
@@ -787,8 +836,8 @@ export function assertRecipeReceipt(payload: unknown, recipe: WinnerRecipe): voi
     if (!s || s.role !== spec.role) fail(`receipt.segments[${i}].role expected "${spec.role}"`)
     if (s.motion_type !== spec.motion_type) fail(`receipt.segments[${i}].motion_type mismatch`)
     if (s.clip_source !== 'ai_i2v') fail(`receipt.segments[${i}].clip_source must be "ai_i2v"`)
-    if (s.source_image_url !== firstSource) {
-      fail(`receipt.segments[${i}].source_image_url must reuse first entry`)
+    if (typeof s.source_image_url !== 'string' || s.source_image_url.trim().length === 0) {
+      fail(`receipt.segments[${i}].source_image_url missing`)
     }
     const expectedActual = spec.gen_duration_s ?? spec.duration_hint_s
     if (typeof s.actual_duration_s !== 'number' || Math.abs(s.actual_duration_s - expectedActual) > 0.6) {
@@ -815,6 +864,13 @@ export function assertRecipeReceipt(payload: unknown, recipe: WinnerRecipe): voi
         && (typeof s.caption !== 'string' || s.caption.trim().length === 0)) {
       fail(`receipt.segments[${i}].caption required (non-empty) for text-overlay role "${spec.role}"`)
     }
+  }
+  const receiptSources = new Set(rec.segments.map((s) => s.source_image_url))
+  if (recipe.source_image_mode === 'distinct' && receiptSources.size !== recipe.segments.length) {
+    fail('receipt.segments must use distinct source_image_url values')
+  }
+  if (recipe.source_image_mode === 'reuse' && receiptSources.size !== 1) {
+    fail('receipt.segments must reuse one source_image_url')
   }
   if (!rec.endcard || rec.endcard.planned_duration_s !== recipe.endcard_dur) {
     fail('receipt.endcard.planned_duration_s mismatch')
@@ -882,6 +938,25 @@ export function pickRecipeSourceOrReject(
   }
 }
 
+export type RecipeSourcesPick =
+  | { sources: string[] }
+  | { rejection: string }
+
+/** 按 recipe 合同选图；distinct 模式会去重并要求每段一张。 */
+export function pickRecipeSourcesOrReject(
+  pool: ReadonlyArray<string | null | undefined>,
+  recipe: WinnerRecipe,
+): RecipeSourcesPick {
+  const sources = Array.from(new Set(pool
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => v.trim())))
+  const required = recipe.source_image_mode === 'distinct' ? recipe.segments.length : 1
+  if (sources.length >= required) return { sources: sources.slice(0, required) }
+  return {
+    rejection: `gate_data_unavailable: creative_recipe "${recipe.id}" requires ≥${required} distinct client-owned or transformed source image(s), got ${sources.length}`,
+  }
+}
+
 // ── R5 brief completeness gate(pre-insert + pre-provider 双重验证)─────────────
 //
 // 补 buildFullRecipeBrief 之外的第二道防线:即便未来有人绕过 buildFullRecipeBrief 直接
@@ -919,6 +994,10 @@ export function assertRecipeBriefComplete(brief: unknown, recipe: WinnerRecipe):
   if ((recipe.cta_facts_required?.length ?? 0) > 0) {
     assertRecipeCtaFacts(b.cta_facts, recipe)
   }
+  if (recipe.requires_viral_visual_plan) {
+    const director = b.visual_director as { viral_visual_plan?: unknown } | null | undefined
+    assertViralVisualPlan(director?.viral_visual_plan)
+  }
   // 延续 plan shape 检查(段/plan/idempotency/source 同图/max_new_clips)。
   assertRecipePlanShape(brief, recipe)
   // R5:idempotency_key 必须已经是 deterministic(evaluate 传 signal.id ns),
@@ -940,6 +1019,11 @@ export interface FullRecipeBriefInput {
   recipe: WinnerRecipe
   angle: string
   sourceImageUrl: string
+  sourceImageUrls?: readonly string[]
+  /** ME Viral Video 提取的 prompt-safe 视觉结构，不含他人文案/画面。 */
+  visualDirective?: string | null
+  /** Viral V2 evidence receipt; required by recipes that opt into the V2 gate. */
+  visualPlan?: ViralVisualPlan | null
   creativeProfile: Record<string, unknown> // 已经过 client-config compact
   copy: RecipeCopyInput | MulticutRecipeCopyInput
   /** client-scoped verified facts；仅声明了 cta_facts_required 的 recipe 使用。 */
@@ -967,10 +1051,13 @@ export interface FullRecipeBriefInput {
  * 结构化 copy 与 receipt 元数据;不再走「insert queued → patch」这条竞态窗口(R5)。
  */
 export function buildFullRecipeBrief(input: FullRecipeBriefInput): Record<string, unknown> {
+  if (input.recipe.requires_viral_visual_plan) assertViralVisualPlan(input.visualPlan)
   const plan = buildRecipePlan({
     recipe: input.recipe,
     angle: input.angle,
     sourceImageUrl: input.sourceImageUrl,
+    sourceImageUrls: input.sourceImageUrls,
+    visualDirective: input.visualDirective,
     keyNamespace: input.keyNamespace,
   })
   const copy = input.recipe.text_overlay_roles?.includes('middle')
@@ -1001,6 +1088,14 @@ export function buildFullRecipeBrief(input: FullRecipeBriefInput): Record<string
     max_new_clips: plan.max_new_clips,
     aspect_ratio: input.aspectRatio ?? '9:16',
     notes: input.notes ?? '',
+    visual_director: {
+      source_image_mode: input.recipe.source_image_mode,
+      max_continuous_i2v_seconds: Math.max(...input.recipe.segments.map((s) => s.duration_hint_s)),
+      watermark_y: input.recipe.watermark_y,
+      endcard_fact_layout: input.recipe.endcard_fact_layout,
+      ...(input.visualDirective ? { viral_style_directive: input.visualDirective } : {}),
+      ...(input.visualPlan ? { viral_visual_plan: input.visualPlan } : {}),
+    },
   }
   if (ctaFacts) brief.cta_facts = ctaFacts
   if (input.attribution) brief.attribution = input.attribution
@@ -1008,4 +1103,26 @@ export function buildFullRecipeBrief(input: FullRecipeBriefInput): Record<string
     brief.review_feedback_digest = input.reviewFeedbackDigest.trim()
   }
   return brief
+}
+
+export function assertViralVisualPlan(value: unknown): asserts value is ViralVisualPlan {
+  const plan = value as Partial<ViralVisualPlan> | null | undefined
+  const fail = (detail: string): never => {
+    throw new Error(`${RECIPE_ERR.PLAN_INVALID}: viral_visual_plan ${detail}`)
+  }
+  if (!plan || typeof plan !== 'object' || plan.schema_version !== 1) fail('missing or schema_version != 1')
+  const checked = plan as Partial<ViralVisualPlan>
+  if (!Array.isArray(checked.reference_ids) || checked.reference_ids.length === 0
+      || checked.reference_ids.some((id) => typeof id !== 'string' || id.trim().length === 0)) {
+    fail('reference_ids missing/empty')
+  }
+  const referenceCount = (checked.reference_ids as string[]).length
+  if (!Array.isArray(checked.references) || checked.references.length !== referenceCount) {
+    fail('references must match reference_ids')
+  }
+  for (const field of ['selection_reason', 'hook_pattern', 'edit_rhythm', 'overlay_pattern', 'prompt_directive'] as const) {
+    if (typeof checked[field] !== 'string' || checked[field]!.trim().length === 0) fail(`${field} missing/empty`)
+  }
+  if (!Array.isArray(checked.shot_grammar) || checked.shot_grammar.length === 0) fail('shot_grammar missing/empty')
+  if (!Array.isArray(checked.prohibited_patterns) || checked.prohibited_patterns.length === 0) fail('prohibited_patterns missing/empty')
 }

@@ -22,6 +22,17 @@ const DATAFORSEO_API_BASE = 'https://api.dataforseo.com/v3'
 const DEFAULT_LOCATION_CODE = 2036
 const DEFAULT_LANGUAGE_CODE = 'en'
 
+/** A task-level API failure returned inside an otherwise-successful HTTP 200. */
+export class DataForSeoTaskError extends Error {
+  constructor(
+    public readonly errorCode: number | undefined,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'DataForSeoTaskError'
+  }
+}
+
 // ─── Return types ─────────────────────────────────────────────────────────────
 
 export interface LabsKeyword {
@@ -333,7 +344,8 @@ export async function bulkKeywordVolume(
   // 跟仓库另一个先例 business-listings.ts:224 反向选择：那处是历史遗留宽处理，
   // 我们跟 popular-products.ts:166 / business-data.ts 保持一致。
   if ((task?.status_code ?? 0) !== 20000) {
-    throw new Error(
+    throw new DataForSeoTaskError(
+      task?.status_code,
       `DataForSEO keyword_overview task error ${task?.status_code ?? 'missing'}: ${task?.status_message ?? 'unknown'}`,
     )
   }

@@ -18,6 +18,7 @@ import {
   deriveRecipeIntent,
   parseFactoryRecipeConfig,
   pickRecipeSourceOrReject,
+  pickRecipeSourcesOrReject,
   RECIPE_ERR,
   RecipeConfigError,
   resolveRecipe,
@@ -29,6 +30,7 @@ import {
 
 const RECIPE = resolveRecipe('single_image_i2v_pullback_12s')!
 const MULTICUT = resolveRecipe('single_image_i2v_multicut_9s')!
+const MULTI_IMAGE = resolveRecipe('multi_image_i2v_multicut_9s')!
 const SOURCE = 'https://cdn.example.com/hero.jpg'
 const NS = 'sig_test-signal-id'
 
@@ -54,6 +56,12 @@ describe('recipe timeline formula(R1)', () => {
     expect(MULTICUT.segments).toHaveLength(3)
     expect(MULTICUT.segments.every((segment) => segment.duration_hint_s <= 4)).toBe(true)
     expect(MULTICUT.segments.every((segment) => segment.gen_duration_s === 5)).toBe(true)
+  })
+  it('Candidate 4 recipe 强制三张不同图、上方 logo 和分层端卡', () => {
+    expect(MULTI_IMAGE.source_image_mode).toBe('distinct')
+    expect(MULTI_IMAGE.watermark_y).toBe(120)
+    expect(MULTI_IMAGE.endcard_fact_layout).toBe('facts_stack')
+    expect(MULTI_IMAGE.requires_viral_visual_plan).toBe(true)
   })
   it('recipe max_final_dur = 12.0', () => {
     expect(RECIPE.max_final_dur).toBe(12.0)
@@ -95,6 +103,29 @@ describe('winnerRecipeFromBrief — 严格解析(R2)', () => {
 describe('buildRecipePlan — deterministic namespace(R5)', () => {
   it('keyNamespace 缺 → 抛', () => {
     expect(() => buildRecipePlan({ recipe: RECIPE, angle: 'x', sourceImageUrl: SOURCE, keyNamespace: '' })).toThrow(/keyNamespace/)
+  })
+  it('Candidate 4 三段使用三张不同源图并注入 Viral 视觉指令', () => {
+    const sources = [SOURCE, 'https://cdn.example.com/second.jpg', 'https://cdn.example.com/third.jpg']
+    const p = buildRecipePlan({
+      recipe: MULTI_IMAGE,
+      angle: 'China closer than ever',
+      sourceImageUrl: SOURCE,
+      sourceImageUrls: sources,
+      visualDirective: 'proven travel style: strong visual reveal',
+      keyNamespace: NS,
+    })
+    expect(p.clip_generation_plan.map((x) => x.source_image_url)).toEqual(sources)
+    expect(p.clip_generation_plan.every((x) => x.prompt_hint.includes('proven travel style'))).toBe(true)
+    expect(() => assertRecipePlanShape({ ...p }, MULTI_IMAGE)).not.toThrow()
+  })
+  it('Candidate 4 少于三张不同图时 fail-closed', () => {
+    expect(() => buildRecipePlan({
+      recipe: MULTI_IMAGE,
+      angle: 'x',
+      sourceImageUrl: SOURCE,
+      sourceImageUrls: [SOURCE, SOURCE],
+      keyNamespace: NS,
+    })).toThrow(RECIPE_ERR.SOURCE_MISSING)
   })
   it('signal namespace → 每个 key 都以此为前缀', () => {
     const p = buildRecipePlan({ recipe: RECIPE, angle: 'x', sourceImageUrl: SOURCE, keyNamespace: NS })
@@ -234,6 +265,52 @@ describe('multicut copy + CTA facts', () => {
   })
 })
 
+describe('Viral V2 recipe audit gate', () => {
+  const visualPlan = {
+    schema_version: 1 as const,
+    reference_ids: ['viral-ref-1'],
+    references: [{ id: 'viral-ref-1', score: 4.7, hook_type: 'visual surprise', techniques: ['dynamic reveal'] }],
+    selection_reason: 'semantic client and campaign fit; reach secondary',
+    hook_pattern: 'visual surprise',
+    shot_grammar: ['dynamic reveal'],
+    edit_rhythm: 'multi-cut; every continuous I2V shot <= 2.6s',
+    overlay_pattern: 'hook + middle; short distinct lines',
+    prohibited_patterns: ['static-photo slideshow'],
+    prompt_directive: 'viral-v2 travel brand; open with visual surprise; dynamic reveal',
+  }
+  const facts = { phone: '09 123 4567', url: 'example.com', departure: 'October 2026' }
+
+  it('persists auditable reference IDs and selection logic in the executable brief', () => {
+    const brief = buildFullRecipeBrief({
+      recipe: MULTI_IMAGE,
+      angle: 'China beyond the postcard',
+      sourceImageUrl: SOURCE,
+      sourceImageUrls: [SOURCE, 'https://cdn.example.com/two.jpg', 'https://cdn.example.com/three.jpg'],
+      visualDirective: visualPlan.prompt_directive,
+      visualPlan,
+      creativeProfile: {},
+      copy: { hook: 'Beyond the postcard', middle: 'Meet the real China' },
+      ctaFacts: facts,
+      keyNamespace: NS,
+    })
+    expect((brief.visual_director as { viral_visual_plan: unknown }).viral_visual_plan).toEqual(visualPlan)
+    expect(() => assertRecipeBriefComplete(brief, MULTI_IMAGE)).not.toThrow()
+  })
+
+  it('refuses a Viral V2 recipe before provider work when its plan receipt is missing', () => {
+    expect(() => buildFullRecipeBrief({
+      recipe: MULTI_IMAGE,
+      angle: 'China',
+      sourceImageUrl: SOURCE,
+      sourceImageUrls: [SOURCE, 'https://cdn.example.com/two.jpg', 'https://cdn.example.com/three.jpg'],
+      creativeProfile: {},
+      copy: { hook: 'Beyond China', middle: 'Meet the real China' },
+      ctaFacts: facts,
+      keyNamespace: NS,
+    })).toThrow(/viral_visual_plan/)
+  })
+})
+
 describe('assertRecipeBudget(R7)', () => {
   it('max_new_clips < segments → 拒', () => {
     expect(() =>
@@ -341,10 +418,11 @@ describe('assertRecipeReceipt — 生产 receipt validator(R12)', () => {
 })
 
 describe('WINNER_RECIPE_IDS — 白名单闸', () => {
-  it('只登记当前两条冻结 recipe', () => {
+  it('只登记当前三条版本化 recipe', () => {
     expect(WINNER_RECIPE_IDS).toEqual([
       'single_image_i2v_pullback_12s',
       'single_image_i2v_multicut_9s',
+      'multi_image_i2v_multicut_9s',
     ])
   })
 })
@@ -491,6 +569,20 @@ describe('pickRecipeSourceOrReject(R6 truthful rejection)', () => {
   it('pool 有效源图前有空值 → 跳过空值选第一个真实源图', () => {
     expect(pickRecipeSourceOrReject([null, '', 'https://c.jpg'], RECIPE_LOCAL))
       .toEqual({ source: 'https://c.jpg' })
+  })
+})
+
+describe('pickRecipeSourcesOrReject — Candidate 4 distinct source gate', () => {
+  it('去重后取前三张', () => {
+    expect(pickRecipeSourcesOrReject([
+      SOURCE, SOURCE, 'https://cdn.example.com/b.jpg', 'https://cdn.example.com/c.jpg',
+    ], MULTI_IMAGE)).toEqual({
+      sources: [SOURCE, 'https://cdn.example.com/b.jpg', 'https://cdn.example.com/c.jpg'],
+    })
+  })
+  it('不足三张就拒绝，不回退同图', () => {
+    expect(pickRecipeSourcesOrReject([SOURCE, 'https://cdn.example.com/b.jpg'], MULTI_IMAGE))
+      .toHaveProperty('rejection')
   })
 })
 

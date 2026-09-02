@@ -76,6 +76,7 @@ describe('shape agreement — TS vs MJS registry(R13)', () => {
         'id', 'version', 'label', 'endcard_dur', 'xfade', 'min_final_dur', 'max_final_dur',
         'caption_mode', 'tts_enabled', 'kenburns', 'hook_max_words_en', 'hook_max_chars_cjk',
         'min_loudness_lufs', 'min_bgm_input_loudness_lufs', 'endcard_transition',
+        'source_image_mode', 'watermark_y', 'endcard_fact_layout',
       ] as const) {
         expect(t[key]).toEqual(m[key])
       }
@@ -89,8 +90,9 @@ describe('shape agreement — TS vs MJS registry(R13)', () => {
     const source = 'https://cdn.example.com/x.jpg'
     const ns = 'sig_agreement'
     for (const id of WINNER_RECIPE_IDS) {
-      const t = tsBuildRecipePlan({ recipe: tsResolveRecipe(id)!, angle: 'brand story', sourceImageUrl: source, keyNamespace: ns })
-      const m = mjsBuildRecipePlan({ recipe: mjsResolveRecipe(id), angle: 'brand story', sourceImageUrl: source, keyNamespace: ns })
+      const sources = [source, 'https://cdn.example.com/y.jpg', 'https://cdn.example.com/z.jpg']
+      const t = tsBuildRecipePlan({ recipe: tsResolveRecipe(id)!, angle: 'brand story', sourceImageUrl: source, sourceImageUrls: sources, keyNamespace: ns })
+      const m = mjsBuildRecipePlan({ recipe: mjsResolveRecipe(id), angle: 'brand story', sourceImageUrl: source, sourceImageUrls: sources, keyNamespace: ns })
       expect(t.segments).toEqual(m.segments)
       expect(t.clip_generation_plan).toEqual(m.clip_generation_plan)
       expect(t.creative_recipe).toEqual(m.creative_recipe)

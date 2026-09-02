@@ -9,6 +9,7 @@ import {
   daysAgo,
   loadManualItems,
   pushPlatformCandidateReviewItems,
+  pushDataForSeoCreditsItem,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -29,6 +30,44 @@ describe('daysAgo', () => {
     expect(daysAgo('2026-07-25T12:00:00Z', now)).toBe(7)
     expect(daysAgo(null, now)).toBeNull()
     expect(daysAgo('not-a-date', now)).toBeNull()
+  })
+})
+
+describe('pushDataForSeoCreditsItem', () => {
+  function fakeDiscoveryQuery(rows: unknown[]) {
+    let containsFilter: unknown
+    const chain = {
+      select: () => chain,
+      gte: () => chain,
+      contains: (_column: string, value: unknown) => {
+        containsFilter = value
+        return chain
+      },
+      limit: async () => ({ data: rows, error: null }),
+    }
+    return {
+      supabase: { from: () => chain } as never,
+      getContainsFilter: () => containsFilter,
+    }
+  }
+
+  it('creates one actionable item only for a persisted 40210 warning', async () => {
+    const items: ManualItem[] = []
+    const query = fakeDiscoveryQuery([{ id: 'discovery-1' }])
+    await pushDataForSeoCreditsItem(query.supabase, items, new Date('2026-09-01T00:00:00Z'))
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'dataforseo_credits_out', client_id: 'infra' })
+    expect(items[0].how).toContain('Billing')
+    expect(query.getContainsFilter()).toEqual({ meta: { warnings: [{ error_code: 40210 }] } })
+  })
+
+  it('does not create a recharge task when the exact 40210 query has no match', async () => {
+    const items: ManualItem[] = []
+    const query = fakeDiscoveryQuery([])
+    await pushDataForSeoCreditsItem(query.supabase, items, new Date('2026-09-01T00:00:00Z'))
+
+    expect(items).toEqual([])
   })
 })
 
