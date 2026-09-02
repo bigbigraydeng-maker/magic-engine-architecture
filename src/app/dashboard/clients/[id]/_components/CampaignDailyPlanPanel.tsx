@@ -96,6 +96,7 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   const [postExpanded, setPostExpanded] = useState(false)
   const [reviewReason, setReviewReason] = useState('')
   const [reviewSaving, setReviewSaving] = useState(false)
+  const [bulkReviewSaving, setBulkReviewSaving] = useState(false)
   const [reviewError, setReviewError] = useState('')
   const requestSequence = useRef(0)
   const loadAbort = useRef<AbortController | null>(null)
@@ -138,6 +139,7 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   useEffect(() => {
     setData(null)
     setReviewSaving(false)
+    setBulkReviewSaving(false)
     setReviewError('')
     void load()
     return () => {
@@ -157,18 +159,20 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
     setReviewError('')
   }, [selectedDate, selectedBundle?.post_review?.reason, selectedBundle?.post_review?.reviewed_at])
 
-  const submitPostReview = useCallback(async (verdict: PostReview['verdict']) => {
+  const submitPostReview = useCallback(async (verdict: PostReview['verdict'], dateOverride?: string, expectedReviewRevisionOverride?: string | null) => {
     const scope = `${clientId}:${campaignId}`
-    if (!data?.plan_id || !data.plan_revision || !selectedDate) {
+    const reviewDate = dateOverride ?? selectedDate
+    if (!data?.plan_id || !data.plan_revision || !reviewDate) {
       setReviewError('当前计划没有可审核的已保存版本，请刷新后重试。')
       return
     }
-    if (verdict === 'NEEDS_REVISION' && !reviewReason.trim()) {
+    const reason = verdict === 'NEEDS_REVISION' ? reviewReason.trim() : null
+    if (verdict === 'NEEDS_REVISION' && !reason) {
       setReviewError('请先写明需要修改的原因。')
       return
     }
 
-    setReviewSaving(true)
+    if (!dateOverride) setReviewSaving(true)
     setReviewError('')
     try {
       const res = await fetch(`/api/clients/${clientId}/campaign-daily-plan/post-review`, {
@@ -178,10 +182,10 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
           campaign_id: campaignId,
           plan_id: data.plan_id,
           expected_plan_revision: data.plan_revision,
-          expected_review_revision: data.review_revision ?? null,
-          date: selectedDate,
+          expected_review_revision: expectedReviewRevisionOverride ?? data.review_revision ?? null,
+          date: reviewDate,
           verdict,
-          reason: verdict === 'NEEDS_REVISION' ? reviewReason.trim() : null,
+          reason,
         }),
       })
       const json = await res.json()
@@ -196,13 +200,45 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
         }
         throw new Error(json.error ?? '保存审核失败')
       }
+      if (dateOverride) return json.review_revision as string | null
       await load()
     } catch (err) {
       if (activeScope.current === scope) setReviewError((err as Error).message)
+      if (dateOverride) throw err
     } finally {
-      if (activeScope.current === scope) setReviewSaving(false)
+      if (activeScope.current === scope && !dateOverride) setReviewSaving(false)
     }
   }, [campaignId, clientId, data, load, reviewReason, selectedDate])
+
+  const bulkPassPendingPosts = useCallback(async () => {
+    const scope = `${clientId}:${campaignId}`
+    if (!data?.plan_id || !data.plan_revision) {
+      setReviewError('当前计划没有可审核的已保存版本，请刷新后重试。')
+      return
+    }
+    const pendingDates = data.bundles
+      .filter(bundle => bundle.post && !(bundle.post_review?.verdict === 'PASS' && bundle.post_review.is_current))
+      .map(bundle => bundle.date)
+    if (pendingDates.length === 0) return
+
+    setBulkReviewSaving(true)
+    setReviewSaving(true)
+    setReviewError('')
+    try {
+      let reviewRevision = data.review_revision ?? null
+      for (const date of pendingDates) {
+        reviewRevision = await submitPostReview('PASS', date, reviewRevision) ?? reviewRevision
+      }
+      if (activeScope.current === scope) await load()
+    } catch {
+      if (activeScope.current === scope) await load()
+    } finally {
+      if (activeScope.current === scope) {
+        setBulkReviewSaving(false)
+        setReviewSaving(false)
+      }
+    }
+  }, [campaignId, clientId, data, load, submitPostReview])
 
   if (loading) {
     return <p className="text-xs text-me-charcoal/45 animate-pulse py-3">加载每日计划…</p>
@@ -217,6 +253,11 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
     needs_revision: 0,
     total: data.bundles.filter(bundle => !!bundle.post).length,
   }
+  const pendingPostCount = data.bundles.filter(
+    bundle => bundle.post && !(bundle.post_review?.verdict === 'PASS' && bundle.post_review.is_current)
+  ).length
+  const selectedPostPassed = selectedBundle?.post_review?.verdict === 'PASS' && selectedBundle.post_review.is_current
+  const selectedPostNeedsRevision = selectedBundle?.post_review?.verdict === 'NEEDS_REVISION'
 
   return (
     <div className="border border-black/[.06] rounded-xl overflow-hidden">
@@ -226,6 +267,20 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
           <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-me-charcoal/[.06] text-me-charcoal/65">
             Post 已通过 {reviewSummary.passed}/{reviewSummary.total}
           </span>
+          {reviewSummary.total > 0 && (
+            <button
+              type="button"
+              disabled={reviewSaving || bulkReviewSaving || pendingPostCount === 0}
+              onClick={() => void bulkPassPendingPosts()}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                pendingPostCount === 0
+                  ? 'bg-[#5C8A4A]/12 text-[#5C8A4A]'
+                  : 'bg-[#5C8A4A] text-white hover:bg-[#4D783E]'
+              }`}
+            >
+              {bulkReviewSaving ? '批量保存中…' : pendingPostCount === 0 ? '全部 Post 已通过' : `批量通过未审 Post（${pendingPostCount}）`}
+            </button>
+          )}
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
             data.grounding.status === 'OK' ? 'bg-[#5C8A4A]/12 text-[#5C8A4A]' : 'bg-me-gold/20 text-me-ochre'
           }`}>
@@ -249,12 +304,14 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
                   type="button"
                   disabled={!selectable}
                   onClick={() => { setSelectedDate(day.date); setPostExpanded(false) }}
-                  className={`rounded-lg px-1.5 py-2 text-center transition-colors ${
+                  className={`rounded-lg px-1.5 py-2 text-center transition-colors border ${
                     isSelected
-                      ? 'bg-me-ochre text-white'
+                      ? 'bg-me-ochre text-white border-me-ochre shadow-[0_0_0_2px_rgba(198,139,31,0.18)]'
                       : selectable
-                        ? 'bg-me-ivory hover:bg-me-ochre/15 cursor-pointer'
-                        : 'bg-me-ivory/60 cursor-not-allowed'
+                        ? postReview?.verdict === 'PASS' && postReview.is_current
+                          ? 'bg-[#5C8A4A]/8 border-[#5C8A4A]/20 hover:bg-[#5C8A4A]/12 cursor-pointer'
+                          : 'bg-me-ivory border-transparent hover:bg-me-ochre/15 cursor-pointer'
+                        : 'bg-me-ivory/60 border-transparent cursor-not-allowed'
                   }`}
                 >
                   <p className={`text-[10px] mb-1 ${isSelected ? 'text-white/85' : 'text-me-charcoal/55'}`}>{day.date.slice(5)}</p>
@@ -284,6 +341,12 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
               <BundleCard title="📝 Post">
                 {selectedBundle.post ? (
                   <>
+                    {selectedPostPassed && (
+                      <div className="mb-2 rounded-lg border border-[#5C8A4A]/20 bg-[#5C8A4A]/8 px-3 py-2">
+                        <p className="text-xs font-semibold text-[#5C8A4A]">✓ 这一天的 Facebook Post 已通过</p>
+                        <p className="mt-0.5 text-[10px] text-me-charcoal/45">仍未排期、未发布；这里只代表 Post 人工审核通过。</p>
+                      </div>
+                    )}
                     {selectedBundle.post_image ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -334,23 +397,32 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
                       {selectedBundle.post_review?.verdict === 'NEEDS_REVISION' && selectedBundle.post_review.reason && (
                         <p className="text-[11px] text-[#C2453A]">上次反馈：{selectedBundle.post_review.reason}</p>
                       )}
-                      <input
-                        type="text"
-                        value={reviewReason}
-                        maxLength={500}
-                        onChange={event => setReviewReason(event.target.value)}
-                        placeholder="如需修改，请写明原因"
-                        className="w-full rounded-md border border-black/10 px-2.5 py-2 text-xs text-me-charcoal placeholder:text-me-charcoal/35 focus:outline-none focus:ring-1 focus:ring-me-ochre"
-                      />
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          disabled={reviewSaving}
-                          onClick={() => void submitPostReview('PASS')}
-                          className="rounded-md bg-[#5C8A4A] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                        >
-                          {reviewSaving ? '保存中…' : 'Post 通过'}
-                        </button>
+                      {!selectedPostPassed && (
+                        <input
+                          type="text"
+                          value={reviewReason}
+                          maxLength={500}
+                          onChange={event => setReviewReason(event.target.value)}
+                          placeholder="如需修改，请写明原因"
+                          className="w-full rounded-md border border-black/10 px-2.5 py-2 text-xs text-me-charcoal placeholder:text-me-charcoal/35 focus:outline-none focus:ring-1 focus:ring-me-ochre"
+                        />
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        {!selectedPostPassed && (
+                          <button
+                            type="button"
+                            disabled={reviewSaving}
+                            onClick={() => void submitPostReview('PASS')}
+                            className="rounded-md bg-[#5C8A4A] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                          >
+                            {reviewSaving ? '保存中…' : selectedPostNeedsRevision ? '改为 Post 通过' : 'Post 通过'}
+                          </button>
+                        )}
+                        {selectedPostPassed && (
+                          <span className="rounded-md bg-[#5C8A4A]/12 px-3 py-1.5 text-xs font-semibold text-[#5C8A4A]">
+                            ✓ Post 已通过
+                          </span>
+                        )}
                         <button
                           type="button"
                           disabled={reviewSaving}
