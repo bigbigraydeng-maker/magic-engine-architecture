@@ -5,6 +5,22 @@
 
 ---
 
+### 2026-08-29（`content_factory_render_jobs` RLS 策略补回 `TO service_role`）
+
+**发生了什么**：复审 CTS tailor-made 行程超时修复时顺手翻到 `20260731081328_content_factory_render_jobs.sql`，发现建表 migration 漏写了 `TO service_role`（`CREATE POLICY ... FOR ALL USING (true)` 不写 `TO` 等价于 `TO PUBLIC`，对 anon 生效），跟 2026-08-03 那次 118 条策略泄露事故是同一根因、同一模板遗漏。直连生产 Supabase 查 `pg_policies` 核实：**生产库当前该策略 `roles` 已是 `{service_role}`，不是活的漏洞**——建表时间（07-31）早于 `20260803020000_rls_lock_policies_to_service_role.sql` 那次批量收紧扫描（08-03 02:00），已被顺带收紧，只是源文件本身没跟着改。
+
+**风险评估**：建表到批量扫描之间（07-31 08:45 ~ 08-03 02:00）约 3 天窗口内写入过 25 行数据，全部属于同一 `client_id`（Magic Lab Class，内部自有 IP 品牌，非付费客户），逐条核对 `scenes`/`error`/`vo_urls`/`output_url`/`clip_urls` 字段未发现邮箱、API key、签名 URL 等敏感内容；无法倒查历史访问日志确认是否真被匿名读取过，但即使读到也只是自家内容工厂做片记录，不涉及客户机密。
+
+**修复**：新增 `20260829120000_fix_content_factory_render_jobs_rls_role.sql`，用 `ALTER POLICY`（只改角色不动条件，无「表裸奔」窗口）把源码模板也钉死到 `TO service_role`，跟 `client_connectors`（`20260818000001`）、`client_projects`（`20260819000001`）同一手法——目的是让**源码**（未来任何环境从零重建这张表时会读到的模板）恢复正确，避免下次重建环境时先裸奔一段再指望批量扫描"蒙对"补上。PM 在 Supabase SQL Editor 手工执行（会话内 Supabase MCP 写操作与浏览器自动化均被 auto mode 分类器拦截，无法由 Claude 直接执行），确认 `Success`。
+
+**复审**：子牙（架构，通过）+ 魏征（挑刺）两轮。魏征发现并证伪了一个真实盲区——`client_projects` 表用小写 `create policy` 语法逃过了最初的大小写敏感 grep，且建表时间晚于 08-03 扫描、未被覆盖；核实后确认已于 08-19 由另一次修复（`20260819000001`）合并到 main，不是新坑，但暴露了排查方法论的漏洞（grep 需不区分大小写）。
+
+**未完成**：全仓库还有 ~39 个建表 migration 存在同一模板遗漏（建表时间早于 08-03 扫描，理论上生产已被顺带收紧，但除 `content_factory_render_jobs`/`client_connectors`/`client_projects` 外均未逐张拿 `pg_policies` 核实过）。已作为独立任务（子牙开出的 `task_0550d1f9`）派发，PM 已在另一个会话启动核对。
+
+**Reuse Statement**：复用既有 `ALTER POLICY`（只改角色不动条件）修复手法与验证脚本结构，与 `20260803020000`/`20260818000001`/`20260819000001` 三次同类修复完全一致，无新增抽象。改动只限 `content_factory_render_jobs` 一张表的策略角色，不动条件、不动其他表、不动 app 代码（所有读写路径本就用 service role key）。无客户/行业专属逻辑写入 shared runtime——这是平台安全基线的源码纠偏，不含任何客户判断。
+
+---
+
 ### 2026-08-23（AI Visibility Tracker OpenAI 引擎模型退役静默失效修复，PR [#1167](https://github.com/bigbigraydeng-maker/magic-engine/pull/1167)）
 
 **发生了什么**：闽商潜在客户批量诊断任务中意外发现，`src/lib/ai-tracker/runners/openai.ts` 写死的 `gpt-4o-search-preview`（AI Visibility Tracker 每周一 cron `ai-tracker-weekly` 的 OpenAI 侧模型）被 OpenAI 于 2026-07-23 整族退役，现场 canary 实测全系列变体（含带日期快照与滚动别名）一律 404。查生产 Supabase：openai 引擎最后一次成功记录停在 2026-08-17（上周一），2026-08-17 之后到发现时为止零记录——说明本周一（08-24 01:00 UTC）的 cron 还没跑过，是抢在下一次触发前修复的，**未真正命中生产**。cron 路由是 fire-and-forget（202 立即返回）+ orchestrator 对单次 runner 失败有 try/catch 兜底，healthchecks.io 只在 curl 拿到 202 时 ping 成功，不会因为下游任务失败报警——是本条铁律要求专门核实、单独排查的一类静默失效。
