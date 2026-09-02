@@ -26,6 +26,7 @@ export const CTS_REQUEST_EVENT = 'me/factory.cts-candidate.requested'
 export const CTS_REVIEW_EVENT = 'me/factory.cts-candidate.reviewed'
 export const CTS_REVIEW_MATCH_FIELD = 'data.request_id'
 export const CTS_WORKFLOW_VERSION = 'cts-one-candidate-v1'
+export const DAILY_PLAN_READY_EVENT = 'daily_plan.publish_queue.ready'
 
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const WORKFLOW_ENV_KEYS = Object.freeze([
@@ -273,6 +274,47 @@ export function createCtsWorkflowFunction(client, scope, receiptDir, env, adapte
   )
 }
 
+export function createDailyPlanReadyFunction(client, receiptDir) {
+  return client.createFunction(
+    {
+      id: 'daily-plan-publish-queue-ready-no-publish',
+      name: 'CTS Daily Plan — publish preparation receipt (no publish)',
+      retries: 0,
+      idempotency: 'event.data.plan_id',
+      concurrency: { limit: 1, key: 'event.data.client_id' },
+    },
+    { event: DAILY_PLAN_READY_EVENT },
+    async ({ event, step }) => {
+      const data = validateDailyPlanReadyData(event.data)
+      return step.run('persist-daily-plan-ready-receipt', () =>
+        persistReceipt(receiptDir, `${data.plan_id}.publish-ready.json`, {
+          ...data,
+          status: 'ready_no_publish',
+          consumed_at: new Date().toISOString(),
+        }))
+    },
+  )
+}
+
+export function validateDailyPlanReadyData(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Invalid daily plan ready event')
+  }
+  for (const field of ['plan_id', 'campaign_id', 'client_id']) {
+    assertSafeId(data[field], field)
+  }
+  if (data.event_name !== DAILY_PLAN_READY_EVENT) throw new Error('Daily plan event name mismatch')
+  if (data.no_publish !== true) throw new Error('Daily plan event requires no_publish=true')
+  return {
+    plan_id: data.plan_id,
+    campaign_id: data.campaign_id,
+    client_id: data.client_id,
+    plan_revision: typeof data.plan_revision === 'string' ? data.plan_revision : null,
+    no_publish: true,
+    event_name: DAILY_PLAN_READY_EVENT,
+  }
+}
+
 export function resolveWorkflowStateDir(userHome = homedir()) {
   return join(userHome, 'Library', 'Application Support', 'Magic Engine', 'inngest-cts-workflow')
 }
@@ -286,8 +328,9 @@ async function main() {
   const mode = process.argv[2]
   if (mode === 'connect') {
     const fn = createCtsWorkflowFunction(client, scope, receiptDir, env)
+    const dailyPlanFn = createDailyPlanReadyFunction(client, receiptDir)
     const connection = await connect({
-      apps: [{ client, functions: [fn] }],
+      apps: [{ client, functions: [fn, dailyPlanFn] }],
       instanceId: `cts-workflow-${hostname()}`,
       maxWorkerConcurrency: 1,
     })
