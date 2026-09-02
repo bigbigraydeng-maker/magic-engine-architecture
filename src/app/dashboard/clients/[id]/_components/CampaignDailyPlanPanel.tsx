@@ -67,6 +67,8 @@ interface DailyPlanResponse {
   review_summary: { passed: number; needs_revision: number; total: number }
 }
 
+type PublishQueueStatus = 'READY' | 'NEEDS_REVISION' | 'PENDING_REVIEW'
+
 const GROUNDING_LABEL: Record<DailyPlanResponse['grounding']['status'], string> = {
   OK: '✅ 已连接 Master Brief',
   NEEDS_BRIEF: '⚠️ 缺少 Master Brief（NEEDS_BRIEF）',
@@ -263,12 +265,13 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
     .map(bundle => {
       const passed = bundle.post_review?.verdict === 'PASS' && bundle.post_review.is_current
       const needsRevision = bundle.post_review?.verdict === 'NEEDS_REVISION'
+      const status: PublishQueueStatus = passed ? 'READY' : needsRevision ? 'NEEDS_REVISION' : 'PENDING_REVIEW'
       return {
         date: bundle.date,
         cta: bundle.post?.cta ?? 'UNKNOWN',
         ctaUrl: bundle.post?.cta_url ?? null,
         hasImage: !!bundle.post_image,
-        status: passed ? 'READY' : needsRevision ? 'NEEDS_REVISION' : 'PENDING_REVIEW',
+        status,
       }
     })
   const publishQueueReadyCount = publishQueueItems.filter(item => item.status === 'READY').length
@@ -645,7 +648,7 @@ function PostReviewBadge({ review }: { review: PostReview | null | undefined }) 
   return <span className="rounded-full bg-me-charcoal/[.06] px-2 py-0.5 text-[10px] font-medium text-me-charcoal/50">待审核</span>
 }
 
-function PublishQueueBadge({ status }: { status: 'READY' | 'NEEDS_REVISION' | 'PENDING_REVIEW' }) {
+function PublishQueueBadge({ status }: { status: PublishQueueStatus }) {
   if (status === 'READY') {
     return <span className="justify-self-start rounded-full bg-[#5C8A4A]/12 px-2 py-0.5 text-[10px] font-medium text-[#5C8A4A]">待排期</span>
   }
