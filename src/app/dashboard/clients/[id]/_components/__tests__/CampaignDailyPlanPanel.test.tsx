@@ -279,7 +279,7 @@ describe('CampaignDailyPlanPanel — Reel readiness is script-only, media_status
 })
 
 describe('CampaignDailyPlanPanel — conversion goal vs publishing destination (Build Control TRUTHFUL READINESS)', () => {
-  it('shows lead_form_submit as 转化目标 with a Chinese explainer; destination reads UNKNOWN / 未连接, never the CTA', async () => {
+  it('shows lead_form_submit as 转化目标 with a Chinese explainer; destination stays UNKNOWN and never echoes the CTA', async () => {
     mockFetchOnce({
       success: true,
       campaign: { id: CAMPAIGN_ID, title: 'Christmas Campaign', offer: null, primary_cta: 'lead_form_submit' },
@@ -309,8 +309,8 @@ describe('CampaignDailyPlanPanel — conversion goal vs publishing destination (
     // Destination row explicitly says UNKNOWN / 未连接; the primary_cta must
     // NOT be echoed as a destination.
     expect(screen.getByText(/发布目的地/)).toBeInTheDocument()
-    expect(screen.getByText(/UNKNOWN \/ 未连接/)).toBeInTheDocument()
-    expect(screen.getByText(/尚未绑定 Facebook Page/)).toBeInTheDocument()
+    expect(screen.getByText('UNKNOWN')).toBeInTheDocument()
+    expect(screen.getByText(/等待发布桥确认，不经旧运营台/)).toBeInTheDocument()
 
     // Publish authorisation stays NOT_AUTHORIZED.
     expect(screen.getByText('NOT_AUTHORIZED')).toBeInTheDocument()
@@ -364,6 +364,27 @@ describe('CampaignDailyPlanPanel — inline Facebook Post review (#1308)', () =>
     expect(screen.getByText(/不代表事实核验、Story\/Reel 通过、生成、排期、Provider 或发布授权/)).toBeInTheDocument()
     expect(screen.getByText('NOT_AUTHORIZED')).toBeInTheDocument()
     expect(screen.queryByText(/Launch Hub/i)).not.toBeInTheDocument()
+    expect(document.querySelector('a[href*="/dashboard/content"]')).toBeNull()
+  })
+
+  it('shows a read-only Daily Plan publish queue without linking to the legacy content board', async () => {
+    mockFetchOnce(reviewPayload({
+      verdict: 'PASS',
+      reason: null,
+      reviewed_at: '2026-09-01T15:05:00.000Z',
+      is_current: true,
+    }))
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+
+    await screen.findByText('发布队列 / Publish Queue')
+    expect(screen.getByText('Ready 1/1')).toBeInTheDocument()
+    expect(screen.getByText('待排期')).toBeInTheDocument()
+    expect(screen.getByText('未排期')).toBeInTheDocument()
+    expect(screen.getByText('未发布')).toBeInTheDocument()
+    expect(screen.getByText(/不写入旧运营台/)).toBeInTheDocument()
+    expect(screen.getByText('Facebook Post')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /发布|排期/ })).not.toBeInTheDocument()
     expect(document.querySelector('a[href*="/dashboard/content"]')).toBeNull()
   })
 

@@ -67,6 +67,8 @@ interface DailyPlanResponse {
   review_summary: { passed: number; needs_revision: number; total: number }
 }
 
+type PublishQueueStatus = 'READY' | 'NEEDS_REVISION' | 'PENDING_REVIEW'
+
 const GROUNDING_LABEL: Record<DailyPlanResponse['grounding']['status'], string> = {
   OK: '✅ 已连接 Master Brief',
   NEEDS_BRIEF: '⚠️ 缺少 Master Brief（NEEDS_BRIEF）',
@@ -258,6 +260,21 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   ).length
   const selectedPostPassed = selectedBundle?.post_review?.verdict === 'PASS' && selectedBundle.post_review.is_current
   const selectedPostNeedsRevision = selectedBundle?.post_review?.verdict === 'NEEDS_REVISION'
+  const publishQueueItems = data.bundles
+    .filter(bundle => !!bundle.post)
+    .map(bundle => {
+      const passed = bundle.post_review?.verdict === 'PASS' && bundle.post_review.is_current
+      const needsRevision = bundle.post_review?.verdict === 'NEEDS_REVISION'
+      const status: PublishQueueStatus = passed ? 'READY' : needsRevision ? 'NEEDS_REVISION' : 'PENDING_REVIEW'
+      return {
+        date: bundle.date,
+        cta: bundle.post?.cta ?? 'UNKNOWN',
+        ctaUrl: bundle.post?.cta_url ?? null,
+        hasImage: !!bundle.post_image,
+        status,
+      }
+    })
+  const publishQueueReadyCount = publishQueueItems.filter(item => item.status === 'READY').length
 
   return (
     <div className="border border-black/[.06] rounded-xl overflow-hidden">
@@ -508,6 +525,49 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
           )}
         </div>
 
+        {/* Daily Plan publish queue — review handoff only; no legacy content board. */}
+        <div className="border-t border-black/[.06] pt-3">
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide">发布队列 / Publish Queue</p>
+            <div className="flex flex-wrap gap-1.5">
+              <span className="rounded-full bg-[#5C8A4A]/12 px-2 py-0.5 text-[10px] font-medium text-[#5C8A4A]">
+                Ready {publishQueueReadyCount}/{publishQueueItems.length}
+              </span>
+              <span className="rounded-full bg-me-charcoal/[.06] px-2 py-0.5 text-[10px] font-medium text-me-charcoal/50">
+                未排期
+              </span>
+              <span className="rounded-full bg-me-charcoal/[.06] px-2 py-0.5 text-[10px] font-medium text-me-charcoal/50">
+                未发布
+              </span>
+            </div>
+          </div>
+          <p className="mb-2 text-[10px] leading-relaxed text-me-charcoal/40">
+            这里只承接 Daily Plan 已通过的 Facebook Post，作为下一步发布确认入口；不写入旧运营台，也不代表已授权发布。
+          </p>
+          {publishQueueItems.length === 0 ? (
+            <p className="text-xs text-me-charcoal/45 italic">暂无可进入发布队列的 Post。</p>
+          ) : (
+            <div className="space-y-1.5">
+              {publishQueueItems.map(item => (
+                <div
+                  key={item.date}
+                  className="grid grid-cols-[4.5rem_7rem_1fr] items-center gap-2 rounded-lg border border-black/[.06] bg-white px-2.5 py-2 text-xs"
+                >
+                  <span className="font-medium text-me-charcoal/70">队列 {item.date.slice(5)}</span>
+                  <PublishQueueBadge status={item.status} />
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-me-charcoal/70">Facebook Post</p>
+                    <p className="truncate text-[10px] text-me-charcoal/40">
+                      {item.hasImage ? '图片已绑定' : '缺少图片'} · CTA: {item.cta}
+                      {item.ctaUrl ? ` · ${item.ctaUrl}` : ' · 链接 UNKNOWN'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Publishing + Ad preview */}
         <div className="border-t border-black/[.06] pt-3">
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">发布计划 / 广告预览</p>
@@ -521,8 +581,8 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
             </p>
             <p>
               <span className="text-me-charcoal/45">发布目的地：</span>
-              <span className="font-medium">UNKNOWN / 未连接</span>
-              <span className="text-me-charcoal/40"> · 尚未绑定 Facebook Page / Instagram 账号</span>
+              <span className="font-medium">{data.publishing_plan.destination}</span>
+              <span className="text-me-charcoal/40"> · 等待发布桥确认，不经旧运营台</span>
             </p>
             <p className="flex items-center gap-2">
               <span className="text-me-charcoal/45">发布授权：</span>
@@ -586,6 +646,16 @@ function PostReviewBadge({ review }: { review: PostReview | null | undefined }) 
     return <span className="rounded-full bg-[#C2453A]/10 px-2 py-0.5 text-[10px] font-medium text-[#C2453A]">需修改</span>
   }
   return <span className="rounded-full bg-me-charcoal/[.06] px-2 py-0.5 text-[10px] font-medium text-me-charcoal/50">待审核</span>
+}
+
+function PublishQueueBadge({ status }: { status: PublishQueueStatus }) {
+  if (status === 'READY') {
+    return <span className="justify-self-start rounded-full bg-[#5C8A4A]/12 px-2 py-0.5 text-[10px] font-medium text-[#5C8A4A]">待排期</span>
+  }
+  if (status === 'NEEDS_REVISION') {
+    return <span className="justify-self-start rounded-full bg-[#C2453A]/10 px-2 py-0.5 text-[10px] font-medium text-[#C2453A]">需修改</span>
+  }
+  return <span className="justify-self-start rounded-full bg-me-charcoal/[.06] px-2 py-0.5 text-[10px] font-medium text-me-charcoal/50">待审核</span>
 }
 
 function ReadinessRow({ label, ok, forceLabel }: { label: string; ok: boolean; forceLabel?: string }) {
