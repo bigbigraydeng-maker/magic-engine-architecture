@@ -59,8 +59,22 @@ export interface PartnerCandidate {
  * Anti-fabrication guard (魏征 review 2026-09-02): a platform status can only
  * be 'verified' when a source_url backs it — self-reported claims ("we are a
  * leading Meta agency") are not evidence. Downgrades any unbacked 'verified'
- * claim to 'unknown' rather than trusting the caller, so this rule holds even
- * if a future caller (AI research step or manual entry) forgets to check it.
+ * claim to 'unknown' rather than trusting the caller.
+ *
+ * Scope, precisely (Codex review 2026-09-02): this only checks that
+ * source_url is a non-empty string — it does NOT verify the URL is on an
+ * official platform domain. That's deliberate: spec's own evidence tiers
+ * (§6) accept "a company's own qualification page displaying the real
+ * program badge" as valid, not only the official directory itself, and a
+ * fixed domain allowlist would reject that legitimate tier. The research
+ * step is responsible for only ever putting a real, checkable page in
+ * source_url — this function's guarantee is narrower: "no URL → never
+ * verified", not "the URL proves official status."
+ *
+ * This function does nothing on its own if nothing calls it — pass every
+ * candidate through sanitizePartnerCandidate() before it's written anywhere
+ * (DB insert, draft generation) rather than relying on the caller to
+ * remember to call assertOfficialSourced() directly.
  */
 export function assertOfficialSourced(input: OfficialPartnerStatus): OfficialPartnerStatus {
   const result: OfficialPartnerStatus = {}
@@ -72,6 +86,21 @@ export function assertOfficialSourced(input: OfficialPartnerStatus): OfficialPar
       : entry
   }
   return result
+}
+
+/**
+ * The mandatory choke point before a candidate is persisted or drafted:
+ * runs official_partner_status through assertOfficialSourced() so an
+ * unbacked 'verified' claim can never reach the database, regardless of
+ * where the candidate came from (AI research, manual entry, a future
+ * import script). Call this, not assertOfficialSourced() directly, from
+ * any write path.
+ */
+export function sanitizePartnerCandidate(candidate: PartnerCandidate): PartnerCandidate {
+  return {
+    ...candidate,
+    official_partner_status: assertOfficialSourced(candidate.official_partner_status),
+  }
 }
 
 /** True once the candidate has ≥1 platform verified via an official source. */

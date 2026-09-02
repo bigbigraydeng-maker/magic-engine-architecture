@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest'
-import { assertOfficialSourced, hasAnyVerifiedPlatform, normalizeDomain } from './types'
+import { assertOfficialSourced, hasAnyVerifiedPlatform, normalizeDomain, sanitizePartnerCandidate } from './types'
+import type { PartnerCandidate } from './types'
+
+function baseCandidate(overrides: Partial<PartnerCandidate> = {}): PartnerCandidate {
+  return {
+    company_name: 'Acme Digital', country: 'AU', website: 'https://acmedigital.com.au', domain: 'acmedigital.com.au',
+    platforms: ['meta'], official_partner_status: {},
+    contact_name: null, contact_role: null, contact_email: null, contact_source: null,
+    b2b_partnership: 'unknown', white_label: 'unknown', support_escalation: 'unknown', training_access: 'unknown',
+    event_access: 'unknown', branding_rights: 'unknown', partner_manager: null,
+    commercial_model: { pricing_status: 'unknown' }, notes: null, source_urls: [],
+    ...overrides,
+  }
+}
 
 describe('assertOfficialSourced', () => {
   it('downgrades an unbacked "verified" claim to unknown', () => {
@@ -34,6 +47,31 @@ describe('hasAnyVerifiedPlatform', () => {
       meta: { status: 'unknown' },
       google: { status: 'verified', source_url: 'https://google.com/partners/x' },
     })).toBe(true)
+  })
+})
+
+describe('sanitizePartnerCandidate — the mandatory choke point before persistence', () => {
+  it('downgrades an unbacked "verified" claim even when the caller forgot to call assertOfficialSourced() itself', () => {
+    const candidate = baseCandidate({
+      official_partner_status: { meta: { status: 'verified' } }, // no source_url — e.g. a sloppy import script
+    })
+    const result = sanitizePartnerCandidate(candidate)
+    expect(result.official_partner_status.meta?.status).toBe('unknown')
+  })
+
+  it('leaves a properly sourced "verified" claim untouched', () => {
+    const candidate = baseCandidate({
+      official_partner_status: { google: { status: 'verified', source_url: 'https://google.com/partners/x' } },
+    })
+    const result = sanitizePartnerCandidate(candidate)
+    expect(result.official_partner_status.google?.status).toBe('verified')
+  })
+
+  it('does not mutate other candidate fields', () => {
+    const candidate = baseCandidate({ company_name: 'Acme', platforms: ['meta', 'google'] })
+    const result = sanitizePartnerCandidate(candidate)
+    expect(result.company_name).toBe('Acme')
+    expect(result.platforms).toEqual(['meta', 'google'])
   })
 })
 
