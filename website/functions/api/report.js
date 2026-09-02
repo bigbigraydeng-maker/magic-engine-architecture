@@ -141,7 +141,7 @@ async function sendEmail(env, { to, subject, htmlBody }) {
     return;
   }
 
-  const from = env.RESEND_FROM || 'Magic Engine <hello@magicengine.com.au>';
+  const from = env.RESEND_FROM || 'Magic Engine <hello@magicengine.cloud>';
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',

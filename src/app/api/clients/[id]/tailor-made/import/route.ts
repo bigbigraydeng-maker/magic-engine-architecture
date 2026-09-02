@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { callClaudeWithDocs } from '@/lib/anthropic/client'
 import { extractItinerary, applyPatch } from '@/lib/tailor-made/extract'
-import { detectKind, docxToText, plainToText } from '@/lib/tailor-made/read-source'
+import { detectKind, docxToText, plainToText, type SourceKind } from '@/lib/tailor-made/read-source'
 import { heroForTrip, pickHeroName } from '@/lib/tailor-made/hero'
 import { parseFlightPdf } from '@/lib/tailor-made/flights'
+import { createOrReuseJob, fingerprintInput, markRunning, markCompleted, markFailed } from '@/lib/tailor-made/jobs'
+import { getItinerary, saveItinerary } from '@/lib/tailor-made/store'
 import type { TailorMadeItinerary } from '@/lib/tailor-made/types'
 
 /**
@@ -23,12 +25,18 @@ import type { TailorMadeItinerary } from '@/lib/tailor-made/types'
  *
  * 顺带按目的地选好封面图 —— 甲方原话「重庆团封面就该是重庆」。
  *
- * Body: multipart { file, current? }
- * Responses: 200 { payload, review, reply, heroPicked } / 400 / 401 / 403 / 413 / 502
+ * ⚠️ 这个 POST 只建任务、立刻回 202——真正跑 AI 的活儿在 runImportJob() 里，
+ * fire-and-forget，不占这次 HTTP 连接。原因：ME 后台正式域名走 Cloudflare
+ * 代理，CF 对被代理的请求有约 100 秒等待上限；27 天以上的团光生成就要
+ * 100-180 秒，同步等一个 HTTP 响应必然被 CF 掐断，浏览器只会收到一个
+ * HTML 错误页，报 "Unexpected token '<'"（CTS 2027 China Panorama 实测）。
+ * 前端改成轮询 /tailor-made/jobs/[jobId] 拿结果，见 TailorMadeEditor.tsx。
+ *
+ * Body: multipart { file, current, itineraryId }
+ * Responses: 202 { job_id } / 400 / 401 / 403 / 413
  */
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 180
 
 const MAX_BYTES = 12 * 1024 * 1024
 
@@ -75,52 +83,66 @@ function looksLikeTicket(text: string): boolean {
   return hasFlightNo && hasLeg && hasTicketMarker
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const access = await requireDashboardClientAccess(params.id)
-  if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status })
-
-  let file: File | null = null
-  let current: TailorMadeItinerary | null = null
+/**
+ * 生成结束后，除了写进任务表给轮询的人看，也顺手把结果存回行程草稿本身——
+ * 不然顾问在生成期间关掉标签页（Codex 复审点出来的场景），任务表里趟着一份
+ * 生成好的内容，草稿页上却永远看不到，用户只能重新点一次、重新花一次钱。
+ *
+ * 乐观锁：只有草稿的 updated_at 跟建任务时读到的一致，才落这次结果——如果
+ * 顾问在等待期间自己手动改过草稿（正常的自动保存已经落库），updated_at 会
+ * 变，这时候宁可不存，也不能拿一份基于旧草稿算出来的结果覆盖用户更新的内容。
+ */
+async function persistIfUnchanged(
+  clientId: string, itineraryId: string, baselineUpdatedAt: string, payload: TailorMadeItinerary
+): Promise<void> {
   try {
-    const form = await req.formData()
-    const f = form.get('file')
-    if (f instanceof File) file = f
-    const cur = form.get('current')
-    if (typeof cur === 'string' && cur) current = JSON.parse(cur) as TailorMadeItinerary
-  } catch {
-    return NextResponse.json({ error: '请求格式错误' }, { status: 400 })
+    const latest = await getItinerary(clientId, itineraryId)
+    if (!latest) return // 草稿被删了，没什么好存的
+    if (latest.updated_at !== baselineUpdatedAt) {
+      console.warn('[tailor-made/import] 草稿在生成期间被改过，跳过自动回存，避免覆盖更新的内容', { itineraryId })
+      return
+    }
+    await saveItinerary(clientId, itineraryId, payload)
+  } catch (err) {
+    console.error('[tailor-made/import] 自动回存草稿失败（任务表里的结果还在，不算彻底丢失）', err)
   }
+}
 
-  if (!file) return NextResponse.json({ error: '请选择行程文件' }, { status: 400 })
-  if (!current) return NextResponse.json({ error: '缺少当前行程数据' }, { status: 400 })
-  if (file.size > MAX_BYTES) return NextResponse.json({ error: '文件过大（上限 12MB）' }, { status: 413 })
-
-  const kind = detectKind(file.name, file.type)
-  if (!kind) {
-    return NextResponse.json(
-      { error: '只支持 Word（.docx）、PDF 和纯文本。老式 .doc 请先另存为 .docx 或 PDF。' },
-      { status: 400 },
-    )
-  }
+/** 后台真正干活的地方——不绑定任何 HTTP 连接，AI 想跑多久跑多久 */
+async function runImportJob(params: {
+  jobId: string
+  clientId: string
+  itineraryId: string
+  baselineUpdatedAt: string
+  kind: SourceKind
+  base64: string
+  filename: string
+  current: TailorMadeItinerary
+}): Promise<void> {
+  const { jobId, clientId, itineraryId, baselineUpdatedAt, kind, base64, filename, current } = params
+  await markRunning(jobId)
 
   try {
-    const buf = await file.arrayBuffer()
+    const arrayBuffer = Uint8Array.from(Buffer.from(base64, 'base64')).buffer
     let text: string
-    if (kind === 'docx') text = await docxToText(buf)
-    else if (kind === 'pdf') text = await pdfToText(Buffer.from(buf).toString('base64'), file.name)
-    else text = await plainToText(buf)
+    if (kind === 'docx') text = await docxToText(arrayBuffer)
+    else if (kind === 'pdf') text = await pdfToText(base64, filename)
+    else text = await plainToText(arrayBuffer)
 
     if (text.length > 80_000) text = text.slice(0, 80_000)
 
     // 传错框也能救回来：认出是出票单就走航班解析，不当行程糟蹋掉
     if (kind === 'pdf' && looksLikeTicket(text)) {
-      const flights = await parseFlightPdf(Buffer.from(buf).toString('base64'), file.name)
-      return NextResponse.json({
-        payload: { ...current, flights: flights.flights, bookingRef: flights.bookingRef || current.bookingRef },
+      const flights = await parseFlightPdf(base64, filename)
+      const payload = { ...current, flights: flights.flights, bookingRef: flights.bookingRef || current.bookingRef }
+      await markCompleted(jobId, {
+        payload,
         review: [],
         reply: `这份是出票单，不是行程 —— 已按航班读取。${flights.note}`,
         detectedAs: 'ticket',
       })
+      await persistIfUnchanged(clientId, itineraryId, baselineUpdatedAt, payload)
+      return
     }
 
     const result = await extractItinerary({ message: text, current })
@@ -150,16 +172,77 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    return NextResponse.json({
-      payload,
-      review: result.review,
-      reply: result.reply,
-      heroName,
-      sourceKind: kind,
-    })
+    await markCompleted(jobId, { payload, review: result.review, reply: result.reply, heroName, sourceKind: kind })
+    await persistIfUnchanged(clientId, itineraryId, baselineUpdatedAt, payload)
   } catch (error) {
     const msg = error instanceof Error ? error.message : '解析失败'
     console.error('[tailor-made/import]', msg)
-    return NextResponse.json({ error: `行程文件解析失败：${msg}` }, { status: 502 })
+    await markFailed(jobId, `行程文件解析失败：${msg}`)
   }
+}
+
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const access = await requireDashboardClientAccess(params.id)
+  if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status })
+
+  let file: File | null = null
+  let current: TailorMadeItinerary | null = null
+  let itineraryId: string | null = null
+  try {
+    const form = await req.formData()
+    const f = form.get('file')
+    if (f instanceof File) file = f
+    const cur = form.get('current')
+    if (typeof cur === 'string' && cur) current = JSON.parse(cur) as TailorMadeItinerary
+    const id = form.get('itineraryId')
+    if (typeof id === 'string' && id) itineraryId = id
+  } catch {
+    return NextResponse.json({ error: '请求格式错误' }, { status: 400 })
+  }
+
+  if (!file) return NextResponse.json({ error: '请选择行程文件' }, { status: 400 })
+  if (!current) return NextResponse.json({ error: '缺少当前行程数据' }, { status: 400 })
+  if (!itineraryId) return NextResponse.json({ error: '缺少行程 ID' }, { status: 400 })
+  if (file.size > MAX_BYTES) return NextResponse.json({ error: '文件过大（上限 12MB）' }, { status: 413 })
+
+  const kind = detectKind(file.name, file.type)
+  if (!kind) {
+    return NextResponse.json(
+      { error: '只支持 Word（.docx）、PDF 和纯文本。老式 .doc 请先另存为 .docx 或 PDF。' },
+      { status: 400 },
+    )
+  }
+
+  const base64 = Buffer.from(await file.arrayBuffer()).toString('base64')
+
+  // 建任务前先查草稿现在的 updated_at（生成完要靠它判断草稿有没有被同时改过，
+  // 见 persistIfUnchanged() 的乐观锁注释）——这一步和下面建任务一样可能因为
+  // DB 抖动失败，必须在同一个 try/catch 里，不能让异常漏到 Next.js 默认错误页，
+  // 那正是这次要修的原始故障（HTML 错误页把 "Unexpected token '<'" 甩给浏览器）。
+  let jobId: string, reused: boolean, baselineUpdatedAt: string
+  try {
+    const baselineRecord = await getItinerary(params.id, itineraryId)
+    baselineUpdatedAt = baselineRecord?.updated_at ?? ''
+    ;({ jobId, reused } = await createOrReuseJob({
+      clientId: params.id,
+      itineraryId,
+      kind: 'import_file',
+      inputFingerprint: fingerprintInput(base64),
+      input: { filename: file.name, sourceKind: kind },
+    }))
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '建任务失败'
+    console.error('[tailor-made/import] createOrReuseJob failed', msg)
+    return NextResponse.json({ error: msg }, { status: 502 })
+  }
+
+  if (!reused) {
+    void runImportJob({
+      jobId, clientId: params.id, itineraryId, baselineUpdatedAt, kind, base64, filename: file.name, current,
+    }).catch((err) => {
+      console.error('[tailor-made/import] background job crashed', err)
+    })
+  }
+
+  return NextResponse.json({ job_id: jobId }, { status: 202 })
 }

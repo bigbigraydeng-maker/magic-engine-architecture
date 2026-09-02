@@ -34,4 +34,43 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: 'Current-Sponsored Competitor Discovery（当前活跃广告主实时发现 + diff 竞品清单）',
     reviewDate: '2026-09-28',
   },
+  {
+    name: '创作者专属 collection + 独立 UTM（每个合作创作者一个可归因落地页）',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: '内容排产输入从"想主题"改成"读客户 products.json 上新 feed"',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: '促销走购物车层折扣叠加、不批量改 `compare_at_price`',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: '电商 SEO 检测方向：aggregateRating 空评分 / hreflang 适用性判断 / sitemap 内部垃圾过滤',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: 'AI agent 能否直接购买（Shopify UCP / agents.md 是否平台默认开放）作为 AI 可见度测量口径候选维度',
+    reviewDate: '2026-09-30',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '跨源交叉验证与对照实验设计（用独立数据源互证结论 · 用对照组排除替代解释）',
+    reviewDate: '2026-09-30',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'AI 单页站生成器（事实采集 → AI 文案 → 模板渲染 → 静态发布）',
+    reviewDate: '2026-09-30',
+  },
+  {
+    name: 'AU/NZ 本地商业目录批量登记 SOP（NAP 文案模板 + 目录清单，供未来客户 onboarding 复用）',
+    reviewDate: '2026-10-02',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'Governed Lead-Reply Agent（结构化事实驱动的广告留资对话生成 + 发送前防幻觉/禁用清单校验引擎，接管 Messenger/WhatsApp 等渠道的黑箱平台自带 AI 客服）',
+    reviewDate: '2026-09-15',
+  },
 ]

@@ -20,7 +20,7 @@ import { isPaidOnly, PaidOnlyError } from '@/lib/auth/paid-only-handler'
 import { ConversationThread, ErrorBox } from '../_components/bits'
 
 /** paid_only 时页面上给的明确中文提示（与列表页一致）。 */
-const PAID_MESSAGE = '商务收件箱是付费功能 · 请联系 Magic Lab 开通后查看。'
+const PAID_MESSAGE = '商务收件箱是付费功能 · 请联系 Magic Engine 开通后查看。'
 
 interface DetailResponse extends InboxConversationDetail {
   error?: string

@@ -20,7 +20,13 @@ import {
   completeJob,
   failJob,
 } from '@/lib/zhangqian/persistor'
-import { getDomainMetrics, getKeywordsForSite, bulkKeywordVolume } from '@/lib/dataforseo/labs'
+import {
+  DataForSeoTaskError,
+  getDomainMetrics,
+  getKeywordsForSite,
+  bulkKeywordVolume,
+} from '@/lib/dataforseo/labs'
+import type { DiscoveryWarning } from '@/lib/zhangqian/types'
 import { locationCodeFor } from '@/lib/dataforseo/client'
 import { loadMemoryForClient } from '@/lib/memory'
 import { precheckCharge, commitCharge, refundOnFail } from '@/lib/mtc/charge'
@@ -189,7 +195,7 @@ async function executeDiscoveryJob(
     }
 
     // Enrich seed keywords with per-keyword SEMrush metrics (volume / KD / CPC)
-    let enrichmentWarning: string | null = null
+    let enrichmentWarning: DiscoveryWarning | null = null
     if (report.seed_keywords.length > 0) {
       await updateJobProgress(supabaseAdmin, jobId, { progress_note: '正在获取种子关键词数据…' })
       try {
@@ -207,14 +213,25 @@ async function executeDiscoveryJob(
           }
         })
       } catch (err) {
-        enrichmentWarning = err instanceof Error ? err.message : String(err)
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        enrichmentWarning = {
+          stage: 'seed_enrichment',
+          ...(err instanceof DataForSeoTaskError && err.errorCode !== undefined
+            ? { error_code: err.errorCode }
+            : {}),
+          message: 'Keyword volume and difficulty could not be refreshed. Other report findings remain available.',
+        }
         console.warn('[zhangqian/discover] bulkKeywordVolume enrichment failed', {
           jobId,
           clientId,
           domain,
-          error: enrichmentWarning,
+          error: errorMessage,
         })
       }
+    }
+
+    if (enrichmentWarning) {
+      report.meta.warnings = [...(report.meta.warnings ?? []), enrichmentWarning]
     }
 
     await completeJob(supabaseAdmin, jobId, clientId, report)

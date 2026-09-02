@@ -1,0 +1,255 @@
+name: PR Application Validation
+
+# Read-only application evidence for every pull request.
+# This workflow checks out the exact PR head, uses no repository secrets, and
+# never comments, commits, pushes, merges, deploys, or contacts a provider.
+#
+# Stable check names:
+# - CRM focused tests
+# - Type-check
+# - Application build
+
+on:
+  pull_request:
+  # Explicitly authorised, read-only fallback for the rare case where a
+  # normal pull_request event does not produce a run (for example, a workflow
+  # registration/indexing race after this file first reaches the default
+  # branch). Build Control supplies an open PR number; the workflow resolves
+  # the exact head from GitHub's API and never accepts a caller-supplied SHA.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Open PR number to re-run exact-HEAD checks for (fallback only).'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-application-validation-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  resolve-fallback-target:
+    name: Resolve fallback PR head
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+    steps:
+      - name: Resolve exact PR head via GitHub API (not caller-supplied SHA)
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          state=$(jq -r '.state' <<<"${pr_json}")
+          if [[ "${state}" != "open" ]]; then
+            echo "::error::PR #${PR_NUMBER} is not open (state=${state}); refusing fallback run."
+            exit 1
+          fi
+          head_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+          base_sha=$(jq -r '.base.sha' <<<"${pr_json}")
+          {
+            echo "head_sha=${head_sha}"
+            echo "base_sha=${base_sha}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo '## Fallback trigger — resolved target'
+            echo
+            echo "- PR: #${PR_NUMBER}"
+            echo "- Head SHA (from API, not caller input): \`${head_sha}\`"
+            echo "- Base SHA: \`${base_sha}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  crm-focused-tests:
+    needs: resolve-fallback-target
+    if: always() && (github.event_name == 'pull_request' || needs.resolve-fallback-target.result == 'success')
+    name: CRM focused tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run #1009 CRM decision-list tests when present
+        shell: bash
+        run: |
+          set -euo pipefail
+          unit_test='src/lib/crm/__tests__/decision-list.test.ts'
+          page_test='src/app/dashboard/clients/[id]/crm/decisions/__tests__/page.test.tsx'
+
+          {
+            echo '## CRM focused tests'
+            echo
+            echo "- PR head: \`${PR_HEAD_SHA}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [[ -f "${unit_test}" && -f "${page_test}" ]]; then
+            npm test -- "${unit_test}" "${page_test}"
+            echo '- Result: PASS' >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "::notice::#1009 CRM focused tests are not present on PR head ${PR_HEAD_SHA}; check is not applicable."
+            echo '- Result: NOT APPLICABLE — both #1009 test files are not present on this head.' >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+  type-check:
+    name: Type-check
+    needs: resolve-fallback-target
+    if: always() && (github.event_name == 'pull_request' || needs.resolve-fallback-target.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run baseline-aware repository type-check
+        shell: bash
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.resolve-fallback-target.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          head_log="${RUNNER_TEMP}/typecheck-head.log"
+          base_log="${RUNNER_TEMP}/typecheck-base.log"
+          head_errors="${RUNNER_TEMP}/typecheck-head.errors"
+          base_errors="${RUNNER_TEMP}/typecheck-base.errors"
+          new_errors="${RUNNER_TEMP}/typecheck-new.errors"
+
+          set +e
+          npm run type-check 2>&1 | tee "${head_log}"
+          head_status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ ${head_status} -eq 0 ]]; then
+            echo '- Mode: full type-check PASS on PR head.' >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          if grep -Eqi 'heap out of memory|FATAL ERROR' "${head_log}"; then
+            echo '::error::PR-head type-check did not complete; baseline comparison is unsafe.'
+            exit 1
+          fi
+
+          grep -E 'error TS[0-9]+:' "${head_log}" | LC_ALL=C sort -u > "${head_errors}" || true
+          if [[ ! -s "${head_errors}" ]]; then
+            echo '::error::PR-head type-check failed without comparable TypeScript diagnostics.'
+            exit 1
+          fi
+
+          base_dir="${RUNNER_TEMP}/typecheck-base"
+          git worktree add --detach "${base_dir}" "${BASE_SHA}"
+          pushd "${base_dir}" >/dev/null
+          npm ci
+          set +e
+          npm run type-check 2>&1 | tee "${base_log}"
+          base_status=${PIPESTATUS[0]}
+          set -e
+          popd >/dev/null
+
+          if grep -Eqi 'heap out of memory|FATAL ERROR' "${base_log}"; then
+            echo '::error::Base type-check did not complete; baseline comparison is unsafe.'
+            exit 1
+          fi
+
+          if [[ ${base_status} -eq 0 ]]; then
+            echo '::error::Base type-check passes but PR head fails.'
+            exit 1
+          fi
+
+          grep -E 'error TS[0-9]+:' "${base_log}" | LC_ALL=C sort -u > "${base_errors}" || true
+          if [[ ! -s "${base_errors}" ]]; then
+            echo '::error::Base type-check failed without comparable TypeScript diagnostics.'
+            exit 1
+          fi
+
+          comm -13 "${base_errors}" "${head_errors}" > "${new_errors}"
+          if [[ -s "${new_errors}" ]]; then
+            echo '::error::PR head introduces new TypeScript diagnostics:'
+            cat "${new_errors}"
+            exit 1
+          fi
+
+          echo "::notice::PR head adds no TypeScript diagnostics beyond base ${BASE_SHA}; baseline debt is recorded separately."
+          {
+            echo '- Mode: baseline-aware type-check PASS.'
+            echo "- Base SHA: \`${BASE_SHA}\`"
+            echo "- Existing base diagnostics: $(wc -l < \"${base_errors}\")"
+            echo '- New PR diagnostics: 0'
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Record exact tested head
+        if: always()
+        run: |
+          {
+            echo '## Type-check'
+            echo
+            echo "- PR head: \`${PR_HEAD_SHA}\`"
+            echo "- Result: \`${{ job.status }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  application-build:
+    name: Application build
+    needs: resolve-fallback-target
+    if: always() && (github.event_name == 'pull_request' || needs.resolve-fallback-target.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.resolve-fallback-target.outputs.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build application
+        env:
+          # Non-secret, non-routable placeholders used only while Next.js
+          # statically evaluates modules. This job performs no deployment.
+          NEXT_PUBLIC_SUPABASE_URL: https://ci-validation.invalid
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key-not-a-secret
+          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key-not-a-secret
+        run: npm run build
+      - name: Record exact tested head
+        if: always()
+        run: |
+          {
+            echo '## Application build'
+            echo
+            echo "- PR head: \`${PR_HEAD_SHA}\`"
+            echo "- Result: \`${{ job.status }}\`"
+            echo '- Environment: non-secret, non-routable build placeholders; no deployment.' 
+          } >> "${GITHUB_STEP_SUMMARY}"

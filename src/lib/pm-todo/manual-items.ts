@@ -50,6 +50,7 @@ export type ManualItemKind =
   | 'meta_stuck'
   | 'crawl_stale'
   | 'video_credits_out'
+  | 'dataforseo_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
   | 'goal_baseline_mismatch'
@@ -206,6 +207,10 @@ export async function loadManualItems(
   // 毫无关系。放在后面的话，客户表一空它就被跳过了。
   // 出片余额用完 —— 只有人能充值，必须当天摆到眼前，不能烂在工单的 error 字段里
   await pushVideoCreditsItem(supabase, items, now)
+  // 关键词数据供应商余额用完 —— 同样只有人能充值；仅 40210 进入人工车道。
+  await pushDataForSeoCreditsItem(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] Keyword Intelligence 余额检查失败（不阻塞其他待办）:', e),
+  )
   // 按时没跑 / 查不出跑没跑 —— PM 2026-08-03 要求「不能完成需要有报错」
   await pushCronHealthItems(supabase, items, now)
   // 平台候选到了复查日期 —— 不落库、不查表，纯本地日期判断
@@ -452,6 +457,8 @@ export async function loadManualItems(
 
 /** 出片余额充值页 —— 用户自己的账户页,不是深链,登录后一定打得开。 */
 const MUAPI_TOPUP_URL = 'https://muapi.ai/topup'
+/** 官方稳定后台入口；登录后从 Billing → Add Funds 充值。 */
+const DATAFORSEO_DASHBOARD_URL = 'https://app.dataforseo.com/'
 
 /**
  * AI 出片余额用完 —— 必须下发给人，因为只有人能充值。
@@ -493,6 +500,34 @@ async function pushVideoCreditsItem(
     what: 'AI 出片的余额用完了 —— 工厂现在做到一半就会断，做出来的半成品也白花了钱',
     how: '打开链接充值（这是我们生成视频画面用的账户）。充完回我一句，我把断掉的那几单重跑',
     href: MUAPI_TOPUP_URL,
+  })
+}
+
+/** Keyword Intelligence 余额告罄只认供应商的明确 40210，不猜其它错误。 */
+export async function pushDataForSeoCreditsItem(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  const since = new Date(now.getTime() - 3 * 86_400_000).toISOString()
+  const { data, error } = await supabase
+    .from('client_discovery')
+    .select('id')
+    .gte('generated_at', since)
+    // JSONB containment matches a warning object even when it also has stage/message.
+    .contains('payload', { meta: { warnings: [{ error_code: 40210 }] } })
+    .limit(1)
+
+  if (error) throw new Error(`client_discovery warning query failed: ${error.message}`)
+  if (!data?.length) return
+
+  items.push({
+    kind: 'dataforseo_credits_out',
+    client_id: 'infra',
+    client_name: 'Magic Engine 后台',
+    what: 'Keyword Intelligence 余额用完了 —— 新的客户发现、SEO 竞品分析和内容选题会缺少关键词量数据',
+    how: '打开后台 → Billing → Add Funds 充值；充完回我一句，我把最近受影响的发现任务重跑',
+    href: DATAFORSEO_DASHBOARD_URL,
   })
 }
 

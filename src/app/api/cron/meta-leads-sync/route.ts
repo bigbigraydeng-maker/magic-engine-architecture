@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { syncClientMetaLeads, type MetaLeadsSyncClient } from '@/lib/meta/leads-sync'
 import { startCronRun } from '@/lib/cron/run-logger'
+import { summariseFailures } from '@/lib/meta/leads-sync-alert'
 
 // 一个客户可能有多个表单，每个表单还要翻页；给足时间。
 export const maxDuration = 600
@@ -70,6 +71,12 @@ async function run(): Promise<NextResponse> {
     completed: results.length - failed,
     failed,
     summary: { newContacts, leadsIngested, results },
+    // 有客户取不到数就必须把原话带进 error_message —— 日报邮件的「错误原因」列
+    // 读的就是这个字段。2026-08-21~08-30 这里一直是 null,于是日报每天照发
+    // 「meta-leads-sync 4 failed —」,一屏破折号没有一个字说明是什么事,
+    // 9 天没人看得懂,4 个客户的线索管道全程断供(CTS 一家漏 45 条、NZ$736)。
+    // 真正的报错当时就躺在 summary 里,只是没人把它搬到人看得见的地方。
+    error: summariseFailures(results),
   })
 
   return NextResponse.json({

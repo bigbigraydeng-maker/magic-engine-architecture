@@ -10,6 +10,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { FACTORY_B_TRACK_SCENE_TAGS, FACTORY_CLIENT_DERIVED_SCENE_TAG } from './constants'
 import { scanRedlineHits, validateClipPath } from './worker-guard'
+import { assertRecipeReceipt, winnerRecipeFromBrief, type WinnerRecipe } from './recipe'
 
 const ACTIVE_STATUSES = ['claimed', 'producing']
 
@@ -34,6 +35,78 @@ export interface CompleteParams {
   caption: string
   actualCost: number
   newClips: CompleteClipInput[]
+  /** blocker 1:recipe 单必须携带 executed receipt;legacy 单可 undefined。 */
+  recipeReceipt?: unknown
+}
+
+/**
+ * blocker 1:server-side recipe complete gate。
+ * - brief 无 creative_recipe → 保留 legacy 分支,无需 receipt
+ * - brief 有 creative_recipe → 必须携带 receipt,且必须通过 shared assertRecipeReceipt
+ * - new_clips 数量必须等于 recipe.segments 数
+ * - receipt.recipe.id/version 必须匹配 brief.creative_recipe
+ * - receipt.segments[i].source_image_url 必须等于 brief.clip_generation_plan[i].source_image_url
+ * - new_clips[i].source_meta.recipe 必须携带 recipe.id;source_meta.request_id 必须与 receipt provider 对齐
+ */
+function assertRecipeCompletion(
+  wo: Record<string, unknown>,
+  newClips: CompleteClipInput[],
+  recipeReceipt: unknown,
+): { ok: true } | { ok: false; error: string } {
+  const briefObj = (wo.brief ?? {}) as Record<string, unknown>
+  // 已打回、等待显式 replan 的壳单绝不能被旧 worker 当 legacy 完成。
+  if (briefObj.recipe_replan_required === true) {
+    return {
+      ok: false,
+      error: 'recipe replan required: work order cannot complete until server writes a full acknowledged recipe plan',
+    }
+  }
+  let recipe: WinnerRecipe | null
+  try {
+    recipe = winnerRecipeFromBrief(wo.brief)
+  } catch (e) {
+    return { ok: false, error: `brief.creative_recipe malformed: ${e instanceof Error ? e.message : String(e)}` }
+  }
+  if (!recipe) return { ok: true } // legacy
+  if (recipeReceipt == null || typeof recipeReceipt !== 'object') {
+    return { ok: false, error: 'recipe_receipt required for recipe work orders (legacy worker payload rejected)' }
+  }
+  try {
+    assertRecipeReceipt(recipeReceipt, recipe)
+  } catch (e) {
+    return { ok: false, error: `recipe_receipt validation failed: ${e instanceof Error ? e.message : String(e)}` }
+  }
+  if (newClips.length !== recipe.segments.length) {
+    return {
+      ok: false,
+      error: `new_clips count ${newClips.length} != recipe.segments ${recipe.segments.length}`,
+    }
+  }
+  const plan = Array.isArray(briefObj.clip_generation_plan)
+    ? (briefObj.clip_generation_plan as Array<Record<string, unknown>>)
+    : []
+  const rec = recipeReceipt as { segments?: Array<Record<string, unknown>> }
+  const segs = Array.isArray(rec.segments) ? rec.segments : []
+  for (let i = 0; i < segs.length; i++) {
+    const expectedSource = plan[i]?.source_image_url
+    if (segs[i]?.source_image_url !== expectedSource) {
+      return { ok: false, error: `recipe_receipt.segments[${i}].source_image_url != brief plan[${i}] source (${String(expectedSource)})` }
+    }
+  }
+  for (let i = 0; i < newClips.length; i++) {
+    const m = (newClips[i].source_meta ?? {}) as Record<string, unknown>
+    if (m.recipe !== recipe.id) {
+      return { ok: false, error: `new_clips[${i}].source_meta.recipe missing/mismatch (want "${recipe.id}", got "${String(m.recipe)}")` }
+    }
+    const segProv = segs[i]?.provider as { request_id?: unknown } | undefined
+    if (segProv?.request_id !== m.request_id) {
+      return {
+        ok: false,
+        error: `new_clips[${i}].source_meta.request_id "${String(m.request_id)}" != receipt.segments[${i}].provider.request_id "${String(segProv?.request_id)}"`,
+      }
+    }
+  }
+  return { ok: true }
 }
 
 export type CompleteResult =
@@ -44,9 +117,13 @@ export async function completeWorkOrder(
   supabase: SupabaseClient,
   p: CompleteParams,
 ): Promise<CompleteResult> {
-  const { wo, workerId, videoPath, segmentsPath, srtPath, caption, actualCost, newClips } = p
+  const { wo, workerId, videoPath, segmentsPath, srtPath, caption, actualCost, newClips, recipeReceipt } = p
   const clientId = wo.client_id as string
   const woId = wo.id as string
+
+  // blocker 1:recipe brief 必须携带并通过 shared receipt validator（防旧 worker 只报路径就 in_review）
+  const recipeGate = assertRecipeCompletion(wo, newClips, recipeReceipt)
+  if (!recipeGate.ok) return { ok: false, status: 422, error: recipeGate.error }
 
   // ② 成片级红线复扫(fail-closed:红线/brief 查询失败即拒,查不到 ≠ 没有)
   const { data: client, error: cErr } = await supabase

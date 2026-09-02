@@ -1,0 +1,550 @@
+<title>赴华会奖数据扫描</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+:root {
+  --ground: #F3F5F7; --surface: #FFFFFF; --surface-2: #E9EDF1;
+  --line: #D3DAE2; --line-soft: #E3E8EE;
+  --ink: #1A2028; --ink-2: #3E4954; --ink-3: #6E7986;
+  --steel: #2D5F7C; --steel-soft: #E2EBF1;
+  --copper: #A65D2E; --copper-soft: #F7EAE1;
+  --good: #2F6B4F; --good-soft: #E2EFE8;
+  --warn: #8A6A1C; --warn-soft: #F5EEDC;
+  --shadow: 0 1px 2px rgba(26,32,40,.05), 0 10px 28px -14px rgba(26,32,40,.22);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0D1116; --surface: #151B22; --surface-2: #1D242D;
+    --line: #2A333E; --line-soft: #222A33;
+    --ink: #E7ECF2; --ink-2: #B4BECA; --ink-3: #838E9C;
+    --steel: #7BAAC9; --steel-soft: #1A2530;
+    --copper: #D68F60; --copper-soft: #2A1F18;
+    --good: #6FBE95; --good-soft: #16241D;
+    --warn: #D3AC5C; --warn-soft: #241F14;
+    --shadow: 0 1px 2px rgba(0,0,0,.45), 0 10px 28px -14px rgba(0,0,0,.75);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0D1116; --surface: #151B22; --surface-2: #1D242D;
+  --line: #2A333E; --line-soft: #222A33;
+  --ink: #E7ECF2; --ink-2: #B4BECA; --ink-3: #838E9C;
+  --steel: #7BAAC9; --steel-soft: #1A2530;
+  --copper: #D68F60; --copper-soft: #2A1F18;
+  --good: #6FBE95; --good-soft: #16241D;
+  --warn: #D3AC5C; --warn-soft: #241F14;
+  --shadow: 0 1px 2px rgba(0,0,0,.45), 0 10px 28px -14px rgba(0,0,0,.75);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: ui-sans-serif, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 16px; line-height: 1.75; -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px 100px; }
+
+.masthead { padding: 60px 0 28px; border-bottom: 3px solid var(--ink); }
+.eyebrow {
+  font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11px;
+  letter-spacing: .18em; text-transform: uppercase; color: var(--copper);
+  margin: 0 0 20px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+}
+.eyebrow .dim { color: var(--ink-3); }
+h1 {
+  font-family: "Archivo", ui-sans-serif, sans-serif; font-weight: 700;
+  font-size: clamp(34px, 5.4vw, 54px); line-height: 1.07; letter-spacing: -.025em;
+  margin: 0 0 20px; text-wrap: balance;
+}
+.standfirst { font-size: clamp(16.5px, 2vw, 19px); line-height: 1.68; color: var(--ink-2); max-width: 66ch; margin: 0 0 24px; }
+.tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag {
+  font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: .04em;
+  padding: 4px 9px; border: 1px solid var(--line); border-radius: 2px;
+  color: var(--ink-3); background: var(--surface);
+}
+.tag.ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 38%, var(--line)); background: var(--good-soft); }
+.tag.no { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 38%, var(--line)); background: var(--warn-soft); }
+
+.tocnav { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--ground) 90%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); margin-bottom: 48px; padding: 9px 0; }
+.tocnav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 3px; overflow-x: auto; }
+.tocnav a { font-family: "JetBrains Mono", monospace; font-size: 11.5px; text-decoration: none; color: var(--ink-3); padding: 5px 10px; border-radius: 2px; white-space: nowrap; display: block; }
+.tocnav a:hover { color: var(--steel); background: var(--steel-soft); }
+.tocnav a:focus-visible, a:focus-visible { outline: 2px solid var(--steel); outline-offset: 2px; border-radius: 2px; }
+
+section { margin-bottom: 70px; scroll-margin-top: 20px; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 30px; }
+.sec-eyebrow { font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: var(--steel); white-space: nowrap; }
+h2 { font-family: "Archivo", sans-serif; font-weight: 600; font-size: clamp(23px, 3.2vw, 31px); line-height: 1.22; letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+h3 { font-weight: 700; font-size: 17px; margin: 36px 0 12px; }
+h3:first-child { margin-top: 0; }
+p { margin: 0 0 16px; max-width: 74ch; }
+p.lead { font-size: 17px; color: var(--ink-2); }
+a { color: var(--steel); text-underline-offset: 2px; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 26px; }
+.stat { background: var(--surface); padding: 19px 18px 17px; }
+.stat-v { font-family: "JetBrains Mono", monospace; font-size: 25px; font-weight: 700; line-height: 1.1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; display: block; margin-bottom: 6px; }
+.stat-v.up { color: var(--good); } .stat-v.dn { color: var(--copper); }
+.stat-l { font-size: 13px; line-height: 1.45; color: var(--ink-2); display: block; }
+.stat-s { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-3); display: block; margin-top: 6px; }
+
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); margin-bottom: 12px; }
+table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14px; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; line-height: 1.5; }
+thead th { font-family: "JetBrains Mono", monospace; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; background: var(--surface-2); border-bottom: 1px solid var(--line); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+td.num { font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 12.5px; color: var(--ink-3); margin: 0 0 26px; max-width: 78ch; line-height: 1.6; }
+
+.pill { font-family: "JetBrains Mono", monospace; font-size: 10.5px; padding: 2px 7px; border-radius: 2px; white-space: nowrap; display: inline-block; }
+.pill.y { background: var(--good-soft); color: var(--good); }
+.pill.n { background: var(--surface-2); color: var(--ink-3); }
+.pill.r { background: var(--copper-soft); color: var(--copper); }
+.pill.w { background: var(--warn-soft); color: var(--warn); }
+
+.bars { display: grid; gap: 9px; margin-bottom: 12px; }
+.bar-row { display: grid; grid-template-columns: minmax(96px, 148px) 1fr auto; gap: 13px; align-items: center; }
+.bar-l { font-size: 13.5px; color: var(--ink-2); }
+.bar-track { height: 10px; background: var(--surface-2); border-radius: 1px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--steel); }
+.bar-fill.c { background: var(--copper); }
+.bar-n { font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; min-width: 58px; text-align: right; }
+
+.note { border-left: 3px solid var(--steel); background: var(--steel-soft); padding: 16px 20px; border-radius: 0 3px 3px 0; margin: 0 0 24px; }
+.note.copper { border-left-color: var(--copper); background: var(--copper-soft); }
+.note.amber { border-left-color: var(--warn); background: var(--warn-soft); }
+.note p:last-child { margin-bottom: 0; }
+.note-t { font-family: "JetBrains Mono", monospace; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 8px; color: var(--steel); }
+.note.copper .note-t { color: var(--copper); }
+.note.amber .note-t { color: var(--warn); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 20px 22px; box-shadow: var(--shadow); }
+.card h4 { font-family: "Archivo", sans-serif; font-weight: 600; font-size: 18px; margin: 0 0 3px; letter-spacing: -.01em; }
+.card .sub { font-family: "JetBrains Mono", monospace; font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 13px; }
+.card p { font-size: 14px; margin-bottom: 11px; }
+.card p:last-child { margin-bottom: 0; }
+ul.body { padding-left: 20px; margin: 0 0 18px; max-width: 74ch; }
+ul.body li { margin-bottom: 9px; }
+
+.roster { border: 2px solid var(--ink); border-radius: 3px; overflow: hidden; background: var(--surface); margin-bottom: 14px; }
+.roster-head { background: var(--ink); color: var(--ground); padding: 13px 20px; font-family: "JetBrains Mono", monospace; font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; }
+.roster-row { display: grid; grid-template-columns: 30px 1fr auto; gap: 14px; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--line-soft); }
+.roster-row:last-child { border-bottom: none; }
+.roster-mark { font-family: "JetBrains Mono", monospace; font-size: 15px; font-weight: 700; text-align: center; }
+.roster-mark.y { color: var(--good); }
+.roster-mark.n { color: var(--copper); }
+.roster-label { font-size: 14.5px; line-height: 1.5; }
+.roster-label small { display: block; color: var(--ink-3); font-size: 12.5px; line-height: 1.45; margin-top: 2px; }
+.roster-note { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-3); text-align: right; white-space: nowrap; }
+
+.quote { border-left: 3px solid var(--copper); padding: 14px 20px; background: var(--copper-soft); border-radius: 0 3px 3px 0; font-size: 15px; max-width: none; margin: 0 0 20px; }
+.quote .zh { color: var(--ink-3); font-size: 13.5px; display: block; margin-top: 4px; }
+.mono-list { font-family: "JetBrains Mono", monospace; font-size: 14px; line-height: 1.9; background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 16px 20px; max-width: none; margin: 0 0 16px; }
+
+footer { border-top: 3px solid var(--ink); padding-top: 22px; font-size: 13px; color: var(--ink-3); }
+footer p { max-width: 80ch; margin-bottom: 10px; }
+footer .fine { font-family: "JetBrains Mono", monospace; font-size: 11px; line-height: 1.7; }
+
+@media (max-width: 640px) {
+  .wrap { padding: 0 17px 64px; }
+  .masthead { padding-top: 36px; }
+  .roster-row { grid-template-columns: 26px 1fr; gap: 11px; padding: 12px 15px; }
+  .roster-note { display: none; }
+  .bar-row { grid-template-columns: 1fr auto; }
+  .bar-track { display: none; }
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">
+    <span>Magic Engine</span><span class="dim">/</span>
+    <span class="dim">自主研究 · 非受托</span><span class="dim">/</span>
+    <span class="dim">全部基于公开信息</span><span class="dim">/</span>
+    <span class="dim">2026-08-30</span>
+  </p>
+  <h1>赴华会奖数据扫描</h1>
+  <p class="standfirst">我们用公开数据源扫了一遍全球会奖入华市场：谁在找中国、用什么渠道找、AI 又是怎么回答他们的。<strong>这是一份我们自己做的市场研究，不受任何机构委托，也不评价任何企业的经营。</strong></p>
+  <div class="tags">
+    <span class="tag ok">30 国搜索需求实测</span>
+    <span class="tag ok">8 种母语交叉复核</span>
+    <span class="tag ok">Meta 广告库实查</span>
+    <span class="tag ok">AI 回答实测 · 4 问</span>
+    <span class="tag ok">7 张国际名册扫描</span>
+    <span class="tag no">3 项未取得（已列明）</span>
+  </div>
+</header>
+
+<nav class="tocnav" aria-label="目录">
+  <ul>
+    <li><a href="#scope">先说清楚边界</a></li>
+    <li><a href="#demand">谁在找中国</a></li>
+    <li><a href="#behavior">他们怎么找</a></li>
+    <li><a href="#ai">AI 怎么回答</a></li>
+    <li><a href="#visibility">名录可见度实测</a></li>
+    <li><a href="#ads">三个市场的广告结构</a></li>
+    <li><a href="#facts">政策与补贴口径</a></li>
+    <li><a href="#gaps">我们没查到的</a></li>
+    <li><a href="#me">Magic Engine 能补哪一环</a></li>
+  </ul>
+</nav>
+
+<section id="scope">
+  <div class="sec-head"><span class="sec-eyebrow">开篇</span><h2>先说清楚边界</h2></div>
+
+  <div class="note copper">
+    <p class="note-t">关于这份报告的性质</p>
+    <p><strong>这是一份自主研究，没有受任何机构委托，也没有任何形式的商业约定。</strong>我们做它，是想用一个真实课题检验自己的数据抓取与分析方法，同时看看这套方法对做入境会奖的机构是否真的有用。</p>
+    <p style="margin-top:10px"><strong>我们不是会奖行业的专家。</strong>一家成规模的会奖机构，团队对客户、产品、执行、报价的理解远超我们。所以报告里<strong>没有关于「会奖业务该怎么做」的建议</strong>——那不是我们该说的。我们做的是另一件事：把海外数字世界里跟这门生意有关的公开数据扫一遍，呈现看到了什么。<strong>这些数据的业务含义，要由懂业务的人来判断。</strong></p>
+  </div>
+
+  <div class="note">
+    <p class="note-t">关于报告中涉及具体企业的部分</p>
+    <p>第四、五节涉及对众信旅游（002707）公开数字资产的检索结果。需要说明三点：</p>
+    <p style="margin-top:10px"><strong>一、</strong>全部信息来自公开可检索渠道——公开网页、公开名录、公司自行披露的年度报告，<strong>不含任何非公开信息</strong>。<strong>二、</strong>相关内容是对<strong>技术与传播层面</strong>可检索状态的客观记录，<strong>不构成对公司经营状况、业务能力或投资价值的评价</strong>。<strong>三、</strong>公开检索存在盲区，<strong>「未查到」不等于「不存在」</strong>；若与实际情况有出入，以企业自身信息为准，也欢迎指正。</p>
+  </div>
+
+  <h3>我们用了什么，没用什么</h3>
+  <p><strong>没有使用任何付费行业数据库</strong>（Semrush、Similarweb、行业研究报告一概没买）。全部结论来自四类公开源的组合与交叉验证：</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>数据源</th><th>用它扫了什么</th><th>规模</th></tr></thead>
+      <tbody>
+        <tr><td>Google 广告数据接口</td><td>全球各国对「去中国」相关需求的真实搜索量与点击价</td><td class="num">30 国 · 8 语种复核</td></tr>
+        <tr><td>Meta 广告库</td><td>各国实际在投的广告主体、文案、结算货币</td><td class="num">6 组检索 · 3 国对比</td></tr>
+        <tr><td>带联网检索的 AI</td><td>海外买家问 AI 时，AI 实际回答什么、推荐谁</td><td class="num">4 问 · 成本 0.024 美元</td></tr>
+        <tr><td>官方公告与年报原文</td><td>免签名单、办会审批、各地补贴、上市公司披露</td><td class="num">3 份年报 PDF 全文</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">这套方法的成本几乎全部是时间，不是数据采购费。整份报告的直接数据支出低于 1 美元。</p>
+</section>
+
+<section id="demand">
+  <div class="sec-head"><span class="sec-eyebrow">发现一</span><h2>谁在主动找中国</h2></div>
+
+  <p class="lead">我们先拉了 30 个国家、8 个关键词的真实搜索量，再用 8 种母语复核一遍，排除「只查英文会低估非英语市场」的偏差。</p>
+
+  <div class="bars">
+    <div class="bar-row"><span class="bar-l">印度</span><div class="bar-track"><div class="bar-fill c" style="width:100%"></div></div><span class="bar-n">18,100</span></div>
+    <div class="bar-row"><span class="bar-l">美国</span><div class="bar-track"><div class="bar-fill" style="width:44.8%"></div></div><span class="bar-n">8,100</span></div>
+    <div class="bar-row"><span class="bar-l">巴西</span><div class="bar-track"><div class="bar-fill" style="width:44.8%"></div></div><span class="bar-n">8,100</span></div>
+    <div class="bar-row"><span class="bar-l">澳大利亚</span><div class="bar-track"><div class="bar-fill" style="width:36.5%"></div></div><span class="bar-n">6,600</span></div>
+    <div class="bar-row"><span class="bar-l">英国 / 菲律宾 / 泰国</span><div class="bar-track"><div class="bar-fill" style="width:19.9%"></div></div><span class="bar-n">3,600</span></div>
+    <div class="bar-row"><span class="bar-l">新加坡 / 加拿大 / 印尼</span><div class="bar-track"><div class="bar-fill" style="width:16%"></div></div><span class="bar-n">2,900</span></div>
+    <div class="bar-row"><span class="bar-l">马来西亚 / 阿联酋</span><div class="bar-track"><div class="bar-fill" style="width:13.3%"></div></div><span class="bar-n">2,400</span></div>
+    <div class="bar-row"><span class="bar-l">德国 / 荷兰 / 越南</span><div class="bar-track"><div class="bar-fill" style="width:8.8%"></div></div><span class="bar-n">1,600</span></div>
+  </div>
+  <p class="caption">关键词 canton fair 月均搜索量，30 国实测取前列。母语复核发现：法语「foire de canton」1,600，高于英文查询的 1,300——<strong>纯英文关键词研究会系统性低估非英语市场</strong>。这是这次扫描里一个可复用的方法结论。</p>
+
+  <h3>这组数字和官方数据对上了</h3>
+  <p>广交会官方唯一一次公开具体国家排名（第 135 届）的顺序是：</p>
+  <p class="mono-list"><strong>印度 → 美国 → 尼日利亚 → 马来西亚 → 印度尼西亚 → 德国 → 韩国 → 澳大利亚 → 巴西 → 沙特阿拉伯</strong></p>
+
+  <div class="note">
+    <p class="note-t">交叉验证成立</p>
+    <p>我们跑的 Google 搜索量，和广交会官方的预注册人数排名，<strong>是两个完全独立的数据源，指向同一组国家</strong>——印度、美国、澳大利亚、巴西、德国、韩国都在两张表的前列。</p>
+    <p style="margin-top:10px">这一条本身就是方法验证：<strong>公开搜索数据能在没有任何官方内部数据的情况下，还原出接近官方口径的市场排序。</strong></p>
+  </div>
+
+  <h3>两个正在发生的结构变化</h3>
+  <div class="cards">
+    <div class="card">
+      <h4>中东超过了欧美</h4>
+      <p class="sub">2025 春 · 137 届预注册</p>
+      <p>中东国家占 <strong>14.3%</strong>，欧美占 <strong>10.52%</strong>——中东买家占比首次超越欧美。139 届广交会已专门为中东买家推出定制服务包。</p>
+      <p>「一带一路」国家占比从 64.9% 升到 <strong>70% 以上</strong>，绝对人数 18.7 万。</p>
+    </div>
+    <div class="card">
+      <h4>欧美的来华动机变了</h4>
+      <p class="sub">链博会 vs 广交会</p>
+      <p>欧美在广交会只占 10–18% 且几乎零增长。但在<strong>链博会，欧美占境外参展商的 50%</strong>，美国参展商同比 +15%、其中 <strong>60% 是世界 500 强</strong>。</p>
+      <p>数据显示的是：<strong>欧美企业来中国的理由正在从「采购」转向「供应链与技术合作」。</strong></p>
+    </div>
+  </div>
+</section>
+
+<section id="behavior">
+  <div class="sec-head"><span class="sec-eyebrow">发现二</span><h2>他们怎么找——三组对照实验</h2></div>
+
+  <p class="lead">搜索量能告诉我们「谁在找」，但不能直接告诉我们「办会这件事走不走搜索」。所以我们设计了一组对照实验来测。</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>组别</th><th>关键词</th><th>美国月搜</th><th>英国</th><th>点击价</th></tr></thead>
+      <tbody>
+        <tr><td><strong>A</strong> 通用品类</td><td>destination management company</td><td class="num">201,000</td><td class="num">27,100</td><td class="num">$0.58</td></tr>
+        <tr><td><strong>A</strong></td><td>corporate retreat</td><td class="num">18,100</td><td class="num">1,300</td><td class="num">$34.42</td></tr>
+        <tr><td><strong>A</strong></td><td>company offsite</td><td class="num">210</td><td class="num">70</td><td class="num"><strong>$51.19</strong></td></tr>
+        <tr><td><strong>B</strong> 指向中国</td><td>incentive trip china</td><td class="num">0</td><td class="num">0</td><td class="num">—</td></tr>
+        <tr><td><strong>B</strong></td><td>corporate retreat china</td><td class="num">0</td><td class="num">0</td><td class="num">—</td></tr>
+        <tr><td><strong>C</strong> 指向日本</td><td>incentive trip japan</td><td class="num">0</td><td class="num">0</td><td class="num">—</td></tr>
+        <tr><td><strong>C</strong> 指向新加坡</td><td>incentive trip singapore</td><td class="num">10</td><td class="num">0</td><td class="num">—</td></tr>
+        <tr><td><strong>C</strong> 指向迪拜</td><td>corporate retreat dubai</td><td class="num">0</td><td class="num">0</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">另用德、法、西、意、日、韩、葡七种母语复核过同类词，「奖励旅游到中国」在所有语言里都是 0。10 是 Google 的低量分桶下限。</p>
+
+  <div class="note">
+    <p class="note-t">C 组是这个实验的关键</p>
+    <p>如果只做 B 组，容易得出「中国不受欢迎」的结论。加上 C 组才看清：<strong>连日本、新加坡、迪拜这些会奖强国也是零。</strong></p>
+    <p style="margin-top:10px">所以数据说的是：<strong>「目的地 + 企业活动」这个组合，全球都没人搜。</strong>这一条既排除了「中国特别差」的误读，也排除了「我们查错词」的可能。</p>
+    <p style="margin-top:10px">但 A 组同时显示：<strong>「destination management company」这个品类词在美国月搜 20 万。</strong>买家会搜品类，只是不带目的地。</p>
+  </div>
+</section>
+
+<section id="ai">
+  <div class="sec-head"><span class="sec-eyebrow">发现三 · 最新</span><h2>AI 怎么回答海外买家</h2></div>
+
+  <p class="lead">这是这次扫描里我们认为最值得单独拿出来的一块。我们用海外买家会真问的四个问题，去问带联网检索的 AI，看它实际回答什么。四问总成本 0.024 美元。</p>
+
+  <h3>第一问：「我们要办 300 人赴华奖励旅游，该联系哪些 DMC？」</h3>
+  <p>AI 直接给出了一份可以拿去用的名单，还主动问要不要帮忙做成排序的外联清单和询价邮件模板：</p>
+  <p class="mono-list">Ovation China · Destination China (euromic) · WildChina<br>Crown DMC · Hosts Global China · DMC Beijing</p>
+  <p>这份名单里<strong>未出现众信</strong>。我们把它与后面第五节扫描的国际名录对照，发现<strong>高度重合</strong>——因为 AI 读取的正是那些名录和官网内容。</p>
+
+  <h3>第二问：「美国公民能免签来中国参加商务会议或展会吗？」</h3>
+  <p>AI 答对了，而且比我们查得还全：准确说明美国不在 30 天免签名单、海南是例外且事由覆盖展会，还补充了一条我们没查到的——<strong>美国的 APEC 商务旅行卡对中国不具备签证功能</strong>。</p>
+  <p class="caption">这一条我们如实记录：关于中国政策的事实性问题，AI 目前回答得相当准确。「AI 在传播错误信息」这个假设不成立。</p>
+
+  <h3>第三问：「中国、日本、新加坡，400 人亚太区域会议选哪个？」</h3>
+  <p>AI 推荐<strong>新加坡</strong>，日本第二，<strong>中国被列为「看情况才选」</strong>——只有当参会者或业务目标是中国特定的才建议选。它给出的理由原话是：</p>
+  <p class="quote">“The provided results <strong>do not support it</strong> as the strongest general-purpose regional conference choice versus Singapore.”<span class="zh">（我找到的资料，不支持中国比新加坡更适合作为通用选择）</span></p>
+
+  <div class="note copper">
+    <p class="note-t">注意它说的是什么</p>
+    <p>AI 给的理由不是「中国不好」，是<strong>「资料不支持」</strong>——它在英文互联网上没找到足够支撑中国的材料。</p>
+    <p style="margin-top:10px">这是一个<strong>内容层面的事实</strong>，我们只负责把它测出来并呈现。至于它在业务上意味着什么、值不值得处理，是你们的判断。</p>
+  </div>
+
+  <h3>第四问：「众信能做外企在华的会奖活动吗？」</h3>
+  <p>AI 回答<strong>能</strong>，并给出了证据：称引用众信自己的会奖页面，提到服务过<strong>德国、英国、法国、挪威、俄罗斯</strong>的会奖团组，客户包括 <strong>Dell、Nokia、家乐福、中欧国际工商学院</strong>；另引用进博会展商页确认<strong>上海众信国际会奖服务有限公司</strong>。</p>
+
+  <div class="note amber">
+    <p class="note-t">两条必须说明</p>
+    <p><strong>① 这条比我们从年报里读到的更多。</strong>我们通读了 2023–2025 三份年报全文，会奖段落里没有这些海外案例。<strong>说明众信的相关经历比年报披露的更丰富</strong>——这也提示我们，仅靠年报判断一家公司的能力是不够的。</p>
+      <p style="margin-top:10px"><strong>② AI 引用的那个页面，我们没能独立核实到。</strong>公开搜索未定位到。所以这条标注为「AI 声称，未独立验证」。<strong>这本身说明一件事：AI 关于一家公司说的话，可能准确也可能是拼接的。</strong></p>
+  </div>
+
+  <h3>把四问放在一起看</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>买家怎么问</th><th>AI 怎么答</th></tr></thead>
+      <tbody>
+        <tr><td>「推荐几家中国的 DMC」</td><td><strong>给六家，没有众信</strong></td></tr>
+        <tr><td>「众信行不行？」</td><td><strong>说行，还列举案例</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">测试使用 Perplexity（带联网检索）2026-08-30；同一套方法可覆盖 ChatGPT、Claude、Gemini。单次查询约 0.006 美元，意味着这件事可以做成按月定期监测，而不是一次性抽查。原始问答全文可提供。</p>
+
+  <p>数据呈现的现象是：<strong>当买家已经知道众信的名字，AI 会给出正面回答；当买家不知道、只问「推荐谁」时，AI 不会主动提及。</strong></p>
+</section>
+
+<section id="visibility">
+  <div class="sec-head"><span class="sec-eyebrow">发现四</span><h2>名录可见度实测</h2></div>
+
+  <p class="lead">承接上一节的问题——AI 那份推荐名单是从哪来的？我们逐一扫描了海外买家和 AI 都会读取的国际名录。为了让方法有个具体落点，我们以众信旅游作为样本做了一次完整检索；<strong>换成任何一家中国会奖机构，这套检索都可以照样跑一遍。</strong></p>
+
+  <div class="roster">
+    <div class="roster-head">公开名录检索结果 · 样本：众信旅游 · 2026-08-30</div>
+    <div class="roster-row"><span class="roster-mark n">✗</span><span class="roster-label">ICCA 会员<small>国际大会及会议协会。中国已有 84 家机构在册</small></span><span class="roster-note">未查到</span></div>
+    <div class="roster-row"><span class="roster-mark n">✗</span><span class="roster-label">SITE 会员<small>奖励旅游专业协会</small></span><span class="roster-note">未查到</span></div>
+    <div class="roster-row"><span class="roster-mark n">✗</span><span class="roster-label">MPI / PCMA 会员<small>全球最大的会议专业人士组织</small></span><span class="roster-note">未查到</span></div>
+    <div class="roster-row"><span class="roster-mark n">✗</span><span class="roster-label">EVINTRA 中国 DMC 目录<small>在册的是 Destination China、Setmice、Liberty China DMC</small></span><span class="roster-note">未查到</span></div>
+    <div class="roster-row"><span class="roster-mark n">✗</span><span class="roster-label">euromic 网络<small>邀请制，每个目的地一家，中国席位是 Destination China</small></span><span class="roster-note">未查到</span></div>
+    <div class="roster-row"><span class="roster-mark n">✗</span><span class="roster-label">Global DMC Partners<small>北京席位是 New Imagination DMC</small></span><span class="roster-note">未查到</span></div>
+    <div class="roster-row"><span class="roster-mark n">✗</span><span class="roster-label">Cvent 供应商目录<small>全球最大的企业活动询价平台</small></span><span class="roster-note">需登录·未能确证</span></div>
+    <div class="roster-row"><span class="roster-mark y">✓</span><span class="roster-label">PATA / IATA<small>旅游与航空协会</small></span><span class="roster-note">在册</span></div>
+  </div>
+  <p class="caption">各协会官方 members directory 与名录平台的中国 DMC 列表逐一检索，中英文交叉验证。「未查到」= 公开渠道检索无命中，不等于绝对不存在——如果实际已在册，说明档案在检索层不可见，这同样是个可处理的技术问题。</p>
+
+  <h3>海外版官网的实测状况</h3>
+  <p>我们抓取了 global.uzai.com 全站逐页核对。以下是客观记录：</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>检查项</th><th>实测结果</th></tr></thead>
+      <tbody>
+        <tr><td>技术栈 / 语言版本</td><td>Shopify 建站，含 10 个语言版本</td></tr>
+        <tr><td>可售产品数</td><td><code>/collections/all</code> 返回 "Showing 0 of 0 products"</td></tr>
+        <tr><td>页脚社媒链接</td><td>指向 facebook.com/shopify、instagram.com/shopify 等主题默认值</td></tr>
+        <tr><td>条款页</td><td>整页为 Lorem Ipsum 占位文</td></tr>
+        <tr><td>询价表单字段</td><td>姓名 / 电话 / 邮箱 / 留言，共 4 项</td></tr>
+        <tr><td>MICE 专属落地页或询价入口</td><td>未查到</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">另注：<code>utourchina.com</code> 是一家上海的独立入境地接社，与众信无关，海外买家搜索时容易混淆。</p>
+
+  <div class="note">
+    <p class="note-t">关于这一节的读法</p>
+    <p>以上是<strong>技术与传播层面的客观记录，不构成对业务能力的任何评价</strong>。一个海外站没填满，在国内企业里相当普遍，通常反映的是资源优先级——业务本身的重心不在这里。</p>
+    <p style="margin-top:10px">我们把它列出来只有一个原因：它和第三节 AI 的回答之间存在<strong>可观察的技术关联</strong>——AI 读取的正是公开名录和网站内容，而这两处目前可被机器读取的信息量有限。<strong>这是一个可以用技术手段处理的问题，与企业实际的业务能力无关。</strong></p>
+  </div>
+</section>
+
+<section id="ads">
+  <div class="sec-head"><span class="sec-eyebrow">发现五</span><h2>三个市场的广告结构</h2></div>
+
+  <p class="lead">我们按国家拉取了 Meta 广告库，看各市场实际在投的是谁。这里有一个方法上的发现值得单说。</p>
+
+  <div class="cards">
+    <div class="card">
+      <h4>印度 · 约 330 条在投</h4>
+      <p class="sub">本土组团方林立</p>
+      <p>十几家印度本土公司在投广交会组团广告，已经卷到<strong>用印地语和古吉拉特语分邦投放</strong>（如「从中古吉拉特邦出发」）、按行业细分（「医疗器械直采」）。</p>
+      <p>有一家把广告标题直接写成 <strong>"No Visa Rejection"（不拒签）</strong>——与搜索数据里印度「china business visa」高需求完全吻合。</p>
+    </div>
+    <div class="card">
+      <h4>美国 · 约 147 条在投</h4>
+      <p class="sub">结构完全相反</p>
+      <p>几乎全部是<strong>中国工厂自己在投广告招揽买家</strong>（「来广交会顺路看我们展厅」），本土组团服务方只找到一家。</p>
+      <p>美国搜索需求排全球第二（8,100），但 Meta 上的组团服务供给几乎为零。</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <p class="note-t">一个可复用的方法：用结算货币识破投放主体</p>
+    <p>Meta 广告库返回每条广告的结算货币。<strong>用 AUD 投放的才是真把澳洲当主战场，用 USD 或 CNY 投放的往往是境外主体在广撒网。</strong></p>
+    <p style="margin-top:10px">靠这一项，我们在另一个市场识别出：某批看起来是「本地旅行社」的投放方，实为中国境内地接社的账号。<strong>这是任何付费竞品工具都不会直接告诉你的信息。</strong></p>
+  </div>
+
+  <div class="note amber">
+    <p class="note-t">同时我们也测了：会奖 B2B 在 Meta 上没有生态</p>
+    <p>在美国检索 <code>incentive travel</code> 有 963 条在投广告、<code>destination management company</code> 有 273 条，<strong>逐条看下来全是保健品、健身、网文小说——一条真正的会奖广告都没有</strong>。企业活动采购决策人不在这个平台上做采购决策。</p>
+    <p style="margin-top:10px">所以 Meta 对会奖业务的价值<strong>在情报，不在投放</strong>。上面印度那 330 条就是这么挖出来的。</p>
+  </div>
+</section>
+
+<section id="facts">
+  <div class="sec-head"><span class="sec-eyebrow">发现六</span><h2>政策与补贴：我们抓到的口径差异</h2></div>
+
+  <p class="lead">这部分你们比我们熟，我们只把抓取到的公开条款并排放在一起——差异主要在<strong>门槛口径</strong>，各地对「什么算国际会议」的定义完全不同。</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>地区</th><th>会议类门槛</th><th>金额</th></tr></thead>
+      <tbody>
+        <tr><td><strong>海南</strong></td><td>高端专业会议 <strong>参会代表 ≥300 人</strong></td><td class="num">培育期最长 5 届，累计最高 1,125 万元</td></tr>
+        <tr><td><strong>上海</strong></td><td>国际性会议 <strong>≥500 人且境外占比 ≥50%</strong>，四星以上住宿 ≥2 晚<br>奖励旅游团：单一企业<strong>境外参会者 ≥300 人</strong></td><td class="num">每场最高 10 万元<br>每家企业每年最高 30 万元</td></tr>
+        <tr><td><strong>成都</strong>（天府新区）</td><td><strong>≥5 个国家、≥200 人、境外代表 ≥20%</strong></td><td class="num">基础补贴上浮 40%，单项目最高 100 万<br>政策总上限 200 万</td></tr>
+        <tr><td><strong>横琴</strong></td><td>进入 ICCA 统计的国际会议</td><td class="num">每位参会者 800 元，单场最高 100 万<br>首次取得 ICCA 认证奖 20 万</td></tr>
+        <tr><td><strong>北京</strong></td><td>引进国际专业展会 ≥1 万㎡ 且国际参展商租用面积 ≥20%</td><td class="num">最高 100 万元<br><strong>未见针对国际会议的独立奖项</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">政策原文实查 2026-08-30，上海与海南两条已逐字核对官方发布页。各地对「引进国际会议落地」的补贴口径差异大且多不公开挂网。</p>
+
+  <div class="note">
+    <p class="note-t">两条抓取时注意到的细节</p>
+    <p><strong>① 上海那条的申请主体写明是「旅行社」</strong>，且奖励旅游团有独立门槛（单一企业境外参会者 ≥300 人、四星以上住宿 ≥2 晚），与会议类分开计算。</p>
+    <p style="margin-top:10px"><strong>② 出海参展的展位费本身也在补贴范围内</strong>——上海标准为 3,000 元/㎡、单个展会单个企业上限 81,000 元。对照实际展位报价（ITB Asia 9 ㎡ 约 4.3 万元、IMEX Frankfurt 6 ㎡ 约 7.2 万元），均在覆盖区间内。</p>
+  </div>
+
+  <p>另外两条与海外客源直接相关的政策事实，供参考：<strong>美国不在中国 50 国单方面免签名单内</strong>，全国范围唯一免签路径是 240 小时过境免签，但该政策要求持有飞往第三国的联程客票；<strong>海南 61 国免签名单含美国，停留 30 天，事由原文明确包含「会展」</strong>，活动范围限海南省内。这两条我们核对了国家移民管理局原文。</p>
+</section>
+
+<section id="gaps">
+  <div class="sec-head"><span class="sec-eyebrow">诚实交代</span><h2>我们没查到的</h2></div>
+
+  <p class="lead">一份扫描报告的价值，取决于它把「不知道的部分」说清楚的程度。以下是本轮明确未取得的：</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>缺口</th><th>为什么没拿到</th></tr></thead>
+      <tbody>
+        <tr><td><strong>中国境内地接的实际费率惯例</strong></td><td>国际口径全部公开（酒店给第三方 7–10% 团房佣金、DMC 净价加价 15–40%、代理 10–15% 管理费），<strong>中国境内一条都查不到</strong></td></tr>
+        <tr><td>中国入境会奖的单独市场规模</td><td>公开的会奖市场数字是全口径含国内，不能当入境规模用</td></tr>
+        <tr><td>入境外国人「按商务/会展目的」的人次占比</td><td>文旅部 2020 年后不再发布按目的分的分项表</td></tr>
+        <tr><td>众信是否在 Cvent 供应商目录</td><td>该目录需登录查看，标注为「未能确证」而非「不在」</td></tr>
+        <tr><td>AI 引用的众信会奖页面</td><td>公开搜索未定位到该页</td></tr>
+        <tr><td>ICCA 2025 中国城市明细</td><td>官方公开摘要为翻页书格式抓不到表格，数字来自行业媒体转载，<strong>单一来源</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note amber">
+    <p class="note-t">一条我们主动纠正的</p>
+    <p>坊间流传一句「众信年报称依托全球供应链及境外分支网络积极拓展入境旅游业务」——我们对 2023、2024、2025 三份年报 PDF 全文逐字搜索，<strong>这句话不存在</strong>。年报的实际表述是「以向世界展现中国文化独特魅力为研发理念」。</p>
+    <p style="margin-top:10px">列出这条不是为了纠错，是为了说明我们的核对标准：<strong>凡是引用，都回到原始文件。</strong></p>
+  </div>
+</section>
+
+<section id="me" style="border-top:3px solid var(--ink); padding-top:44px">
+  <div class="sec-head"><span class="sec-eyebrow">关于我们</span><h2>Magic Engine 能补哪一环</h2></div>
+
+  <p class="lead">这份报告里的每一个数字，都是用同一套能力抓出来的。我们把这套能力和众信的能力放在一起看，边界是清楚的。</p>
+
+  <div class="cards">
+    <div class="card">
+      <h4>众信的强项</h4>
+      <p class="sub">我们不碰的部分</p>
+      <p>会奖业务本身：客户关系、产品设计、地接执行、报价与履约、供应链、牌照资质、一百多人的专业团队。</p>
+      <p><strong>这些我们不懂，也不打算给建议。</strong></p>
+    </div>
+    <div class="card">
+      <h4>我们的强项</h4>
+      <p class="sub">这份报告的全部来源</p>
+      <p>海外数字世界的<strong>数据抓取、交叉验证、持续监测</strong>，以及面向海外市场的<strong>数字传播执行</strong>——网站、内容、媒体、广告、AI 可见度。</p>
+      <p>我们常驻澳新，做的是英语市场的数字获客。</p>
+    </div>
+  </div>
+
+  <h3>为什么澳新的经验能用在这件事上</h3>
+  <p>澳新的价值不在于它本身是个大市场，而在于<strong>它是英语世界的完整缩影</strong>——Google、Meta、LinkedIn 在澳新和美英欧是同一套规则、同一批平台、同一种用户行为。<strong>在澳新验证过的打法换到美国或欧洲，需要换的是市场参数，不是方法。</strong></p>
+  <p>这次扫描覆盖 30 个国家、8 种语言复核，用的就是同一套方法。同期我们刚完成一份澳洲市场的完整扫描报告，可作为作品一并提供。</p>
+
+  <h3>对入华会奖这件事，我们能提供的四类支持</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>能力</th><th>对应本报告的哪一节</th><th>to B / to C</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>市场数据的持续抓取与监测</strong><br>需求量级、竞品投放、客源国变化</td>
+          <td>第二、三、五节</td>
+          <td><span class="pill y">两者通用</span></td>
+        </tr>
+        <tr>
+          <td><strong>AI 可见度基线与月度追踪</strong><br>买家问 AI 时你出不出现、AI 怎么描述你</td>
+          <td>第四节</td>
+          <td><span class="pill y">两者通用</span></td>
+        </tr>
+        <tr>
+          <td><strong>海外数字资产建设</strong><br>英文站、内容、名录档案、询价入口</td>
+          <td>第五节</td>
+          <td><span class="pill w">to B 为主</span></td>
+        </tr>
+        <tr>
+          <td><strong>海外媒体与广告投放</strong><br>行业媒体、邮件、社媒、搜索</td>
+          <td>第六节（含「不建议投放」的判断）</td>
+          <td><span class="pill y">两者通用</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p class="note-t">关于 to B 和 to C</p>
+    <p>这四类能力在两条线上是通的，只是打法不同：<strong>to B（企业客户、组团方、代理、协会）</strong>靠名录、AI 可见度、行业媒体和定向邮件；<strong>to C（入境散客与小团）</strong>靠搜索、内容和社媒。</p>
+    <p style="margin-top:10px">我们刚完成的那份澳洲报告，做的就是完整的 to C 市场扫描——同一套数据能力，换一个应用面。</p>
+  </div>
+
+  <div class="note copper">
+    <p class="note-t">下一步</p>
+    <p>这份报告是我们自己做的，没有前置条件，也不附带任何商业要求。做它的目的很简单：<strong>与其发一份介绍我们能做什么的材料，不如直接做一件事给你看。</strong></p>
+    <p style="margin-top:10px">如果其中任何一节对你们有用，我们可以就那一块<strong>做得更深</strong>——比如把某个客源国拉到国别级、把 AI 可见度铺开到四个平台并建立基线、或者把同业的海外数字资产逐页拆解。<strong>做哪一块、按什么节奏、要不要做，都听你们的。</strong></p>
+    <p style="margin-top:10px">另外有两个问题想请教，因为我们确实不了解一线情况：<strong>第一，第四节测出的「AI 推荐中国 DMC 时给出六家名单」这个现象，在行业内是否已经被关注？第二，这类数据对你们的实际业务是否真的有参考价值？</strong>如果我们高估了它的重要性，也很想听到这个反馈——这对我们判断方法的适用边界同样有用。</p>
+  </div>
+</section>
+
+<footer>
+  <p><strong>赴华会奖数据扫描</strong> · Magic Engine 自主研究 · 2026-08-30</p>
+  <p class="fine">数据来源：Google 广告数据接口（30 国搜索需求实测，8 语种复核）· Meta 广告库（按国家实查）· 带联网检索的 AI（4 问实测，Perplexity）· 国家移民管理局与外交部公告原文 · 各地会展补贴政策官方发布页 · 上市公司公开年度报告 · ICCA 统计报告 · 广交会与链博会官方通稿。<br><br><strong>免责说明：</strong>本报告为 Magic Engine 自主开展的市场研究，<strong>未受任何机构委托，不存在任何形式的商业约定</strong>。报告中涉及具体企业的内容，全部来自公开可检索渠道与企业自行披露的信息，<strong>不含任何非公开信息</strong>；相关记录仅针对公开数字资产的技术与传播层面可检索状态，<strong>不构成对该企业经营状况、业务能力、财务表现或证券投资价值的评价或建议</strong>。公开检索存在盲区，「未查到」不等于「不存在」，如与实际情况有出入，以企业自身公开信息为准。所有数字均带可核验来源，未取得的数据已在「我们没查到的」一节显式列明。</p>
+</footer>
+
+</div>
