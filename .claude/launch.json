@@ -19,6 +19,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "docs/clients/parkhomes/web"],
       "port": 4321
+    },
+    {
+      "name": "marketing-website",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8877", "--directory", "website"],
+      "port": 8877
     }
   ]
 }

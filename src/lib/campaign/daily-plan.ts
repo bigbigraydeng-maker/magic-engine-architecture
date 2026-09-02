@@ -82,15 +82,33 @@ export interface CampaignDailyPlanData {
     received_at: string
     raw_summary: string | null
   }
-  /** Added only by the explicit review handoff. The original command_meta and
-   *  grounding reference stay unchanged so refreshed dates never pretend the
-   *  old copy was regenerated or re-grounded. */
-  refresh_meta?: {
-    start_date: string
-    end_date: string
-    original_dates: string[]
-    applied_at: string
-  }
+  /**
+   * Human review of the Facebook Post for individual dates. This is kept
+   * inside the plan snapshot so a new complete-snapshot POST naturally
+   * clears every decision instead of carrying approval onto changed copy or
+   * imagery. It is deliberately separate from bundle-level readiness and
+   * publishing authorisation.
+   */
+  review_meta?: CampaignDailyPostReviewMeta
+}
+
+export type CampaignDailyPostReviewVerdict = 'PASS' | 'NEEDS_REVISION'
+
+export interface CampaignDailyPostReviewDecision {
+  verdict: CampaignDailyPostReviewVerdict
+  reason: string | null
+  reviewed_at: string
+  reviewed_by_user_id: string
+}
+
+export interface CampaignDailyPostReviewMeta {
+  schema_version: 1
+  /** The content snapshot this review belongs to (`command_meta.received_at`). */
+  plan_revision: string
+  /** Independent compare-and-set token for concurrent review writes. */
+  revision: string
+  updated_at: string
+  posts: Record<string, CampaignDailyPostReviewDecision>
 }
 
 // ─── Inbound command schema (Section A — conversation-command persistence seam) ──
@@ -107,7 +125,88 @@ const uuidLike = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'invalid id')
 
-const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+const dateStringSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const parsed = new Date(`${value}T00:00:00.000Z`)
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+  }, 'invalid calendar date')
+
+const postReviewDecisionSchema = z
+  .object({
+    verdict: z.enum(['PASS', 'NEEDS_REVISION']),
+    reason: z.string().max(500).nullable(),
+    reviewed_at: z.string().datetime(),
+    reviewed_by_user_id: uuidLike,
+  })
+  .superRefine((value, ctx) => {
+    const reason = value.reason?.trim() ?? ''
+    if (value.verdict === 'NEEDS_REVISION' && reason.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['reason'],
+        message: 'reason is required when the Post needs revision',
+      })
+    }
+    if (value.verdict === 'PASS' && value.reason !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['reason'],
+        message: 'reason must be null when the Post passes',
+      })
+    }
+  })
+
+export const CampaignDailyPostReviewMetaSchema = z.object({
+  schema_version: z.literal(1),
+  plan_revision: z.string().datetime(),
+  revision: uuidLike,
+  updated_at: z.string().datetime(),
+  posts: z.record(dateStringSchema, postReviewDecisionSchema),
+})
+
+export const CampaignDailyPostReviewCommandSchema = z
+  .object({
+    campaign_id: uuidLike,
+    plan_id: uuidLike,
+    expected_plan_revision: z.string().datetime(),
+    expected_review_revision: uuidLike.nullable(),
+    date: dateStringSchema,
+    verdict: z.enum(['PASS', 'NEEDS_REVISION']),
+    reason: z.string().max(500).optional().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    const reason = value.reason?.trim() ?? ''
+    if (value.verdict === 'NEEDS_REVISION' && reason.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['reason'],
+        message: 'reason is required when the Post needs revision',
+      })
+    }
+  })
+
+export type CampaignDailyPostReviewCommand = z.infer<typeof CampaignDailyPostReviewCommandSchema>
+
+/**
+ * A review key is valid only when it identifies exactly one scheduled Post
+ * and exactly one stored Post bundle. This rejects orphaned keys and
+ * ambiguous duplicate dates in persisted JSON before they reach the UI or
+ * a compare-and-set update.
+ */
+export function isReviewablePostDate(plan: CampaignDailyPlanData, date: string): boolean {
+  const days = Array.isArray(plan.days) ? plan.days : []
+  const bundles = Array.isArray(plan.bundles) ? plan.bundles : []
+  const matchingDays = days.filter(day => day?.date === date)
+  const matchingBundles = bundles.filter(bundle => bundle?.date === date)
+  return (
+    matchingDays.length === 1 &&
+    matchingDays[0].slots?.post === 'PLANNED' &&
+    matchingBundles.length === 1 &&
+    !!matchingBundles[0].post
+  )
+}
 
 // A bundle inside a POST snapshot is COMPLETE: Post + 4-frame Story + Reel
 // are all required. Partial days (e.g. Post-only) are not accepted through

@@ -5,6 +5,16 @@
 
 ---
 
+### 2026-09-02（官网免费体检漏斗 schema 修复 + Insights 博客上线，PR [#1313](https://github.com/bigbigraydeng-maker/magic-engine/pull/1313) + [#1314](https://github.com/bigbigraydeng-maker/magic-engine/pull/1314)）
+
+**发生了什么**：PM 反馈 magicengine.com.au 的「免费体检」功能一直有问题。实测 + 生产库核查（`discovery_leads` 表 0 行）确认：`email` 列建表起就是 `NOT NULL`，但两步漏斗设计里 `scout.js` 第一次插入时不带 email（email 在第二步 `/api/report` 才收集），导致每次插入都撞约束失败。子牙+魏征两轮独立复审后，migration 已 apply 到生产（`glbdnayojixmexgofbsd`）放开该约束。
+
+**⚠️ 这条修复不是当前症状的唯一根因**：直接调用生产 `/api/scout` 验证 `leadId` 返回 `demo-...` 前缀，证实 magicengine.com.au 的 Cloudflare Pages 项目（独立账号，本仓库无权限访问）**完全没有配置 `SUPABASE_URL`/`SUPABASE_SERVICE_KEY`**，`storeLead()` 从未真正连接过数据库——这一步需要 PM 在 Cloudflare 后台手动补，登记在 [ROADMAP.md](../ROADMAP.md) 的手工任务里。
+
+**顺手做的**：官网 `/blog/` 上线（此前 `master_briefs` 对 ME 自己这个 client 是 0 行——ME 的内容引擎从没对自己开过工），两篇首发文章打已验证的关键词簇（`ai training for small business`、`ai agents for business automation`），FAQ/Article JSON-LD + AI 可见度块齐全，内容全部基于 `/ai-training`/`/ai-automation` 页面真实产品事实撰写。同时把全站 35 个文件里两个不一致的对外联系邮箱（`raydeng@magicengine.com.au` 112 处 + 走错域名的 `hello@magicengine.com.au` 1 处）统一成 `hello@magicengine.cloud`。中文版 `/cn/blog/` 按 PM 要求本轮先跳过。
+
+---
+
 ### 2026-08-28（Tailor Made 长行程生成失败修复 —— 输出截断 + CF 代理超时两层根因，PR [#1212](https://github.com/bigbigraydeng-maker/magic-engine/pull/1212) + [#1226](https://github.com/bigbigraydeng-maker/magic-engine/pull/1226)）
 
 **发生了什么**：CTS 顾问给一份 27 天的「China Panorama」出行程单，后台报 `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`。查生产库发现更严重的一面：`tailor_made_itineraries` 里 `CTS-2026-0024`（终端客户 Shirley Gordon & Steven Birchall）**已经存进去了一份只有 2 天的草稿**——不是生成失败没存，是把写了一半的行程当成功结果静默落库了。状态还是 `draft` 没发出去，未造成对外事故。
