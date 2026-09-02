@@ -24,7 +24,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getMetaTokenForClient } from '@/lib/meta/token-manager'
+import { getMetaTokenForClient, getStoredPageToken } from '@/lib/meta/token-manager'
 import { getPageAccessToken, fetchPagePosts, type PagePost } from '@/lib/meta/page-posts'
 
 const POSTS_TO_FETCH = 50
@@ -144,12 +144,16 @@ export async function syncPageMetrics(
 
   for (const { client_id, page_id } of mappings) {
     try {
-      const userToken = await getMetaTokenForClient(client_id)
-      if (!userToken) {
+      // Prefer the Page token captured by the client's Meta OAuth connection.
+      // The legacy env-var path remains the fallback for clients that have not
+      // migrated to stored connections yet.
+      const storedPageToken = await getStoredPageToken(client_id, page_id)
+      const userToken = storedPageToken ? null : await getMetaTokenForClient(client_id)
+      if (!storedPageToken && !userToken) {
         results.push({ client_id, page_id, outcome: 'no_token' })
         continue
       }
-      const pageToken = await getPageAccessToken(userToken, page_id)
+      const pageToken = storedPageToken ?? await getPageAccessToken(userToken!, page_id)
       if (!pageToken) {
         results.push({ client_id, page_id, outcome: 'no_token' })
         continue
