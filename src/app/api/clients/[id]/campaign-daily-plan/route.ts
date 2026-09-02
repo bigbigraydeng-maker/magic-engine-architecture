@@ -25,6 +25,7 @@ import {
   CAMPAIGN_DAILY_PLAN_KIND,
   CampaignDailyCommandSchema,
   CampaignDailyPostReviewMetaSchema,
+  CampaignDailyPublishQueueMetaSchema,
   computeGrounding,
   computeReadiness,
   buildPublishingPlan,
@@ -109,6 +110,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         plan_revision: null,
         review_revision: null,
         review_summary: { passed: 0, needs_revision: 0, total: 0 },
+        publish_queue_receipt: null,
       })
     }
 
@@ -147,6 +149,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         throw new Error('INVALID_POST_REVIEW_STATE')
       }
       reviewMeta = parsedReview.data
+    }
+    let publishQueueMeta = null
+    if (planData?.publish_queue_meta !== undefined) {
+      const parsedPublishQueue = CampaignDailyPublishQueueMetaSchema.safeParse(planData.publish_queue_meta)
+      if (
+        !parsedPublishQueue.success ||
+        parsedPublishQueue.data.plan_revision !== planRevision ||
+        parsedPublishQueue.data.review_revision !== reviewMeta?.revision
+      ) {
+        throw new Error('INVALID_PUBLISH_QUEUE_STATE')
+      }
+      publishQueueMeta = parsedPublishQueue.data
     }
 
     // Grounding must reflect what the SAVED plan was actually grounded in,
@@ -302,6 +316,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       plan_revision: planRevision,
       review_revision: reviewMeta?.revision ?? null,
       review_summary: reviewSummary,
+      publish_queue_receipt: publishQueueMeta,
     })
   } catch (err: unknown) {
     return NextResponse.json({ success: false, error: errorMessage(err) }, { status: 500 })

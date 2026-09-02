@@ -350,6 +350,7 @@ describe('CampaignDailyPlanPanel — inline Facebook Post review (#1308)', () =>
         needs_revision: postReview?.verdict === 'NEEDS_REVISION' ? 1 : 0,
         total: 1,
       },
+      publish_queue_receipt: null,
     }
   }
 
@@ -384,8 +385,55 @@ describe('CampaignDailyPlanPanel — inline Facebook Post review (#1308)', () =>
     expect(screen.getByText('未发布')).toBeInTheDocument()
     expect(screen.getByText(/不写入旧运营台/)).toBeInTheDocument()
     expect(screen.getByText('Facebook Post')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /发布|排期/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^发布$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^排期$/ })).not.toBeInTheDocument()
     expect(document.querySelector('a[href*="/dashboard/content"]')).toBeNull()
+  })
+
+  it('lets a fully passed queue create an Inngest no-publish receipt and reloads the panel', async () => {
+    const first = reviewPayload({
+      verdict: 'PASS',
+      reason: null,
+      reviewed_at: '2026-09-01T15:05:00.000Z',
+      is_current: true,
+    })
+    const withReceipt = {
+      ...first,
+      publish_queue_receipt: {
+        event_name: 'daily_plan.publish_queue.ready',
+        event_id: 'evt_123',
+        status: 'READY_NO_PUBLISH',
+        no_publish: true,
+        created_at: '2026-09-01T16:00:00.000Z',
+        posts: [{
+          date: '2026-08-24',
+          image_asset_id: 'asset-1',
+          cta_url: 'https://example.test/tour',
+          review_verdict: 'PASS',
+        }],
+      },
+    }
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => first })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true, changed: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => withReceipt }) as unknown as typeof fetch
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '生成发布准备回执' }))
+
+    await screen.findByText('✓ 发布准备回执已生成')
+    expect(screen.getByText('Inngest 已记录')).toBeInTheDocument()
+    const postCall = vi.mocked(global.fetch).mock.calls[1]
+    expect(postCall[0]).toBe(`/api/clients/${CLIENT_ID}/campaign-daily-plan/publish-queue`)
+    expect(JSON.parse(postCall[1]!.body as string)).toMatchObject({
+      campaign_id: CAMPAIGN_ID,
+      plan_id: first.plan_id,
+      expected_plan_revision: first.plan_revision,
+      expected_review_revision: first.review_revision,
+      no_publish: true,
+    })
+    expect(screen.queryByRole('button', { name: /^发布$/ })).not.toBeInTheDocument()
   })
 
   it('requires a revision reason, then PATCHes the exact loaded plan and reloads the inline state', async () => {

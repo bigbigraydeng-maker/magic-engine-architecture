@@ -65,6 +65,14 @@ interface DailyPlanResponse {
   plan_revision: string | null
   review_revision: string | null
   review_summary: { passed: number; needs_revision: number; total: number }
+  publish_queue_receipt: {
+    event_name: 'daily_plan.publish_queue.ready'
+    event_id: string
+    status: 'READY_NO_PUBLISH'
+    no_publish: true
+    created_at: string
+    posts: Array<{ date: string; image_asset_id: string; cta_url: string; review_verdict: 'PASS' }>
+  } | null
 }
 
 type PublishQueueStatus = 'READY' | 'NEEDS_REVISION' | 'PENDING_REVIEW'
@@ -99,7 +107,9 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   const [reviewReason, setReviewReason] = useState('')
   const [reviewSaving, setReviewSaving] = useState(false)
   const [bulkReviewSaving, setBulkReviewSaving] = useState(false)
+  const [publishQueueSaving, setPublishQueueSaving] = useState(false)
   const [reviewError, setReviewError] = useState('')
+  const [publishQueueError, setPublishQueueError] = useState('')
   const requestSequence = useRef(0)
   const loadAbort = useRef<AbortController | null>(null)
   const activeScope = useRef(`${clientId}:${campaignId}`)
@@ -142,7 +152,9 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
     setData(null)
     setReviewSaving(false)
     setBulkReviewSaving(false)
+    setPublishQueueSaving(false)
     setReviewError('')
+    setPublishQueueError('')
     void load()
     return () => {
       requestSequence.current += 1
@@ -242,6 +254,37 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
     }
   }, [campaignId, clientId, data, load, submitPostReview])
 
+  const preparePublishQueue = useCallback(async () => {
+    const scope = `${clientId}:${campaignId}`
+    if (!data?.plan_id || !data.plan_revision || !data.review_revision) {
+      setPublishQueueError('当前计划还没有完整审核版本，请刷新后重试。')
+      return
+    }
+    setPublishQueueSaving(true)
+    setPublishQueueError('')
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign-daily-plan/publish-queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaign_id: campaignId,
+          plan_id: data.plan_id,
+          expected_plan_revision: data.plan_revision,
+          expected_review_revision: data.review_revision,
+          no_publish: true,
+        }),
+      })
+      const json = await res.json()
+      if (activeScope.current !== scope) return
+      if (!res.ok || !json.success) throw new Error(json.error ?? '发布准备回执生成失败')
+      await load()
+    } catch (err) {
+      if (activeScope.current === scope) setPublishQueueError((err as Error).message)
+    } finally {
+      if (activeScope.current === scope) setPublishQueueSaving(false)
+    }
+  }, [campaignId, clientId, data, load])
+
   if (loading) {
     return <p className="text-xs text-me-charcoal/45 animate-pulse py-3">加载每日计划…</p>
   }
@@ -275,6 +318,8 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
       }
     })
   const publishQueueReadyCount = publishQueueItems.filter(item => item.status === 'READY').length
+  const publishQueueReady = publishQueueItems.length > 0 && publishQueueReadyCount === publishQueueItems.length
+  const publishQueueReceipt = data.publish_queue_receipt
 
   return (
     <div className="border border-black/[.06] rounded-xl overflow-hidden">
@@ -539,6 +584,11 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
               <span className="rounded-full bg-me-charcoal/[.06] px-2 py-0.5 text-[10px] font-medium text-me-charcoal/50">
                 未发布
               </span>
+              {publishQueueReceipt && (
+                <span className="rounded-full bg-[#5C8A4A]/12 px-2 py-0.5 text-[10px] font-medium text-[#5C8A4A]">
+                  Inngest 已记录
+                </span>
+              )}
             </div>
           </div>
           <p className="mb-2 text-[10px] leading-relaxed text-me-charcoal/40">
@@ -566,6 +616,35 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
               ))}
             </div>
           )}
+          <div className="mt-3 rounded-lg bg-me-ivory/70 px-3 py-2">
+            {publishQueueReceipt ? (
+              <div className="space-y-1 text-xs text-me-charcoal/60">
+                <p className="font-semibold text-[#5C8A4A]">✓ 发布准备回执已生成</p>
+                <p className="text-[10px] text-me-charcoal/45">
+                  {publishQueueReceipt.event_name} · {publishQueueReceipt.status} · {publishQueueReceipt.event_id}
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-[10px] leading-relaxed text-me-charcoal/45">
+                  全部 Post 通过后，可生成 Inngest 发布准备回执；这一步仍然不发布、不排期。
+                </p>
+                <button
+                  type="button"
+                  disabled={!publishQueueReady || publishQueueSaving}
+                  onClick={() => void preparePublishQueue()}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                    publishQueueReady
+                      ? 'bg-me-ochre text-white hover:bg-me-gold'
+                      : 'bg-me-charcoal/[.08] text-me-charcoal/45'
+                  }`}
+                >
+                  {publishQueueSaving ? '生成回执中…' : '生成发布准备回执'}
+                </button>
+              </div>
+            )}
+            {publishQueueError && <p className="mt-2 text-[11px] text-[#C2453A]">{publishQueueError}</p>}
+          </div>
         </div>
 
         {/* Publishing + Ad preview */}
