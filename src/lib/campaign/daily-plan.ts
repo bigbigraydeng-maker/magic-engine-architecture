@@ -90,6 +90,13 @@ export interface CampaignDailyPlanData {
    * publishing authorisation.
    */
   review_meta?: CampaignDailyPostReviewMeta
+  /**
+   * Publish-queue handoff receipt. This is still `no_publish`: it records
+   * that the seven reviewed Facebook Posts are ready for the next workflow
+   * step and that an Inngest event was emitted. It is not a schedule or
+   * provider publish receipt.
+   */
+  publish_queue_meta?: CampaignDailyPublishQueueMeta
 }
 
 export type CampaignDailyPostReviewVerdict = 'PASS' | 'NEEDS_REVISION'
@@ -109,6 +116,30 @@ export interface CampaignDailyPostReviewMeta {
   revision: string
   updated_at: string
   posts: Record<string, CampaignDailyPostReviewDecision>
+}
+
+export interface CampaignDailyPublishQueuePostReceipt {
+  date: string
+  image_asset_id: string
+  cta_url: string
+  review_verdict: 'PASS'
+}
+
+export interface CampaignDailyPublishQueueMeta {
+  schema_version: 1
+  event_name: 'daily_plan.publish_queue.ready'
+  event_id: string
+  request_id: string
+  plan_revision: string
+  review_revision: string
+  status: 'READY_NO_PUBLISH'
+  no_publish: true
+  publishing_authorization: 'NOT_AUTHORIZED'
+  provider_impact: 'NONE'
+  cost_usd: 0
+  created_at: string
+  created_by_user_id: string
+  posts: CampaignDailyPublishQueuePostReceipt[]
 }
 
 // ─── Inbound command schema (Section A — conversation-command persistence seam) ──
@@ -132,6 +163,18 @@ const dateStringSchema = z
     const parsed = new Date(`${value}T00:00:00.000Z`)
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
   }, 'invalid calendar date')
+
+// HTTPS-only URL check for public-facing customer destinations.
+const httpsUrl = z
+  .string()
+  .refine((v) => {
+    try {
+      const u = new URL(v)
+      return u.protocol === 'https:'
+    } catch {
+      return false
+    }
+  }, { message: 'must be a well-formed HTTPS URL' })
 
 const postReviewDecisionSchema = z
   .object({
@@ -189,6 +232,38 @@ export const CampaignDailyPostReviewCommandSchema = z
 
 export type CampaignDailyPostReviewCommand = z.infer<typeof CampaignDailyPostReviewCommandSchema>
 
+export const CampaignDailyPublishQueueCommandSchema = z.object({
+  campaign_id: uuidLike,
+  plan_id: uuidLike,
+  expected_plan_revision: z.string().datetime(),
+  expected_review_revision: uuidLike,
+  no_publish: z.literal(true),
+})
+
+export const CampaignDailyPublishQueueMetaSchema = z.object({
+  schema_version: z.literal(1),
+  event_name: z.literal('daily_plan.publish_queue.ready'),
+  event_id: z.string().min(1),
+  request_id: uuidLike,
+  plan_revision: z.string().datetime(),
+  review_revision: uuidLike,
+  status: z.literal('READY_NO_PUBLISH'),
+  no_publish: z.literal(true),
+  publishing_authorization: z.literal('NOT_AUTHORIZED'),
+  provider_impact: z.literal('NONE'),
+  cost_usd: z.literal(0),
+  created_at: z.string().datetime(),
+  created_by_user_id: uuidLike,
+  posts: z.array(z.object({
+    date: dateStringSchema,
+    image_asset_id: uuidLike,
+    cta_url: httpsUrl,
+    review_verdict: z.literal('PASS'),
+  })).min(1),
+})
+
+export type CampaignDailyPublishQueueCommand = z.infer<typeof CampaignDailyPublishQueueCommandSchema>
+
 /**
  * A review key is valid only when it identifies exactly one scheduled Post
  * and exactly one stored Post bundle. This rejects orphaned keys and
@@ -214,19 +289,6 @@ export function isReviewablePostDate(plan: CampaignDailyPlanData, date: string):
 // (deferred) or leave the stored snapshot ambiguous. GET keeps rendering
 // null Post/Story/Reel entries from legacy rows honestly; that read
 // tolerance does not extend to the write contract.
-// HTTPS-only URL check for the Post CTA — an http:// destination on a
-// public-facing customer button would strip TLS mid-click.
-const httpsUrl = z
-  .string()
-  .refine((v) => {
-    try {
-      const u = new URL(v)
-      return u.protocol === 'https:'
-    } catch {
-      return false
-    }
-  }, { message: 'must be a well-formed HTTPS URL' })
-
 const bundleSchema = z.object({
   date: dateStringSchema,
   post: z.object({
