@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { requirePaidClientAccess } from '@/lib/auth/client-access'
 
 const ALLOWED_STATUSES = ['draft', 'approved', 'scheduled', 'published', 'rejected'] as const
 type PostStatus = typeof ALLOWED_STATUSES[number]
@@ -21,6 +22,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Max 100 posts per batch' }, { status: 400 })
     }
 
+    // Resolve every target before mutation, then prove access to every unique
+    // owner. This keeps global-admin batches working while a scoped user can
+    // never smuggle another client's ID into an otherwise valid request.
+    const { data: owners, error: ownerError } = await supabaseAdmin
+      .from('content_posts')
+      .select('id, client_id')
+      .in('id', post_ids)
+    if (ownerError) throw ownerError
+    if ((owners ?? []).length !== new Set(post_ids).size) {
+      return NextResponse.json({ success: false, error: 'One or more posts not found' }, { status: 404 })
+    }
+    const clientIds = Array.from(new Set((owners ?? []).map(row => row.client_id as string)))
+    for (const clientId of clientIds) {
+      const access = await requirePaidClientAccess(clientId)
+      if (!access.ok) {
+        return NextResponse.json({ success: false, error: access.error }, { status: access.status })
+      }
+    }
+
     const resolvedAction: string = action ?? 'updateStatus'
 
     if (resolvedAction === 'delete') {
@@ -28,6 +48,7 @@ export async function POST(req: NextRequest) {
         .from('content_posts')
         .delete()
         .in('id', post_ids)
+        .in('client_id', clientIds)
         .select('id')
 
       if (error) throw error
@@ -46,6 +67,7 @@ export async function POST(req: NextRequest) {
         .from('content_posts')
         .update({ status })
         .in('id', post_ids)
+        .in('client_id', clientIds)
         .select('id, status')
 
       if (error) throw error

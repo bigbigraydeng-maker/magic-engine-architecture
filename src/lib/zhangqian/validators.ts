@@ -34,6 +34,8 @@ import type {
   MediaChannelCategory,
   MediaChannelReachMetric,
   SanityIssue,
+  DiscoveryWarning,
+  DiscoveryWarningStage,
 } from './types'
 
 // ─── Result type ──────────────────────────────────────────────────────────────
@@ -73,6 +75,32 @@ function normalizeNotes(v: unknown): string {
 
 const inRange = (n: number, min: number, max: number): boolean =>
   n >= min && n <= max
+
+const DISCOVERY_WARNING_STAGES: ReadonlySet<DiscoveryWarningStage> =
+  new Set<DiscoveryWarningStage>(['seed_enrichment', 'domain_metrics'])
+
+/**
+ * Treat persisted report metadata as external input. Old or malformed warning
+ * rows are dropped individually so one bad entry cannot break report viewing.
+ */
+export function normalizeDiscoveryWarnings(value: unknown): DiscoveryWarning[] {
+  if (!Array.isArray(value)) return []
+
+  const warnings: DiscoveryWarning[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) continue
+    if (!isString(entry.stage) || !DISCOVERY_WARNING_STAGES.has(entry.stage as DiscoveryWarningStage)) continue
+    if (!isString(entry.message) || entry.message.trim().length === 0) continue
+    if (entry.error_code !== undefined && (!isNumber(entry.error_code) || !Number.isInteger(entry.error_code))) continue
+
+    warnings.push({
+      stage: entry.stage as DiscoveryWarningStage,
+      ...(entry.error_code === undefined ? {} : { error_code: entry.error_code }),
+      message: entry.message.trim(),
+    })
+  }
+  return warnings
+}
 
 // ─── Enum sets (kept inline for fast lookup, mirrors types.ts) ───────────────
 

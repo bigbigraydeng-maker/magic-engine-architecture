@@ -1,0 +1,65 @@
+
+=== 产品词（红海） — 合计 14,680 ===
+     3600  china tours   $3.74  [HIGH]
+     3600  tours to china   $3.74  [HIGH]
+     2400  china tour packages   $2.76  [HIGH]
+     2400  china holiday packages   $2.76  [HIGH]
+     2400  china travel packages   $2.76  [HIGH]
+      170  china group tours   $4.55  [MEDIUM]
+      110  small group tours china   $4.28  [MEDIUM]
+
+=== 政策词（免签） — 合计 6,200 ===
+     2400  do australians need a visa for china   $2.70  [LOW]
+     1900  china visa australia   $5.06  [LOW]
+      880  china visa free australia   $0.84  [LOW]
+      880  china visa free   $0.38  [LOW]
+      140  china visa requirements   $1.16  [LOW]
+
+=== 地域词（本地社占优但缺席） — 合计 3,290 ===
+     1600  flights to china from sydney   $0.74  [MEDIUM]
+      880  china tours from australia   $3.00  [HIGH]
+      320  china tours from sydney   $3.04  [HIGH]
+      210  china tours from melbourne   $2.78  [HIGH]
+      170  china tours from brisbane   $2.29  [HIGH]
+      110  china tours from perth   $2.86  [HIGH]
+
+=== 顾虑词（几乎无人回答） — 合计 3,620 ===
+     2900  best time to visit china   $0.79  [LOW]
+      390  is china safe to travel   $0.11  [LOW]
+      140  china travel tips   $0.64  [LOW]
+      110  wechat pay for foreigners   $1.75  [LOW]
+       50  how to pay in china as a tourist   $1.11  [MEDIUM]
+       20  internet in china for tourists   $3.23  [MEDIUM]
+       10  alipay for tourists  [LOW]
+        0  vpn for china
+
+=== 定制词（空地） — 合计 250 ===
+      140  private china tour   $10.29  [HIGH]
+       90  luxury china tours   $3.65  [MEDIUM]
+       10  tailor made china tours
+       10  custom china tour   $20.63  [HIGH]
+        0  china tour with flights included
+
+=== 品牌词 — 合计 8,960 ===
+     4400  wendy wu tours   $0.83  [MEDIUM]
+     2900  tripadeal china   $0.51  [MEDIUM]
+     1000  wendy wu china tours   $0.80  [MEDIUM]
+      590  intrepid travel china   $2.45  [LOW]
+       70  helen wong tours  [LOW]
+
+=== 目的地词 — 合计 6,100 ===
+     3600  harbin ice festival   $1.39  [LOW]
+     1000  great wall of china tour   $2.70  [LOW]
+      880  yangtze river cruise   $2.04  [MEDIUM]
+      260  beijing tour   $2.85  [HIGH]
+      170  zhangjiajie tour   $3.05  [HIGH]
+      170  shanghai tour   $2.21  [MEDIUM]
+       20  chengdu panda tour   $1.66  [HIGH]
+
+=== 细分（医疗/商务） — 合计 6,690 ===
+     6600  canton fair   $2.97  [LOW]
+       40  dental implants china   $5.67  [MEDIUM]
+       30  medical tourism china   $4.06  [LOW]
+       10  china factory tour   $2.35  [LOW]
+       10  china sourcing trip  [LOW]
+        0  health checkup china

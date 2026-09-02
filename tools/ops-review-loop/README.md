@@ -47,6 +47,82 @@ Nothing here resolves a review conversation. Nothing here can push to
 `.github/workflows/**` or `tools/ai-orchestrator/**` (the fix prompt explicitly
 forbids it, on top of whatever the Claude GitHub App's own token permits).
 
+## Risk rating and delivery scoring — present, NOT yet wired
+
+`risk.mjs`, `sampling.mjs`, `quality.mjs` and `gate-marker.mjs` are in `src/`
+with 229 offline tests. **No workflow calls any of them yet.** They are on
+`main` first, on purpose: both loop workflows run `actions/checkout ref: main`,
+so a step that calls a brand-new module fails on the PR that introduces it,
+every time, until both halves are on main — the exact trap the inline
+`baseline` step in `ops-codex-to-claude-fix.yml` documents. Wiring is a separate
+PR.
+
+Until that PR lands, the loop still behaves exactly as the state diagram above
+describes: every `claude/*` PR asks Codex, and the cap is a flat three rounds.
+
+What the modules decide, once wired:
+
+| module | question |
+|---|---|
+| `risk.mjs` | A / B / C, computed from the PR's changed files — **both ends of a rename**, so a protected file cannot be walked out of the set. Protected path → A; a narrow allowlist (docs, styles, images, test-only) → C; anything unrecognised → B; anything unreadable → A. The PR author's declared level is a floor, never a ceiling. Also reports the **risk categories** hit, which is what decides the evidence owed. |
+| `sampling.mjs` | Which C-level heads still draw a Codex review. Stable 20% keyed on `(pr, head sha)` — a re-run cannot re-roll it. A and B are always reviewed. |
+| `maxRoundsForRisk` | Automated fix rounds: C=1, B=1, A=2, replacing the flat 3. An unrecognised level gets the smallest budget, not the largest. |
+| `quality.mjs` | Score out of 100 from *named observed signals only* (missing evidence scores 0; an unregistered signal throws). Thresholds C≥75 / B≥85 / A≥90. Hard gates — red CI, an open Codex P0/P1/P2 on the current head, a stale sha, **specialised evidence matching the categories hit**, any unreadable input — block readiness at any score. |
+| `gate-marker.mjs` | The `<!-- me-dev-gate:{...} -->` record, bound to **both** base and head sha, so a rating dies the moment the diff moves. Only A/B/C are storable, and markers count only when `selectTrustedGateMarkers` says a trusted identity wrote them. |
+
+### Specialised evidence follows the categories, not a fixed list
+
+An earlier draft required one fixed thing of every A-level PR: client-isolation
+evidence. Codex's review of PR #1205 pointed out that a migration, a workflow
+edit, a payment route and a dependency bump are all A and none of them have an
+isolation surface — so they could never be Ready, or their authors would write
+isolation prose they had not verified. Manufactured evidence is worse than no
+gate. (This very PR is that shape: A because it edits `tools/ops-review-loop/`,
+with no isolation surface at all.)
+
+So `classifyRisk` reports categories, `SPECIALIZED_EVIDENCE` says what each one
+owes (`db-migration` → migration evidence, `control-plane` → control-plane
+evidence, `supply-chain` → dependency justification, and so on), and
+`evaluateSpecializedEvidence` compares required against observed. A category the
+table does not recognise owes an explicit manual sign-off rather than nothing.
+
+The gate clears **only on a positive, structurally valid claim of
+completeness**: `readable === true`, `required` and `missing` both real arrays,
+`missing` empty, and `complete === true`. Everything else blocks — not
+evaluated, unreadable, malformed, or merely not-positively-complete.
+
+That asymmetry is the whole point, and it was Codex's round-2 finding on
+PR #1205. The check used to block only when it could *prove* an item was
+missing; an absent or mistyped `missing` field made that condition false, which
+is the same answer success gives. Three malformed objects — `{readable: true}`,
+`{readable: true, missing: 'not-an-array'}`, and
+`{readable: true, missing: [], complete: false}` — therefore took a score-100
+A-level PR to READY with zero blockers. An empty missing list is not a claim
+that anything was checked.
+
+Two facts worth keeping, because both were measured rather than assumed:
+
+- **Codex does not emit structured quality output.** Real reviews on PR #1204
+  (2026-08-27, four reviews across four head shas) are markdown prose with a
+  `**Reviewed commit:** \`<sha>\`` line. So `quality.mjs` exports
+  `CODEX_QUALITY_FIELDS = 'unavailable'` and takes exactly one fact from Codex —
+  the P0/P1/P2 count from `severity.mjs` — as a hard gate, not as a score.
+- **The flat 3-round cap is too blunt.** PR #1204 is documentation only and
+  still burned all three automated rounds before landing on NEEDS HUMAN REVIEW.
+  That PR is why `maxRoundsForRisk` exists.
+
+### `tools/ops-review-loop` tests do not run in CI yet
+
+The required check is `ai-orchestrator-tests`, and it runs
+`npx vitest run tools/ai-orchestrator` — which does **not** match this
+directory. So every test here, old and new, runs only on a laptop.
+
+That also makes one claim in `ops-fix-scope-guard.yml` wrong today: its
+bootstrap branch says `workflow-guards.test.ts` is "part of the REQUIRED
+ai-orchestrator-tests check" and would turn red if the guard script were deleted
+from main. It would not — nothing runs it. Fixing that means editing a workflow,
+so it belongs to the wiring PR, not this one.
+
 ## Why plain Node instead of `actions/github-script`
 
 The decision logic (dedup by head-sha + stage marker, the 3-round cap, and the

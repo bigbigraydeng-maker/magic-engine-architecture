@@ -1,12 +1,15 @@
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { TailorMadeItinerary } from './types';
+import { normaliseItinerary } from './normalise';
+import { injectData, loadTemplate } from './template-html';
 
 /**
  * 把行程数据注入 HTML 模板。
  *
  * 模板是唯一的版面来源（templates/tailor-made-itinerary/itinerary-template.html），
  * 后台预览和最终 PDF 用的是同一个文件 —— 所见即所得，不存在两套样式跑偏的问题。
+ *
+ * 载入与注入的机制与画册共用，见 ./template-html。
  */
 
 const TEMPLATE_PATH = path.join(
@@ -16,39 +19,9 @@ const TEMPLATE_PATH = path.join(
   'itinerary-template.html'
 );
 
-const START = '/*__DATA_START__*/';
-const END = '/*__DATA_END__*/';
-
-let cached: string | null = null;
-
-async function loadTemplate(): Promise<string> {
-  if (cached) return cached;
-
-  let html: string;
-  try {
-    html = await readFile(TEMPLATE_PATH, 'utf8');
-  } catch {
-    throw new Error(`行程单模板缺失：${TEMPLATE_PATH}`);
-  }
-
-  if (!html.includes(START) || !html.includes(END)) {
-    throw new Error('行程单模板缺少数据标记（__DATA_START__ / __DATA_END__）');
-  }
-
-  cached = html;
-  return html;
-}
-
 export async function renderItineraryHtml(data: TailorMadeItinerary): Promise<string> {
-  const template = await loadTemplate();
-  const a = template.indexOf(START);
-  const b = template.indexOf(END);
-
-  // 数据落在 <script> 里，`</script>` 与 U+2028/2029 会截断脚本，必须转义
-  const json = JSON.stringify(data)
-    .replace(/<\//g, '<\\/')
-    .replace(/\u2028/g, '\\u2028')
-    .replace(/\u2029/g, '\\u2029');
-
-  return template.slice(0, a + START.length) + json + template.slice(b);
+  const template = await loadTemplate(TEMPLATE_PATH, '行程单');
+  // 归一化放在渲染入口，预览和导出走的是同一条路 —— 放在别处就会出现
+  // 「预览好好的，导出来是空的」这种最难查的差异。见 normalise.ts
+  return injectData(template, normaliseItinerary(data));
 }

@@ -23,11 +23,13 @@ const CTS_LIKE = {
 describe('projectFactoryConfig — 投影', () => {
   it('空配置 → 全 null / false,不抛', () => {
     expect(projectFactoryConfig({})).toEqual({
-      publish_target: null, factory_goal_id: null, verified_offer: null,
+      publish_target: null, factory_goal_id: null, verified_offer: null, verified_cta: null,
       allow_b_track_landmark_ads: false, auto_order_enabled: false,
       creative_profile: EMPTY_CREATIVE_PROFILE,
+      creative_recipe: null,
     })
     expect(projectFactoryConfig(null).publish_target).toBeNull()
+    expect(projectFactoryConfig(null).creative_recipe).toBeNull()
   })
 
   it('🔴 只填一半的发布目标 → 投影成 null(等于没配,UI 才会提示「缺发布目标」)', () => {
@@ -43,6 +45,36 @@ describe('projectFactoryConfig — 投影', () => {
 
   it('促销只有截止日没有价格 → null(没价格的促销钩子没意义)', () => {
     expect(projectFactoryConfig({ verified_offer: { offer_expiry: '31 July' } }).verified_offer).toBeNull()
+  })
+
+  it('端卡事实必须 phone/url/departure 齐全；price 可选', () => {
+    const complete = {
+      phone: '09 123 4567', url: 'example.com', departure: 'October 2026', price: 'From $1,999',
+    }
+    expect(projectFactoryConfig({ verified_cta: complete }).verified_cta).toEqual(complete)
+    expect(projectFactoryConfig({ verified_cta: { phone: '09 123 4567' } }).verified_cta).toBeNull()
+  })
+})
+
+describe('verified_cta — 客户级端卡事实', () => {
+  it('完整事实可保存，空字段拒绝', () => {
+    const good = mergeFactoryConfig({}, {
+      verified_cta: { phone: '09 123 4567', url: 'example.com', departure: 'October 2026' },
+    })
+    expect(good.ok && good.config.verified_cta).toEqual({
+      phone: '09 123 4567', url: 'example.com', departure: 'October 2026',
+    })
+    expect(mergeFactoryConfig({}, {
+      verified_cta: { phone: '09 123 4567', url: '', departure: 'October 2026' },
+    }).ok).toBe(false)
+  })
+
+  it('null 删除，body 未提及则保留', () => {
+    const existing = { verified_cta: { phone: '1', url: 'x', departure: 'd' } }
+    const kept = mergeFactoryConfig(existing, { allow_b_track_landmark_ads: false })
+    expect(kept.ok && kept.config.verified_cta).toEqual(existing.verified_cta)
+    const cleared = mergeFactoryConfig(existing, { verified_cta: null })
+    expect(cleared.ok && 'verified_cta' in cleared.config).toBe(false)
   })
 })
 
@@ -199,6 +231,57 @@ describe('出片风格 — 投影与下发', () => {
     if (!r.ok) return
     expect(r.config.publish_target).toBeDefined()
     expect(r.config.factory_goal_note).toBe('备注')
+  })
+})
+
+describe('creative_recipe — 白名单 + 版本闸(合同 5469105522 §1)', () => {
+  it('未配 recipe(投影)→ null,不影响其它字段', () => {
+    expect(projectFactoryConfig({ factory_goal_id: 'ef92d878-c283-4a1c-be7d-1462c8c4a83c' }).creative_recipe).toBeNull()
+  })
+
+  it('🔴 合法 recipe id + 缺 version → 拒(禁止静默补齐 · R2 严格解析)', () => {
+    const r = mergeFactoryConfig({}, { creative_recipe: { id: 'single_image_i2v_pullback_12s' } })
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error).toMatch(/version/)
+  })
+
+  it('合法 recipe id + version → 存下', () => {
+    const r = mergeFactoryConfig({}, { creative_recipe: { id: 'single_image_i2v_pullback_12s', version: 1 } })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.config.creative_recipe).toEqual({ id: 'single_image_i2v_pullback_12s', version: 1 })
+  })
+
+  it('🔴 未登记的 recipe id → 拒(禁止「随便加个 id 试试」路径)', () => {
+    const r = mergeFactoryConfig({}, { creative_recipe: { id: 'ai_montage_v3' } })
+    expect(r.ok).toBe(false)
+  })
+
+  it('🔴 recipe id + 错版本 → 拒(升级 recipe = 显式换版本,不许静默继续)', () => {
+    const r = mergeFactoryConfig({}, { creative_recipe: { id: 'single_image_i2v_pullback_12s', version: 999 } })
+    expect(r.ok).toBe(false)
+  })
+
+  it('传 null → 删掉 recipe 配置(回到 legacy 路径)', () => {
+    const r = mergeFactoryConfig(
+      { creative_recipe: { id: 'single_image_i2v_pullback_12s', version: 1 } },
+      { creative_recipe: null },
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect('creative_recipe' in r.config).toBe(false)
+  })
+
+  it('body 未提及 recipe → 现有配置原样保留(合并语义)', () => {
+    const r = mergeFactoryConfig(
+      { creative_recipe: { id: 'single_image_i2v_pullback_12s', version: 1 } },
+      { allow_b_track_landmark_ads: true },
+    )
+    expect(r.ok && r.config.creative_recipe).toEqual({ id: 'single_image_i2v_pullback_12s', version: 1 })
+  })
+
+  it('脏投影(旧行里存着未知 id)→ 前端读到 null,不炸,不误配', () => {
+    expect(projectFactoryConfig({ creative_recipe: { id: 'legacy_x', version: 1 } }).creative_recipe).toBeNull()
   })
 })
 

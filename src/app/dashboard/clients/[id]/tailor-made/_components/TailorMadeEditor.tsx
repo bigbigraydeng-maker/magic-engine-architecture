@@ -1,5 +1,6 @@
 'use client';
 
+import ItineraryAudit from './ItineraryAudit';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   blankDay,
@@ -14,6 +15,7 @@ import {
 import type { ReviewItem } from '@/lib/tailor-made/extract';
 import AiComposer, { type ChatTurn } from './AiComposer';
 import ReviewPanel, { sectionIdForPath } from './ReviewPanel';
+import { pollTailorMadeJob } from '@/lib/tailor-made/poll-job';
 
 /**
  * Tailor-made 行程单编辑器。
@@ -39,7 +41,9 @@ export default function TailorMadeEditor({
   const [status, setStatus] = useState<TailorMadeStatus>(record.status);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [note, setNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [note, setNote] = useState<{ kind: 'ok' | 'info' | 'err'; text: string } | null>(null);
+  const [instruction, setInstruction] = useState('');
+  const [assisting, setAssisting] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -67,6 +71,21 @@ export default function TailorMadeEditor({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const objectUrlRef = useRef<string | null>(null);
 
+  // 轮询期间用户导航离开——停止再 setState，也停止再打轮询请求
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  /**
+   * 有 AI 任务在跑（上传解析 / 对话改行程）。
+   *
+   * 这期间整个编辑区冻住：任务跑完是「整份替换」payload，而那份 payload 是按
+   * 提交那一刻的草稿算出来的——等待期间的任何手工修改都会被无声冲掉。
+   * 与其事后补救，不如这几分钟里不让人改。
+   */
+  const generating = importBusy || aiBusy;
+
   /** 任何字段变更都走这里，顺带打脏标记 */
   const edit = useCallback((mutate: (draft: TailorMadeItinerary) => void) => {
     setPayload((prev) => {
@@ -90,11 +109,18 @@ export default function TailorMadeEditor({
         const res = await fetch(`/api/clients/${clientId}/tailor-made/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, current: payload, history: turns }),
+          body: JSON.stringify({ message, current: payload, history: turns, itineraryId: record.id }),
           credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'AI 解析失败');
+        const started = await res.json();
+        if (!res.ok) throw new Error(started.error || 'AI 解析失败');
+
+        const { result, error, cancelled } = await pollTailorMadeJob(
+          clientId, started.job_id, () => !isMountedRef.current
+        );
+        if (cancelled) return; // 页面已经不在了，任务在后台继续跑，回来重开草稿页会看到结果
+        if (error) throw new Error(error);
+        const data = result as { payload: TailorMadeItinerary; review?: ReviewItem[]; reply: string };
 
         setPayload(data.payload);
         setDirty(true);
@@ -103,13 +129,14 @@ export default function TailorMadeEditor({
         // 有待确认项时自动展开校对面，否则顾问看不到要改哪里
         if ((data.review ?? []).length > 0) setFieldsOpen(true);
       } catch (err) {
+        if (!isMountedRef.current) return;
         setAiError(err instanceof Error ? err.message : 'AI 解析失败');
         setTurns((prev) => prev.slice(0, -1));
       } finally {
-        setAiBusy(false);
+        if (isMountedRef.current) setAiBusy(false);
       }
     },
-    [clientId, payload, turns]
+    [clientId, payload, turns, record.id]
   );
 
   /**
@@ -156,11 +183,24 @@ export default function TailorMadeEditor({
         const fd = new FormData();
         fd.append('file', file);
         fd.append('current', JSON.stringify(payloadRef.current));
+        fd.append('itineraryId', record.id);
         const res = await fetch(`/api/clients/${clientId}/tailor-made/import`, {
           method: 'POST', body: fd, credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '解析失败');
+        const started = await res.json();
+        if (!res.ok) throw new Error(started.error || '解析失败');
+
+        const { result, error, cancelled } = await pollTailorMadeJob(
+          clientId, started.job_id, () => !isMountedRef.current
+        );
+        if (cancelled) return; // 页面已经不在了，任务在后台继续跑，回来重开草稿页会看到结果
+        if (error) throw new Error(error);
+        const data = result as {
+          payload: TailorMadeItinerary;
+          review?: ReviewItem[];
+          reply: string;
+          heroName?: string | null;
+        };
 
         setPayload(data.payload);
         setDirty(true);
@@ -169,12 +209,13 @@ export default function TailorMadeEditor({
         setImportNote(data.reply ?? '已导入');
         if ((data.review ?? []).length > 0) setFieldsOpen(true);
       } catch (err) {
+        if (!isMountedRef.current) return;
         setImportNote(err instanceof Error ? err.message : '解析失败');
       } finally {
-        setImportBusy(false);
+        if (isMountedRef.current) setImportBusy(false);
       }
     },
-    [clientId]
+    [clientId, record.id]
   );
 
   /** 换封面 —— 自动选会猜错，得留个换的入口 */
@@ -236,6 +277,44 @@ export default function TailorMadeEditor({
       document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }, []);
+
+  /* ---------------- 一句话改 ---------------- */
+
+  const assist = useCallback(async () => {
+    if (!instruction.trim() || assisting) return;
+    setAssisting(true);
+    setNote(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/tailor-made/assist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload, instruction }),
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || '改写失败');
+
+      const changed: string[] = json.changed ?? [];
+      if (changed.length === 0) {
+        // 模型没动内容 —— 多半在回答问题，或拒绝改酒店/价格这类承诺性字段。
+        // 这不是失败，保留输入框里的原话，别让顾问以为系统坏了。
+        setNote({ kind: 'info', text: json.note });
+        return;
+      }
+
+      setPayload(json.payload as TailorMadeItinerary);
+      setDirty(true);
+      setInstruction('');
+      setNote({
+        kind: 'ok',
+        text: `${json.note}（改了 ${changed.length} 处：${changed.slice(0, 3).join('、')}${changed.length > 3 ? '…' : ''}）`,
+      });
+    } catch (err) {
+      setNote({ kind: 'err', text: err instanceof Error ? err.message : '改写失败' });
+    } finally {
+      setAssisting(false);
+    }
+  }, [payload, clientId, instruction, assisting]);
 
   /* ---------------- 预览 ---------------- */
 
@@ -311,9 +390,18 @@ export default function TailorMadeEditor({
    */
   useEffect(() => {
     if (!dirty || saving) return;
+    // 生成期间不自动保存。
+    //
+    // 🔴 生成结束时 setPayload(data.payload) 是整份替换，而那份 payload 是用
+    // 「提交那一刻」的草稿算出来的。如果顾问在等待的 2-3 分钟里填了价格 / 客户
+    // 姓名（界面还提示「✓ 已自动保存」，他有理由以为存住了），结果一回来就
+    // 被整份盖掉，1.5 秒后自动保存再把这个倒退写进库——顾问填的东西无声消失，
+    // 最坏情况是价格空着的行程单发给了真实旅客。
+    // 生成期间连同下面的表单一起冻住，是目前最不容易出错的做法。
+    if (generating) return;
     const timer = setTimeout(() => { void save(); }, 1500);
     return () => clearTimeout(timer);
-  }, [dirty, saving, save]);
+  }, [dirty, saving, save, generating]);
 
   // ⌘S / Ctrl+S 保存 —— 顾问改长行程时会本能地按
   useEffect(() => {
@@ -373,7 +461,17 @@ export default function TailorMadeEditor({
           </div>
 
           {note && (
-            <span className={`text-sm ${note.kind === 'ok' ? 'text-green-700' : 'text-red-600'}`}>{note.text}</span>
+            <span
+              className={`text-sm ${
+                note.kind === 'ok'
+                  ? 'text-green-700'
+                  : note.kind === 'info'
+                    ? 'text-me-charcoal/70'
+                    : 'text-red-600'
+              }`}
+            >
+              {note.text}
+            </span>
           )}
 
           <button
@@ -405,6 +503,48 @@ export default function TailorMadeEditor({
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         {/* ---------- 左：AI 对话 + 校对 ---------- */}
         <div className="space-y-4">
+          {/* 空字段体检。模板遇到缺字段是渲染成空白、不报错，8 页里人眼看不出来 ——
+              CTS-2026-0025 就这样带着两处空白发给了客户。见 lib/tailor-made/audit.ts */}
+          <ItineraryAudit payload={payload} />
+
+          {/* 一句话改。放在体检下面 —— 顾问先看到「哪里空着」，再顺手说一句让它改。 */}
+          <section className="space-y-3 rounded-xl border border-black/10 bg-white p-5">
+            <div>
+              <h2 className="text-sm font-black text-me-charcoal">用一句话改</h2>
+              <p className="mt-1 text-xs text-me-charcoal/55">
+                想改哪里直接说 ——「第 5 天写详细一点」「所有描述都短一些」「西安那两天写得更适合带小孩」。
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={instruction}
+                placeholder="例如：把每天的正文都缩短到三句话"
+                onChange={(e) => setInstruction(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) void assist();
+                }}
+                disabled={assisting}
+                className="flex-1 rounded-md border border-black/10 px-3 py-2 text-sm focus:border-me-ochre focus:outline-none disabled:bg-gray-50"
+              />
+              <button
+                type="button"
+                onClick={() => void assist()}
+                disabled={assisting || !instruction.trim()}
+                className="whitespace-nowrap rounded-md bg-me-ochre px-4 py-2 text-sm font-medium text-white hover:bg-me-ochre/90 disabled:bg-gray-300"
+              >
+                {assisting ? '改写中…' : '改'}
+              </button>
+            </div>
+
+            <p className="text-[11px] leading-relaxed text-me-charcoal/45">
+              只改介绍性文字。<b className="font-bold">酒店、餐食、车次、价格改不动</b> ——
+              那些是对客户的承诺，写错了客人拿着它去值机、去入住，只能你自己改。
+              改完先在右边看一眼，认可了再点「立即保存」。
+            </p>
+          </section>
+
           {/* 第一步：两份文件。这是甲方描述的真实起点 ——
               「他们会先输入 2 个信息：航班信息 pdf 和每日行程文本文件」。
               以前上传入口埋在「逐项校对」里，等于没有。 */}
@@ -467,7 +607,10 @@ export default function TailorMadeEditor({
             )}
           </section>
 
-          <AiComposer onSubmit={askAi} busy={aiBusy} turns={turns} error={aiError} />
+          {/* busy 传 generating 而不是 aiBusy：上传解析期间也不能发对话指令——
+              两个任务各自拿着提交那一刻的草稿快照，谁后跑完谁覆盖谁，
+              上传的 27 天会被一句「改第 5 天」的结果整份顶掉。 */}
+          <AiComposer onSubmit={askAi} busy={generating} turns={turns} error={aiError} />
 
           <ReviewPanel
             items={review}
@@ -485,7 +628,20 @@ export default function TailorMadeEditor({
             <span className="text-me-charcoal/40">{fieldsOpen ? '收起 ▴' : '展开 ▾'}</span>
           </button>
 
-          <div className={fieldsOpen ? 'space-y-6' : 'hidden'}>
+          {/* 生成期间整块冻住：结果回来是整份替换 payload，这期间改的东西留不住。
+              明说原因，别让顾问以为界面卡了。 */}
+          {generating && fieldsOpen && (
+            <p className="rounded-lg border border-me-ochre/30 bg-me-ivory px-4 py-3 text-xs leading-relaxed text-me-charcoal/75">
+              <strong>生成中，这几分钟先不要改下面的内容。</strong>
+              AI 跑完会把整份行程替换掉，现在填的价格、客户姓名会被覆盖掉留不住。
+              等下面的表单恢复可编辑，再一项项核对补充。
+            </p>
+          )}
+          <div
+            className={fieldsOpen ? 'space-y-6' : 'hidden'}
+            aria-busy={generating}
+            style={generating ? { opacity: 0.45, pointerEvents: 'none' } : undefined}
+          >
           <Section id="tm-client" title="终端客户与报价">
             <Grid2>
               <Text label="终端客户称呼" hint="行程单要发给的人，出现在封面 Prepared for" value={payload.client.name}

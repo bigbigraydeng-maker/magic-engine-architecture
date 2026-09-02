@@ -20,7 +20,14 @@ import {
   completeJob,
   failJob,
 } from '@/lib/zhangqian/persistor'
-import { getDomainMetrics, getKeywordsForSite, bulkKeywordVolume } from '@/lib/dataforseo/labs'
+import {
+  DataForSeoTaskError,
+  getDomainMetrics,
+  getKeywordsForSite,
+  bulkKeywordVolume,
+} from '@/lib/dataforseo/labs'
+import type { DiscoveryWarning } from '@/lib/zhangqian/types'
+import { locationCodeFor } from '@/lib/dataforseo/client'
 import { loadMemoryForClient } from '@/lib/memory'
 import { precheckCharge, commitCharge, refundOnFail } from '@/lib/mtc/charge'
 
@@ -44,9 +51,9 @@ export async function POST(
     // Resolve domain from clients table
     const { data: client, error: clientErr } = await supabaseAdmin
       .from('clients')
-      .select('id, domain')
+      .select('id, domain, semrush_db')
       .eq('id', clientId)
-      .single<{ id: string; domain: string }>()
+      .single<{ id: string; domain: string; semrush_db: string | null }>()
 
     if (clientErr || !client) {
       return NextResponse.json({ success: false, error: 'Client not found' }, { status: 404 })
@@ -77,7 +84,7 @@ export async function POST(
     // Fire-and-forget background execution. The worker handles MTC commit on
     // success and refund-on-fail; we pass projectedMtc=0 for admin runs so the
     // worker becomes a no-op for billing.
-    void executeDiscoveryJob(jobId, clientId, client.domain, projectedMtc).catch((err: unknown) => {
+    void executeDiscoveryJob(jobId, clientId, client.domain, projectedMtc, client.semrush_db).catch((err: unknown) => {
       console.error('[zhangqian/discover] background failure', err)
     })
 
@@ -101,6 +108,8 @@ async function executeDiscoveryJob(
   clientId: string,
   domain: string,
   projectedMtc: number,
+  /** clients.semrush_db —— 决定预取用哪个国家的数据。null 时按 au 兜底。 */
+  semrushDb: string | null,
 ): Promise<void> {
   await updateJobProgress(supabaseAdmin, jobId, {
     status: 'running',
@@ -108,12 +117,16 @@ async function executeDiscoveryJob(
     progress_note: '正在预取域名数据…',
   })
 
-  // Pre-fetch domain data before starting the agent — never block on failure
+  // Pre-fetch domain data before starting the agent — never block on failure.
+  // ⚠️ 2026-08-26：这里原本把 location_code 写死成 2036（澳洲），不看客户在哪个国家。
+  // 于是所有新西兰客户（CTS、Roman、Park Homes、HBay…）拿到的预取上下文都是澳洲
+  // 搜索数据。agent 自己的工具是按 location 正确切 2554 的，所以只污染预取这一段，
+  // 但那正是喂给模型的第一手材料。改用现成的 locationCodeFor(clients.semrush_db)。
   let semrushContext: string | undefined
   try {
     const [metricsResult, keywordsResult] = await Promise.allSettled([
       getDomainMetrics(domain),
-      getKeywordsForSite(domain, 2036, 20),
+      getKeywordsForSite(domain, locationCodeFor(semrushDb), 20),
     ])
 
     const metrics  = metricsResult.status  === 'fulfilled' ? metricsResult.value  : null
@@ -182,6 +195,7 @@ async function executeDiscoveryJob(
     }
 
     // Enrich seed keywords with per-keyword SEMrush metrics (volume / KD / CPC)
+    let enrichmentWarning: DiscoveryWarning | null = null
     if (report.seed_keywords.length > 0) {
       await updateJobProgress(supabaseAdmin, jobId, { progress_note: '正在获取种子关键词数据…' })
       try {
@@ -198,12 +212,37 @@ async function executeDiscoveryJob(
             semrush_cpc: d.cpc ?? 0,
           }
         })
-      } catch {
-        // Non-fatal — seed keywords saved without per-keyword metrics
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        enrichmentWarning = {
+          stage: 'seed_enrichment',
+          ...(err instanceof DataForSeoTaskError && err.errorCode !== undefined
+            ? { error_code: err.errorCode }
+            : {}),
+          message: 'Keyword volume and difficulty could not be refreshed. Other report findings remain available.',
+        }
+        console.warn('[zhangqian/discover] bulkKeywordVolume enrichment failed', {
+          jobId,
+          clientId,
+          domain,
+          error: errorMessage,
+        })
       }
     }
 
+    if (enrichmentWarning) {
+      report.meta.warnings = [...(report.meta.warnings ?? []), enrichmentWarning]
+    }
+
     await completeJob(supabaseAdmin, jobId, clientId, report)
+
+    // completeJob 会把 progress_note 覆盖成 "Discovery complete."，
+    // 所以降级提示必须放在 completeJob 之后，否则会被冲掉。
+    if (enrichmentWarning) {
+      await updateJobProgress(supabaseAdmin, jobId, {
+        progress_note: '⚠️ 种子关键词补数据未完成，报告字段可能不完整（详情见运维日志）',
+      })
+    }
 
     // MTC commit (skipped for admin runs where projectedMtc was set to 0)
     if (projectedMtc > 0) {

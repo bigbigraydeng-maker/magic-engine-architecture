@@ -199,7 +199,12 @@ ${message}`
 
   const body: Anthropic.MessageCreateParamsNonStreaming = {
     model: MODEL_SONNET,
-    max_tokens: 8192,
+    // 27 天的 China Panorama 实测撑爆过 8192——20 天行程在这个上限下
+    // 就已经「常跑 60-120s」，说明输出量本来就贴着上限走，天数一多必截断。
+    // 16000 翻倍留了余量，但也只是按比例外推，不是精确算出来的安全线——
+    // 真正兜底的是下面那道 stop_reason 硬闸：算错了就报错，不会再悄悄丢数据。
+    // 见 CTS 2027 China Panorama 报障（27 天只解析出 2 天）。
+    max_tokens: 16000,
     system: SYSTEM_PROMPT,
     messages: [...history.slice(-6), { role: 'user', content: userContent }],
     tools: [SUBMIT_TOOL],
@@ -207,8 +212,8 @@ ${message}`
     tool_choice: { type: 'tool', name: SUBMIT_TOOL.name },
   }
 
-  // 直连 Anthropic，不经 CF AI Gateway：20 天行程 + max_tokens 8192 常跑
-  // 60-120s，超过网关 ~60s 超时会返回 HTML 524（浏览器端看到的就是
+  // 直连 Anthropic，不经 CF AI Gateway：长行程 + 大 max_tokens 生成耗时久，
+  // 超过网关 ~60s 超时会返回 HTML 524（浏览器端看到的就是
   // "Unexpected token '<'" JSON 解析错误）。与 #364 Marketing Plan 同根同解。
   let response: Anthropic.Message
   try {
@@ -229,6 +234,16 @@ ${message}`
     })
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`)
     response = (await res.json()) as Anthropic.Message
+  }
+
+  // 硬闸：output 被 max_tokens 截断时，Anthropic 仍会把已经写完的那部分
+  // tool_use.input 当成"合法结果"返回——这份文件是要发给终端客户的，宁可
+  // 报错重来，也不能把写了一半的行程（CTS 2027 China Panorama 实测只有
+  // 前 2 天）当成完整行程悄悄存下去。
+  if (response.stop_reason === 'max_tokens') {
+    // 这条消息同时给「粘贴改行程」和「上传行程文件」两条入口用，不能预设
+    // 具体操作方式（比如「分段粘贴」对上传文件的场景就文不对题）。
+    throw new Error('行程内容过长，AI 一次没能写完就被截断了（天数特别多的团容易发生）。请重试一次；如果还是不行，请联系技术支持处理')
   }
 
   const toolUse = response.content.find(

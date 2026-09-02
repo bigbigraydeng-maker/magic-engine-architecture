@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { DiagnosisBlock, DiscoveryReport } from '@/lib/zhangqian/types'
+import { normalizeDiscoveryWarnings } from '@/lib/zhangqian/validators'
 
 export function scoreColor(value: number) {
   if (value < 40) return '#dc2626'
@@ -113,6 +114,7 @@ export function ReportView({ report }: { report: DiscoveryReport }) {
   const competitors = report.competitors ?? []
   const socials = report.social_profiles ?? []
   const reviewPlatforms = report.review_platforms ?? []
+  const warnings = normalizeDiscoveryWarnings(report.meta?.warnings)
 
   const overallScore = diagnosis?.scores?.overall ?? null
   const crisisType = diagnosis?.crisis_type ?? null
@@ -132,6 +134,16 @@ export function ReportView({ report }: { report: DiscoveryReport }) {
 
   return (
     <div className="px-5 py-8 print:px-0 print:py-0 sm:px-8">
+      {warnings.length > 0 && (
+        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-950" role="status">
+          <p className="text-sm font-black">Some data is temporarily unavailable</p>
+          <ul className="mt-2 space-y-1 text-sm leading-6">
+            {warnings.map((warning, index) => (
+              <li key={`${warning.stage}-${index}`}>{warning.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <section className="rounded-lg bg-slate-950 p-6 text-white sm:p-8">
           <div className="flex flex-wrap items-center gap-2">

@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CTS Tours — Tailor-made Picture Book</title>
+<style>
+/* ============================================================
+   CTS TOURS — TAILOR-MADE BROCHURE (PICTURE BOOK) TEMPLATE
+   A4 print document, sister to itinerary-template.html.
+   Card pages are laid out by paginate() below, so a景点卡片
+   never splits across a page break and a city's cards flow
+   onto as many pages as they need.
+   Brand tokens mirror tailwind.config.ts.
+   ============================================================ */
+:root{
+  --red:#B61E2E;
+  --gold:#D6A756;
+  --ink:#23201C;
+  --muted:#5A554F;
+  --faint:#8A857E;
+  --cream:#FBF7F0;
+  --line:#E4DCD0;
+  --pad-x:16mm;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{
+  background:#6f6a64;
+  font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;
+  color:var(--ink);
+  font-size:10pt;
+  line-height:1.58;
+  -webkit-font-smoothing:antialiased;
+}
+.serif{font-family:'Playfair Display',Georgia,'Times New Roman',serif}
+
+/* ---------- sheet ---------- */
+.sheet{
+  width:210mm;height:297mm;background:#fff;
+  margin:0 auto 10mm;position:relative;overflow:hidden;
+  display:flex;flex-direction:column;
+  box-shadow:0 8px 30px rgba(0,0,0,.32);
+}
+.sheet__band{flex:0 0 auto;height:2.4mm;display:flex}
+.sheet__band i{display:block;height:100%}
+.sheet__band i:nth-child(1){width:64%;background:var(--red)}
+.sheet__band i:nth-child(2){width:36%;background:var(--gold)}
+
+.sheet__head{
+  flex:0 0 auto;height:17mm;padding:5mm var(--pad-x) 0;
+  display:flex;align-items:flex-start;justify-content:space-between;
+}
+.sheet__head img{height:9mm;width:auto;display:block}
+.sheet__head .hmeta{text-align:right;font-size:7pt;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);line-height:1.5;padding-top:1mm}
+.sheet__head .hmeta b{display:block;color:var(--ink);font-weight:600;letter-spacing:.05em}
+
+.sheet__body{flex:1 1 auto;padding:4mm var(--pad-x) 0;overflow:hidden;display:flex;flex-direction:column}
+.sheet__body > *{flex:0 0 auto}
+
+.sheet__foot{
+  flex:0 0 auto;height:15mm;padding:3mm var(--pad-x) 0;margin:0 var(--pad-x);
+  border-top:.5pt solid var(--line);
+  display:flex;align-items:flex-start;justify-content:space-between;
+  font-size:7pt;color:var(--muted);letter-spacing:.02em;
+}
+.sheet__foot .fnum{white-space:nowrap;padding-left:8mm}
+
+/* ---------- cover ---------- */
+.sheet--cover{padding:0}
+.cover__img{
+  flex:0 0 auto;height:176mm;position:relative;
+  background:#2b2a28 center/cover no-repeat;
+}
+.cover__img::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(to bottom,rgba(35,32,28,.38) 0%,rgba(35,32,28,0) 30%,rgba(251,247,240,0) 68%,var(--cream) 97%);
+}
+.cover__eyebrow{
+  position:absolute;top:14mm;left:var(--pad-x);z-index:2;
+  color:#fff;font-size:7.6pt;letter-spacing:.24em;text-transform:uppercase;
+  text-shadow:0 1px 6px rgba(0,0,0,.45);
+}
+.cover__panel{
+  flex:1 1 auto;background:var(--cream);
+  padding:9mm var(--pad-x) 13mm;
+  display:flex;flex-direction:column;
+}
+.cover__logo{height:12mm;width:auto;align-self:flex-start;margin:0 0 7mm}
+.cover__title{font-size:31pt;line-height:1.1;letter-spacing:-.01em;margin-bottom:4mm}
+.cover__route{
+  font-size:9.4pt;letter-spacing:.15em;text-transform:uppercase;color:var(--red);
+  font-weight:600;margin-bottom:5mm;
+}
+.cover__rule{height:.5pt;background:var(--line);margin-bottom:5mm}
+.cover__meta{display:flex;gap:12mm;font-size:9pt;color:var(--muted)}
+.cover__meta b{display:block;font-size:7pt;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:.8mm}
+.cover__meta span{color:var(--ink);font-weight:500}
+.cover__prepared{
+  margin-top:auto;padding-top:7mm;display:flex;justify-content:space-between;align-items:flex-end;
+  font-size:8pt;color:var(--muted);
+}
+.cover__prepared .pfor{font-size:10pt;color:var(--ink)}
+.cover__prepared .pfor b{display:block;font-size:7pt;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:1mm}
+
+/* ---------- city opener (full-bleed hero page) ---------- */
+.sheet--opener .sheet__body{padding:0}
+.opener__img{
+  flex:0 0 auto;height:150mm;position:relative;
+  background:#2b2a28 center/cover no-repeat;
+}
+.opener__img::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(to bottom,rgba(35,32,28,.20) 0%,rgba(35,32,28,.06) 42%,rgba(35,32,28,.66) 100%);
+}
+.opener__title{position:absolute;left:var(--pad-x);bottom:13mm;z-index:2;color:#fff}
+.opener__title .d{font-size:7pt;letter-spacing:.26em;text-transform:uppercase;font-weight:700;margin-bottom:3mm;opacity:.94}
+.opener__title h2{font-size:33pt;line-height:1.02;letter-spacing:-.01em}
+.opener__cap{
+  position:absolute;right:var(--pad-x);bottom:5mm;z-index:2;
+  color:rgba(255,255,255,.88);font-size:6.8pt;letter-spacing:.08em;
+}
+.opener__body{flex:1 1 auto;padding:9mm var(--pad-x) 0}
+.opener__body h3{font-size:15pt;line-height:1.2;margin-bottom:4mm}
+.opener__body p{font-size:9.6pt;line-height:1.68;color:var(--muted)}
+.glance{display:flex;gap:10mm;margin-top:9mm;padding-top:5mm;border-top:.5pt solid var(--line)}
+.glance div{flex:1}
+.glance b{display:block;font-size:6.6pt;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:1.2mm}
+.glance span{font-size:8.4pt;line-height:1.5;color:var(--ink)}
+
+/* ---------- card grid ---------- */
+.secbar{
+  display:flex;justify-content:space-between;align-items:baseline;
+  border-bottom:.5pt solid var(--line);padding-bottom:2.5mm;margin-bottom:7mm;
+}
+.secbar h3{font-size:15pt}
+.secbar span{font-size:6.8pt;letter-spacing:.2em;text-transform:uppercase;color:var(--red);font-weight:700}
+
+/* A row holds two cards. Rows are the pagination unit, so a card never
+   splits and the two cards in a row always stay side by side. */
+.crow{display:flex;gap:8mm;margin-bottom:10mm;align-items:flex-start}
+.crow:last-child{margin-bottom:0}
+.card{width:calc((100% - 8mm) / 2)}
+.card__img{width:100%;height:56mm;background:#e8e2d8 center/cover no-repeat;display:block}
+.card .d{font-size:6.2pt;letter-spacing:.18em;text-transform:uppercase;color:var(--red);font-weight:700;margin:3.5mm 0 1.5mm}
+.card h4{font-size:11pt;line-height:1.22;margin-bottom:2.5mm}
+.card p{font-size:8pt;line-height:1.56;color:var(--muted)}
+.card--note{background:var(--cream);padding:6mm 6mm;align-self:stretch}
+.card--note .d{margin-top:0}
+
+/* ---------- closing ---------- */
+.note{background:var(--cream);padding:6mm 7mm;margin-top:8mm}
+.note b{display:block;font-size:6.8pt;letter-spacing:.16em;text-transform:uppercase;color:var(--red);font-weight:700;margin-bottom:2.5mm}
+.note p{font-size:8.8pt;line-height:1.6;color:var(--muted)}
+.cred{font-size:6.8pt;line-height:1.6;color:var(--faint);margin-top:7mm}
+.signoff{margin-top:auto;padding-bottom:4mm;text-align:center;font-size:7.6pt;letter-spacing:.26em;text-transform:uppercase;color:var(--red);font-weight:700}
+
+/* ---------- overview route strip ---------- */
+.route{display:flex;margin-top:7mm}
+.route > div{flex:1;padding-right:5mm}
+.route span{display:block;font-size:7pt;letter-spacing:.14em;text-transform:uppercase;color:var(--red);font-weight:700;margin-bottom:1.5mm}
+.route b{display:block;font-size:13pt;margin-bottom:2mm}
+.route p{font-size:8pt;line-height:1.5;color:var(--muted)}
+.rule{height:.5pt;background:var(--line);margin:8mm 0}
+.eyebrow{font-size:7pt;letter-spacing:.2em;text-transform:uppercase;color:var(--red);font-weight:700;margin-bottom:2mm}
+h2.sec{font-size:17pt;line-height:1.2;margin-bottom:3mm}
+p.lede{font-size:9.8pt;line-height:1.68;color:var(--muted)}
+
+/* off-screen measuring area — same width as a real sheet body */
+#measure{
+  position:absolute;left:-9999px;top:0;visibility:hidden;
+  width:calc(210mm - var(--pad-x) * 2);
+}
+
+@media print{
+  @page{size:A4;margin:0}
+  body{background:#fff}
+  .sheet{margin:0;box-shadow:none;break-after:page;page-break-after:always}
+  .sheet:last-child{break-after:auto;page-break-after:auto}
+  #measure{display:none!important}
+}
+</style>
+</head>
+<body>
+<div id="doc"></div>
+<div id="measure"></div>
+<script>
+/* ------------------------------------------------------------------
+   Data is injected between the markers below by
+   src/lib/tailor-made/brochure-render.ts. Schema:
+   templates/tailor-made-brochure/README.md
+   ------------------------------------------------------------------ */
+const CTS_BROCHURE = /*__DATA_START__*/{
+  "logo": "",
+  "creditLine": "",
+  "cover": {
+    "image": "", "eyebrow": "TAILOR-MADE JOURNEY", "title": "Your Journey",
+    "cities": [], "meta": [], "footNote": ""
+  },
+  "overview": { "eyebrow": "Your journey", "title": "", "intro": "", "note": { "title": "", "body": "" } },
+  "cities": [],
+  "closing": { "eyebrow": "Next", "title": "", "body": "", "signOff": "" },
+  "credits": []
+}/*__DATA_END__*/;
+
+const CTS_FIRM = {
+  name: 'CTS Tours',
+  address: '2F CTS House, 175 Queen Street, Auckland',
+  phone: '0800 287 888',
+  email: 'info@ctstours.co.nz',
+  web: 'www.ctstours.co.nz',
+};
+
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const el = (html) => {
+  const t = document.createElement('template');
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild;
+};
+
+/**
+ * Inline `background-image` declaration for a consultant-supplied image URL.
+ *
+ * Two levels of escaping, both required:
+ *   1. CSS  — a quote or backslash inside url("…") ends the URL token;
+ *   2. HTML — the declaration lands in a double-quoted style attribute, so the
+ *      quotes around the URL must be entity-encoded or they close the attribute.
+ * Skipping (2) silently drops every image: the attribute ends at the first
+ * inner quote and the rest of the URL is parsed as stray attributes.
+ */
+const bg = (url) => (url ? esc(`background-image:url("${String(url).replace(/["\\]/g, '\\$&')}")`) : '');
+
+const docTitle = () => CTS_BROCHURE.cover.title || 'Picture Book';
+
+function coverSheet(d){
+  const s = el(`<section class="sheet sheet--cover"></section>`);
+  s.innerHTML = `
+    <div class="cover__img" style="${bg(d.cover.image)}">
+      <div class="cover__eyebrow">${esc(d.cover.eyebrow)}</div>
+    </div>
+    <div class="cover__panel">
+      ${d.logo ? `<img class="cover__logo" src="${d.logo}" alt="CTS Tours">` : ''}
+      <div class="cover__title serif">${esc(d.cover.title)}</div>
+      ${d.cover.cities.length ? `<div class="cover__route">${d.cover.cities.map(esc).join(' &nbsp;·&nbsp; ')}</div>` : ''}
+      <div class="cover__rule"></div>
+      <div class="cover__meta">
+        ${d.cover.meta.map((m) => `<div><b>${esc(m.label)}</b><span>${esc(m.value)}</span></div>`).join('')}
+      </div>
+      <div class="cover__prepared">
+        <div class="pfor"><b>Prepared for</b>${esc(d.preparedFor || '')}</div>
+        <div>${esc(d.quoteRef ? 'Ref ' + d.quoteRef : '')}${d.cover.footNote ? ' &nbsp;·&nbsp; ' + esc(d.cover.footNote) : ''}</div>
+      </div>
+    </div>`;
+  return s;
+}
+
+/**
+ * Every block that flows through pagination, in document order.
+ *
+ * `keepNext` marks a block that must not be the last thing on a page —
+ * a city's section bar stranded at the foot of a page with its cards
+ * overleaf reads as a mistake.
+ */
+function blocks(d){
+  const out = [];
+  const push = (html, keepNext) => {
+    const n = el(html);
+    if (keepNext) n.dataset.keepNext = '1';
+    out.push(n);
+  };
+
+  // ---- overview ----
+  const route = d.cities.map((c) => `
+    <div>
+      <span>${esc(c.days)}</span>
+      <b class="serif">${esc(c.name)}</b>
+      <p>${esc(c.hero.title)}</p>
+    </div>`).join('');
+
+  push(`<div>
+      <div class="eyebrow">${esc(d.overview.eyebrow)}</div>
+      <h2 class="sec serif">${esc(d.overview.title)}</h2>
+      <p class="lede">${esc(d.overview.intro)}</p>
+      ${d.cities.length ? `<div class="rule"></div><div class="route">${route}</div>` : ''}
+      ${d.overview.note.title || d.overview.note.body
+        ? `<div class="note"><b>${esc(d.overview.note.title)}</b><p>${esc(d.overview.note.body)}</p></div>`
+        : ''}
+    </div>`);
+
+  return out;
+}
+
+/** A city's card pages: cards flow two per row, rows paginate freely. */
+function cityCardBlocks(city){
+  const out = [];
+  const push = (html, keepNext) => {
+    const n = el(html);
+    if (keepNext) n.dataset.keepNext = '1';
+    out.push(n);
+  };
+
+  const cards = city.blocks || [];
+  if (!cards.length) return out;
+
+  push(`<div class="secbar">
+      <h3 class="serif">${esc(city.name)}</h3>
+      <span>Also in ${esc(city.name)}</span>
+    </div>`, true);
+
+  for (let i = 0; i < cards.length; i += 2){
+    const pair = cards.slice(i, i + 2).map(cardHtml).join('');
+    push(`<div class="crow">${pair}</div>`);
+  }
+  return out;
+}
+
+function cardHtml(c){
+  // A note panel has no image; an attraction card always does.
+  if (!('image' in c)) {
+    return `<div class="card card--note">
+        <div class="d">${esc(c.eyebrow)}</div>
+        <h4 class="serif">${esc(c.title)}</h4>
+        <p>${esc(c.body)}</p>
+      </div>`;
+  }
+  return `<div class="card">
+      <span class="card__img" style="${bg(c.image)}"></span>
+      ${c.day ? `<div class="d">${esc(c.day)}</div>` : ''}
+      <h4 class="serif">${esc(c.title)}</h4>
+      <p>${esc(c.body)}</p>
+    </div>`;
+}
+
+function openerSheet(d, city){
+  const s = el(`<section class="sheet sheet--opener"></section>`);
+  s.innerHTML = `
+    <div class="sheet__band"><i></i><i></i></div>
+    <div class="sheet__head">
+      ${d.logo ? `<img src="${d.logo}" alt="CTS Tours">` : '<span></span>'}
+      <div class="hmeta"><b>${esc(docTitle())}</b>${esc(d.quoteRef ? 'Ref ' + d.quoteRef : '')}</div>
+    </div>
+    <div class="sheet__body">
+      <div class="opener__img" style="${bg(city.hero.image)}">
+        <div class="opener__title">
+          <div class="d">${esc(city.days)}</div>
+          <h2 class="serif">${esc(city.name)}</h2>
+        </div>
+        <div class="opener__cap">${esc(city.hero.caption)}</div>
+      </div>
+      <div class="opener__body">
+        <h3 class="serif">${esc(city.hero.title)}</h3>
+        <p>${esc(city.hero.body)}</p>
+        ${city.glance && city.glance.length
+          ? `<div class="glance">${city.glance.map((g) => `<div><b>${esc(g.label)}</b><span>${esc(g.value)}</span></div>`).join('')}</div>`
+          : ''}
+      </div>
+    </div>
+    ${footHtml()}`;
+  return s;
+}
+
+function closingSheet(d){
+  const s = newSheet(d);
+  s.querySelector('.sheet__body').innerHTML = `
+    <div class="eyebrow">${esc(d.closing.eyebrow)}</div>
+    <h2 class="sec serif">${esc(d.closing.title)}</h2>
+    <p class="lede">${esc(d.closing.body)}</p>
+    <div class="note">
+      <b>Talk to us</b>
+      <p>${esc(CTS_FIRM.name)} &nbsp;·&nbsp; ${esc(CTS_FIRM.address)}<br>
+         ${esc(CTS_FIRM.phone)} &nbsp;·&nbsp; ${esc(CTS_FIRM.email)} &nbsp;·&nbsp; ${esc(CTS_FIRM.web)}</p>
+    </div>
+    ${d.creditLine ? `<div class="cred">${esc(d.creditLine)}</div>` : ''}
+    <div class="signoff">${esc(d.closing.signOff)}</div>`;
+  return s;
+}
+
+function footHtml(){
+  return `<div class="sheet__foot">
+      <div>${esc(CTS_FIRM.name)} &nbsp;·&nbsp; ${esc(CTS_FIRM.phone)} &nbsp;·&nbsp; ${esc(CTS_FIRM.email)} &nbsp;·&nbsp; ${esc(CTS_FIRM.web)}</div>
+      <div class="fnum"></div>
+    </div>`;
+}
+
+function newSheet(d){
+  const s = el(`<section class="sheet"></section>`);
+  s.innerHTML = `
+    <div class="sheet__band"><i></i><i></i></div>
+    <div class="sheet__head">
+      ${d.logo ? `<img src="${d.logo}" alt="CTS Tours">` : '<span></span>'}
+      <div class="hmeta"><b>${esc(docTitle())}</b>${esc(d.quoteRef ? 'Ref ' + d.quoteRef : '')}</div>
+    </div>
+    <div class="sheet__body"></div>
+    ${footHtml()}`;
+  return s;
+}
+
+/**
+ * Flow a list of blocks into as many sheets as they need.
+ * Returns the sheets; measurement happens at the real content width.
+ */
+function flow(d, list, doc, measure){
+  if (!list.length) return [];
+
+  list.forEach((n) => measure.appendChild(n));
+  const heights = list.map((n) => {
+    const r = n.getBoundingClientRect();
+    const mb = parseFloat(getComputedStyle(n).marginBottom) || 0;
+    return r.height + mb;
+  });
+  measure.innerHTML = '';
+
+  const probe = newSheet(d);
+  doc.appendChild(probe);
+  const limit = probe.querySelector('.sheet__body').clientHeight;
+  doc.removeChild(probe);
+
+  const sheets = [];
+  let sheet = newSheet(d), body = sheet.querySelector('.sheet__body'), used = 0;
+  sheets.push(sheet);
+
+  for (let i = 0; i < list.length; i++){
+    const h = heights[i];
+    const keepNext = list[i].dataset.keepNext === '1' && i + 1 < list.length;
+    const needs = keepNext ? h + heights[i + 1] : h;
+
+    // a block taller than a page cannot be helped — let it start fresh
+    if (used > 0 && used + needs > limit){
+      sheet = newSheet(d); body = sheet.querySelector('.sheet__body'); used = 0;
+      sheets.push(sheet);
+    }
+    body.appendChild(list[i]);
+    used += h;
+  }
+  return sheets;
+}
+
+function render(){
+  const d = CTS_BROCHURE;
+  const doc = document.getElementById('doc');
+  const measure = document.getElementById('measure');
+  doc.innerHTML = '';
+
+  const sheets = [];
+
+  doc.appendChild(coverSheet(d));
+
+  // overview
+  sheets.push(...flow(d, blocks(d), doc, measure));
+
+  // per city: one full-bleed opener, then however many card pages it needs
+  for (const city of d.cities){
+    sheets.push(openerSheet(d, city));
+    sheets.push(...flow(d, cityCardBlocks(city), doc, measure));
+  }
+
+  sheets.push(closingSheet(d));
+  sheets.forEach((s) => doc.appendChild(s));
+
+  // page numbers — cover is page 1
+  const total = sheets.length + 1;
+  sheets.forEach((s, i) => {
+    const n = s.querySelector('.fnum');
+    if (n) n.textContent = `Page ${i + 2} of ${total}`;
+  });
+}
+
+/**
+ * 没有布局就不要排版。
+ *
+ * 这份 HTML 会在后台的标签页里加载，而顾问可能还停在「行程单」那一页 ——
+ * 容器是隐藏的，getBoundingClientRect() 和 clientHeight 全是 0。
+ * 分页拿到 0 当页高，就会把每一块各排一页：真实数据实测 11 页变成 17 页，
+ * 中间夹着大量只有一个标题的空白页。而这一切没有任何报错。
+ *
+ * 所以先探一下有没有真实高度；没有就等到有了再排（切到这个标签页、
+ * 窗口尺寸变化、或者下一帧）。
+ */
+function hasLayout(){
+  const doc = document.getElementById('doc');
+  const probe = newSheet(CTS_BROCHURE);
+  doc.appendChild(probe);
+  const h = probe.querySelector('.sheet__body').clientHeight;
+  doc.removeChild(probe);
+  return h > 0;
+}
+
+let laidOut = false;
+function renderWhenVisible(){
+  if (laidOut || !hasLayout()) return false;
+  render();
+  laidOut = true;
+  return true;
+}
+
+if (!renderWhenVisible()){
+  const retry = () => { if (renderWhenVisible()) stop(); };
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(retry) : null;
+  const stop = () => {
+    if (ro) ro.disconnect();
+    window.removeEventListener('resize', retry);
+    document.removeEventListener('visibilitychange', retry);
+  };
+  if (ro) ro.observe(document.documentElement);
+  window.addEventListener('resize', retry);
+  document.addEventListener('visibilitychange', retry);
+  // 打印前兜底：真到了导出那一刻还没排过，宁可现排也不能交一份空白的出去
+  window.addEventListener('beforeprint', () => { if (!laidOut) render(); });
+}
+</script>
+</body>
+</html>

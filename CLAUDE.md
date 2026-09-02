@@ -53,7 +53,10 @@ Magic Engine 的目标是**一个共享平台 + 多个垂直版本**。真实客
 
 行业差异进入 **Industry Playbook / Profile / Policy**；客户差异进入 **client configuration / approved evidence / private memory**。未来 **ME Real Estate / ME Travel** 应建立在同一底层平台上，而不是复制一套新系统。
 
-每个开发任务开工前必须依次通过：
+**这道闸不只管写代码。** 调研、分析、写文档、跑一次性探针脚本——只要**要调外部 API 或数据源**，就先查 [`docs/STATE.md` §5 外部服务](./docs/STATE.md) 的「已有封装」列，或直接 `ls src/lib/ | grep -i <provider>`。
+scratchpad 里的临时脚本**同样受约束**：它不会进仓库，但它对平台能力的错误认知会留在你的判断里（2026-08-30 实例：调研时手写脚本直调 DataForSEO 与 AI 可见度，而封装早已存在，错误认知污染了之后两轮架构判断）。
+
+每个任务开工前必须依次通过：
 
 1. **Repository Fact Gate**：先 `git fetch origin`，Current State Audit 第一行必须报告 `remote fetched at + exact main SHA`；没有 SHA，审计不成立。
 2. **Domain Semantics Gate**：确认所谓“通用”模块内部没有把首个客户/行业语义硬编码成平台规则。`clientId` 参数化不等于语义通用。
@@ -96,6 +99,19 @@ PM **不**决策：分支策略 · 修复走 A 还是 B · 字段命名 · 测�
 人工任务自带三件套，缺一条就是没下发好：**what**（问题**和影响**，说人话）· **how**（具体点哪里，让 FDE 不用问人）· **href**（直达链接，连粘贴都不用）。
 
 > 一句话：**能自动就别丢给人；真丢给人，就把话说到他不用问第二遍。发现不许死在日志里。**
+
+#### Inngest 工作流硬约束（2026-09-03）
+
+凡是代码设计涉及**跨步骤异步接力**或**外部副作用**，必须把 Inngest 作为默认工作流层接入，而不是只靠页面状态、脚本日志或人工记忆串联。包括但不限于：内容生成 → Ray 审核 → 发布/排期 → provider 回执 → T+N 监控 → Outcome 回写。
+
+最小要求：
+- 事件名必须业务可读，例如 `daily_plan.publish_queue.ready` / `factory.cts_candidate.reviewed`；
+- 每个关键阶段必须有机器可读 receipt：request id、client id、source record id、status、cost/provider 影响、no_publish / authorization 状态、created_at；
+- 人工审核只能推进到下一事件，不等于发布授权；
+- 发布、扣费、客户可见外发、排期这类副作用必须 fail-closed：没有 Ray 授权事件和 provider receipt，不许伪造完成；
+- 如果某个工作流暂时不上 Inngest，PR 必须写明原因、恢复条件和替代 receipt 存在哪里。
+
+不需要上 Inngest 的例外：纯展示 UI、单次同步读取、无外部副作用的本地纯函数或测试修复。不要为了“用了 Inngest”而把简单组件复杂化。
 
 反模式与真实事故见 [PITFALLS §F](./docs/PITFALLS.md)。实现参考 `src/lib/pm-todo/manual-items.ts`（今日待办「🙋 需要你动手」栏）。
 
