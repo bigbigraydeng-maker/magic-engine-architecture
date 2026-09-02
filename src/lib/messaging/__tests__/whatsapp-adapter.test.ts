@@ -34,15 +34,28 @@ function mockDb(opts: { conversationId?: string | null; lastInboundAt?: string |
         },
         order: () => chain,
         limit: () => chain,
+        then: (resolve: (v: unknown) => unknown) =>
+          Promise.resolve({ data: opts.conversationId ? { id: opts.conversationId } : null }).then(resolve),
         maybeSingle: async () => ({
           data: opts.conversationId ? { id: opts.conversationId } : null,
         }),
       }
       return {
-        select: (_cols: string, o?: { head?: boolean }) =>
-          o?.head
-            ? { eq: () => ({ eq: async () => ({ count: opts.convoCount ?? 0 }) }) }
-            : chain,
+        // head:true 是 isConnected 的计数查询。按**列名**建模，不是按 eq 调用次数
+        // ——后者眼下也能红，但红的原因是「调用次数变了」而不是「筛错了列」，
+        // 将来合法地多加一个过滤条件就会莫名其妙失败。
+        select: (_cols: string, o?: { head?: boolean }) => {
+          if (!o?.head) return chain
+          const countChain: Record<string, unknown> = {
+            eq: (col: string, val: unknown) => {
+              convoFilters[col] = val
+              return countChain
+            },
+            then: (resolve: (v: unknown) => unknown) =>
+              Promise.resolve({ count: opts.convoCount ?? 0 }).then(resolve),
+          }
+          return countChain
+        },
       }
     }
     if (table === 'conversation_messages') {
@@ -74,6 +87,12 @@ describe('这个客户接没接 WhatsApp', () => {
   it('一条会话都没有 → 没接通', async () => {
     mockDb({ convoCount: 0 })
     expect(await whatsappAdapter.isConnected('c1')).toBe(false)
+  })
+
+  it('判断接没接通时同时筛客户和渠道 —— 少一个就会把别人的会话算进来', async () => {
+    mockDb({ convoCount: 3 })
+    await whatsappAdapter.isConnected('c1')
+    expect(convoFilters).toMatchObject({ client_id: 'c1', channel: 'whatsapp' })
   })
 })
 

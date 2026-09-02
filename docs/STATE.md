@@ -57,6 +57,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | **社媒内容矩阵** | ✅ 成熟 | `lib/{brief,content,social,reels,visual,images,publer,scheduling}` · `api/clients/[id]/{brief,campaign}` · `api/content/route-{a,b,c}` · `api/visual` | `master_briefs` `campaign_briefs` `content_posts` `visual_assets` `reels_drafts` |
 | **AI Content Factory** (P21) | 🔄 建设中 | `lib/{factory,ai-factory,winner-reel-sync}` · `api/factory` · `scripts/factory-worker/` | `content_work_orders` `content_work_order_clips` `factory_balance_ledger` `factory_angle_blocklist` |
 | **Ads Intelligence** | 🔄 建设中 | `lib/{meta,google-ads,tiktok-ads,ads-strategy}` · `api/clients/[id]/ad-health` | `ad_daily_insights` `ad_strategy_configs` `ad_health_narratives` |
+| **Leads 营销中心**（多渠道私信 / CRM） | 🔄 建设中 | `lib/{messaging,messenger,whatsapp,crm}` · `api/clients/[id]/{messenger,crm,business-inbox}` · **`api/webhooks/whatsapp`**（对外 endpoint，Meta 推送入口） | `conversations` `conversation_messages` `conversation_briefs` `conversation_outbound_log` `contacts` `contact_identities` `contact_touchpoints` |
 | **策略层**（Goal→Initiative→Action） | ✅ 上线 | `lib/{strategy,marketing-plan,execution,zhuge}` · `api/{goals,initiatives}` | `goals` `initiatives` `marketing_plans` `execution_items` |
 | **飞轮数据闭环** (P12) | ✅ 上线 | `lib/flywheel` · `api/flywheel` | `flywheel_actions` `flywheel_metrics` `flywheel_outcomes` |
 | **诊断 / 数据回流** | ✅ 上线 | `lib/{diagnostic,scoring,ga4,gbp,places,competitors,monthly-report,reports}` | `diagnostic_{runs,findings,narratives}` `ga4_traffic_snapshots` `anomaly_signals` |

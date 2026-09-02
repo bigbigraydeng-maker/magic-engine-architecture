@@ -1,12 +1,19 @@
 /**
  * Tests for sending a WhatsApp reply from ME.
  *
- * Mirrors `lib/messenger/__tests__/send.test.ts`'s weighting: isolation,
- * window enforcement, and an audit trail that only exists when the send
- * actually happened. The two differences from that file are structural, not
- * a lighter bar — WhatsApp auth is a single ME-wide token + phone_number_id
- * (env vars, no per-client OAuth lookup) and the window has no 7-day
- * human_agent tier.
+ * Weighted like `lib/messenger/__tests__/send.test.ts`: this module is one of
+ * the few that speaks to a real customer as the client, so the tests are about
+ * the ways that goes wrong, not the happy path.
+ *
+ * Two things here are NOT in the Messenger version, because WhatsApp's auth
+ * model made them possible:
+ *   · sending from a number that belongs to a different client (the sender
+ *     identity lives in env, the conversation's owner lives in the DB)
+ *   · sending with no audit row, because the audit insert failed
+ *
+ * Every stub records the filters it was called with. A stub that ignores
+ * `.eq()` makes isolation tests pass no matter what the implementation does —
+ * the assertions at the bottom of each describe block are what make these real.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -22,6 +29,7 @@ const CTS = 'c0000000-0000-0000-0000-000000000000'
 const OZTOP = 'd5c98811-1c1d-4ded-bdf0-4cefec6afb84'
 const CONVO = 'convo-uuid'
 const WA_ID = '64211234567'
+const OUR_NUMBER = '999888777'
 
 const NOW = new Date('2026-09-02T12:00:00.000Z')
 
@@ -30,6 +38,8 @@ interface Captured {
   auditUpdates: Record<string, unknown>[]
   messageInserts: Record<string, unknown>[]
   touchpointUpserts: { row: Record<string, unknown>; opts: unknown }[]
+  /** 每张表上用过的过滤条件 —— 隔离断言全靠它。 */
+  filters: Record<string, Record<string, unknown>>
 }
 
 function stubSupabase(opts: {
@@ -38,21 +48,38 @@ function stubSupabase(opts: {
   psid?: string | null
   channel?: string
   contactId?: string | null
+  /** 这个客户名下绑的号码。undefined = 跟 env 一致；null = 没绑。 */
+  ownedNumberId?: string | null
+  ownerLookupFails?: boolean
+  auditInsertFails?: boolean
 }): Captured {
-  const captured: Captured = { auditInserts: [], auditUpdates: [], messageInserts: [], touchpointUpserts: [] }
+  const captured: Captured = {
+    auditInserts: [],
+    auditUpdates: [],
+    messageInserts: [],
+    touchpointUpserts: [],
+    filters: {},
+  }
 
   mockFrom.mockImplementation((table: string) => {
     let result: unknown = { data: null, error: null }
     let selectingInbound = false
+    const f = (captured.filters[table] ??= {})
 
     const chain: Record<string, unknown> = {
       select: () => chain,
       eq: (col: string, val: unknown) => {
+        f[col] = val
         if (col === 'direction' && val === 'inbound') selectingInbound = true
         return chain
       },
-      order: () => chain,
+      order: (col: string, o?: { ascending?: boolean }) => {
+        f[`__order_${col}`] = o?.ascending
+        return chain
+      },
       limit: () => chain,
+      // 见 route.test.ts 同处注释：没有 then，被测代码的 error 检查读到的全是 undefined
+      then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
       single: async () => result,
       maybeSingle: async () => {
         if (table === 'conversation_messages' && selectingInbound) {
@@ -63,7 +90,9 @@ function stubSupabase(opts: {
       insert: (payload: Record<string, unknown>) => {
         if (table === 'conversation_outbound_log') {
           captured.auditInserts.push(payload)
-          result = { data: { id: 'audit-1' }, error: null }
+          result = opts.auditInsertFails
+            ? { data: null, error: { message: 'audit write failed' } }
+            : { data: { id: 'audit-1' }, error: null }
         } else if (table === 'conversation_messages') {
           captured.messageInserts.push(payload)
           result = { data: null, error: null }
@@ -98,7 +127,19 @@ function stubSupabase(opts: {
       }
     }
 
-    return chain
+    if (table === 'clients') {
+      result = opts.ownerLookupFails
+        ? { data: null, error: { message: 'lookup blew up' } }
+        : {
+            data: {
+              whatsapp_phone_number_id:
+                opts.ownedNumberId === undefined ? OUR_NUMBER : opts.ownedNumberId,
+            },
+            error: null,
+          }
+    }
+
+    return chain as never
   })
 
   return captured
@@ -117,12 +158,13 @@ describe('whatsappWindow', () => {
   })
 
   it('超过 24 小时 → 只能发模板', () => {
-    const twentyFiveHoursAgo = new Date(NOW.getTime() - 25 * 3_600_000).toISOString()
-    expect(whatsappWindow(twentyFiveHoursAgo, NOW)).toEqual({ kind: 'template_only', msRemaining: 0 })
+    expect(whatsappWindow(new Date(NOW.getTime() - 25 * 3_600_000).toISOString(), NOW)).toEqual({
+      kind: 'template_only',
+      msRemaining: 0,
+    })
   })
 
-  it('没有 7 天 human_agent 续期档 —— WhatsApp 没有这一档，跟 Messenger 不同', () => {
-    // 6 天前（Messenger 的 human_agent 窗口内，但 WhatsApp 早就该关了）
+  it('没有 7 天 human_agent 续期档 —— 这是跟 Messenger 唯一的规则差异', () => {
     const sixDaysAgo = new Date(NOW.getTime() - 6 * 24 * 3_600_000).toISOString()
     expect(whatsappWindow(sixDaysAgo, NOW).kind).toBe('template_only')
   })
@@ -136,7 +178,12 @@ describe('sendWhatsApp', () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     process.env.WHATSAPP_ACCESS_TOKEN = 'test-token'
-    process.env.WHATSAPP_PHONE_NUMBER_ID = '999888777'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = OUR_NUMBER
+    // 默认让 fetch 炸 —— 任何**不该**打网络的用例一旦打了，就会以明显的方式失败，
+    // 而不是安静地发出一个真实请求。
+    global.fetch = vi.fn(() => {
+      throw new Error('这个用例不该调用 fetch')
+    }) as unknown as typeof fetch
   })
 
   afterEach(() => {
@@ -146,95 +193,139 @@ describe('sendWhatsApp', () => {
     vi.clearAllMocks()
   })
 
-  it('空消息直接拒 —— 不查库、不打 Graph', async () => {
-    const res = await sendWhatsApp({
+  const send = (over: Partial<Parameters<typeof sendWhatsApp>[0]> = {}) =>
+    sendWhatsApp({
       clientId: CTS,
       conversationId: CONVO,
-      body: '   ',
+      body: '你好',
       sentByEmail: 'sales@cts.co.nz',
       usedAiDraft: false,
+      ...over,
     })
+
+  it('空消息直接拒 —— 不查库、不打 Graph', async () => {
+    const res = await send({ body: '   ' })
     expect(res).toMatchObject({ ok: false, reason: 'empty_body' })
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
-  it('隔离：会话不属于调用方声称的 client_id → 拒', async () => {
-    stubSupabase({ convoClientId: OZTOP, lastInboundAt: NOW.toISOString() })
-    const res = await sendWhatsApp({
-      clientId: CTS,
-      conversationId: CONVO,
-      body: '你好',
-      sentByEmail: 'sales@cts.co.nz',
-      usedAiDraft: false,
-    })
+  it('隔离：会话不属于调用方声称的 client_id → 拒，且不写审计', async () => {
+    const captured = stubSupabase({ convoClientId: OZTOP, lastInboundAt: NOW.toISOString() })
+    const res = await send()
     expect(res).toMatchObject({ ok: false, reason: 'wrong_client' })
+    expect(captured.auditInserts).toHaveLength(0)
   })
 
-  it('不是 whatsapp 渠道的会话 → 拒，不许拿错渠道的对话去调 Graph', async () => {
-    stubSupabase({ channel: 'messenger', lastInboundAt: NOW.toISOString() })
-    const res = await sendWhatsApp({
-      clientId: CTS,
-      conversationId: CONVO,
-      body: '你好',
-      sentByEmail: 'sales@cts.co.nz',
-      usedAiDraft: false,
+  it('查会话时按主键取 —— 断言真的带了 id 条件', async () => {
+    const captured = stubSupabase({ lastInboundAt: NOW.toISOString() })
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify({ messages: [{ id: 'wamid.1' }] }),
+    }) as unknown as typeof fetch
+    await send()
+    expect(captured.filters.conversations).toMatchObject({ id: CONVO })
+  })
+
+  it('算窗口只认这条会话的 inbound —— 断言 conversation_id 和 direction 都筛了', async () => {
+    const captured = stubSupabase({ lastInboundAt: NOW.toISOString() })
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify({ messages: [{ id: 'wamid.1' }] }),
+    }) as unknown as typeof fetch
+    await send()
+    expect(captured.filters.conversation_messages).toMatchObject({
+      conversation_id: CONVO,
+      direction: 'inbound',
     })
-    expect(res).toMatchObject({ ok: false, reason: 'wrong_channel' })
+    // 取最新那条，不是最早那条 —— 取错方向会让窗口几乎永远判成关闭
+    expect(captured.filters.conversation_messages.__order_sent_at).toBe(false)
+  })
+
+  it('不是 whatsapp 渠道的会话 → 拒', async () => {
+    stubSupabase({ channel: 'messenger', lastInboundAt: NOW.toISOString() })
+    expect(await send()).toMatchObject({ ok: false, reason: 'wrong_channel' })
   })
 
   it('超过 24 小时窗口 → 拒，且不写审计（还没发就不该留「发过」的痕迹）', async () => {
     const captured = stubSupabase({
       lastInboundAt: new Date(NOW.getTime() - 25 * 3_600_000).toISOString(),
     })
-    const res = await sendWhatsApp({
-      clientId: CTS,
-      conversationId: CONVO,
-      body: '你好',
-      sentByEmail: 'sales@cts.co.nz',
-      usedAiDraft: false,
-    })
+    const res = await send()
     expect(res).toMatchObject({ ok: false, reason: 'window_closed' })
     expect(captured.auditInserts).toHaveLength(0)
   })
 
-  it('凭据没配 → 明确说「未配置」，写进审计，不假装发出去了', async () => {
+  it('凭据没配 → 明确说未配置，不打 Graph', async () => {
     delete process.env.WHATSAPP_ACCESS_TOKEN
-    const captured = stubSupabase({ lastInboundAt: NOW.toISOString() })
-    const res = await sendWhatsApp({
-      clientId: CTS,
-      conversationId: CONVO,
-      body: '你好',
-      sentByEmail: 'sales@cts.co.nz',
-      usedAiDraft: false,
-    })
-    expect(res).toMatchObject({ ok: false, reason: 'no_token' })
-    expect(captured.auditUpdates[0]).toMatchObject({ status: 'failed' })
+    stubSupabase({ lastInboundAt: NOW.toISOString() })
+    expect(await send()).toMatchObject({ ok: false, reason: 'no_token' })
   })
 
-  it('成功路径：Graph 返回 message id → 写审计、写消息、更新会话、记触点', async () => {
+  // ── 发件号归属：这是 WhatsApp 独有的隔离缺口 ────────────────────────────
+  it('客户绑的号码跟当前配置的发送号码不一致 → 拒发，绝不用别人的号发出去', async () => {
+    const captured = stubSupabase({ lastInboundAt: NOW.toISOString(), ownedNumberId: '111222333' })
+    const res = await send()
+    expect(res).toMatchObject({ ok: false, reason: 'no_token' })
+    expect(res.ok === false && res.error).toContain('不一致')
+    expect(captured.auditInserts).toHaveLength(0)
+  })
+
+  it('客户压根没绑号码 → 拒发', async () => {
+    stubSupabase({ lastInboundAt: NOW.toISOString(), ownedNumberId: null })
+    const res = await send()
+    expect(res).toMatchObject({ ok: false, reason: 'no_token' })
+    expect(res.ok === false && res.error).toContain('还没有绑定')
+  })
+
+  it('查号码归属时按会话所属客户查 —— 断言查的是 convo.client_id，不是调用方传的', async () => {
+    const captured = stubSupabase({ lastInboundAt: NOW.toISOString() })
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify({ messages: [{ id: 'wamid.1' }] }),
+    }) as unknown as typeof fetch
+    await send()
+    expect(captured.filters.clients).toMatchObject({ id: CTS })
+  })
+
+  it('归属查询本身失败 → 拒发（查不到不等于没绑）', async () => {
+    stubSupabase({ lastInboundAt: NOW.toISOString(), ownerLookupFails: true })
+    expect(await send()).toMatchObject({ ok: false, reason: 'no_token' })
+  })
+
+  // ── 审计 ────────────────────────────────────────────────────────────────
+  it('审计行写不进去 → 拒发。宁可不发，也不留一条查不到出处的消息', async () => {
+    stubSupabase({ lastInboundAt: NOW.toISOString(), auditInsertFails: true })
+    const res = await send()
+    expect(res).toMatchObject({ ok: false })
+    expect(res.ok === false && res.error).toContain('没写成功')
+  })
+
+  it('成功路径：写审计、发 Graph、回写消息、记触点', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       text: async () => JSON.stringify({ messages: [{ id: 'wamid.abc123' }] }),
     }) as unknown as typeof fetch
 
     const captured = stubSupabase({ lastInboundAt: NOW.toISOString() })
-    const res = await sendWhatsApp({
-      clientId: CTS,
-      conversationId: CONVO,
-      body: '你好，请问几点出发？',
-      sentByEmail: 'sales@cts.co.nz',
-      usedAiDraft: true,
-    })
+    const res = await send({ body: '你好，请问几点出发？', usedAiDraft: true })
 
     expect(res).toEqual({ ok: true, whatsappMessageId: 'wamid.abc123', window: 'open' })
-    expect(captured.auditInserts[0]).toMatchObject({ used_ai_draft: true, messaging_type: 'open' })
+    expect(captured.auditInserts[0]).toMatchObject({
+      used_ai_draft: true,
+      // 渠道限定词汇：跟 Messenger 的 standard / human_agent 不混在同一列里
+      messaging_type: 'whatsapp_cs_window',
+      client_id: CTS,
+    })
     expect(captured.auditUpdates[0]).toMatchObject({ status: 'sent', meta_message_id: 'wamid.abc123' })
     expect(captured.messageInserts[0]).toMatchObject({ direction: 'outbound', message_id: 'wamid.abc123' })
-    expect(captured.touchpointUpserts[0].row).toMatchObject({ channel: 'whatsapp', direction: 'outbound' })
+    expect(captured.touchpointUpserts[0].row).toMatchObject({
+      channel: 'whatsapp',
+      direction: 'outbound',
+      client_id: CTS,
+    })
 
-    // Graph 调用打对了号码、带对了 token —— 这是唯一真正会「静默发错」的地方。
     expect(global.fetch).toHaveBeenCalledWith(
-      'https://graph.facebook.com/v20.0/999888777/messages',
+      `https://graph.facebook.com/v20.0/${OUR_NUMBER}/messages`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
@@ -242,7 +333,7 @@ describe('sendWhatsApp', () => {
     )
   })
 
-  it('Graph 拒收 → 明确失败，写审计，不假装发出去了', async () => {
+  it('Graph 拒收 → 明确失败并记进审计，不假装发出去了', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 400,
@@ -250,14 +341,7 @@ describe('sendWhatsApp', () => {
     }) as unknown as typeof fetch
 
     const captured = stubSupabase({ lastInboundAt: NOW.toISOString() })
-    const res = await sendWhatsApp({
-      clientId: CTS,
-      conversationId: CONVO,
-      body: '你好',
-      sentByEmail: 'sales@cts.co.nz',
-      usedAiDraft: false,
-    })
-    expect(res).toMatchObject({ ok: false, reason: 'graph_failed' })
+    expect(await send()).toMatchObject({ ok: false, reason: 'graph_failed' })
     expect(captured.auditUpdates[0]).toMatchObject({ status: 'failed' })
   })
 })

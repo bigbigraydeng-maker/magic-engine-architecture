@@ -10,13 +10,17 @@
  * why this file reads `WHATSAPP_ACCESS_TOKEN` directly instead of calling
  * `getMetaTokenForClient`.
  *
- * `WHATSAPP_PHONE_NUMBER_ID` is a single global env var (matches `.env.example`
- * and `lib/voice/config.ts`, which already declares the same var for the Voice
- * Agent's WhatsApp-call provider gate). That is correct for exactly one
- * WhatsApp client (CTS). The day a second client gets a WhatsApp number, this
- * needs to become a per-client column — same shape as `clients.facebook_page_id`
- * — not another global env var. Not built now: no second caller exists yet
- * (Scope 闸 #1, ENGINEERING_QUALITY_GATES.md §4).
+ * ## Sender identity — why this reads the DB and not just the env var
+ *
+ * `clients.whatsapp_phone_number_id` is the authority for which number belongs
+ * to which client; `WHATSAPP_PHONE_NUMBER_ID` is only the credential telling us
+ * which number this deployment holds a token for. When they disagree, the
+ * conversation belongs to a client whose number we are not configured to send
+ * from — sending anyway would deliver a message to client A's customer from
+ * client B's number, with nothing in the stack reporting an error. The SOP's own
+ * "changing the number means delete the old, add the new" procedure guarantees a
+ * window where those two disagree, so this is a first-client problem, not a
+ * second-client problem. **Fail closed.**
  *
  * ## Window scope — deliberately conservative (2026-09-02)
  *
@@ -38,6 +42,17 @@ const GRAPH_BASE = 'https://graph.facebook.com/v20.0'
 
 const HOUR_MS = 60 * 60 * 1000
 export const CUSTOMER_SERVICE_WINDOW_MS = 24 * HOUR_MS
+
+/**
+ * What goes in the shared `conversation_outbound_log.messaging_type` column.
+ *
+ * That column is shared across channels and has no CHECK constraint; Messenger
+ * writes 'standard' / 'human_agent', which are Meta Messenger tag names and mean
+ * nothing on WhatsApp. Writing the window kind ('open') there would put a third
+ * vocabulary in one column and quietly break any report grouping by it. A
+ * channel-qualified constant keeps the values self-describing.
+ */
+const WHATSAPP_MESSAGING_TYPE = 'whatsapp_cs_window'
 
 export type WhatsAppWindow =
   | { kind: 'open'; msRemaining: number }
@@ -195,7 +210,49 @@ export async function sendWhatsApp(input: SendWhatsAppInput): Promise<SendWhatsA
     }
   }
 
-  const { data: audit } = await supabaseAdmin
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
+  if (!accessToken || !phoneNumberId) {
+    return { ok: false, status: 424, error: 'WhatsApp 授权未配置，无法发送', reason: 'no_token' }
+  }
+
+  // Which number does this conversation's client actually own? Sending from a
+  // number that belongs to a different client is the one failure here that
+  // reaches a real customer wearing the wrong business's identity.
+  const { data: owner, error: ownerErr } = await supabaseAdmin
+    .from('clients')
+    .select('whatsapp_phone_number_id')
+    .eq('id', convo.client_id)
+    .maybeSingle<{ whatsapp_phone_number_id: string | null }>()
+
+  if (ownerErr) {
+    return {
+      ok: false,
+      status: 424,
+      error: 'WhatsApp 号码归属查不到，暂时不能发送，请稍后重试',
+      reason: 'no_token',
+    }
+  }
+
+  const ownedNumberId = owner?.whatsapp_phone_number_id ?? null
+  if (!ownedNumberId || ownedNumberId !== phoneNumberId) {
+    // Fail closed on both "this client has no number bound" and "the bound
+    // number is not the one we hold a token for".
+    return {
+      ok: false,
+      status: 424,
+      error: ownedNumberId
+        ? '这个客户的 WhatsApp 号码跟当前配置的发送号码不一致，已阻止发送（避免用别的客户号码发给客人）'
+        : '这个客户还没有绑定 WhatsApp 号码，不能发送',
+      reason: 'no_token',
+    }
+  }
+
+  // Audit BEFORE the send, and refuse to send if the audit row cannot be
+  // written: this module speaks to a real customer as the client, so "who said
+  // this" must always be answerable. A send with no audit row is worse than a
+  // send that did not happen.
+  const { data: audit, error: auditErr } = await supabaseAdmin
     .from('conversation_outbound_log')
     .insert({
       conversation_id: convo.id,
@@ -203,21 +260,32 @@ export async function sendWhatsApp(input: SendWhatsAppInput): Promise<SendWhatsA
       sent_by_email: input.sentByEmail,
       body,
       used_ai_draft: input.usedAiDraft,
-      messaging_type: window.kind,
+      messaging_type: WHATSAPP_MESSAGING_TYPE,
       status: 'pending',
     })
     .select('id')
     .single()
 
-  const finish = async (patch: Record<string, unknown>) => {
-    if (audit?.id) await supabaseAdmin.from('conversation_outbound_log').update(patch).eq('id', audit.id)
+  if (auditErr || !audit?.id) {
+    return {
+      ok: false,
+      status: 502,
+      error: '发送前的记录没写成功，为避免留下无法追溯的消息，这条没有发出去，请重试',
+      reason: 'graph_failed',
+    }
   }
 
-  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
-  if (!accessToken || !phoneNumberId) {
-    await finish({ status: 'failed', error_message: 'WhatsApp credentials not configured' })
-    return { ok: false, status: 424, error: 'WhatsApp 授权未配置，无法发送', reason: 'no_token' }
+  const auditId = audit.id as string
+  const finish = async (patch: Record<string, unknown>) => {
+    const { error } = await supabaseAdmin
+      .from('conversation_outbound_log')
+      .update(patch)
+      .eq('id', auditId)
+    if (error) {
+      // The message may already be out; the audit row is now stuck on 'pending'.
+      // Loud log so a reaper/alert can find it — never silent.
+      console.error(`[whatsapp/send] 审计行 ${auditId} 更新失败（消息可能已发出）:`, error.message)
+    }
   }
 
   const sent = await postToGraph(phoneNumberId, accessToken, convo.participant_psid, body)
@@ -228,20 +296,32 @@ export async function sendWhatsApp(input: SendWhatsAppInput): Promise<SendWhatsA
 
   await finish({ status: 'sent', meta_message_id: sent.messageId })
 
-  await supabaseAdmin.from('conversation_messages').insert({
+  // The customer already has this message. If the local copy fails to write,
+  // the thread will look unanswered and someone will send it a second time —
+  // so this failure has to be visible even though we cannot undo the send.
+  const nowIso = new Date().toISOString()
+  const { error: echoErr } = await supabaseAdmin.from('conversation_messages').insert({
     conversation_id: convo.id,
-    message_id: sent.messageId ?? `me-${audit?.id ?? Date.now()}`,
+    message_id: sent.messageId ?? `me-${auditId}`,
     direction: 'outbound',
     sender_id: phoneNumberId,
     sender_name: input.sentByEmail,
     body,
-    sent_at: new Date().toISOString(),
+    sent_at: nowIso,
   })
+  if (echoErr) {
+    console.error(
+      `[whatsapp/send] 消息已发给客人但没写进对话流（会话 ${convo.id}，审计 ${auditId}）：${echoErr.message}`,
+    )
+  }
 
-  await supabaseAdmin
+  const { error: bumpErr } = await supabaseAdmin
     .from('conversations')
-    .update({ last_message_at: new Date().toISOString(), last_message_from: 'page' })
+    .update({ last_message_at: nowIso, last_message_from: 'page' })
     .eq('id', convo.id)
+  if (bumpErr) {
+    console.error(`[whatsapp/send] 会话 ${convo.id} 时间戳更新失败:`, bumpErr.message)
+  }
 
   await markContactFollowedUp(convo)
 
