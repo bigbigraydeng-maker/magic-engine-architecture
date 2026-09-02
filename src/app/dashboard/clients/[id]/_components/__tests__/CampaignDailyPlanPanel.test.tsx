@@ -424,6 +424,75 @@ describe('CampaignDailyPlanPanel — inline Facebook Post review (#1308)', () =>
     expect(screen.queryByText('已通过')).not.toBeInTheDocument()
   })
 
+  it('makes a current PASS visually obvious and removes the duplicate pass action', async () => {
+    mockFetchOnce(reviewPayload({
+      verdict: 'PASS',
+      reason: null,
+      reviewed_at: '2026-09-01T15:05:00.000Z',
+      is_current: true,
+    }))
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+
+    await screen.findByText('✓ 这一天的 Facebook Post 已通过')
+    expect(screen.getByText('Post 已通过 1/1')).toBeInTheDocument()
+    expect(screen.getByText('✓ Post 已通过')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Post 通过' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Post 需修改' })).toBeInTheDocument()
+  })
+
+  it('batch-passes pending Posts one at a time using the latest review revision', async () => {
+    const first = reviewPayload()
+    first.days = daysGrid(['2026-08-24', '2026-08-25'])
+    first.bundles = [
+      first.bundles[0],
+      {
+        ...first.bundles[0],
+        date: '2026-08-25',
+        post: { ...first.bundles[0].post, hook: 'Second Post', image_asset_id: 'asset-2' },
+        post_review: null,
+      },
+    ]
+    first.review_summary = { passed: 0, needs_revision: 0, total: 2 }
+    const reviewed = {
+      ...first,
+      review_revision: '30000000-0000-0000-0000-000000000003',
+      bundles: first.bundles.map(bundle => ({
+        ...bundle,
+        post_review: {
+          verdict: 'PASS',
+          reason: null,
+          reviewed_at: '2026-09-01T15:10:00.000Z',
+          is_current: true,
+        },
+      })),
+      review_summary: { passed: 2, needs_revision: 0, total: 2 },
+    }
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => first })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true, changed: true, review_revision: '20000000-0000-0000-0000-000000000002' }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true, changed: true, review_revision: '30000000-0000-0000-0000-000000000003' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => reviewed }) as unknown as typeof fetch
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /批量通过未审 Post（2）/ }))
+
+    await screen.findByText('全部 Post 已通过')
+    const calls = vi.mocked(global.fetch).mock.calls
+    expect(calls).toHaveLength(4)
+    expect(JSON.parse(calls[1][1]!.body as string)).toMatchObject({
+      date: '2026-08-24',
+      verdict: 'PASS',
+      expected_review_revision: null,
+    })
+    expect(JSON.parse(calls[2][1]!.body as string)).toMatchObject({
+      date: '2026-08-25',
+      verdict: 'PASS',
+      expected_review_revision: '20000000-0000-0000-0000-000000000002',
+    })
+  })
+
   it('ignores an old client GET that resolves after the panel switches clients', async () => {
     let resolveOld: ((value: { ok: true; json: () => Promise<unknown> }) => void) | undefined
     const oldResponse = new Promise<{ ok: true; json: () => Promise<unknown> }>(resolve => {
