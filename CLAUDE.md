@@ -100,6 +100,19 @@ PM **不**决策：分支策略 · 修复走 A 还是 B · 字段命名 · 测�
 
 > 一句话：**能自动就别丢给人；真丢给人，就把话说到他不用问第二遍。发现不许死在日志里。**
 
+#### Inngest 工作流硬约束（2026-09-03）
+
+凡是代码设计涉及**跨步骤异步接力**或**外部副作用**，必须把 Inngest 作为默认工作流层接入，而不是只靠页面状态、脚本日志或人工记忆串联。包括但不限于：内容生成 → Ray 审核 → 发布/排期 → provider 回执 → T+N 监控 → Outcome 回写。
+
+最小要求：
+- 事件名必须业务可读，例如 `daily_plan.publish_queue.ready` / `factory.cts_candidate.reviewed`；
+- 每个关键阶段必须有机器可读 receipt：request id、client id、source record id、status、cost/provider 影响、no_publish / authorization 状态、created_at；
+- 人工审核只能推进到下一事件，不等于发布授权；
+- 发布、扣费、客户可见外发、排期这类副作用必须 fail-closed：没有 Ray 授权事件和 provider receipt，不许伪造完成；
+- 如果某个工作流暂时不上 Inngest，PR 必须写明原因、恢复条件和替代 receipt 存在哪里。
+
+不需要上 Inngest 的例外：纯展示 UI、单次同步读取、无外部副作用的本地纯函数或测试修复。不要为了“用了 Inngest”而把简单组件复杂化。
+
 反模式与真实事故见 [PITFALLS §F](./docs/PITFALLS.md)。实现参考 `src/lib/pm-todo/manual-items.ts`（今日待办「🙋 需要你动手」栏）。
 
 ### 4. 大任务必须 ≥2 审
