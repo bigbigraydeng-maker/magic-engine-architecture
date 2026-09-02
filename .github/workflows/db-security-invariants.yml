@@ -1,0 +1,90 @@
+name: DB Security Invariants
+
+# 数据库安全不变量探针（#1326）。
+#
+# 为什么要有这个：
+#   2026-08-03 事故（118 条策略漏写 TO service_role，anon 可读写业务表）之后，
+#   补救靠的是 20260803020000 那一个 migration。但**源码模板从来没修好** ——
+#   仓库里仍有约 120 条 `CREATE POLICY ... USING (true)` 缺 TO 子句，
+#   而 CI 全程不碰数据库，下次谁再漏写，没有任何东西会发现。
+#
+#   更根本的问题（2026-09-03 A 级复审的架构结论）：对「收紧类」migration，
+#   任何放在同一事务里的闸门在语义上都不可能 fail-safe —— 它唯一的补救手段
+#   是回滚，而回滚方向永远是「重新暴露」。所以护栏必须放在事务外，就是这里。
+#
+# 这个 job 做的事：起一个干净的 postgres，把全部 migration 从零重放一遍，
+# 然后断言四条末态属性。任一不满足即失败。
+#
+# 只读：不用任何仓库 secret，不连生产库，不评论不推送不部署。
+#
+# 稳定检查名：DB security invariants
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/**'
+      - 'scripts/db-invariants.sql'
+      - 'scripts/db-replay-and-verify.sh'
+      - '.github/workflows/db-security-invariants.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - 'scripts/db-invariants.sql'
+      - 'scripts/db-replay-and-verify.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-security-invariants-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  invariants:
+    name: DB security invariants
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # 与生产 Supabase 同大版本（生产为 17.6）
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: me_ci_verify
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Replay migrations and assert invariants
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/me_ci_verify
+        run: bash scripts/db-replay-and-verify.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 静态闸：只对本次 PR 改动过的 migration 断言「CREATE POLICY 必须写 TO」。
+      # 存量（120 条 / 61 个文件）的实际暴露面已由上一步的末态不变量兜住，
+      # 一次性重写历史 migration 是大 diff 高风险低收益 —— 这里只防下一次。
+      - name: CREATE POLICY must declare TO (changed files only)
+        run: node scripts/check-policy-to-clause.mjs
+
+      # 存量盘点，只打印不失败 —— 让积压可见，不让它悄悄变大。
+      - name: Report legacy policies missing TO (informational)
+        if: always()
+        run: node scripts/check-policy-to-clause.mjs --all
