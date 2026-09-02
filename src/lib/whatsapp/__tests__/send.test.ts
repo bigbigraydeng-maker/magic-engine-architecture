@@ -278,13 +278,18 @@ describe('sendWhatsApp', () => {
   })
 
   it('查号码归属时按会话所属客户查 —— 断言查的是 convo.client_id，不是调用方传的', async () => {
-    const captured = stubSupabase({ lastInboundAt: NOW.toISOString() })
+    // 两个 id 必须不同，否则这条断言结构上不可能失败（魏征第 2 轮 W10：
+    // 原 fixture 两边都是 CTS，测试名副其实但实际测不到任何东西）。
+    // 这里让隔离闸先放行（调用方声称 OZTOP、会话也属于 OZTOP），
+    // 于是「查归属时用的是哪个 id」才真正可观测。
+    const captured = stubSupabase({ convoClientId: OZTOP, lastInboundAt: NOW.toISOString() })
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       text: async () => JSON.stringify({ messages: [{ id: 'wamid.1' }] }),
     }) as unknown as typeof fetch
-    await send()
-    expect(captured.filters.clients).toMatchObject({ id: CTS })
+    await send({ clientId: OZTOP })
+    expect(captured.filters.clients).toMatchObject({ id: OZTOP })
+    expect(captured.filters.clients.id).not.toBe(CTS)
   })
 
   it('归属查询本身失败 → 拒发（查不到不等于没绑）', async () => {
@@ -318,10 +323,17 @@ describe('sendWhatsApp', () => {
     })
     expect(captured.auditUpdates[0]).toMatchObject({ status: 'sent', meta_message_id: 'wamid.abc123' })
     expect(captured.messageInserts[0]).toMatchObject({ direction: 'outbound', message_id: 'wamid.abc123' })
+    // W8：回写必须挂在**这条**会话上。只断言 direction/message_id 的话，
+    // 把 conversation_id 写成别的会话，测试照样绿。
+    expect(captured.messageInserts[0]).toMatchObject({ conversation_id: CONVO })
     expect(captured.touchpointUpserts[0].row).toMatchObject({
       channel: 'whatsapp',
       direction: 'outbound',
       client_id: CTS,
+      // W12：出站幂等键必须是 `:out`。写成 `:in` 会跟入站触点撞同一个键，
+      // 把「客人说过话」那笔覆盖成「我们回过」。
+      source_ref: `${CONVO}:out`,
+      source: 'whatsapp',
     })
 
     expect(global.fetch).toHaveBeenCalledWith(

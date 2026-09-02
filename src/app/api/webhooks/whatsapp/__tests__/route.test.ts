@@ -98,6 +98,7 @@ function messagePayload(
 
 interface Captured {
   convoUpserts: { row: Record<string, unknown>; opts: unknown }[]
+  updates: { table: string; payload: Record<string, unknown> }[]
   msgUpserts: { row: Record<string, unknown>; opts: unknown }[]
   touchUpserts: { row: Record<string, unknown>; opts: unknown }[]
   filters: Record<string, Record<string, unknown>>
@@ -112,7 +113,7 @@ function stubDb(
     resolveContactThrows?: boolean
   } = {},
 ): Captured {
-  const captured: Captured = { convoUpserts: [], msgUpserts: [], touchUpserts: [], filters: {} }
+  const captured: Captured = { convoUpserts: [], msgUpserts: [], touchUpserts: [], updates: [], filters: {} }
 
   if (opts.resolveContactThrows) {
     mockResolveContact.mockRejectedValue(new Error('identity blew up'))
@@ -134,9 +135,16 @@ function stubDb(
         f[`__lt_${col}`] = val
         return chain
       },
+      is: (col: string, val: unknown) => {
+        f[`__is_${col}`] = val
+        return chain
+      },
       single: async () => result,
       maybeSingle: async () => result,
-      update: () => chain,
+      update: (payload: Record<string, unknown>) => {
+        captured.updates.push({ table, payload })
+        return chain
+      },
       // 真 supabase 的 builder 是 thenable：`await from(x).upsert(y)` 直接拿到
       // { data, error }。stub 少了这个，被测代码里的 error 检查全部读到 undefined，
       // 于是「写库失败」这条路永远测不到。
@@ -306,13 +314,16 @@ describe('POST — 消息落库', () => {
     const captured = stubDb()
     const referral = { source_id: '120248364536030307', ctwa_clid: 'clid-abc', headline: '春季团' }
     await POST(makePost(messagePayload({ referral })))
-    expect(captured.convoUpserts[0].row).toMatchObject({ entry_referral: referral })
+    expect(captured.updates).toContainEqual(
+      expect.objectContaining({ table: 'conversations', payload: { entry_referral: referral } }),
+    )
   })
 
-  it('没有 referral 的普通消息不会把已存的 referral 覆盖成空', async () => {
+  it('没有 referral 的普通消息完全不碰这一列（不会把已存的覆盖成空）', async () => {
     const captured = stubDb()
     await POST(makePost(messagePayload()))
     expect(captured.convoUpserts[0].row).not.toHaveProperty('entry_referral')
+    expect(captured.updates.filter((u) => 'entry_referral' in u.payload)).toHaveLength(0)
   })
 
   it('图片消息要留住 Meta 的 media id —— 30 天后原件在 Meta 那边也没了', async () => {
@@ -324,6 +335,43 @@ describe('POST — 消息落库', () => {
     )
     expect(captured.msgUpserts[0].row).toMatchObject({ media_type: 'image', media_id: 'media-123' })
     expect(captured.msgUpserts[0].row.body).toContain('护照')
+  })
+
+  // ── 国际号码 ──────────────────────────────────────────────────────────
+  // wa_id 是「带国码、不带 +」。直接丢给 normalisePhone 会走「已带国码」那条
+  // 分支，而那条只认默认国家（NZ）—— 澳洲/中国/美国客人一律认不出人、不记
+  // 触点、消息永远不出现在任何界面。ME 是 AU+NZ 双市场，这些用例就是换客户
+  // 测试本身。
+  it.each([
+    ['澳大利亚', '61412345678', '+61412345678'],
+    ['中国', '8613800138000', '+8613800138000'],
+    ['美国', '14155551234', '+14155551234'],
+    ['新西兰', '64211234567', '+64211234567'],
+  ])('%s 号码的客人也要认得出来（%s）', async (_label, waId, expected) => {
+    stubDb()
+    await POST(makePost(messagePayload({ waId })))
+    expect(mockResolveContact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        identities: [{ kind: 'phone', value: expected }],
+      }),
+    )
+  })
+
+  it('归因是首触：referral 单独带 is-null 守卫补写，不进 upsert', async () => {
+    const captured = stubDb()
+    const referral = { source_id: 'ad-1', ctwa_clid: 'clid-1' }
+    await POST(makePost(messagePayload({ referral })))
+    // 不能在 upsert 里 —— 那样客人点第二条广告时会把第一条盖掉
+    expect(captured.convoUpserts[0].row).not.toHaveProperty('entry_referral')
+    // 必须带「只在原来是空的时候才写」这道闸，且条件在 SQL 里（并发安全）
+    expect(captured.filters.conversations).toMatchObject({ __is_entry_referral: null })
+  })
+
+  it('入站触点只许往前推，不许把时间拨回去（并发投递下的回拨闸）', async () => {
+    const captured = stubDb()
+    const sentAt = new Date(1788336000 * 1000).toISOString()
+    await POST(makePost(messagePayload()))
+    expect(captured.filters.contact_touchpoints).toMatchObject({ [`__lt_occurred_at`]: sentAt })
   })
 
   it('身份解析挂了 → 消息照样入库（不能因为认不出人就把消息丢了）', async () => {

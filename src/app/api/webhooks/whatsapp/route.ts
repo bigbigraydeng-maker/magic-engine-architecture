@@ -209,7 +209,16 @@ async function upsertConversation(
   try {
     const resolved = await resolveContact({
       clientId,
-      identities: buildIdentities({ phone: waId }),
+      // wa_id is a full international number WITHOUT the leading '+' (Meta's
+      // contract). Passing it raw makes normalisePhone fall through to its
+      // "already has a country code" branch, which only recognises the DEFAULT
+      // country — so a +64 number resolves and an Australian, Chinese or US one
+      // returns null, the contact is never created, no touchpoint is filed, and
+      // the message sits in the database where nobody sees it. Re-adding the '+'
+      // routes it through the E.164 branch, which is country-agnostic.
+      // ME serves AU **and** NZ; defaulting to one of them here would hardcode
+      // the first client's market into shared runtime (张良 红线 2 / 换客户测试).
+      identities: buildIdentities({ phone: `+${waId}` }),
       displayName: participantName ?? null,
       source: 'whatsapp',
       seenAt: sentAt,
@@ -233,9 +242,6 @@ async function upsertConversation(
         participant_psid: waId,
         participant_name: participantName ?? null,
         ...(contactId ? { contact_id: contactId } : {}),
-        // first-touch: only the opening message carries it, and upsert would
-        // otherwise overwrite it with undefined on every later message.
-        ...(referral ? { entry_referral: referral } : {}),
         // The message's own timestamp, not arrival time — a delayed delivery
         // must not jump the inbox ordering. Known edge: if Meta delivers an
         // older message after a newer one, this writes the older time. Making
@@ -251,7 +257,26 @@ async function upsertConversation(
     .single()
 
   if (error || !data) throw new Error(error?.message ?? 'failed to upsert conversation')
-  return { conversationId: data.id as string, contactId }
+  const conversationId = data.id as string
+
+  // Attribution is FIRST-touch, so this is a separate guarded write rather than
+  // part of the upsert above: a customer who clicks a second ad weeks later
+  // would otherwise have the original ad overwritten, which is exactly the
+  // last-touch-wins failure lib/crm/identity.ts guards `first_attributed_at`
+  // against. The `.is(null)` lives in the WHERE clause so concurrent deliveries
+  // cannot race each other.
+  if (referral) {
+    const { error: refErr } = await supabaseAdmin
+      .from('conversations')
+      .update({ entry_referral: referral })
+      .eq('id', conversationId)
+      .is('entry_referral', null)
+    if (refErr) {
+      console.error(`[webhooks/whatsapp] entry_referral 写入失败（会话 ${conversationId}）:`, refErr.message)
+    }
+  }
+
+  return { conversationId, contactId }
 }
 
 /**
@@ -399,7 +424,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           failures.push(`lookup_failed:${phoneNumberId}`)
         } else {
           // Genuinely nobody owns this number. Retrying will not help, so this
-          // must not hold up the delivery — but it is a real configuration hole.
+          // must not hold up the delivery — but it is a real configuration hole
+          // AND a real customer message being lost.
+          //
+          // TODO(#1331): this currently dead-ends in a log line, which 铁律 3
+          // 下半 forbids. It needs to reach 「🙋 需要你动手」 via
+          // lib/pm-todo/manual-items.ts. Deferred out of this PR because the
+          // signal has nowhere to persist yet — by definition we do not know
+          // which client to attach it to, so it needs its own store. Both
+          // reviewers agreed this is a follow-up, not a merge blocker, since
+          // the alternative (503 forever) would take the whole subscription
+          // down over one client's misconfiguration.
           console.error(
             `[webhooks/whatsapp] no client mapped to phone_number_id=${phoneNumberId} ` +
               `— ${messages.length} message(s) dropped. Set clients.whatsapp_phone_number_id.`,
