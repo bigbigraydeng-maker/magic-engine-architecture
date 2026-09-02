@@ -7,7 +7,7 @@
 
 ### 2026-09-02（ME 自己的上游 Meta/Google/TikTok 渠道伙伴 BD 工具上线，PR [#1318](https://github.com/bigbigraydeng-maker/magic-engine/pull/1318)）
 
-**发生了什么**：PM 给了一份 spec，要找 AU/NZ 已获 Meta/Google/TikTok 官方 partner 资质的公司，建立 ME 自己的上游渠道合作（不是找客户，是 ME 给自己找上游伙伴）。经 me-platform-tier-gate 判定为 L4 内部运营工具（不占用 6 支柱任一条），复用审查发现 `src/lib/prospecting/`（Phase 35 客户获取漏斗）已经是几乎一样的问题（发现候选→打分→AI 草稿→人工审批发送→追踪回复）的现成架构，子牙（架构）+ 魏征（挑刺）两轮独立复审后，决定复用其状态机/打分/AI草稿/人工审批/RLS 模板这套**模式**，但因目标实体不同（上游伙伴漏斗 vs 客户漏斗，`converted_client_id` 语义不通用）新建独立表 `platform_partner_outreach`，不混进 `outbound_prospects`。
+**发生了什么**：PM 给了一份 spec，要找 AU/NZ 已获 Meta/Google/TikTok 官方 partner 资质的公司，建立 ME 自己的上游渠道合作（不是找客户，是 ME 给自己找上游伙伴）。经 me-platform-tier-gate 判定为层级模型（L1-L4）之外的 ME 自有内部运营资产——不服务单一客户、不含 `client_id` 语义，不适用 L4「单客户配置」定义，也不占用 6 支柱任一条，复用审查发现 `src/lib/prospecting/`（Phase 35 客户获取漏斗）已经是几乎一样的问题（发现候选→打分→AI 草稿→人工审批发送→追踪回复）的现成架构，子牙（架构）+ 魏征（挑刺）两轮独立复审后，决定复用其状态机/打分/AI草稿/人工审批/RLS 模板这套**模式**，但因目标实体不同（上游伙伴漏斗 vs 客户漏斗，`converted_client_id` 语义不通用）新建独立表 `platform_partner_outreach`，不混进 `outbound_prospects`。
 
 **魏征挑出的四条缺口，全部落进代码**：① RLS 从一开始就显式写 `FOR ALL TO service_role`（`outbound_prospects` 当年漏了这行，酿成 2026-08-03 那次 2,678 行泄露事故——这次没有重蹈）；② 认证状态字段写了 `assertOfficialSourced()` 兜底——`source_url` 是空字符串时，"verified" 会被降级为 "unknown"；但这只是"非空字符串"校验，不核实 URL 是否真的指向 Meta/Google/TikTok 官方渠道，而且写入路径（含 seed migration）目前都不调用它，Wave 1 seed 里有几家"verified"的 `source_url` 其实是候选公司自己的宣传页而不是官方目录，这一条还是弱校验，没到硬约束；③ 合规页脚重新写了 `partnerComplianceFooter()`，不能照抄 prospecting 那句"通过你的 Google Business 列表找到你"（渠道伙伴不是本地商家，来源措辞会变成谎言）；④ `domain` 加了唯一索引兜底"第一轮最多联系一次"。
 
