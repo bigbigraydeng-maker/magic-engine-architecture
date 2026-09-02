@@ -70,6 +70,8 @@ export type ManualItemKind =
   | 'dm_maybe_stop'
   /** 平台候选（docs/registry/platform-candidates.md）到了复查日期 —— 见 me-platform-tier-gate skill */
   | 'platform_candidate_review_due'
+  /** 客人像是说他付款了，但不是我们自己确认的 —— 只有人能核对到账，不许机器自己打 paid 标签 */
+  | 'paid_signal_needs_review'
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
@@ -228,6 +230,10 @@ export async function loadManualItems(
   // ME 产品动态自动发 LinkedIn —— 敏感内容待审 / 账号未连 / 发布失败三种卡点
   await pushLinkedinProgressItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] LinkedIn 进度贴待办检查失败（不阻塞其他待办）:', e),
+  )
+  // 客人说他付款了但没法自动确认 —— 只有人能对银行流水，不许机器自己打 paid 标签
+  await pushPaidSignalReviewItems(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] 待确认付款读取失败（不阻塞其他待办）:', e),
   )
   if (clientsError) {
     items.push(clientListUnreadableItem(clientsError.message))
@@ -501,6 +507,67 @@ async function pushVideoCreditsItem(
     how: '打开链接充值（这是我们生成视频画面用的账户）。充完回我一句，我把断掉的那几单重跑',
     href: MUAPI_TOPUP_URL,
   })
+}
+
+/** Mailchimp 后台的联系人页 —— 登录后一定打得开的稳定入口。 */
+const MAILCHIMP_AUDIENCE_URL = 'https://admin.mailchimp.com/audience/contacts/'
+
+/**
+ * 客人像是说他付款了，但**不是我们自己确认的** → 下发给人核一眼。
+ *
+ * 为什么不自动打标签：`mailchimp/paid-signal` 里那条红线 —— 一封写着
+ * 「I'll transfer tomorrow」或者甩了张回单截图的邮件，不等于钱到账。看账不看话。
+ * 错打一个 `paid_customer`，这个正在谈的客人会被停掉全部跟进邮件，这单就丢了。
+ *
+ * 所以这一档只能是人工：Baker 去银行对一眼，到账了就在 Mailchimp 点上标签。
+ *
+ * 数据来自 `mailchimp-paid-tagging` cron 写进 `cron_run_logs.summary.needsReview`
+ * —— 不为它单开一张表（新表要 migration，而这条信息本来就是那次运行的产物）。
+ */
+export async function pushPaidSignalReviewItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  // 只看最近一次跑的结果。翻更早的会让已经处理完的人反复出现在待办上。
+  const { data, error } = await supabase
+    .from('cron_run_logs')
+    .select('summary, started_at')
+    .eq('job_name', 'mailchimp-paid-tagging')
+    .order('started_at', { ascending: false })
+    .limit(1)
+
+  if (error) throw new Error(`cron_run_logs query failed: ${error.message}`)
+
+  const summary = (data ?? [])[0]?.summary as { needsReview?: unknown } | null | undefined
+  const rows = Array.isArray(summary?.needsReview) ? summary.needsReview : []
+
+  for (const raw of rows.slice(0, 20)) {
+    const r = raw as {
+      email?: unknown
+      name?: unknown
+      evidence?: unknown
+      receivedAt?: unknown
+      clientId?: unknown
+      clientName?: unknown
+    }
+    const email = typeof r.email === 'string' ? r.email : ''
+    if (!email) continue
+    const who = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : email
+    const quote = typeof r.evidence === 'string' ? r.evidence.trim() : ''
+    const days = daysAgo(typeof r.receivedAt === 'string' ? r.receivedAt : null, now)
+    const when = days === null ? '' : days === 0 ? '今天' : `${days} 天前`
+
+    items.push({
+      kind: 'paid_signal_needs_review',
+      client_id: typeof r.clientId === 'string' ? r.clientId : 'infra',
+      client_name: typeof r.clientName === 'string' ? r.clientName : 'Magic Engine 后台',
+      // 原话逐字带上 —— 人一眼就知道该不该信，不用回邮箱翻
+      what: `${who}${when ? `（${when}）` : ''}像是说他付款了${quote ? `：「${quote}」` : ''} —— 但这是他自己说的，不是我们确认到账，所以系统没敢自动标成已付款客户。不标的话，他还会继续收到招揽邮件`,
+      how: '去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 paid_customer 标签（加完他就自动退出群发名单了）；没到就不用管',
+      href: MAILCHIMP_AUDIENCE_URL,
+    })
+  }
 }
 
 /** Keyword Intelligence 余额告罄只认供应商的明确 40210，不猜其它错误。 */
