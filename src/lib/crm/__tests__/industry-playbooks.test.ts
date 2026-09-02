@@ -49,16 +49,10 @@ describe('LOGISTICS_PLAYBOOK', () => {
     expect(LOGISTICS_PLAYBOOK.resolveWaitSignal).toBeUndefined()
   })
 
-  it('keeps a shorter click window than tourism', () => {
-    const logistics = LOGISTICS_PLAYBOOK.clickWindowMs
-    const tourism = TOURISM_PLAYBOOK.clickWindowMs
-    expect(logistics).toBeDefined()
-    expect(tourism).toBeDefined()
-    expect(logistics!).toBeLessThan(tourism!)
-  })
-
-  it('is 14 days', () => {
-    expect(LOGISTICS_PLAYBOOK.clickWindowMs).toBe(14 * 86_400_000)
+  it('does not override the click window (falls back to the generic default)', () => {
+    // 14 天目前只有单客户单条对话作为依据，还没到能定成行业默认的程度——
+    // 见 industry-playbooks.ts 里 LOGISTICS_PLAYBOOK 的长注释。
+    expect(LOGISTICS_PLAYBOOK.clickWindowMs).toBeUndefined()
   })
 })
 
