@@ -145,6 +145,21 @@ export function FacebookPagePanel({ clientId }: Props) {
   const { page_id, publish_target_page_id, pages, pages_error, reachable } = state.data
   const dirty = draft.trim() !== (page_id ?? '').trim()
 
+  /**
+   * 绑好的主页不在「我们能操作的主页」列表里 —— 常态，不是边角情况：这正是
+   * reachable=false 那条红字存在的理由。
+   *
+   * 必须为它单独补一个 <option>，否则 <select value={draft}> 匹配不到任何项，
+   * 浏览器回退显示第一项「— 不接私信 —」：屏幕上同时出现「绑了主页，但线索
+   * 进不来」和「不接私信」两句自相矛盾的话（2026-09-03 NewAsian 实测）。
+   *
+   * 更要命的是随之而来的静默改绑：draft 仍等于 page_id，dirty=false、保存键灰着，
+   * 人想改都改不了；而他只要在下拉框里动一下，draft 就变成别人的主页 ID 或空，
+   * 保存键亮起 —— 一次「确认当前设置」的动作，实际把这个客户改绑到了别的主页。
+   */
+  const boundOutsideList =
+    page_id !== null && pages !== null && !pages.some((p) => p.id === page_id)
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <LiveStatus pageId={page_id} reachable={reachable} />
@@ -167,6 +182,11 @@ export function FacebookPagePanel({ clientId }: Props) {
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
         >
           <option value="">— 不接私信 —</option>
+          {boundOutsideList && (
+            <option value={page_id as string}>
+              当前绑定：{page_id}（ME 读不到）
+            </option>
+          )}
           {pages.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}（{p.id}）
@@ -255,13 +275,30 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
     text: '这个客户还没配好「发布到哪个 Facebook 主页」，所以没法发起发布授权。请先在「视频工厂配置」里把发布主页填好，再点「重新授权 Meta 发布权限」。',
   },
   denied: { ok: false, text: '授权取消了，没有任何改动。要接私信的话再点一次。' },
+  // ⚠ 下面两条的措辞是 2026-09-03 NewAsian 事故后重写的。
+  //
+  // 旧文案只给了「换个账号」和「查主页 ID」两个方向。实测时两个都是对的却仍然
+  // 失败：主页 ID 正确（Meta 按广告账户查返回的就是它）、授权账号在 Business
+  // Suite 里也确实看得到该主页的消息 —— 真因是客户的商务组合里从没添加过
+  // Magic Engine 这个应用，应用因此拿不到该组合下任何主页的令牌。
+  //
+  // 一条把人引向死路的提示比没有提示更贵：排查的人会反复确认那两件本来就没错
+  // 的事。所以这里按实测的可能性排序，把最常中的原因放第一条。
   no_pages: {
     ok: false,
-    text: '授权成功了，但那个账号名下没有任何主页 —— 多半是登错了账号。请用能在 Business Suite 里看到这个主页消息的账号再试一次。',
+    text:
+      '授权成功了，但 Meta 说这个账号名下一个主页都没有。先查这两条（比「登错账号」常见得多）：' +
+      '① 客户的商务组合里没有添加 Magic Engine 应用 —— 去客户的 Business 设置 →「应用」→ 添加；' +
+      '② 你对主页只有商务组合里的资产分配，缺主页本身的管理员角色，要客户在主页「页面访问权限」里加你。' +
+      '两条都排除了，才考虑是不是登错了账号。',
   },
   page_not_granted: {
     ok: false,
-    text: '授权成功了，但授权的账号看不到这里绑定的这个主页。请换一个能看到这个主页消息的账号，或者先确认主页 ID 填对了。',
+    text:
+      '授权成功了，但 Meta 没把这个主页交给我们 —— 注意这跟「主页 ID 填错」「账号看不到这个主页」通常都无关，' +
+      '按实测的可能性从高到低查：① 客户的商务组合里没有添加 Magic Engine 应用（去客户的 Business 设置 →「应用」→ 添加）；' +
+      '② 你对这个主页只是商务组合里的「资产分配」，缺主页本身的管理员角色 —— 需要客户在主页「页面访问权限」里把你加上；' +
+      '③ 最后才轮到登错账号或主页 ID 不对。',
   },
   no_page_bound: { ok: false, text: '还没绑定主页 —— 先在上面选好主页并保存，再点连接。' },
   bad_state: { ok: false, text: '这个连接链接已经过期了，请重新点一次「连接 Meta」。' },
