@@ -5,6 +5,20 @@
 
 ---
 
+### 2026-09-02（ME 自己的上游 Meta/Google/TikTok 渠道伙伴 BD 工具上线，PR [#1318](https://github.com/bigbigraydeng-maker/magic-engine/pull/1318)）
+
+**发生了什么**：PM 给了一份 spec，要找 AU/NZ 已获 Meta/Google/TikTok 官方 partner 资质的公司，建立 ME 自己的上游渠道合作（不是找客户，是 ME 给自己找上游伙伴）。经 me-platform-tier-gate 判定为 L4 内部运营工具（不占用 6 支柱任一条），复用审查发现 `src/lib/prospecting/`（Phase 35 客户获取漏斗）已经是几乎一样的问题（发现候选→打分→AI 草稿→人工审批发送→追踪回复）的现成架构，子牙（架构）+ 魏征（挑刺）两轮独立复审后，决定复用其状态机/打分/AI草稿/人工审批/RLS 模板这套**模式**，但因目标实体不同（上游伙伴漏斗 vs 客户漏斗，`converted_client_id` 语义不通用）新建独立表 `platform_partner_outreach`，不混进 `outbound_prospects`。
+
+**魏征挑出的四条缺口，全部落进代码**：① RLS 从一开始就显式写 `FOR ALL TO service_role`（`outbound_prospects` 当年漏了这行，酿成 2026-08-03 那次 2,678 行泄露事故——这次没有重蹈）；② 认证状态字段加了代码层硬约束 `assertOfficialSourced()`——没有真实来源 URL，"verified" 会被强制降级为 "unknown"，不接受 AI/研究脚本自由裁量；③ 合规页脚重新写了 `partnerComplianceFooter()`，不能照抄 prospecting 那句"通过你的 Google Business 列表找到你"（渠道伙伴不是本地商家，来源措辞会变成谎言）；④ `domain` 加了唯一索引兜底"第一轮最多联系一次"。
+
+**研究阶段**：三个平台并行研究出 24 家去重后的 AU/NZ 真实候选（Meta 8 / Google 10 / TikTok 7，Soul+Wolf 跨平台重复合并），全部诚实标注 verified/unverified——Meta 官方 Partner Directory 需要登录态，公开工具打不开，8 家全部如实标 unverified，没有为了凑数字编造资质。打分阶段发现一个值得记的事实：spec 自己的权重设计里 escalation/training/branding 三项占 50 分，这些信号只有等对方回信才能确认，调研阶段全是 unknown 拿不到分——所以没有一家在这一轮就能到 Priority A/B/C（最高 42 分），这是反幻觉设计的必然结果，不是 bug。Wave 1 按"已知信号最强"（明确写白标/代理商合作 + 官方目录能直接核实）选出 10 家并生成完整邮件草稿。
+
+**没做的**：一封邮件都没发——发送严格留给人工审批，这一轮的代码里物理上不存在自动发送路径（`src/lib/partner-outreach/` 不 import `src/lib/email/sender.ts`）。AI 个性化生成路径 `generatePersonalizationLines()` 已写好且跟现有 prospecting 模块同款调用方式，但这个 worktree 本地没有 `ANTHROPIC_API_KEY` 没能做一次真实调用的冒烟测试，Wave 1 的两句个性化文案是本轮手写的。回复分类 + follow-up 调度 + 人工审批 UI（spec §16-17）留到下一轮，登记在 [ROADMAP.md](../ROADMAP.md)。
+
+**分支小插曲**：最初提交在 `claude/trusting-leavitt-231732`（自动修车道），因为改动 968 行 + 两个数据库 migration 触发了 `fix-scope` 闸门（超 800 行上限 + 数据库结构变更是受保护路径），照闸门提示换到 `feat/platform-partner-outreach` 分支重开 PR（#1317 关闭改到 #1318）合并。
+
+---
+
 ### 2026-09-02（官网免费体检漏斗 schema 修复 + Insights 博客上线，PR [#1313](https://github.com/bigbigraydeng-maker/magic-engine/pull/1313) + [#1314](https://github.com/bigbigraydeng-maker/magic-engine/pull/1314)）
 
 **发生了什么**：PM 反馈 magicengine.com.au 的「免费体检」功能一直有问题。实测 + 生产库核查（`discovery_leads` 表 0 行）确认：`email` 列建表起就是 `NOT NULL`，但两步漏斗设计里 `scout.js` 第一次插入时不带 email（email 在第二步 `/api/report` 才收集），导致每次插入都撞约束失败。子牙+魏征两轮独立复审后，migration 已 apply 到生产（`glbdnayojixmexgofbsd`）放开该约束。
