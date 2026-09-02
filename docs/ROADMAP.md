@@ -758,6 +758,23 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 
 ---
 
+## Platform Partner Outreach（ME 自己的上游渠道伙伴 BD，非客户能力）📋 2026-09-02 登记
+
+> 背景：PM 提供 spec，要找 AU/NZ 已获 Meta/Google/TikTok 官方 partner 资质的公司，建立 ME 自己的上游渠道合作（不是找客户）。经 me-platform-tier-gate 判定为 L4 内部运营工具，不占用平台能力线；复用了 `src/lib/prospecting/`（Phase 35）的状态机/打分/AI草稿/人工审批架构模式，但因业务语义不同（客户漏斗 vs 上游伙伴漏斗）新建独立表，不与 `outbound_prospects` 混用。子牙 + 魏征双审已过，四条缺口（RLS checklist、认证状态防幻觉硬约束、独立合规页脚、domain 去重约束）已在代码里落实。
+
+- [x] Migration `supabase/migrations/20260902010000_platform_partner_outreach.sql`（RLS 从一开始就写对 `TO service_role`）
+- [x] `src/lib/partner-outreach/`（types.ts / score.ts / outreach.ts，24 条测试全绿，不 import `src/lib/email/sender.ts` —— 这一轮零发送路径）
+- [x] 研究 25 家 AU/NZ 候选（Meta 8 / Google 10 / TikTok 7，去重 1 家跨平台重复），全部诚实标注 verified/unverified，无编造
+- [x] Wave 1 选出 10 家、生成完整邮件草稿（人工撰写个性化句，未接 AI 调用路径，因为本次会话没有确认 `ANTHROPIC_API_KEY` 可用性）
+- [x] migration 已跑到生产 Supabase（`glbdnayojixmexgofbsd` / CrazyContent，2026-09-02 PM 手动执行）；匿名 key 探针验证 RLS 正确锁定 service_role(对照 `outbound_prospects` 已知修复表，响应 signature 一致)
+- [x] 24 条候选（10 drafted + 14 discovered）已写入生产表，同样探针复验 RLS 未松动
+- [ ] **待办 1**：实际发送 —— 严格等 PM 逐家或批量明确说"发"，不自动发送
+- [ ] **待办 2**：`generatePersonalizationLines()`（AI 调用路径）尚未在生产环境验证可用，目前 wave-1 草稿的两句个性化文案是人工按同一套规则手写的，不是 AI 生成的——下一批候选建议先确认 API key 可用再接上自动生成
+- [ ] **待办 3**：回复分类 + follow-up 调度 + admin 审批 UI（spec §16-17）尚未实现，这一轮范围只到"草稿就绪待审"
+- [ ] **待办 4**：Meta 官方 Partner Directory 需要登录态才能核验，公开调研工具查不到——8 家 Meta 候选全部卡在 unverified；如果 PM 有 Meta Business 账号登录态,可以人工核一遍这批公司
+
+---
+
 ## 平台治理层 · me-platform-tier-gate 后续跟进 📋 2026-08-27 登记
 
 > 背景：2026-08-27 因 HBay KOL 事故设立 [`me-platform-tier-gate`](../.claude/skills/me-platform-tier-gate/SKILL.md) skill，约束 agent 在提议新增 ME 能力线时的思考边界。经魏征（对抗挑刺）+ 子牙（架构）两轮复审，v1 落仓时已修必改项 owner 责任链（问题 1）与候选清单载体（问题 2，见 [`docs/registry/platform-candidates.md`](./registry/platform-candidates.md)）。以下 4 条子牙终审时提出、v1 未修、进本 ROADMAP 分批跟进。
