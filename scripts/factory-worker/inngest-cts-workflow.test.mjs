@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import {
+  DAILY_PLAN_READY_EVENT,
   CTS_REQUEST_EVENT,
   CTS_REVIEW_EVENT,
   CTS_REVIEW_MATCH_FIELD,
@@ -17,11 +18,40 @@ import {
   validateRecipeCodeGate,
   validateRequestData,
   validateReviewData,
+  validateDailyPlanReadyData,
 } from './inngest-cts-workflow.mjs'
 
 const CLIENT = 'c0000000-0000-0000-0000-000000000000'
 const RECIPE_ID = 'single_image_i2v_multicut_9s'
 const SCOPE = { clientId: CLIENT, recipeId: RECIPE_ID, maxProviderUsd: 1 }
+
+test('daily plan ready event is constrained to no-publish and stable scope', () => {
+  assert.deepEqual(validateDailyPlanReadyData({
+    event_name: DAILY_PLAN_READY_EVENT,
+    plan_id: 'plan-1',
+    campaign_id: 'campaign-1',
+    client_id: 'client-1',
+    plan_revision: 'rev-1',
+    no_publish: true,
+  }), {
+    event_name: DAILY_PLAN_READY_EVENT,
+    plan_id: 'plan-1',
+    campaign_id: 'campaign-1',
+    client_id: 'client-1',
+    plan_revision: 'rev-1',
+    no_publish: true,
+  })
+})
+
+test('daily plan ready event rejects publish-enabled payloads', () => {
+  assert.throws(() => validateDailyPlanReadyData({
+    event_name: DAILY_PLAN_READY_EVENT,
+    plan_id: 'plan-1',
+    campaign_id: 'campaign-1',
+    client_id: 'client-1',
+    no_publish: false,
+  }), /no_publish=true/)
+})
 
 function request(overrides = {}) {
   return createRequestData({
