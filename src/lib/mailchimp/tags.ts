@@ -153,10 +153,21 @@ export type ApplyTagsResult =
  *   2. 标签已经对了就不发写请求 —— 补历史要跑几百个人，重跑必须是幂等且便宜的。
  *   3. 拿到真实的 tags 才能算出「实际加了什么、摘了什么」，日志才不是猜的。
  */
+export interface ApplyTagsOptions {
+  /**
+   * 只算不写 —— 补历史前的预演。
+   *
+   * **仍然会发那次查询**：不查就不知道人在不在名单里、标签是不是已经对了，
+   * 预演出来的「会打多少人」会比真跑虚高一大截，等于没预演。省掉的只有写请求。
+   */
+  dryRun?: boolean
+}
+
 export async function applyMemberTags(
   cfg: MailchimpTagsConfig,
   email: string,
   input: ApplyTagsInput,
+  opts: ApplyTagsOptions = {},
 ): Promise<ApplyTagsResult> {
   const add = (input.add ?? []).map((t) => t.trim()).filter(Boolean)
   const remove = (input.remove ?? []).map((t) => t.trim()).filter(Boolean)
@@ -170,6 +181,10 @@ export async function applyMemberTags(
   const toAdd = add.filter((t) => !have.has(t))
   const toRemove = remove.filter((t) => have.has(t))
   if (toAdd.length === 0 && toRemove.length === 0) return { status: 'noop', reason: 'already_correct' }
+
+  // 预演在这里收手 —— 上面那次查询已经发生过了，所以 added/removed 是**真实**
+  // 会发生的动作，不是估的。
+  if (opts.dryRun) return { status: 'applied', added: toAdd, removed: toRemove }
 
   const body = {
     tags: [

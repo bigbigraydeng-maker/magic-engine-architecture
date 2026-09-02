@@ -87,10 +87,22 @@ function searchableText(mail: CandidateMail): string {
  * `applyMemberTags` 自身的幂等短路兜住：第二封查到标签已经对了就直接 noop，
  * 不会重复发写请求，也不会在 `tagged` 里出现两次。
  */
+export interface RunOptions {
+  /**
+   * 只判定不写。补历史要一次动几百个人，先看清楚会打谁再真打 ——
+   * 「跑了才发现判错」在生产标签上是不可逆的（客人已经被移出群发名单了）。
+   *
+   * 注意 dry 跑**仍然会查** Mailchimp：不查就不知道这个人在不在名单里、
+   * 标签是不是已经对了，预演出来的数字会比真跑虚高一大截，等于没预演。
+   */
+  dryRun?: boolean
+}
+
 export async function runPaidTagging(
   mails: CandidateMail[],
   cfg: MailchimpTagsConfig,
   policy: PaidTaggingPolicy,
+  opts: RunOptions = {},
 ): Promise<PaidTaggingResult> {
   const out = emptyResult()
   const alreadyTagged = new Set<string>()
@@ -128,10 +140,12 @@ export async function runPaidTagging(
     }
 
     if (alreadyTagged.has(email)) continue
-    const applied = await applyMemberTags(cfg, email, {
-      add: [policy.paidTag],
-      remove: policy.leadTagsToRemove,
-    })
+    const applied = await applyMemberTags(
+      cfg,
+      email,
+      { add: [policy.paidTag], remove: policy.leadTagsToRemove },
+      { dryRun: opts.dryRun === true },
+    )
 
     if (applied.status === 'applied') {
       alreadyTagged.add(email)

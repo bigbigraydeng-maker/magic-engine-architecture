@@ -121,7 +121,7 @@ async function readMailbox(
   return { ok: true, mails }
 }
 
-async function run(lookbackDays: number): Promise<NextResponse> {
+async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse> {
   const cronRun = await startCronRun('mailchimp-paid-tagging')
 
   const apiKey = process.env.MAILCHIMP_API_KEY
@@ -182,7 +182,7 @@ async function run(lookbackDays: number): Promise<NextResponse> {
     }
 
     const policy = readPolicy(client.leads_config)
-    const r = await runPaidTagging(read.mails, { apiKey, audienceId }, policy)
+    const r = await runPaidTagging(read.mails, { apiKey, audienceId }, policy, { dryRun })
 
     for (const item of r.needsReview) {
       needsReview.push({ ...item, clientId: client.id, clientName: client.name, mailbox: conn.account_id })
@@ -207,10 +207,10 @@ async function run(lookbackDays: number): Promise<NextResponse> {
     completed: results.length - failed,
     failed,
     // needsReview 放进 summary —— manual-items 从这里读，下发成「今天该你动手」。
-    summary: { lookbackDays, results, needsReview },
+    summary: { lookbackDays, dryRun, results, needsReview },
   })
 
-  return NextResponse.json({ ok: true, lookbackDays, results, needsReview })
+  return NextResponse.json({ ok: true, lookbackDays, dryRun, results, needsReview })
 }
 
 /** `?days=N` —— 补历史用。夹在 1..400，防手滑打成 40000 把 Graph 拖死。 */
@@ -220,12 +220,23 @@ function lookbackFrom(req: NextRequest): number {
   return Math.min(Math.floor(raw), MAX_LOOKBACK_DAYS)
 }
 
+/**
+ * `?dry=1` —— 只判定不写。补历史前先跑一次看会打谁。
+ *
+ * 默认 false：定时跑就是要真打标签，把预演设成默认会让这条 cron 天天空转，
+ * 而且日志看起来完全正常 —— 正是这个仓库反复踩的那种「静默什么都没做」。
+ */
+function isDryRun(req: NextRequest): boolean {
+  const raw = (req.nextUrl.searchParams.get('dry') ?? '').trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes'
+}
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const secret = process.env.CRON_SECRET
   if (!secret || req.headers.get('authorization') !== `Bearer ${secret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  return run(lookbackFrom(req))
+  return run(lookbackFrom(req), isDryRun(req))
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -233,5 +244,5 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!secret || req.headers.get('x-cron-secret') !== secret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  return run(lookbackFrom(req))
+  return run(lookbackFrom(req), isDryRun(req))
 }

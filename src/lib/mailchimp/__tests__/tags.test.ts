@@ -150,6 +150,38 @@ describe('applyMemberTags · 真的改', () => {
   })
 })
 
+describe('applyMemberTags · 预演（补历史前先看会打谁）', () => {
+  it('🔴 dryRun → 报告会加什么，但**不发写请求**', async () => {
+    const { impl, calls } = fakeFetch({ status: 'subscribed', tags: ['fb_lead'] })
+    const r = await applyMemberTags(
+      { ...CFG, fetchImpl: impl },
+      EMAIL,
+      { add: ['paid_customer'], remove: ['fb_lead'] },
+      { dryRun: true },
+    )
+    expect(r).toEqual({ status: 'applied', added: ['paid_customer'], removed: ['fb_lead'] })
+    expect(calls.filter((c: { method: string }) => c.method === 'POST')).toHaveLength(0)
+  })
+
+  it('🔴 dryRun 仍然要查一次 —— 不查的话预演数字会虚高，等于没预演', async () => {
+    const { impl, calls } = fakeFetch({ status: 'subscribed', tags: [] })
+    await applyMemberTags({ ...CFG, fetchImpl: impl }, EMAIL, { add: ['paid_customer'] }, { dryRun: true })
+    expect(calls.filter((c: { method: string }) => c.method === 'GET')).toHaveLength(1)
+  })
+
+  it('🔴 dryRun 下人不在名单里 → 照样报 skipped，不假装会成功', async () => {
+    const { impl } = fakeFetch(null)
+    const r = await applyMemberTags({ ...CFG, fetchImpl: impl }, EMAIL, { add: ['x'] }, { dryRun: true })
+    expect(r).toEqual({ status: 'skipped', reason: 'not_in_audience' })
+  })
+
+  it('默认不是预演 —— 不传 opts 就是真写（预演当默认会让 cron 天天空转）', async () => {
+    const { impl, calls } = fakeFetch({ status: 'subscribed', tags: [] })
+    await applyMemberTags({ ...CFG, fetchImpl: impl }, EMAIL, { add: ['paid_customer'] })
+    expect(calls.filter((c: { method: string }) => c.method === 'POST')).toHaveLength(1)
+  })
+})
+
 describe('applyMemberTags · 出错时分得清能不能重试', () => {
   it('401 → 不可重试（key 坏了，重试一万次也一样）', async () => {
     const impl = async () => new Response(null, { status: 401 })
