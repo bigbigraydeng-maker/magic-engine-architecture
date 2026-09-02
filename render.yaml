@@ -944,34 +944,16 @@ services:
     envVars:
       - fromGroup: me-shared-cron-secret
 
-  # 做片拼片 worker — 常驻容器(node+python-PIL+ffmpeg)轮询 content_factory_render_jobs，
-  # 领排队任务 → 分镜 → 画面(gpt-image+Muapi i2v) → 配音(MiniMax) → ffmpeg 拼竖屏成片 → 标待审。
-  # 独立服务的原因：单条 i2v/拼接跑 15-30 分钟，塞不进 web 请求。
-  # ⚠️ 部署后需在 Render 填 sync:false 密钥；首跑验证中文字体(NotoSansCJK ttc)PIL 能读。
-  - type: worker
-    name: content-factory-render-worker
-    env: docker
-    dockerfilePath: ./scripts/render-worker/Dockerfile
-    # standard(1 CPU / 2GB)——starter 的半颗 CPU 跑 1080x1920 视频编码要 40-60 分钟/条，
-    # 512MB 还被 160MB 录像撑爆过一次。PM 2026-08-02 拍板升 standard(+US$18/月)。
-    plan: standard
-    envVars:
-      - key: NEXT_PUBLIC_SUPABASE_URL
-        sync: false
-      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: MUAPI_API_KEY
-        sync: false
-      - key: CF_AIG_TOKEN
-        sync: false
-      - key: FACTORY_CJK_FONT
-        value: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+  # 🔴 2026-09-02 退役：content-factory-render-worker(旧 Render 云端拼片管线)。
+  #    content_factory_render_jobs 表最后一条记录 2026-08-19，两周零产出，讲课式确认
+  #    当前无客户在用(PM 口径)。CTS/Oztop 的广告成片(Winner Intake)确实已转到本机
+  #    scripts/factory-worker(content_work_orders 队列)；但这条 render.yaml 服务背后
+  #    连的是"确认选题"这个通用入口，服务普通内容(非讲课式/非LinkedIn)，这类内容
+  #    目前**没有**自动接班的管线——工单不是从这个入口建的，退役后这类内容出片需要
+  #    人工另外处理，不是"自动切到新线了"，见 [postId]/route.ts 里的对应说明。
+  #    旧代码(render-assemble.ts / render-pipeline.ts / lecture-render.ts /
+  #    render-queue.ts / scripts/render-worker/)本次先留仓库不删(删除类 Bash 操作被
+  #    session 权限拦下)，只摘掉这个 Render 服务和调用它的入口，表数据不动。
 
   # 邮件反应 → CRM：谁收到了、谁打开了、谁点了行程链接。
   #

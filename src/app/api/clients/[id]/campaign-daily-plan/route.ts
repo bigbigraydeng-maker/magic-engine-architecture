@@ -24,13 +24,17 @@ import { getCampaignById } from '@/lib/content/campaign-injector'
 import {
   CAMPAIGN_DAILY_PLAN_KIND,
   CampaignDailyCommandSchema,
+  CampaignDailyPostReviewMetaSchema,
+  CampaignDailyPublishQueueMetaSchema,
   computeGrounding,
   computeReadiness,
   buildPublishingPlan,
   buildAdCandidate,
   buildEmptyDays,
+  isReviewablePostDate,
   todayIso,
   type CampaignDailyPlanData,
+  type CampaignDailyPostReviewMeta,
 } from '@/lib/campaign/daily-plan'
 
 interface ActiveMasterBriefRef {
@@ -60,6 +64,15 @@ function errorMessage(err: unknown): string {
     : typeof err === 'object' && err !== null && 'message' in err
       ? String((err as { message: unknown }).message)
       : JSON.stringify(err)
+}
+
+function isHttpsUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 // ─── GET ──────────────────────────────────────────────────────────────────────
@@ -95,10 +108,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         ad_candidate: null,
         plan_id: null,
         plan_revision: null,
+        review_revision: null,
+        review_summary: { passed: 0, needs_revision: 0, total: 0 },
+        publish_queue_receipt: null,
       })
     }
 
-    const { data: rows } = await supabaseAdmin
+    const { data: rows, error: planReadError } = await supabaseAdmin
       .from('social_plans')
       .select('id, plan_data, created_at')
       .eq('client_id', clientId)
@@ -106,6 +122,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .contains('plan_data', { plan_kind: CAMPAIGN_DAILY_PLAN_KIND })
       .order('created_at', { ascending: false })
       .limit(1)
+
+    if (planReadError) throw planReadError
 
     const planRow = rows?.[0] ?? null
     const planData = (planRow?.plan_data ?? null) as CampaignDailyPlanData | null
@@ -117,6 +135,33 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       ?.current_bundle
     const bundles = planData?.bundles ?? (legacyBundle ? [legacyBundle] : [])
     const days = planData?.days ?? buildEmptyDays(todayIso())
+    const planRevision = planData?.command_meta?.received_at ?? null
+    let reviewMeta: CampaignDailyPostReviewMeta | null = null
+    if (planData?.review_meta !== undefined) {
+      const parsedReview = CampaignDailyPostReviewMetaSchema.safeParse(planData.review_meta)
+      if (
+        !parsedReview.success ||
+        parsedReview.data.plan_revision !== planRevision ||
+        planData.plan_kind !== CAMPAIGN_DAILY_PLAN_KIND ||
+        planData.campaign_id !== campaignId ||
+        Object.keys(parsedReview.data.posts).some(date => !isReviewablePostDate(planData, date))
+      ) {
+        throw new Error('INVALID_POST_REVIEW_STATE')
+      }
+      reviewMeta = parsedReview.data
+    }
+    let publishQueueMeta = null
+    if (planData?.publish_queue_meta !== undefined) {
+      const parsedPublishQueue = CampaignDailyPublishQueueMetaSchema.safeParse(planData.publish_queue_meta)
+      if (
+        !parsedPublishQueue.success ||
+        parsedPublishQueue.data.plan_revision !== planRevision ||
+        parsedPublishQueue.data.review_revision !== reviewMeta?.revision
+      ) {
+        throw new Error('INVALID_PUBLISH_QUEUE_STATE')
+      }
+      publishQueueMeta = parsedPublishQueue.data
+    }
 
     // Grounding must reflect what the SAVED plan was actually grounded in,
     // not "does an active brief happen to exist right now" — otherwise a plan
@@ -156,15 +201,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       // A row whose status/mime_type/archived_at changed AFTER save must
       // NOT read back as truthful provenance — filter it out here so it
       // never enters resolvedAssetIds or assetById.
-      const { data: assets } = await supabaseAdmin
+      const { data: assets, error: assetReadError } = await supabaseAdmin
         .from('client_assets')
         .select('id, storage_url, original_filename, source, ownership, status, archived_at, mime_type')
         .eq('client_id', clientId)
         .in('id', referencedAssetIds)
+      if (assetReadError) throw assetReadError
       resolvedAssets = (assets ?? [])
         .filter(a =>
           a.archived_at == null &&
           a.status === 'analyzed' &&
+          typeof a.storage_url === 'string' &&
+          a.storage_url.trim().length > 0 &&
           typeof a.mime_type === 'string' &&
           a.mime_type.startsWith('image/'))
         .map(a => ({
@@ -213,13 +261,44 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       const provenance = Array.from(new Set(referencedIdsForDay))
         .map(id => assetById.get(id))
         .filter((a): a is NonNullable<typeof a> => !!a)
+      const storedReview = reviewMeta?.posts[bundle.date] ?? null
+      const passStillCurrent = Boolean(
+        postField?.image_asset_id &&
+        postField.cta_url &&
+        isHttpsUrl(postField.cta_url) &&
+        bundle.post?.hook?.trim() &&
+        bundle.post?.body?.trim() &&
+        bundle.post?.cta?.trim() &&
+        postImage
+      )
+      const postReview = storedReview
+        ? {
+            verdict: storedReview.verdict,
+            reason: storedReview.reason,
+            reviewed_at: storedReview.reviewed_at,
+            is_current: storedReview.verdict !== 'PASS' || passStillCurrent,
+          }
+        : null
       return {
         ...bundle,
         post_image: postImage,
         readiness: computeReadiness({ grounding, bundle, resolvedAssetIds }),
         provenance,
+        post_review: postReview,
       }
     })
+
+    const reviewSummary = bundlesWithReadiness.reduce(
+      (summary, bundle) => {
+        if (!bundle.post) return summary
+        summary.total += 1
+        const review = bundle.post_review
+        if (review?.verdict === 'PASS' && review.is_current) summary.passed += 1
+        if (review?.verdict === 'NEEDS_REVISION') summary.needs_revision += 1
+        return summary
+      },
+      { passed: 0, needs_revision: 0, total: 0 }
+    )
 
     // Ad candidate stays scoped to the earliest day that actually has a
     // Reel — WP1 previews at most one candidate, never one per day.
@@ -234,10 +313,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       publishing_plan: buildPublishingPlan(campaign),
       ad_candidate: buildAdCandidate(firstReelBundle),
       plan_id: planRow?.id ?? null,
-      // The handoff action binds to the exact stored command snapshot. A
-      // refresh never changes this value, so a lost response can retry safely;
-      // a later content command changes it and makes the old page fail closed.
-      plan_revision: planData?.command_meta?.received_at ?? null,
+      plan_revision: planRevision,
+      review_revision: reviewMeta?.revision ?? null,
+      review_summary: reviewSummary,
+      publish_queue_receipt: publishQueueMeta,
     })
   } catch (err: unknown) {
     return NextResponse.json({ success: false, error: errorMessage(err) }, { status: 500 })
@@ -341,7 +420,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const { data: existing } = await supabaseAdmin
       .from('social_plans')
-      .select('id, plan_data')
+      .select('id')
       .eq('client_id', clientId)
       .eq('campaign_id', cmd.campaign_id)
       .contains('plan_data', { plan_kind: CAMPAIGN_DAILY_PLAN_KIND })
@@ -372,37 +451,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     let planId: string
-    const existingPlan = existing?.plan_data as CampaignDailyPlanData | null | undefined
-    const existingRevision = existingPlan?.command_meta?.received_at
-
-    if (existing?.id && existingRevision && !existingPlan?.refresh_meta) {
-      // The review handoff uses the same revision + refresh_meta pair as its
-      // linearisation point. A new command may replace an unlocked snapshot,
-      // but it must never overwrite a snapshot after handoff has claimed it.
-      // If either side wins between our read and write, this CAS returns no
-      // row and the caller must reload instead of silently clobbering it.
-      const { data: updated, error } = await supabaseAdmin
+    if (existing?.id) {
+      const { error } = await supabaseAdmin
         .from('social_plans')
         .update({ plan_data: planData })
         .eq('id', existing.id)
-        .eq('client_id', clientId)
-        .eq('campaign_id', cmd.campaign_id)
-        .contains('plan_data', { command_meta: { received_at: existingRevision } })
-        .is('plan_data->refresh_meta', null)
-        .select('id')
-        .maybeSingle()
       if (error) throw error
-      if (!updated) {
-        return NextResponse.json(
-          { success: false, error: 'PLAN_VERSION_CONFLICT' },
-          { status: 409 }
-        )
-      }
       planId = existing.id
     } else {
-      // A handed-off row is immutable audit history. The next complete
-      // command starts a new version instead of overwriting the snapshot
-      // already used to create review drafts.
       const { data: inserted, error } = await supabaseAdmin
         .from('social_plans')
         .insert({
