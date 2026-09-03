@@ -39,6 +39,9 @@
 | `RENDER_EXTERNAL_URL` | Render 自动注入的服务 host | 无需配 | ✅ |
 | `RENDER_INSTANCE_ID` | Render 自动注入的实例 ID | 无需配 | — |
 | `NODE_ENV` `PORT` `HOME` | 运行时标准变量 | 无需配 | — |
+| `INNGEST_SIGNING_KEY` | Inngest 云端回调本应用 `/api/inngest` 时的签名校验密钥。**生产必须配**，否则接收端拒签、云端函数不执行（#1346）。已在 crazycontent/Render-web 上（2026-09-04 核实存在） | Render-web | ✅ |
+| `INNGEST_EVENT_KEY` | 发事件到 Inngest 的密钥（`sendInngestEvent` 用）。已在 Render-web 上 | Render-web | ✅ |
+| `INNGEST_DEV` | ⚠️ **生产绝不可设成真值**：设了会让 SDK 进 dev 模式、静默关掉 `/api/inngest` 的签名校验（任何人可触发函数）。仅本地/预览用。`/api/inngest` 请求期有 fail-closed 守卫，生产设了它会 500 拒服务（#1346） | 仅本地 | ❌ |
 
 ## 2. AI 模型
 
