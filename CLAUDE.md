@@ -169,6 +169,7 @@ Claude Code 干：大范围重构 · 跨模块长链路 · 复杂调试 · 架�
 
 - **绝不凭空注入客户业务数据**：写任何 Goal / Initiative / 关键词前，先查 `master_briefs` + `clients.primary_keywords`。搜索量 / KD / 点击数**必须来自 DataForSEO 或 GSC**，不能估不能编
 - **对外内容必先 grounding 官网**：写 reel / post / 广告 / 邮件前先 WebFetch 客户官网真实产品页。`master_briefs` 只给方向，不含运营细节。发布前逐句标「官网可溯 / brief 可溯 / 未证实」
+- **对外画面必先跑配方对账**：只要要**写视频模板 / 调生图·生视频 API / 拼片出成片**，先查 `viral_reference_library` 拿该行业配方，**并输出一张对账表**（配方每一列 → 这次做了什么 → 满足 / 未满足 / 不适用），再动手。**只满足镜长、切点这类「改个数字就行」的列，跳过真人出镜 / 航拍 / 真实感这类「要换素材才行」的列 = 没照配方做**，成品会是「卡得很准的幻灯片」。2026-07-20、2026-09-03 两次同样事故，见 [PITFALLS D5](./docs/PITFALLS.md)
 - **客户营销落地页必须建在客户自己的域名**，绝对禁止 `magicengine.com.au/<客户>/...`
 - **FDE/PM 要填的字段必须连 Settings UI 一起做完**，绝不写「让 PM 进 Supabase Studio 直填」
 - **素材不足去全网抓**：Unsplash/Pexels（首选，零风险）→ Apify（找参考定风格）→ 客户自传（质量最高）。但客户**真实产品 / 真实价格**的画面只能用客户自己提供的素材
