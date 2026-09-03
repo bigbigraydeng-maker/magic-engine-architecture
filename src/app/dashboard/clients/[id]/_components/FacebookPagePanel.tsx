@@ -47,9 +47,9 @@ type PanelState =
 /** Why there is no pick-list, said the way an operator can act on. */
 const PAGES_ERROR_TEXT: Record<PagesError, string> = {
   no_token:
-    '这个客户还没连 Meta 账号，所以列不出主页。可以先手动填 ID，等连上后同步就会自动开始。',
+    '这个客户还没连 Meta 账号，所以列不出主页。可以先手动填 ID；连上之后同步才会开始，连的时候如果报错，按那条提示往下查。',
   meta_rejected:
-    'Meta 没有返回主页列表（授权可能过期了）。可以先手动填 ID，之后请团队重新连一次 Meta。',
+    '列不出主页 —— Meta 没给我们主页列表，多半是授权过期了。点下面的「连接 Meta」重新授权一次就能恢复列表；急着先绑的话，也可以手动填 ID。',
 }
 
 export function FacebookPagePanel({ clientId }: Props) {
@@ -58,7 +58,7 @@ export function FacebookPagePanel({ clientId }: Props) {
   const [manual, setManual] = useState(false)
   const [saving, setSaving] = useState(false)
   const [errMsg, setErrMsg] = useState<string | null>(null)
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [result, setResult] = useState<{ ok: boolean; text: React.ReactNode } | null>(null)
 
   const load = useCallback(async () => {
     setState({ phase: 'loading' })
@@ -198,8 +198,8 @@ export function FacebookPagePanel({ clientId }: Props) {
                   reachable 改成直接探测主页，两者就会分叉 —— 那时这里会跟上面
                   LiveStatus 说反话，正是本次要消灭的那种自相矛盾（魏征复审）。*/}
               {draftIsSavedBinding
-                ? `当前绑定：${draftValue}${reachable === false ? '（ME 读不到）' : ''}`
-                : `待保存：${draftValue}（不在列表里）`}
+                ? `现在绑的：${draftValue}${reachable === false ? ' —— ME 读不到它' : ''}`
+                : `你刚填的：${draftValue} —— 还没保存，按下面「保存」才算数`}
             </option>
           )}
           {pages.map((p) => (
@@ -252,7 +252,7 @@ export function FacebookPagePanel({ clientId }: Props) {
             撤销修改
           </button>
         )}
-        {!dirty && page_id === null && <span className="text-xs text-slate-400">未接私信</span>}
+        {!dirty && page_id === null && <span className="text-xs text-slate-400">不接私信</span>}
       </div>
 
       <ConnectMeta clientId={clientId} pageId={page_id} publishTargetPageId={publish_target_page_id} />
@@ -266,8 +266,76 @@ export function FacebookPagePanel({ clientId }: Props) {
   )
 }
 
-/** What the callback redirected back with, said the way the operator needs it. */
-const META_RESULT: Record<string, { ok: boolean; text: string }> = {
+/**
+ * 客户的 Meta 后台入口。
+ *
+ * 按 src/lib/pm-todo/action-link.ts 定下的规矩：business.facebook.com 属于登录类
+ * 站点，深链不可靠（好坏链接都返回 200，赌错就是一次白跑），所以只给稳定入口，
+ * 后面的路径用文字写清楚。
+ */
+const META_BUSINESS_HOME = 'https://business.facebook.com/'
+
+function BizLink() {
+  return (
+    <a
+      href={META_BUSINESS_HOME}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="underline underline-offset-2 hover:text-cyan-700"
+    >
+      business.facebook.com
+    </a>
+  )
+}
+
+/**
+ * 「拿不到主页」的三条排查，no_pages 和 page_not_granted 共用一份。
+ *
+ * 拆成列表而不是一段流水字（板桥复审）：人要拿着这个在客户后台和本面板之间来回
+ * 切，挤成一坨 12px 小字会找不回读到哪。
+ *
+ * ①②要动的都是**客户的**后台，运营人员多半没权限 —— 所以末尾必须明说「这两步
+ * 得客户自己点」，否则等于把人堵在一扇他打不开的门前（CLAUDE.md 铁律 3）。
+ *
+ * 名词一律跟 Meta 后台对齐，且对不确定的显示名都给出退路：应用名可能不叫
+ * Magic Engine（按编号找）、「主页访问权限」在有的界面写「页面访问权限」。
+ * 这类防御要么都给要么都不给 —— 只给一半，没给的那半就是下一个卡点。
+ */
+function TroubleshootSteps() {
+  return (
+    <>
+      <ol className="mt-1.5 list-decimal space-y-1.5 pl-4">
+        <li>
+          客户的<span className="font-bold">商务组合</span>里有没有把 Magic Engine 这个应用加进去 ——
+          请客户打开 <BizLink />，左边「设置」→「应用」→ 添加。
+          应用编号 <span className="font-mono">1752513682785923</span>；
+          后台显示的名字不一定就叫 Magic Engine，按编号找最稳。
+        </li>
+        <li>
+          客户在商务组合里把主页「分给」你，跟客户在主页本身把你加成管理人，
+          <span className="font-bold">是两件事，只有后者才够</span>。
+          要客户在主页设置的「主页访问权限」（有的界面写「页面访问权限」）里，
+          把你加成有完全控制权限的人（有的界面写「管理员」）。
+        </li>
+        <li>上面那个主页 ID 是不是手填错了、或者登错了账号。</li>
+      </ol>
+      <p className="mt-1.5">
+        ①②这两步都得<span className="font-bold">客户自己去点</span>，你没权限 ——
+        可以把这段话原样复制发给他。
+      </p>
+    </>
+  )
+}
+
+/**
+ * What the callback redirected back with, said the way the operator needs it.
+ *
+ * text 是 ReactNode 而不是 string：这些提示要指导人去客户的 Meta 后台点几下，
+ * 按 CLAUDE.md 铁律 3，下发给人的任务要带 what / how / href 三件套 —— 纯字符串
+ * 放不下链接，也没法把三条排查拆成看得清的列表（板桥复审 2026-09-03：300 多字
+ * 挤成一坨 12px 小字，人在客户后台和这个面板之间来回切时找不回读到哪）。
+ */
+const META_RESULT: Record<string, { ok: boolean; text: React.ReactNode }> = {
   connected: { ok: true, text: '✓ 连接成功。下一个整点开始同步这个主页的私信。' },
   publish_ready: {
     ok: true,
@@ -305,12 +373,16 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
     // 网络抖动时同样 return []（见 meta-oauth/client.ts），callback 只看
     // length===0，所以这条也可能是一次抖动。把它说成 Meta 的确定回答，会让人
     // 拿着一个不存在的结论去改客户后台的配置。
-    text:
-      '授权走完了，但我们没从这个账号拿到任何主页。可能是 Meta 当时没答上来（先隔几分钟重点一次），' +
-      '也可能是权限没到位。重试仍旧这样的话按顺序查：' +
-      '① 客户的商务组合里有没有添加 Magic Engine 应用 —— 客户的 Business 设置 →「应用」→ 添加（应用编号 1752513682785923，后台显示的名字不一定就叫 Magic Engine，按编号找最稳）；' +
-      '② 你对主页是不是只有商务组合里的资产分配，缺主页本身的管理员角色 —— 要客户在主页「页面访问权限」里加你；' +
-      '③ 是不是登错了账号。',
+    text: (
+      <>
+        <p>
+          授权走完了，但我们没从这个账号拿到任何主页。可能只是 Meta 当时没答上来 ——
+          先隔几分钟重新点一次「连接 Meta」。
+        </p>
+        <p className="mt-1">还是这样的话，按顺序查：</p>
+        <TroubleshootSteps />
+      </>
+    ),
   },
   page_not_granted: {
     ok: false,
@@ -322,13 +394,22 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
     // 打开手填框，而 normalisePageId 只校验「≥8 位数字」，手打错一个数字照样存得
     // 进去 —— 手填错 ID 恰恰是这个界面自己制造的一类常见原因。所以三条并列摆出
     // 来，只说「先查哪条」，不替人排除任何一条。
-    text:
-      '授权走完了，但 Meta 没把这个主页交给我们。三个方向都查一下，第①条是 2026-09 实测遇到过的：' +
-      '① 客户的商务组合里有没有添加 Magic Engine 应用 —— 客户的 Business 设置 →「应用」→ 添加（应用编号 1752513682785923，后台显示的名字不一定就叫 Magic Engine，按编号找最稳）；' +
-      '② 你对这个主页是不是只有商务组合里的「资产分配」，缺主页本身的管理员角色 —— 要客户在主页「页面访问权限」里把你加上；' +
-      '③ 上面那个主页 ID 是不是手填错了、或者登错了账号。' +
-      '另外：如果你刚点的是「重新授权 Meta 发布权限」，那它认的根本不是这里绑的主页，' +
-      '而是「视频工厂配置」里那个发布主页 —— 要查的是那个 ID，别在这里绕。',
+    //
+    // publishing 那句提到最前面当分流（板桥复审）：它原来挂在末尾无条件显示，
+    // 读到的人得回头重判前面①②③还算不算数。META_RESULT 是静态表、拿不到 intent，
+    // 所以做不到真正分岔，只能让人自己先分清点的是哪个按钮。
+    text: (
+      <>
+        <p>
+          <span className="font-bold">先分清你刚点的是哪个按钮。</span>
+          如果点的是「重新授权 Meta 发布权限」：它认的不是这个面板上绑的主页，而是
+          「视频工厂配置」里那个发布主页 —— 下面第③条对你不适用，要查的是那边那个 ID。
+          如果点的是「连接 Meta」，往下看。
+        </p>
+        <p className="mt-1.5">授权走完了，但 Meta 没把这个主页交给我们。三个方向都查一下：</p>
+        <TroubleshootSteps />
+      </>
+    ),
   },
   no_page_bound: { ok: false, text: '还没绑定主页 —— 先在上面选好主页并保存，再点连接。' },
   bad_state: { ok: false, text: '这个连接链接已经过期了，请重新点一次「连接 Meta」。' },
@@ -412,8 +493,10 @@ function ConnectMeta({
       </div>
 
       <p className="mt-2 text-xs leading-relaxed text-slate-400">
+        {/* 同一句死路的第二个副本，而且就贴在按钮下面 —— 是点之前最后读到的一句，
+            比顶部那句更容易让人「确认自己没做错」然后再换个账号白跑一次。*/}
         {pageId
-          ? '用一个能在 Business Suite 里看到这个主页消息的账号授权一次，之后不用再管。'
+          ? '用一个管得了这个主页的账号授权一次。顺利的话之后就不用再管；不顺利的话，上面会写清楚接着查哪里。'
           : '先选好主页并保存，才能连接私信。'}
         {canReauthPublish
           ? '「重新授权 Meta 发布权限」针对的是视频工厂配置里那个发布主页，授权时记得勾上发帖权限。'
@@ -452,8 +535,16 @@ function LiveStatus({ pageId, reachable }: { pageId: string | null; reachable: b
           <br />
           ME 读不到这个主页，所以私信一条都同步不进来 —— 广告照跑照花钱，客人发来的消息只留在对方主页的收件箱里。
         </p>
+        {/* ⚠ 这句原本写的是「用一个能看到这个主页消息的账号授权一次就好」。
+            2026-09-03 NewAsian 实测把它证伪了：授权账号在 Business Suite 里就是
+            看得到该主页消息，照样失败（真因是客户商务组合里没加 Magic Engine 应用）。
+            板桥复审指出，这句在红框里、加粗、位置最靠上，人会先信它 —— 于是先白跑
+            两趟换账号，再回头才注意到中间那段真正的排查指引，而且那时对它的信任
+            已经打折。修下拉框却留着这句，等于修了一半。*/}
         <p className="mt-1.5">
-          点下面的「连接 Meta」，用一个能看到这个主页消息的账号授权一次就好。
+          先点下面的「连接 Meta」重新授权一次。授权完还是这样的话，
+          <span className="font-bold">别急着换账号</span> ——
+          这个账号在 Business Suite 里看得到消息，也不一定够。到时候按下面那条提示往下查。
         </p>
       </div>
     )
@@ -461,7 +552,7 @@ function LiveStatus({ pageId, reachable }: { pageId: string | null; reachable: b
 
   return (
     <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-      绑了主页，但现在连不上 Meta，没法确认同步是否正常。
+      绑了主页，但现在连不上 Meta，没法确认同步是不是正常。多半过一会儿自己好；十几分钟后刷新还是这样，点下面的「连接 Meta」重新授权一次。
     </p>
   )
 }
@@ -475,9 +566,14 @@ function describeSave(pageId: string | null, reachable: boolean | null): { ok: b
     return { ok: true, text: '✓ 已保存，ME 能读到这个主页。下一个整点开始同步私信。' }
   }
   if (reachable === false) {
+    // ⚠ 原文是「多半是这个 ID 不属于已连接的 Meta 账号，或者授权没覆盖到它…请找
+    // 团队确认」。两个毛病：一是用「多半」给一个已被实测推翻的原因押了高置信度，
+    // 跟同屏那段「三条都查、不替你排除任何一条」的排查指引给出相反的排序；二是
+    // 「请找团队确认」把人指向一个不存在的下家 —— 看这个面板的人就是团队，
+    // 这是 CLAUDE.md 铁律 3 说的管道断头（板桥复审 2026-09-03）。
     return {
       ok: false,
-      text: '已保存，但 ME 现在读不到这个主页 —— 多半是这个 ID 不属于已连接的 Meta 账号，或者授权没覆盖到它。同步暂时不会有数据，请找团队确认。',
+      text: '已保存，但 ME 现在读不到这个主页 —— 私信一条也进不来。下一步：点下面的「连接 Meta」重新授权一次；授权完还是读不到的话，按那时候出来的提示往下查。',
     }
   }
   return { ok: false, text: '已保存。Meta 还没连上，接通之后同步才会开始。' }

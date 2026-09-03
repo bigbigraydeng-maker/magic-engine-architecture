@@ -78,7 +78,7 @@ describe('FacebookPagePanel — 绑定值不在列表里', () => {
     render(<FacebookPagePanel clientId={CLIENT_ID} />)
     await screen.findByRole('combobox')
 
-    const opt = screen.getByRole('option', { name: /当前绑定/ }) as HTMLOptionElement
+    const opt = screen.getByRole('option', { name: /现在绑的/ }) as HTMLOptionElement
     expect(opt.value).toBe(BOUND_PAGE)
     // 「读不到」必须写在这一项上；只靠上面那条红字，滚动后就看不见了。
     expect(opt.textContent).toMatch(/读不到/)
@@ -97,7 +97,7 @@ describe('FacebookPagePanel — 绑定值不在列表里', () => {
     const select = (await screen.findByRole('combobox')) as HTMLSelectElement
 
     expect(select.value).toBe(OTHER_PAGES[0].id)
-    expect(screen.queryByRole('option', { name: /当前绑定/ })).toBeNull()
+    expect(screen.queryByRole('option', { name: /现在绑的|你刚填的/ })).toBeNull()
     // 「不接私信」+ 两个真主页 = 3 项，没有多出来的。
     expect(screen.getAllByRole('option')).toHaveLength(3)
   })
@@ -115,7 +115,7 @@ describe('FacebookPagePanel — 绑定值不在列表里', () => {
     const select = (await screen.findByRole('combobox')) as HTMLSelectElement
 
     expect(select.value).toBe('')
-    expect(screen.queryByRole('option', { name: /当前绑定/ })).toBeNull()
+    expect(screen.queryByRole('option', { name: /现在绑的|你刚填的/ })).toBeNull()
   })
 })
 
@@ -192,7 +192,61 @@ describe('FacebookPagePanel — 交互（不是只看渲染）', () => {
     const select = (await screen.findByRole('combobox')) as HTMLSelectElement
     expect(select.value).toBe('999999999999')
     // 而且要讲明这是「还没保存的」，不能跟已生效的绑定混为一谈。
-    expect(screen.getByRole('option', { selected: true }).textContent).toMatch(/待保存/)
+    expect(screen.getByRole('option', { selected: true }).textContent).toMatch(/你刚填的/)
+  })
+})
+
+/**
+ * 板桥复审（2026-09-03）判定为本轮最严重的一条：下拉框只是原 bug 的一半，
+ * 屏幕上最显眼、最常驻的三句话（顶部红字、按钮下方常驻说明、保存后提示）
+ * 当时仍然是事故前那套「换个能看到消息的账号就行」—— 而那正是被实测证伪的
+ * 死路（授权账号在 Business Suite 里就是看得到该主页消息，照样失败）。
+ *
+ * 他推演的动线：照红字换账号 → 失败 → 按钮下面又说同样的话 → 再换一次 →
+ * 才注意到中间那段真正的排查指引，而那时对它的信任已经打折。更糟的是刷新后
+ * URL 上的 ?meta= 被 replaceState 抹掉，那段最贵的指引消失，留在屏幕上的
+ * 恰好是会把人引回死路的那几句 —— 于是整个修复在真实使用节奏下等于没做。
+ *
+ * 这一组就是给那三句话上锁。补的原因很实在：第一版改完文案后做变异，把顶部
+ * 红字整句改回旧说法，9 个测试全绿 —— 改了却没人看着，等于没改。
+ */
+describe('FacebookPagePanel — 常驻文案不许指回死路', () => {
+  it('顶部红字不许再说「换个能看到消息的账号就行」', async () => {
+    mockGet({
+      page_id: BOUND_PAGE,
+      publish_target_page_id: null,
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+    await screen.findByRole('combobox')
+
+    const body = document.body.textContent ?? ''
+    // 正面：必须明确挡住「换账号」这个第一反应。
+    expect(body).toMatch(/别急着换账号/)
+    // 反面：那句被实测证伪的话不许再出现在屏幕上任何地方。
+    expect(body).not.toMatch(/能看到这个主页消息的账号授权一次就好/)
+  })
+
+  it('按钮下方常驻说明不许把「授权一次就完事」说死', async () => {
+    mockGet({
+      page_id: BOUND_PAGE,
+      publish_target_page_id: null,
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+    await screen.findByRole('combobox')
+
+    const body = document.body.textContent ?? ''
+    // 这句贴在按钮下面，是点之前最后读到的一句，比顶部那句更容易让人
+    // 「确认自己没做错」然后再白跑一次。
+    expect(body).not.toMatch(/能在 Business Suite 里看到这个主页消息的账号授权一次，之后不用再管/)
+    expect(body).toMatch(/不顺利的话，上面会写清楚接着查哪里/)
   })
 })
 
@@ -245,7 +299,7 @@ describe('FacebookPagePanel — 授权失败的原因要说全', () => {
       // 结果没改文案就绿了 —— 面板底部那段常驻说明里本来就有这四个字，
       // 断言抓到的是它，跟错误提示没关系。这正是魏征批评的「断言太松」，
       // 我在同一轮里又犯了一次。
-      expect(document.body.textContent ?? '').toMatch(/它认的根本不是这里绑的主页/)
+      expect(document.body.textContent ?? '').toMatch(/它认的不是这个面板上绑的主页/)
     })
   })
 })
