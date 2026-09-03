@@ -41,6 +41,7 @@ import {
   measurementSchedule,
   partitionByIdempotency,
   publishIdempotencyKey,
+  resolvePublishSchedule,
   resolvePublishStatus,
   type CampaignDailyPublishCommand,
   type CampaignDailyPublishFailure,
@@ -281,6 +282,13 @@ async function publishPending(
   const eventIds: string[] = []
 
   for (const candidate of candidates) {
+    // Each Post carries the calendar date the client planned it for. Ask
+    // Facebook to hold it until 08:00 NZ on that date, rather than firing
+    // immediately — otherwise a "7-day plan" becomes "7 posts in one minute",
+    // which is exactly the 2026-09-03 incident this contract now guards.
+    // For today / past dates, resolvePublishSchedule returns publishNow: true.
+    const schedule = resolvePublishSchedule(candidate.date, new Date())
+
     let result: Awaited<ReturnType<typeof publishPagePhotoPost>>
     try {
       result = await publishPagePhotoPost({
@@ -288,6 +296,7 @@ async function publishPending(
         pageAccessToken: context.pageToken,
         message: candidate.message,
         imageUrl: candidate.imageUrl,
+        scheduledPublishTime: schedule.publishNow ? undefined : schedule.scheduledPublishTime,
       })
     } catch (error: unknown) {
       failed.push({
@@ -307,6 +316,9 @@ async function publishPending(
       post_id_source: result.postIdSource,
       page_id: context.pageId,
       published_at: publishedAt,
+      // Only present when we actually asked Facebook to hold it. Absent means
+      // "went live immediately" — a downstream reader shouldn't have to guess.
+      ...(schedule.publishNow ? {} : { scheduled_publish_time: schedule.scheduledPublishTime.toISOString() }),
       permalink: result.permalink,
       provider_response: result.raw,
     }

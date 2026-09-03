@@ -75,7 +75,12 @@ export interface CampaignDailyPublishedPost {
   /** Which Graph field the id came from, so an audit can tell them apart. */
   post_id_source: 'post_id' | 'id'
   page_id: string
+  /** When *we* handed the post to Facebook. Same value whether Facebook
+   *  publishes immediately or holds it until `scheduled_publish_time`. */
   published_at: string
+  /** When Facebook is asked to actually make the post visible. Absent means
+   *  "immediately"; present means Facebook is holding the post until then. */
+  scheduled_publish_time?: string
   permalink: string
   /** Raw provider response, stored verbatim for audit. */
   provider_response: Record<string, unknown>
@@ -115,6 +120,10 @@ export interface CampaignDailyPublishMeta {
   failed: CampaignDailyPublishFailure[]
   /** Inngest receipt ids, one per successfully emitted published event. */
   event_ids: string[]
+  /** Posts that were subsequently recalled — see `daily-plan-recall.ts`. The
+   *  original entry stays out of `published[]` so a reader can trust that field
+   *  as "currently live on the Page"; the recall row keeps the post_id for audit. */
+  recalled?: Array<{ date: string; idempotency_key: string; post_id: string; recalled_at: string; already_gone: boolean }>
 }
 
 const publishedPostSchema = z.object({
@@ -124,6 +133,7 @@ const publishedPostSchema = z.object({
   post_id_source: z.enum(['post_id', 'id']),
   page_id: pageIdSchema,
   published_at: z.string().datetime(),
+  scheduled_publish_time: z.string().datetime().optional(),
   permalink: z.string().min(1),
   provider_response: z.record(z.string(), z.unknown()),
 })
@@ -150,6 +160,13 @@ export const CampaignDailyPublishMetaSchema = z.object({
     failed_at: z.string().datetime(),
   })),
   event_ids: z.array(z.string().min(1)),
+  recalled: z.array(z.object({
+    date: dateStringSchema,
+    idempotency_key: z.string().min(1),
+    post_id: z.string().min(1),
+    recalled_at: z.string().datetime(),
+    already_gone: z.boolean(),
+  })).optional(),
 })
 
 /**
@@ -190,6 +207,62 @@ export function partitionByIdempotency<T extends { idempotency_key: string }>(
     else pending.push(candidate)
   }
   return { pending, skipped }
+}
+
+/**
+ * The instant that corresponds to `08:00 Pacific/Auckland` on a given calendar
+ * date. DST-safe because it iterates against Intl instead of assuming a fixed
+ * UTC offset — NZ swaps between UTC+12 (NZST) and UTC+13 (NZDT) around
+ * Sep/Apr, and hardcoding either would silently shift the send by an hour for
+ * half the year.
+ */
+function nzMorningUtc(dateString: string): Date {
+  const [y, m, d] = dateString.split('-').map(Number)
+  // Guess: interpret 08:00 as if NZ were UTC+12; then correct against the
+  // actual offset by inspecting the local hour Intl reports.
+  let instant = new Date(Date.UTC(y, m - 1, d, 8 - 12, 0, 0))
+  for (let i = 0; i < 3; i++) {
+    const hourStr = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Pacific/Auckland',
+      hour: '2-digit',
+      hour12: false,
+    }).format(instant)
+    // en-US with hour12:false can return "24" for midnight; normalise.
+    const hour = Number(hourStr) % 24
+    if (hour === 8) return instant
+    instant = new Date(instant.getTime() - (hour - 8) * 3_600_000)
+  }
+  return instant
+}
+
+/**
+ * "Publish now" vs "let Facebook hold it until date D".
+ *
+ * The daily plan's `date` field is the day the client expects the post to be
+ * visible in NZ. Before this contract existed, the publisher ignored it and
+ * fired everything immediately — a "7-day plan" turned into "7 posts in one
+ * minute", which is exactly what happened on 2026-09-03 (see PR history).
+ *
+ * Rules:
+ *  - Target = 08:00 Pacific/Auckland on `candidateDate`.
+ *  - If the target is < 15 minutes from `now` (Facebook's own floor is 10min;
+ *    the extra 5 buys margin for clock skew), publish immediately.
+ *  - If it's > 6 months out, also publish immediately — Facebook's ceiling is
+ *    ~180 days, and a plan that far ahead is almost certainly a data error.
+ *  - Otherwise, return the target — the caller passes it to publishPagePhotoPost
+ *    as `scheduledPublishTime`.
+ */
+export function resolvePublishSchedule(
+  candidateDate: string,
+  now: Date,
+): { publishNow: true } | { publishNow: false; scheduledPublishTime: Date } {
+  const target = nzMorningUtc(candidateDate)
+  const leadMs = target.getTime() - now.getTime()
+  const MIN_LEAD_MS = 15 * 60 * 1000
+  const MAX_LEAD_MS = 175 * 24 * 3_600_000 // 175 days, well inside Meta's ~6 month ceiling
+  if (leadMs < MIN_LEAD_MS) return { publishNow: true }
+  if (leadMs > MAX_LEAD_MS) return { publishNow: true }
+  return { publishNow: false, scheduledPublishTime: target }
 }
 
 /** ISO timestamps at which the T+24 / T+72 measurement passes should run. */
