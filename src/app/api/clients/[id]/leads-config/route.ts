@@ -14,6 +14,12 @@
  * 就是死的：以后新遇到一家同行，FDE 加不进去，只能来找开发 —— 而「要 FDE 填的
  * 字段必须连界面一起做完」是铁律，不是建议。
  *
+ * `mailchimpAudienceId` 2026-09-03 补上：`mailchimp-paid-tagging` cron 靠它
+ * 找到这个客户在 Mailchimp 的名单，但那条 cron 优先读的专列
+ * `clients.mailchimp_audience_id` 至今没在生产 apply（见该 cron 文件里的
+ * 注释），回退读的 `leads_config.mailchimp_audience_id` 在这次补之前完全没有
+ * 写入口 —— 新客户只能直接改数据库，否则永远走 `no_audience_id` 跳过打标签。
+ *
  * Responses: 200 { config } / 400 / 401 / 403 / 404 / 500
  */
 
@@ -32,6 +38,8 @@ export interface LeadsConfig {
   tradeDomains: string[]
   /** 网站表单每来一条新客资，best-effort 邮件通知的收件人清单。 */
   notifyEmails: string[]
+  /** 这个客户在 Mailchimp 的 audience id —— 专列没 apply 时的唯一落脚点。 */
+  mailchimpAudienceId: string
 }
 
 function readConfig(raw: unknown): LeadsConfig {
@@ -45,6 +53,7 @@ function readConfig(raw: unknown): LeadsConfig {
     ownEmailDomains: rules.own,
     tradeDomains: rules.trade,
     notifyEmails,
+    mailchimpAudienceId: typeof o.mailchimp_audience_id === 'string' ? o.mailchimp_audience_id.trim() : '',
   }
 }
 
@@ -75,6 +84,7 @@ interface PatchBody {
   ownEmailDomains?: unknown
   tradeDomains?: unknown
   notifyEmails?: unknown
+  mailchimpAudienceId?: unknown
 }
 
 export async function PATCH(
@@ -127,6 +137,14 @@ export async function PATCH(
     const parsed = parseEmailList(body.notifyEmails)
     patch.notify_emails = parsed.emails
     rejected.push(...parsed.rejected)
+  }
+
+  if (body.mailchimpAudienceId !== undefined) {
+    if (typeof body.mailchimpAudienceId !== 'string') {
+      return NextResponse.json({ error: 'mailchimpAudienceId 必须是文字' }, { status: 400 })
+    }
+    // 空字符串是合法的「清空」——不强制必填，客户还没连 Mailchimp 时留空。
+    patch.mailchimp_audience_id = body.mailchimpAudienceId.trim()
   }
 
   if (Object.keys(patch).length === 0) {

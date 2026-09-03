@@ -101,6 +101,15 @@ describe('readPaidSignal · 客人自己说付了 → 只到 needs_review', () =
     const v = readPaidSignal({ text: 'I have paid the deposit', direction: 'outbound' })
     expect(v.kind).not.toBe('confirmed')
   })
+
+  it('🔴 「I have made the payment using the payment link below」→ needs_review，不能被 payment link 抢成 chasing', () => {
+    const v = readPaidSignal({
+      text: 'Hi, I have made the payment using the payment link below. Thanks!',
+      direction: 'inbound',
+    })
+    expect(v.kind).toBe('needs_review')
+    if (v.kind === 'needs_review') expect(v.reason).toBe('inbound_claim')
+  })
 })
 
 describe('readPaidSignal · 🔴 条件式收款句不能当成 confirmed', () => {
@@ -131,6 +140,22 @@ describe('readPaidSignal · 🔴 条件式收款句不能当成 confirmed', () =
   it('真实确认句不受影响：「Your payment has been received in full」仍是 confirmed', () => {
     const v = readPaidSignal({ text: REAL_CONFIRM, direction: 'outbound' })
     expect(v.kind).toBe('confirmed')
+  })
+
+  it('🔴 「Until your payment is received, ...」→ 不是 confirmed（钱还没到）', () => {
+    const v = readPaidSignal({
+      text: 'Until your payment is received, we are unable to confirm your seats.',
+      direction: 'outbound',
+    })
+    expect(v.kind).not.toBe('confirmed')
+  })
+
+  it('🔴 「Before the payment is received, ...」→ 不是 confirmed（钱还没到）', () => {
+    const v = readPaidSignal({
+      text: 'Before the payment is received, please do not book your flights.',
+      direction: 'outbound',
+    })
+    expect(v.kind).not.toBe('confirmed')
   })
 })
 
