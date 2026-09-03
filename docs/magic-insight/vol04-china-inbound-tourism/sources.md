@@ -202,6 +202,7 @@ PDF 属构建产物，不入库。生成命令：
 |---|---|---|---|---|
 | 封面背景 | 上海外滩天际线（东方明珠 + 陆家嘴） | Alejo Meza（@alejomeza） | Unsplash License（免费商用，无需署名，本报告仍署名） | https://unsplash.com/photos/shanghai-china-H23f-2byY_E |
 
-图片以 **base64 内嵌**进 report.html，不外链。原因：报告主要发给中国境内合作方，
-images.unsplash.com 在大陆访问不稳定，外链会裂；内嵌保证离线可开、国内可靠。
+图片存成本卷目录的 **cover.jpg**，report.html 用相对路径引用。对外交付物是 PDF，
+生成时图已烘焙进 PDF，国内照样能看。（早前用 base64 内嵌，2026-09-04 改为文件引用，
+简化制作并给 report.html 瘦身；同时去掉 text-shadow，避免 PDF 阅读器把文字阴影渲染成白条。）
 封面为纯氛围背景图，不含任何数据主张，不构成对来源机构或数据的暗示。
