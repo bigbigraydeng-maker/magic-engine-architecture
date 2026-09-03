@@ -96,17 +96,19 @@ DECLARE
   v_res public.geo_budget_reservations%ROWTYPE;
   v_bud public.geo_client_budgets%ROWTYPE;
   v_remaining numeric;
+  v_inserted int;
 BEGIN
   IF p_reservation_id IS NULL OR length(p_reservation_id) = 0 THEN
     RETURN jsonb_build_object('reserved', false, 'reason', 'invalid_reservation_id');
   END IF;
-  -- 🔴 显式挡 NaN/Infinity/≤0（不靠后面的比较兜底）。
-  IF p_worst_case_usd IS NULL OR p_worst_case_usd <> p_worst_case_usd  -- NaN 自不等
-     OR NOT (p_worst_case_usd > 0) OR p_worst_case_usd >= 'Infinity'::numeric THEN
+  -- 🔴 挡 NaN/Infinity/≤0。numeric 的 NaN 排序**最大**，故 `>= 'Infinity'` 同时挡住 NaN 与 Inf
+  --    （注意：numeric 里 `NaN <> NaN` 为 FALSE，不能用自不等判 NaN —— 与 IEEE 浮点相反）。
+  IF p_worst_case_usd IS NULL OR NOT (p_worst_case_usd > 0)
+     OR p_worst_case_usd >= 'Infinity'::numeric THEN
     RETURN jsonb_build_object('reserved', false, 'reason', 'invalid_worst_case');
   END IF;
 
-  -- 幂等：已存在的预留直接回既有状态，不重复累加。
+  -- 幂等快路径：顺序重试时，既有预留直接回既有状态，不重复累加。
   SELECT * INTO v_res FROM public.geo_budget_reservations
     WHERE reservation_id = p_reservation_id FOR UPDATE;
   IF FOUND THEN
@@ -114,7 +116,7 @@ BEGIN
                               'idempotent', true, 'status', v_res.status);
   END IF;
 
-  -- 锁聚合账，判额度。
+  -- 锁聚合账，判额度。budget 行锁把同 (client, period) 的并发预留串行化。
   SELECT * INTO v_bud FROM public.geo_client_budgets
     WHERE client_id = p_client_id AND period_key = p_period_key FOR UPDATE;
   IF NOT FOUND THEN
@@ -126,11 +128,22 @@ BEGIN
     RETURN jsonb_build_object('reserved', false, 'reason', 'insufficient', 'remaining_usd', v_remaining);
   END IF;
 
+  -- 🔴 用 ON CONFLICT 抢预留身份。并发同 reservation_id 时，快路径可能都没命中（互不可见），
+  --    此处只有一个能真正插入；抢不到的**不动预算**、回幂等，绝不 INSERT 撞 PK 抛错（魏征复验必改）。
+  INSERT INTO public.geo_budget_reservations (reservation_id, client_id, period_key, worst_case_usd, status)
+    VALUES (p_reservation_id, p_client_id, p_period_key, p_worst_case_usd, 'reserved')
+    ON CONFLICT (reservation_id) DO NOTHING;
+  GET DIAGNOSTICS v_inserted = ROW_COUNT;
+  IF v_inserted = 0 THEN
+    SELECT * INTO v_res FROM public.geo_budget_reservations WHERE reservation_id = p_reservation_id;
+    RETURN jsonb_build_object('reserved', v_res.status IN ('reserved','settled'),
+                              'idempotent', true, 'status', v_res.status);
+  END IF;
+
+  -- 只有抢到预留身份的这一支才动预算。
   UPDATE public.geo_client_budgets
     SET reserved_usd = reserved_usd + p_worst_case_usd, updated_at = now()
     WHERE client_id = p_client_id AND period_key = p_period_key;
-  INSERT INTO public.geo_budget_reservations (reservation_id, client_id, period_key, worst_case_usd, status)
-    VALUES (p_reservation_id, p_client_id, p_period_key, p_worst_case_usd, 'reserved');
 
   RETURN jsonb_build_object('reserved', true, 'remaining_usd', v_remaining - p_worst_case_usd);
 END;
@@ -154,7 +167,9 @@ DECLARE
   v_res public.geo_budget_reservations%ROWTYPE;
   v_charge numeric;
 BEGIN
-  IF p_actual_usd IS NULL OR p_actual_usd <> p_actual_usd OR p_actual_usd < 0 THEN
+  -- numeric 的 NaN 排序最大，`>= 'Infinity'` 同时挡 NaN 与 Inf；`< 0` 挡负数（NaN<0 为 FALSE，
+  -- 故不能只靠 `< 0` 挡 NaN —— 魏征复验实测这道闸原本是死代码，靠 LEAST 侥幸兜住）。
+  IF p_actual_usd IS NULL OR p_actual_usd < 0 OR p_actual_usd >= 'Infinity'::numeric THEN
     RETURN jsonb_build_object('settled', false, 'reason', 'invalid_actual');
   END IF;
 

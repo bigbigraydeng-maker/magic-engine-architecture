@@ -110,5 +110,38 @@ BEGIN
   RAISE EXCEPTION 'BUG: anon 竟能执行 reserve';
 EXCEPTION WHEN insufficient_privilege THEN RESET role; RAISE NOTICE '✅ anon 被 REVOKE 挡住';
 END $$;
+
+-- settle 的 NaN/Infinity 护栏现在真生效（魏征复验：原本是死代码）
+DO $$
+DECLARE r jsonb;
+BEGIN
+  PERFORM public.geo_reserve_budget_v1('batch-nan','c0000000-0000-0000-0000-000000000000','2026-09',0.1);
+  r := public.geo_settle_budget_v1('batch-nan','NaN'::numeric);
+  IF r->>'reason' <> 'invalid_actual' THEN RAISE EXCEPTION 'settle NaN 期望 invalid_actual, 实得 %', r; END IF;
+  r := public.geo_settle_budget_v1('batch-nan','Infinity'::numeric);
+  IF r->>'reason' <> 'invalid_actual' THEN RAISE EXCEPTION 'settle Inf 期望 invalid_actual, 实得 %', r; END IF;
+  RAISE NOTICE '✅ settle NaN/Inf 护栏生效';
+END $$;
 SQL
+
+echo "==> 并发同 reservation_id 探针（ON CONFLICT 修复 PK 撞车，魏征复验必改）"
+# 给并发探针一个独立预算行
+"${P[@]}" <<'SQL'
+INSERT INTO public.geo_client_budgets (client_id, period_key, cap_usd)
+VALUES ('e0000000-0000-0000-0000-000000000000','2026-09',10.0);
+SQL
+# 会话A：开事务、预留 dup、hold 1.5s 再提交（后台）
+( "${P[@]}" -c "BEGIN; SELECT public.geo_reserve_budget_v1('dup','e0000000-0000-0000-0000-000000000000','2026-09',0.5); SELECT pg_sleep(1.5); COMMIT;" >/dev/null 2>&1 ) &
+BGPID=$!
+sleep 0.5
+# 会话B：并发用同一个 dup 预留——应阻塞到A提交后返回幂等，绝不 PK 抛错
+B_OUT=$("${P[@]}" -t -c "SELECT public.geo_reserve_budget_v1('dup','e0000000-0000-0000-0000-000000000000','2026-09',0.5);" 2>&1 || true)
+wait $BGPID
+echo "   会话B 返回: $(echo "$B_OUT" | tr -d ' \n')"
+# 断言：B 没报 PK 错，且最终 reserved 只有 0.5（不双计）
+FINAL=$("${P[@]}" -t -c "SELECT reserved_usd FROM public.geo_client_budgets WHERE client_id='e0000000-0000-0000-0000-000000000000';" | tr -d ' \n')
+if echo "$B_OUT" | grep -qi "duplicate key\|ERROR"; then echo "   ❌ 会话B 报了 PK/ERROR：$B_OUT"; exit 1; fi
+if [ "$FINAL" != "0.5000" ]; then echo "   ❌ 并发后 reserved 应=0.5000，实得 $FINAL（双计了）"; exit 1; fi
+echo "   ✅ 并发同 id：B 幂等不报错，reserved 只 0.5（未双计）"
+
 echo "==> ✅ 全部 GEO 预算账本行为断言通过"
