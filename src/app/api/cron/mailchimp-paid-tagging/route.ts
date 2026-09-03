@@ -93,8 +93,47 @@ function toCandidate(m: MailMessage): CandidateMail {
 interface ClientRow {
   id: string
   name: string | null
-  mailchimp_audience_id: string | null
   leads_config: unknown
+}
+
+/**
+ * 这个客户的 Mailchimp audience id。
+ *
+ * ⚠️ **不要直接 `select('mailchimp_audience_id')`** —— 那一列由
+ * `20260826010000_mailchimp_audience_id.sql` 定义，但那条 migration 至今
+ * **没有应用到生产**（文件头写明 Issue #1188 要求 migration_applied = false）。
+ * 直接选它整条查询会 500：`column clients.mailchimp_audience_id does not exist`，
+ * 于是这条 cron 每天失败而没有任何人知道为什么。
+ *
+ * 这不是假设 —— 2026-09-02 本地对生产库跑预演就是这么炸的。同一个坑现在还埋在
+ * `crm/meta-lead.ts` 的 `syncMailchimp` 里：它选了这一列，所以在生产上每次都走
+ * `client_config_read_failed` 分支，静默 skip。那正是 Mailchimp 里从来没出现过
+ * `facebook_leadgen` 标签的原因之一。
+ *
+ * 所以这里从 `leads_config`（jsonb，一定存在）读，并在专列真的 apply 之后
+ * 自动优先用它 —— 探测失败就当没有，不让一列的缺席拖垮整条管道。
+ */
+async function audienceIdsByClient(clientIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+
+  // 专列：apply 过就用，没 apply 就整条忽略（error 不 throw，正好当探测）。
+  const { data, error } = await supabaseAdmin
+    .from('clients')
+    .select('id, mailchimp_audience_id')
+    .in('id', clientIds)
+  if (!error) {
+    for (const r of (data ?? []) as Array<{ id: string; mailchimp_audience_id: string | null }>) {
+      const v = (r.mailchimp_audience_id ?? '').trim()
+      if (v) out.set(r.id, v)
+    }
+  }
+  return out
+}
+
+/** leads_config.mailchimp_audience_id —— 专列没 apply 时的落脚点。 */
+function audienceFromLeadsConfig(leadsConfig: unknown): string {
+  const cfg = (leadsConfig ?? {}) as { mailchimp_audience_id?: unknown }
+  return typeof cfg.mailchimp_audience_id === 'string' ? cfg.mailchimp_audience_id.trim() : ''
 }
 
 /** 读一个邮箱的两个文件夹。一个读失败就整个邮箱失败 —— 只拿到一半会漏判。 */
@@ -149,7 +188,7 @@ async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse>
 
   const { data: clients, error: cErr } = await supabaseAdmin
     .from('clients')
-    .select('id, name, mailchimp_audience_id, leads_config')
+    .select('id, name, leads_config')
     .in('id', Array.from(new Set(connections.map((c) => c.client_id))))
 
   if (cErr) {
@@ -158,6 +197,7 @@ async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse>
   }
 
   const byClient = new Map(((clients ?? []) as ClientRow[]).map((c) => [c.id, c]))
+  const audienceIds = await audienceIdsByClient(Array.from(byClient.keys()))
   const since = new Date(Date.now() - lookbackDays * 86_400_000)
 
   const results: Array<Record<string, unknown>> = []
@@ -168,7 +208,7 @@ async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse>
     // 连接指向一个查不到的客户（删过客户但连接还在）—— 跳过，不为它报错。
     if (!client) continue
 
-    const audienceId = (client.mailchimp_audience_id ?? '').trim()
+    const audienceId = audienceIds.get(client.id) ?? audienceFromLeadsConfig(client.leads_config)
     if (!audienceId) {
       // 空转也要留痕：「这个客户没配 Mailchimp」≠「跑了但没结果」。
       results.push({ client: client.name, mailbox: conn.account_id, skipped: 'no_audience_id' })
