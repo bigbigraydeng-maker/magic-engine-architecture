@@ -234,6 +234,114 @@ export async function fetchGscSnapshot(
   }
 }
 
+// ─── Page × query report (read-only evidence capability) ─────────────────────
+//
+// fetchGscSnapshot above only queries 'query' and 'page' as separate
+// single-dimension reports. Those two lists cannot be joined back into a real
+// page × query pair — a page's top query isn't necessarily that query's top
+// page. This is the one function that asks Search Console for both dimensions
+// together, in a single request, optionally filtered to one country.
+//
+// Deliberately pure: it takes an already-resolved access token and never
+// resolves, refreshes, or persists a token itself, never touches the
+// database, and never retries on provider error. Token lifecycle stays the
+// caller's responsibility (e.g. resolveAccessToken below).
+
+const MAX_PAGE_QUERY_ROWS = 250
+
+export interface GscPageQueryRow {
+  page:        string
+  query:       string
+  clicks:      number
+  impressions: number
+  ctr:         number
+  position:    number
+}
+
+export interface GscPageQueryReportParams {
+  /** Already-resolved plaintext access token. */
+  accessToken: string
+  /** GSC property, e.g. "sc-domain:example.com" or "https://example.com/". */
+  siteUrl:     string
+  startDate:   string
+  endDate:     string
+  /** ISO 3166-1 alpha-3 country code, e.g. "nzl". */
+  country:     string
+  /** Capped at MAX_PAGE_QUERY_ROWS regardless of what's requested. */
+  rowLimit?:   number
+}
+
+export async function fetchGscPageQueryReport(
+  params: GscPageQueryReportParams,
+): Promise<GscPageQueryRow[]> {
+  const { accessToken, siteUrl, startDate, endDate, country, rowLimit } = params
+
+  if (!accessToken) {
+    throw new GscApiError(0, 'MISSING_TOKEN', 'missingToken', 'accessToken is required')
+  }
+  if (!siteUrl) {
+    throw new GscApiError(0, 'MISSING_PROPERTY', 'missingProperty', 'siteUrl is required')
+  }
+  if (!startDate || !endDate) {
+    throw new GscApiError(0, 'MISSING_DATE_RANGE', 'missingDateRange', 'startDate and endDate are required')
+  }
+  if (!country) {
+    throw new GscApiError(0, 'MISSING_COUNTRY', 'missingCountry', 'country is required')
+  }
+
+  const cappedRowLimit = Math.min(rowLimit ?? MAX_PAGE_QUERY_ROWS, MAX_PAGE_QUERY_ROWS)
+
+  const controller = new AbortController()
+  const timer      = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+
+  try {
+    const res = await fetch(
+      `${SEARCH_ANALYTICS_BASE}/${encodeURIComponent(siteUrl)}/searchAnalytics/query`,
+      {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate,
+          endDate,
+          dimensions:            ['page', 'query'],
+          type:                  'web',
+          dimensionFilterGroups: [
+            { filters: [{ dimension: 'country', operator: 'equals', expression: country }] },
+          ],
+          rowLimit: cappedRowLimit,
+          orderBy:  [{ fieldName: 'impressions', sortOrder: 'DESCENDING' }],
+        }),
+        signal: controller.signal,
+      },
+    )
+
+    if (!res.ok) {
+      const rawBody = await res.text()
+      const { googleStatus, googleReason, message } = parseGoogleError(rawBody)
+      throw new GscApiError(res.status, googleStatus, googleReason, message, rawBody.slice(0, 500))
+    }
+
+    const data = await res.json() as {
+      rows?: Array<{ keys: string[]; impressions: number; clicks: number; ctr: number; position: number }>
+    }
+
+    return (data.rows ?? []).map(r => ({
+      page:        r.keys[0] ?? '',
+      query:       r.keys[1] ?? '',
+      clicks:      r.clicks,
+      impressions: r.impressions,
+      ctr:         r.ctr,
+      position:    r.position,
+    }))
+  } catch (err) {
+    if (err instanceof GscApiError) throw err
+    const msg = err instanceof Error ? err.message : String(err)
+    throw new GscApiError(0, 'NETWORK_ERROR', 'networkError', msg)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // ─── Site-level totals (no dimension breakdown) ───────────────────────────────
 
 interface SiteTotals {
