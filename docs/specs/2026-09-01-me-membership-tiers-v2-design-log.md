@@ -43,7 +43,13 @@ $199 / $499 目前完全没有 spec，`docs/registry/pricing-playbook-enterprise
 - $199：加上"口碑/竞品关键变化"提醒（评分变了、竞品降价了）
 - $499：更即时的推送（差评、广告异常、竞品大动作）
 
-**这不是空白待办，先判层级再往下走**：`docs/specs/2026-06-05-mcp-phase2-product-design.md` §1.2/§1.3、§4.1-4.3、§5.2、§8 已经设计并拍板了同一条"跨支柱推送基础设施"——`clients.notification_email` 字段 + 后台 UI、`notification_log` 表（`channel` 字段本就预留 `'email' / future 'wechat'`）、周报 cron 渲染，PM 已拍板"周一 + 周五各一封"频率、微信渠道"暂不做"。下次续聊前必须先跑 [me-platform-tier-gate](../../.claude/skills/me-platform-tier-gate/SKILL.md) 完成层级判定，并明确是**复用**该既有设计（大概率）、**修订**其范围（比如把"周报"扩展为按会员档位分级的推送触发条件/频率），还是有充分理由**废弃**重来——不允许绕开这份既有拍板重新设计一套并行的通知渠道。**渠道不是待定项**：邮件复用现有 SendGrid 封装即可，微信按 §1.3/§8 已拍板"暂不做"；真正待定的只是"要不要在既有 `weekly-brief` cron 上按会员档位加分层触发规则"。
+**层级判定（本节内已完成，非待办）**：`docs/specs/2026-06-05-mcp-phase2-product-design.md` §1.2/§1.3、§4.1-4.3、§5.2、§8 已经设计并拍板了同一条"跨支柱推送基础设施"——`clients.notification_email` 字段 + 后台 UI、`notification_log` 表（`channel` 字段本就预留 `'email' / future 'wechat'`）、周报渲染模板，PM 已拍板"周一 + 周五各一封"频率、微信渠道"暂不做"。跑 [me-platform-tier-gate](../../.claude/skills/me-platform-tier-gate/SKILL.md) 判定结果（Inline 模式）：
+
+> [跟班 · Tier] 这是 **L1 平台基础设施**（跨 6 支柱的通知/摘要触达层，不专属某一支柱）——已在上述 2026-06-05 spec 里拍板为共享设计，本次只是在这层之上按会员档位加分层触发规则，不新增能力线、不需要登记 candidates。
+> [跟班 · 判据] 换客户测试 ✓：`notification_email`/`notification_log`/触发规则全部按 `client_id` 参数化，没有一条默认行为只对首个客户成立；换行业测试 ✓：推送频率只随会员档位变化、不随行业变化，不存在"只对某行业成立"的默认值；红线 1（禁包装升级）✓ 未新造"XX Intelligence"名义；红线 2（禁客户/行业事实进 shared runtime）✓ 未写入客户名或行业硬编码。
+> [跟班 · 结论] 归位既有 L1，无需登记候选，可以继续往下写方案——不允许绕开这份既有拍板重新设计一套并行的通知渠道。是**复用**该既有设计（大概率）、**修订**其范围（比如把"周报"扩展为按会员档位分级的推送触发条件/频率），还是有充分理由**废弃**重来，留给下方"待定"项继续讨论。
+
+**渠道现状核查（2026-09-03 修正，别把已拍板的设计当成已建成的能力）**：2026-06-05 spec 里的 SendGrid 封装、`src/lib/notifications/email.ts`、`notification_log` 表、周报 cron 全部还停在**已拍板但未落地**的设计阶段——仓库里没有 `src/lib/notifications/` 目录，没有 `weekly-brief` cron（无论是路由还是调度配置），`src/app/api/cron/admin-key-expiry/route.ts:5-6` 也明确写着"Email delivery is deferred to P2 (notifications/email.ts + SendGrid not yet built)"。**渠道选型不是待定项**（邮件走 SendGrid、微信按 §1.3/§8 拍板"暂不做"这两条结论不用重新讨论），但真正要新建的实施量包括：SendGrid 客户端封装 + ENV 变量、`src/lib/notifications/email.ts`、`notification_log` 表 migration、周报渲染模板、`weekly-brief` cron 路由 + 调度配置——这些都要计入 GO BUILD 工作量，不能按"复用现成邮件能力"排期。真正待定的只是"要不要在这条还没建的推送链路上按会员档位加分层触发规则"。
 
 ---
 
@@ -213,7 +219,7 @@ PM 提出未来新功能可以走"第三方 developer 共建"的路子（类似�
 
 1. 产品负责人提到一句"之前有 issue 总结的挺好：199 是被看到，499 是花钱被看到"——**已搜遍仓库 issue/PR/commit，没找到原文**，需要产品负责人口述复原这句话的具体意思
 2. **免费档"100 个名额"是一次性测试期定语，还是长期就限量制**——产品负责人说"看转化率再定，转化好可以补贴长期跑"，但这跟 #1274"永久免费不设上限"+ #1276 扫街批量预建站的玩法有冲突，**这条本质上要等真实转化数据才能拍板，不是现在能问出结果的问题**，先挂着，等免费档真上线跑出数据再回来对齐
-3. **要不要在 `docs/specs/2026-06-05-mcp-phase2-product-design.md` 已拍板的通知基础设施（`notification_email`/`notification_log`/周报 cron，微信已拍板暂不做）上按会员档位加分层触发条件/频率**——见上方"获客渠道→客户画像"节：画像三明确不主动登录，画像二周活但登录频率低于画像一。下次续聊前必须先跑 [me-platform-tier-gate](../../.claude/skills/me-platform-tier-gate/SKILL.md) 完成层级判定（复用/修订/废弃既有设计），不得重新设计一套并行的通知渠道；渠道本身不是待定项，待定的只是分档推送的具体触发规则
+3. **要不要在 `docs/specs/2026-06-05-mcp-phase2-product-design.md` 已拍板但尚未建成的通知基础设施（`notification_email`/`notification_log`/周报渲染模板，微信已拍板暂不做）上按会员档位加分层触发条件/频率**——见上方"获客渠道→客户画像"节：画像三明确不主动登录，画像二周活但登录频率低于画像一。层级判定已在上节完成（L1 平台基础设施，归位既有拍板设计，不登记候选，不得重新设计一套并行的通知渠道）；渠道选型也不是待定项（邮件 SendGrid / 微信暂不做已拍板）；真正待定的只是分档推送的具体触发规则，且实施时要计入 SendGrid 封装、`email.ts`、`notification_log` migration、周报 cron 路由/调度这条目前还没建的实施链路（见上节"渠道现状核查"）
 
 ## 已定 · 追加
 
@@ -252,3 +258,4 @@ PM 提出未来新功能可以走"第三方 developer 共建"的路子（类似�
 - 2026-09-02 · $199/$499 支柱额度全部量化（关键词数/评论响应时效/内容条数等具体数字，来源含 PM 口径估计）；新增团队席位轴（1/1/3/10/不限）；产出订阅对比页可视化设计稿（Artifact），供跟 jundong 碰版本
 - 2026-09-02 · 删除注册送 500 MTC 老机制（独立 PR #1339，待复审）；梳理获客渠道倒推出 4 个客户画像，反推出"主动通知/摘要推送"应提升为跨支柱基础设施能力的洞察
 - 2026-09-03 · 六轮审阅修正（Codex PR #1341）：收窄"画像二、三根本不会主动打开仪表盘"为只对画像三成立（画像二上表定义是"周活不是日活"，非零登录），除非有真实使用数据再外推；补记通知基础设施在 `docs/specs/2026-06-05-mcp-phase2-product-design.md` 已有拍板（`notification_email`/`notification_log`/周报 cron/微信暂不做），要求下次续聊前先跑 `me-platform-tier-gate` 判定复用/修订/废弃，不得重新设计一套并行通知渠道
+- 2026-09-03 · 七轮审阅修正（Codex PR #1341 round 2）：不再把层级判定推迟到"下次续聊前"，本文内当场跑完 `me-platform-tier-gate` Inline 判定并给出结论（L1 平台基础设施，归位既有拍板，不登记候选）；同时修正把设计阶段的推送组件误写成"现有能力"的问题——SendGrid 封装、`src/lib/notifications/email.ts`、`notification_log` 表、`weekly-brief` cron 目前均未建成，仓库里没有 `src/lib/notifications/` 目录也没有 `weekly-brief` cron，明确标注这些是"已拍板但未落地"，实施时要计入完整建设工作量
