@@ -198,3 +198,15 @@ npx vite-node scripts/magic-insight-prepublish-check.ts -- \
 
 图表实现为手写 CSS + inline SVG（模板见 [`_shared/charts.css`](../_shared/charts.css)），
 不使用 JS 图表库——避免 headless Chrome 打印 PDF 时的渲染时序问题。
+
+---
+
+## 封面图片来源
+
+| 用途 | 内容 | 摄影师 | 授权 | 链接 |
+|---|---|---|---|---|
+| 封面背景 | 集装箱码头鸟瞰（黄昏） | CHUTTERSNAP（@chuttersnap） | Unsplash License（免费商用，无需署名，本报告仍署名） | https://unsplash.com/photos/aerial-view-of-intermodal-containers-xewrfLD8emE |
+
+图片以 **base64 内嵌**进 report.html，不外链。原因：报告主要发给中国境内合作方，
+images.unsplash.com 在大陆访问不稳定，外链会裂；内嵌保证离线可开、国内可靠。
+封面为纯氛围背景图，不含任何数据主张，不构成对来源机构或数据的暗示。

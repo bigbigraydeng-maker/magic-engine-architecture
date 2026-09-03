@@ -1,0 +1,164 @@
+/*
+ * Magic Insight 报告封面系统 —— 全幅照片 hero + 暗色遮罩 + 醒目标题。
+ *
+ * ⚠️ 起新卷时的共享模板，必须【内联】进 report.html，且照片必须【base64 内嵌】。
+ *    原因（2026-09-04 PM 要求 + 中国合作方约束）：
+ *    - 报告主要发给中国境内合作方，images.unsplash.com 在大陆访问不稳定，
+ *      外链图片会裂。base64 内嵌 = 报告自带图、离线可开、国内可靠。
+ *    - 每卷换一张贴题的 Unsplash 照片，打破「清一色深蓝背景」的同质化。
+ *
+ * 图片来源必须记进该卷 sources.md（摄影师 + Unsplash 链接 + License）。
+ * 遮罩保证白色标题在任何照片上都可读——换图不用调标题颜色。
+ */
+
+/* 照片封面容器：盖住整块 cover section */
+.cover.cover-photo {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  min-height: 560px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: #06101F;
+}
+
+/* 背景照片层 */
+.cover-photo .cover-img {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* 暗色渐变遮罩：底部最深（放标题），中段透一点图，顶部再压一档给品牌角标 */
+.cover-photo .cover-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg,
+      rgba(6, 16, 31, 0.82) 0%,
+      rgba(6, 16, 31, 0.30) 26%,
+      rgba(6, 16, 31, 0.55) 62%,
+      rgba(6, 16, 31, 0.94) 100%),
+    linear-gradient(90deg,
+      rgba(6, 16, 31, 0.55) 0%,
+      rgba(6, 16, 31, 0.10) 55%,
+      rgba(6, 16, 31, 0.0) 100%);
+}
+
+/* 顶部品牌条 */
+.cover-photo .cover-topbar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 24px 40px;
+}
+.cover-photo .cover-topbar .cb-brand {
+  display: flex; align-items: center; gap: 11px;
+}
+.cover-photo .cover-topbar .cb-logo {
+  width: 34px; height: 32px; border-radius: 8px;
+  background: rgba(6, 16, 31, 0.55);
+  border: 1px solid rgba(244, 194, 96, 0.4);
+  display: grid; place-items: center;
+  backdrop-filter: blur(4px);
+}
+.cover-photo .cover-topbar .cb-name {
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: 16px; font-weight: 600; color: #fff;
+  letter-spacing: .01em;
+}
+.cover-photo .cover-topbar .cb-name em { font-style: normal; color: var(--gold-soft); }
+.cover-photo .cover-topbar .cb-vol {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(6, 16, 31, 0.35);
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+
+/* 标题区（压在底部深色处） */
+.cover-photo .cover-hero {
+  position: relative;
+  z-index: 2;
+  margin-top: auto;
+  padding: 0 40px 34px;
+  max-width: 1120px;
+}
+.cover-photo .cover-eyebrow {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--gold-soft); font-weight: 600;
+  margin-bottom: 16px;
+}
+.cover-photo .cover-eyebrow .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--gold);
+  box-shadow: 0 0 0 3px rgba(244, 194, 96, 0.25);
+}
+.cover-photo .cover-hero h1 {
+  color: #fff;
+  font-size: clamp(38px, 5.2vw, 62px);
+  line-height: 1.04;
+  margin: 0;
+  font-weight: 600;
+  max-width: 20ch;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.5);
+}
+.cover-photo .cover-hero h1 em { font-style: normal; color: var(--gold-soft); font-weight: 600; }
+.cover-photo .cover-hero .cover-lead {
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: clamp(16px, 1.6vw, 20px);
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.9);
+  margin: 20px 0 0;
+  max-width: 64ch;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.5);
+}
+.cover-photo .cover-hero .cover-lead strong { color: var(--gold-soft); font-weight: 500; }
+
+/* 照片版权署名 */
+.cover-photo .cover-credit {
+  position: absolute;
+  right: 12px; bottom: 8px;
+  z-index: 2;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: .02em;
+}
+
+/* 封面下方的信息带（立场 + 元信息），紧接照片，深色 */
+.cover-infoband {
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+  padding: 26px 0 30px;
+}
+
+@media (max-width: 640px) {
+  .cover-photo { min-height: 480px; }
+  .cover-photo .cover-topbar { padding: 18px 22px; }
+  .cover-photo .cover-hero { padding: 0 22px 26px; }
+  .cover-photo .cover-topbar .cb-name { font-size: 14px; }
+}
+
+@media print {
+  .cover.cover-photo {
+    min-height: 0;
+    height: 248mm; /* 占满首页 A4 可打印高度 */
+    page-break-after: always;
+    break-after: page;
+  }
+  .cover-photo .cover-img,
+  .cover-photo .cover-scrim {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
