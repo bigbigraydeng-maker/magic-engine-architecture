@@ -456,8 +456,10 @@ function ConnectMeta({
   clientId: string
   pageId: string | null
   publishTargetPageId: string | null
-  /** Env-specific Meta app id, from GET's meta_app_id — see the {{META_APP_ID}}
-   *  placeholder in META_RESULT below. */
+  /** 当前环境实际生效的 Meta 应用编号（GET 返回的 meta_app_id）。
+   *  往下传给 metaResult() → TroubleshootSteps，用来告诉操作员该把哪个应用加进
+   *  客户的商务组合。null = 这套环境没配 FACEBOOK_APP_ID，那时不能让人凭应用
+   *  名去找（容易加错应用），要明说去问工程团队要编号。 */
   metaAppId: string | null
 }) {
   const [outcome, setOutcome] = useState<string | null>(null)

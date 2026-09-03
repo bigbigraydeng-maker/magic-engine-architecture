@@ -250,6 +250,60 @@ describe('FacebookPagePanel — 常驻文案不许指回死路', () => {
   })
 })
 
+/**
+ * 应用编号必须来自服务端的 FACEBOOK_APP_ID，不能写死。
+ *
+ * 我第一版把 1752513682785923 直接写进了文案，另一个窗口（0b3ec4b1）指出问题：
+ * 在编号跟生产不一样的环境（测试/预发布/应用迁移后），照着提示做会把**错的**
+ * 应用加进客户的商务组合 —— 授权照样失败，而且查不出为什么。
+ *
+ * 这两条测试就是不让它退回硬编码：正面断言显示的是服务端给的值，反面断言那个
+ * 写死过的编号不再出现。
+ */
+describe('FacebookPagePanel — 应用编号跟环境走', () => {
+  it('显示服务端给的应用编号，而不是写死的那个', async () => {
+    mockGet({
+      page_id: BOUND_PAGE,
+      publish_target_page_id: null,
+      meta_app_id: '999888777666555',
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    window.history.replaceState({}, '', `/dashboard/clients/${CLIENT_ID}?meta=page_not_granted`)
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+
+    await waitFor(() => {
+      const body = document.body.textContent ?? ''
+      expect(body).toMatch(/999888777666555/)
+      // 曾经写死过的那个编号不许再出现（回退成硬编码就会红）。
+      expect(body).not.toMatch(/1752513682785923/)
+      // 也不许把占位符原样漏给用户 —— 提示已是 JSX，对它做字符串 replace 不生效。
+      expect(body).not.toMatch(/\{\{META_APP_ID\}\}/)
+    })
+  })
+
+  it('环境没配编号时，不许让人凭应用名去找', async () => {
+    mockGet({
+      page_id: BOUND_PAGE,
+      publish_target_page_id: null,
+      meta_app_id: null,
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    window.history.replaceState({}, '', `/dashboard/clients/${CLIENT_ID}?meta=page_not_granted`)
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+
+    await waitFor(() => {
+      // 凭名字找容易加错应用，所以这时要明说去问工程团队要编号。
+      expect(document.body.textContent ?? '').toMatch(/报给工程团队要一下应用编号/)
+    })
+  })
+})
+
 describe('FacebookPagePanel — 授权失败的原因要说全', () => {
   it('page_not_granted 要提「应用没加进客户的商务组合」这条真实原因', async () => {
     mockGet({
