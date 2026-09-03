@@ -4,7 +4,10 @@ import { NextRequest } from 'next/server'
 vi.mock('@/lib/auth/client-access', () => ({ requirePaidClientAccess: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
 vi.mock('@/lib/workflows/inngest-event', () => ({ sendInngestEvent: vi.fn() }))
-vi.mock('@/lib/meta/token-manager', () => ({ getMetaTokenForClient: vi.fn() }))
+vi.mock('@/lib/meta/token-manager', () => ({
+  getMetaTokenForClient: vi.fn(),
+  getStoredPageToken: vi.fn(),
+}))
 vi.mock('@/lib/meta/page-posts', () => ({
   getPageAccessToken: vi.fn(),
   publishPagePhotoPost: vi.fn(),
@@ -14,7 +17,7 @@ import { POST } from '../route'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { sendInngestEvent } from '@/lib/workflows/inngest-event'
-import { getMetaTokenForClient } from '@/lib/meta/token-manager'
+import { getMetaTokenForClient, getStoredPageToken } from '@/lib/meta/token-manager'
 import { getPageAccessToken, publishPagePhotoPost } from '@/lib/meta/page-posts'
 import { publishIdempotencyKey } from '@/lib/campaign/daily-plan-publish'
 
@@ -22,6 +25,7 @@ const mockAccess = vi.mocked(requirePaidClientAccess)
 const mockFrom = vi.mocked(supabaseAdmin.from)
 const mockSendInngestEvent = vi.mocked(sendInngestEvent)
 const mockGetMetaToken = vi.mocked(getMetaTokenForClient)
+const mockGetStoredPageToken = vi.mocked(getStoredPageToken)
 const mockGetPageToken = vi.mocked(getPageAccessToken)
 const mockPublish = vi.mocked(publishPagePhotoPost)
 
@@ -190,6 +194,7 @@ function allow() {
 }
 
 function armProvider() {
+  mockGetStoredPageToken.mockResolvedValue('stored-page-token')
   mockGetMetaToken.mockResolvedValue('user-token')
   mockGetPageToken.mockResolvedValue('page-token')
   mockSendInngestEvent.mockResolvedValue({ event_ids: ['evt_pub_1'] })
@@ -357,6 +362,7 @@ describe('publish bridge — review chain is mandatory', () => {
 
   it('refuses with a status a CDN will pass through when no Page token resolves', async () => {
     stubTables()
+    mockGetStoredPageToken.mockResolvedValue(null)
     mockGetMetaToken.mockResolvedValue('user-token')
     mockGetPageToken.mockResolvedValue(null)
 
@@ -375,14 +381,51 @@ describe('publish bridge — review chain is mandatory', () => {
 
   it('says plainly when the client has no Meta token configured at all', async () => {
     stubTables()
+    mockGetStoredPageToken.mockResolvedValue(null)
     mockGetMetaToken.mockResolvedValue(null)
 
     const response = await POST(request({ no_publish: false }), params)
     const json = await response.json()
 
     expect(response.status).toBe(424)
-    expect(json.detail).toContain('没有配置可用的 Meta 令牌')
+    expect(json.detail).toContain('既没有存下来的主页授权，也没有配置 Meta 令牌')
     expect(mockPublish).not.toHaveBeenCalled()
+  })
+})
+
+describe('publish bridge — token source', () => {
+  it('uses the stored Page authorisation and never touches the hand-pasted token', async () => {
+    stubTables()
+    armProvider()
+
+    await POST(request({ no_publish: false, dates: [DATES[0]] }), params)
+
+    expect(mockGetStoredPageToken).toHaveBeenCalledWith(CLIENT_ID, PAGE_ID)
+    expect(mockGetMetaToken).not.toHaveBeenCalled()
+    expect(mockPublish.mock.calls[0][0].pageAccessToken).toBe('stored-page-token')
+  })
+
+  it('falls back to the env token only when nothing is stored', async () => {
+    stubTables()
+    armProvider()
+    mockGetStoredPageToken.mockResolvedValue(null)
+
+    await POST(request({ no_publish: false, dates: [DATES[0]] }), params)
+
+    expect(mockGetMetaToken).toHaveBeenCalledWith(CLIENT_ID)
+    expect(mockPublish.mock.calls[0][0].pageAccessToken).toBe('page-token')
+  })
+
+  it('tells the reader to re-authorise, naming where the button is', async () => {
+    stubTables()
+    mockGetStoredPageToken.mockResolvedValue(null)
+    mockGetMetaToken.mockResolvedValue('user-token')
+    mockGetPageToken.mockResolvedValue(null)
+
+    const json = await (await POST(request({ no_publish: false }), params)).json()
+
+    expect(json.detail).toContain('平台连接')
+    expect(json.detail).toContain('连接 Meta')
   })
 })
 
@@ -417,7 +460,7 @@ describe('publish bridge — live run records real provider ids', () => {
     expect(mockPublish).toHaveBeenCalledTimes(1)
     expect(mockPublish.mock.calls[0][0]).toMatchObject({
       pageId: PAGE_ID,
-      pageAccessToken: 'page-token',
+      pageAccessToken: 'stored-page-token',
       imageUrl: `https://assets.test/${ASSETS[0]}.jpg`,
       message: 'Hook 1\n\nBody 1\n\nEnquire now: https://ctstours.co.nz/tours/china-classic',
     })
