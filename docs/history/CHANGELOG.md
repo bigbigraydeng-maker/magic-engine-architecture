@@ -5,6 +5,26 @@
 
 ---
 
+### 2026-09-03（Magic Insight 研究报告系列：数据完整性事故 + 发布前机械闸上线，PR [#1337](https://github.com/bigbigraydeng-maker/magic-engine/pull/1337)）
+
+**发生了什么**：PM 要求把行业市场研究报告固化为 ME 常规能力，以「Magic Insight 数据研究院」名义面向 499 档高级会员出品。产出 Vol.01（中国入境游）与 Vol.02（中国→澳洲物流）两卷后，PM 追问「这里的数据是真实的吗」——如实核查后确认：**两卷在起草时未跑任何一次实时数据查询**，却给自造数字配上了权威来源标注（ABS、Google Ads Keyword Planner、国家移民管理局、Trip.com 财报），直接违反 CLAUDE.md 铁律 8。
+
+**核查规模与结果**：34 个 agent 并行核查 + 对抗性反驳，**150 条数字里仅 13 条 VERIFIED**（CONTRADICTED 64 · UNVERIFIABLE 32 · NO_SUCH_DATA_EXISTS 26 · CLOSE_BUT_OFF 15）。三类最危险的失败模式：① 引用**根本不存在的数据源航段**（FBX 大洋洲航段）；② 描述一项**从未执行的调研**（「抽样约 40 家 · 审计时间 2026-08」及 16 项百分比）；③ **真假掺杂最难识别**——北京客源表 8 国里 3 个与官方数据逐位吻合，另 5 个编造且系统性低估（法国印为 −2%，官方实为 +24.9%，正负号相反），真数字反而给假数字背了书。两卷 PDF 已删除，不入库。
+
+**上线了什么**：发布前数据核查机械闸（`src/lib/magic-insight/prepublish-check.ts`），7 条规则 5 条 blocking——数量级换算不自洽、自证清白式表述、声称调研无产物、搜索指标无 receipt、头条数字无口径标注。CLI 有 blocking 时退出码 1 可挂 CI。**Reuse First**：复用 `market-intel/grounding.ts` 的数字抽取，补上该模块注释里明确列为「不覆盖的已知边界」的中英数量级换算——那恰好是本次事故的错因。
+
+**⚠️ 闸门的设计边界（不是遗漏）**：只覆盖「机械错」与「措辞风险」两类。「编造」类文本分析看不出来，只能靠 receipt / 产物强制，所以 SOP 第 1 步是「先备齐凭证」而不是「跑脚本」。
+
+**闸门首次实战即抓出自身 3 个误报**：在 Vol.03 上运行时，多组数量级对配错对、以及把诚实的数据缺口声明误判为指标陈述（章节号 `Vol.02` 触发）。三处全部修复并补成回归用例，测试 27 → 34。
+
+**Vol.03（中国→新西兰小批量物流）为首个过闸发布的卷**：全部数字先查一手源再写，核心发现是 NZ$1,000 界线上的 56.7 倍费用悬崖（海运每票 NZ$2.09 → NZ$118.44）与一条专门约束集货拆单的合并计算规则。报告第 07 节公开列出 7 项「查不到所以没写」，包括推翻了开工时自己的假设——「新西兰生物安保全球最严」没有任何政府机构发布过跨国排名，该说法被删除。
+
+**产物**：SOP [`docs/sops/magic-insight-prepublish-data-check.md`](../sops/magic-insight-prepublish-data-check.md) · 出版系列目录 [`docs/magic-insight/`](../magic-insight/)（含 Vol.03 报告源与逐数字数据台账）· 候选登记见 [`docs/registry/platform-candidates.md`](../registry/platform-candidates.md)。
+
+**PM 待拍板（未推进）**：① 法务边界（免责条款 + 三方数据引用授权）② 编委机制（总编 / 各卷主编 / 发布前谁签字）。
+
+---
+
 ### 2026-09-02（官网免费体检漏斗 schema 修复 + Insights 博客上线，PR [#1313](https://github.com/bigbigraydeng-maker/magic-engine/pull/1313) + [#1314](https://github.com/bigbigraydeng-maker/magic-engine/pull/1314)）
 
 **发生了什么**：PM 反馈 magicengine.com.au 的「免费体检」功能一直有问题。实测 + 生产库核查（`discovery_leads` 表 0 行）确认：`email` 列建表起就是 `NOT NULL`，但两步漏斗设计里 `scout.js` 第一次插入时不带 email（email 在第二步 `/api/report` 才收集），导致每次插入都撞约束失败。子牙+魏征两轮独立复审后，migration 已 apply 到生产（`glbdnayojixmexgofbsd`）放开该约束。
