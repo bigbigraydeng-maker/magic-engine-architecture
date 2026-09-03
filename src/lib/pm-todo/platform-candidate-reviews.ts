@@ -93,4 +93,9 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: 'Governed Lead-Reply Agent（结构化事实驱动的广告留资对话生成 + 发送前防幻觉/禁用清单校验引擎，接管 Messenger/WhatsApp 等渠道的黑箱平台自带 AI 客服）',
     reviewDate: '2026-09-15',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '行业市场研究报告出品能力（署名 "Magic Insight 数据研究院"，面向高级会员定期出品行业级市场研究）',
+    reviewDate: '2026-10-03',
+  },
 ]
