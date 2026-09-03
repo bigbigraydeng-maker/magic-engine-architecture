@@ -355,15 +355,33 @@ describe('publish bridge — review chain is mandatory', () => {
     expect(mockPublish).not.toHaveBeenCalled()
   })
 
-  it('refuses when no Page token can be resolved', async () => {
+  it('refuses with a status a CDN will pass through when no Page token resolves', async () => {
     stubTables()
     mockGetMetaToken.mockResolvedValue('user-token')
     mockGetPageToken.mockResolvedValue(null)
 
     const response = await POST(request({ no_publish: false }), params)
+    const json = await response.json()
 
-    expect(response.status).toBe(502)
-    expect((await response.json()).error).toBe('PAGE_TOKEN_UNAVAILABLE')
+    // Never 502/504: a proxy replaces those bodies with its own error page,
+    // which is exactly how this refusal once reached the browser as
+    // "Bad gateway" with the real reason stripped out.
+    expect([502, 504]).not.toContain(response.status)
+    expect(response.status).toBe(424)
+    expect(json.error).toBe('PAGE_TOKEN_UNAVAILABLE')
+    expect(json.detail).toContain('重新授权')
+    expect(mockPublish).not.toHaveBeenCalled()
+  })
+
+  it('says plainly when the client has no Meta token configured at all', async () => {
+    stubTables()
+    mockGetMetaToken.mockResolvedValue(null)
+
+    const response = await POST(request({ no_publish: false }), params)
+    const json = await response.json()
+
+    expect(response.status).toBe(424)
+    expect(json.detail).toContain('没有配置可用的 Meta 令牌')
     expect(mockPublish).not.toHaveBeenCalled()
   })
 })

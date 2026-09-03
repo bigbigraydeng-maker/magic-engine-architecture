@@ -228,7 +228,22 @@ async function resolvePageToken(
   const userToken = await getMetaTokenForClient(clientId)
   const token = userToken ? await getPageAccessToken(userToken, pageId) : null
   if (!token) {
-    return NextResponse.json({ success: false, error: 'PAGE_TOKEN_UNAVAILABLE' }, { status: 502 })
+    // 424, not 502. A CDN in front of the app (Cloudflare here) treats an
+    // origin 502 as "origin is broken" and replaces our body with its own
+    // branded error page — so this refusal reached the browser as
+    // "Bad gateway" HTML and the real reason was invisible. 424 Failed
+    // Dependency says the same thing (an upstream we depend on did not
+    // cooperate) and is passed through untouched.
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'PAGE_TOKEN_UNAVAILABLE',
+        detail: userToken
+          ? '拿到了 Meta 令牌，但它换不出这个主页的 Page token —— 通常是授权过期或这个令牌没有该主页的权限，需要重新授权。'
+          : '这个客户没有配置可用的 Meta 令牌。',
+      },
+      { status: 424 }
+    )
   }
   return { token }
 }
