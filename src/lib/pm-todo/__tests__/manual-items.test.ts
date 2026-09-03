@@ -13,7 +13,6 @@ import {
   pushPlatformCandidateReviewItems,
   pushDataForSeoCreditsItem,
   pushLinkedinProgressItems,
-  LINKEDIN_PROGRESS_FETCH_LIMIT,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -78,14 +77,21 @@ describe('pushDataForSeoCreditsItem', () => {
 describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏', () => {
   const NOW = new Date('2026-09-03T09:00:00Z')
 
-  /** 假 content_posts 查询：`.select().eq().eq().in().order().limit()` 后 await。 */
+  /**
+   * 假 content_posts 查询：生产用 `fetchAll` 分页，终点是 `.range(from, to)`。
+   * 按 range 真的切片建模 —— 这样 fetchAll 的分页契约（满页续拉、不满页收尾）
+   * 才被如实模拟，不会因为每页都返回全量而重复计数或死循环。
+   */
   function fakePostsQuery(rows: unknown[]): SupabaseClient {
     const chain = {
       select: () => chain,
       eq: () => chain,
       in: () => chain,
       order: () => chain,
-      limit: async () => ({ data: rows, error: null }),
+      range: async (from: number, to: number) => ({
+        data: (rows as unknown[]).slice(from, to + 1),
+        error: null,
+      }),
     }
     return { from: () => chain } as unknown as SupabaseClient
   }
@@ -194,18 +200,27 @@ describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏'
     expect(items).toEqual([])
   })
 
-  it('🔴 取满上限（可能还有更旧的没数进来）→ 显示「N+」，绝不把截断数当总数', async () => {
+  it('🔴 积压很多且更旧的是另一类 → fetchAll 读全，不漏数也不整类漏掉（Codex P2 ×2）', async () => {
     const items: ManualItem[] = []
-    // 假 supabase 的 .limit() 是空操作，会原样返回全部行 —— 给满上限条数
-    // 即模拟「数到上限、后面可能还有」这个生产会遇到的截断态。
-    const full = Array.from({ length: LINKEDIN_PROGRESS_FETCH_LIMIT }, () =>
-      draft('sensitive_content_flagged'),
-    )
-    await pushLinkedinProgressItems(fakePostsQuery(full), items, NOW)
+    // 600 条敏感草稿在前，1 条「已发布但回写失败」排在最后（更旧）。
+    // 旧版 .limit(500) 会把这条红线告警整类砍掉；fetchAll 读全后两类都在。
+    const rows = [
+      ...Array.from({ length: 600 }, () => draft('sensitive_content_flagged')),
+      {
+        id: 'oldest-dbsync',
+        status: 'approved',
+        updated_at: '2026-09-01T00:00:00Z',
+        generation_context_snapshot: { reason: 'published_but_db_sync_failed' },
+      },
+    ]
+    await pushLinkedinProgressItems(fakePostsQuery(rows), items, NOW)
 
     const review = items.filter((i) => i.kind === 'linkedin_progress_needs_review')
-    expect(review).toHaveLength(1)
-    expect(review[0].what).toContain(`${LINKEDIN_PROGRESS_FETCH_LIMIT}+`)
+    // 敏感一条（含精确 600，不被 500 截断）+ 已发布回写失败一条（没被整类漏掉）
+    const sensitive = review.find((i) => i.what.includes('敏感信息'))
+    const dbSync = review.find((i) => i.what.includes('千万别'))
+    expect(sensitive?.what).toContain('600')
+    expect(dbSync).toBeTruthy()
   })
 
   it('发布失败多条、报错各不相同 → 一条汇总，条数 + 去重后的原因都带上', async () => {

@@ -131,6 +131,7 @@ export function gscInspectUrl(siteUrl: string, pageUrl: string): string {
 }
 
 import { gscPropertyUrl, gscInspectSteps, verifyActionLink } from './action-link'
+import { fetchAll } from '@/lib/supabase-paginate'
 import { checkCronHealth } from '@/lib/cron/health'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
@@ -893,16 +894,6 @@ const LINKEDIN_CONNECTORS_URL = `https://app.magicengine.com.au/dashboard/client
 const LINKEDIN_PUBLISH_FAILURE_STALE_HOURS = 2
 
 /**
- * 一次取多少行来数。
- *
- * 🔴 数条数就不能截断（Codex P2, PR #1375）：待办文案会明确说「有 N 条」，
- * 而 N 一旦是 `.limit()` 截断后的数，PM 清完这些会以为积压清空、更旧的还卡着。
- * 这条线是单客户、每周 ~2 条，500 远高于任何真实积压（≈ 5 年全无人处理）；
- * 万一真到顶，`countLabel` 用「N+」兜底，绝不把截断数当成总数。
- */
-export const LINKEDIN_PROGRESS_FETCH_LIMIT = 500
-
-/**
  * ME 产品动态自动发 LinkedIn（P24 新建）—— 三种"这条本该自动完成却没完成"的状态，
  * 全部要下发,不能只写进 cron_run_logs：
  *   1. 敏感内容命中硬过滤,转人审草稿(status='draft', reason='sensitive_content_flagged')
@@ -918,14 +909,34 @@ export async function pushLinkedinProgressItems(
   items: ManualItem[],
   now: Date,
 ): Promise<void> {
-  const { data } = await supabase
-    .from('content_posts')
-    .select('id, status, updated_at, generation_context_snapshot')
-    .eq('client_id', LINKEDIN_PROGRESS_CLIENT_ID)
-    .eq('source', LINKEDIN_PROGRESS_SOURCE)
-    .in('status', ['draft', 'approved'])
-    .order('updated_at', { ascending: false })
-    .limit(LINKEDIN_PROGRESS_FETCH_LIMIT)
+  /**
+   * 🔴 **必须读全，不能截断**（Codex P2 ×2, PR #1375）。
+   *
+   * 待办文案会明确说「有 N 条」，而且是**按类归堆**后再下发。任何 `.limit()`
+   * 都在归类**之前**砍行：
+   *   ① 会把「N 条」说成截断后的数（PM 清完以为清空、更旧的还卡着）；
+   *   ② 更糟——若被砍掉的那批恰好是某一整类（比如最新一批全是敏感草稿，
+   *      把更旧的「已发布但回写失败」整类挤出窗口），那一类会**完全不下发**，
+   *      连"千万别重发"的红线告警都消失。
+   * 所以走平台既有的 `fetchAll` 分页读全（这条线单客户、每周 ~2 条，天然有界；
+   * fetchAll 到 10 万行硬顶会抛错而非静默给半份，正是我们要的 fail-loud）。
+   */
+  const rows = await fetchAll<{
+    id: string
+    status: string
+    updated_at: string
+    generation_context_snapshot: { reason?: string; publish_error?: string } | null
+  }>((from, to) =>
+    supabase
+      .from('content_posts')
+      .select('id, status, updated_at, generation_context_snapshot')
+      .eq('client_id', LINKEDIN_PROGRESS_CLIENT_ID)
+      .eq('source', LINKEDIN_PROGRESS_SOURCE)
+      .in('status', ['draft', 'approved'])
+      // range 必须配 order，否则分页之间顺序不稳、会重复或漏行
+      .order('updated_at', { ascending: false })
+      .range(from, to),
+  )
 
   /**
    * 🔴 **同一类卡点只出一条、带上条数 —— 绝不许一条草稿一行。**
@@ -940,17 +951,8 @@ export async function pushLinkedinProgressItems(
    * 要处理，而不是被同一句话重复轰炸。单条时的文案逐字保留（那几句是多轮 review
    * 磨出来的，尤其"已发布但回写失败"那条的红线话术不能回退）。
    */
-  const rows = (data ?? []) as Array<{
-    id: string
-    status: string
-    updated_at: string
-    generation_context_snapshot: { reason?: string; publish_error?: string } | null
-  }>
-  // 取满上限 = 可能还有更旧的没数进来。此时任何「N 条」都要显示成「N+」，
-  // 并一律走多条文案，绝不把截断数说成总数（见上 LINKEDIN_PROGRESS_FETCH_LIMIT 头注）。
-  const truncated = rows.length >= LINKEDIN_PROGRESS_FETCH_LIMIT
-  const many = (n: number) => n > 1 || truncated
-  const countLabel = (n: number) => (truncated ? `${n}+` : `${n}`)
+  const many = (n: number) => n > 1
+  const countLabel = (n: number) => `${n}`
 
   let sensitiveReview = 0
   let needsSetup = 0
