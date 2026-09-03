@@ -11,20 +11,28 @@
  * the MeMark logo. (Not the dark scan-report theme.)
  *
  * Data: the leak report is REBUILT deterministically from evidence already on
- * the prospect row (audit + ai_report + score_breakdown) — no new column, no
- * migration. Only client-safe fields render (never prospect_score, raw
- * internal analysis, or vendor names). noindex: private to one business.
+ * the prospect row (audit + ai_report + score_breakdown). Only client-safe
+ * fields render (never prospect_score, raw internal analysis, or vendor
+ * names). noindex: private to one business.
+ *
+ * P35.14: a small reviewed pilot batch also carries a full 张骞 Discovery
+ * scan (`discovery_report` + `discovery_report_status` columns, migration
+ * 20260824000001) — when present and fully completed (not truncated), it
+ * enriches the industry-benchmark, keyword and verified-registration
+ * sections below. Most rows have neither column set and behave exactly as
+ * before. See docs/specs/2026-08-24-report-page-discovery-upgrade-design.md.
  */
 
 import type { Metadata } from 'next'
 import { supabaseAdmin } from '@/lib/supabase'
 import { MeMark, MeMarkDefs } from '@/components/ui/me-mark'
-import { buildLeakReport, type LeakStage } from '@/lib/prospecting/report'
+import { buildLeakReport, usableDiscovery, type LeakStage } from '@/lib/prospecting/report'
 import { INDUSTRY_LABELS, type ProspectAnalysis } from '@/lib/prospecting/analyze'
 import { sanitiseOwnerName } from '@/lib/prospecting/outreach'
 import ReportLeadForm from './_components/ReportLeadForm'
 import type { ProspectAudit } from '@/lib/prospecting/audit'
 import type { ScoreSignal } from '@/lib/prospecting/score'
+import type { DiscoveryReport } from '@/lib/zhangqian/types'
 
 export const metadata: Metadata = {
   title: 'Your digital health check — Magic Engine',
@@ -57,6 +65,9 @@ interface ProspectRow {
   audit:         ProspectAudit | null
   score_breakdown: ScoreSignal[] | null
   ai_report:     ProspectAnalysis | null
+  /** P35.14: full Discovery scan, only populated for a small reviewed pilot batch. */
+  discovery_report:        DiscoveryReport | null
+  discovery_report_status: string | null
 }
 
 function InvalidLink() {
@@ -81,11 +92,16 @@ export default async function ReportPage({ params }: { params: { id: string } })
 
   const { data: p } = await supabaseAdmin
     .from('outbound_prospects')
-    .select('business_name, industry, city, country, domain, website_url, email, rating, review_count, audit, score_breakdown, ai_report')
+    .select('business_name, industry, city, country, domain, website_url, email, rating, review_count, audit, score_breakdown, ai_report, discovery_report, discovery_report_status')
     .eq('id', params.id)
     .maybeSingle<ProspectRow>()
 
   if (!p) return <InvalidLink />
+
+  // Column is a plain `text` (CHECK-constrained in the DB, not in TS) — one
+  // cast here, reused everywhere below instead of repeating it per call site.
+  const discoveryStatus = p.discovery_report_status as
+    | 'not_run' | 'running' | 'completed' | 'truncated' | 'failed' | null
 
   const hasWebsite = Boolean(p.website_url || p.domain)
   const report = buildLeakReport({
@@ -100,6 +116,8 @@ export default async function ReportPage({ params }: { params: { id: string } })
     tracking:      p.audit?.tracking ?? null,
     breakdown:     p.score_breakdown ?? null,
     analysis:      p.ai_report ?? null,
+    discovery_report:        p.discovery_report ?? null,
+    discovery_report_status: discoveryStatus,
   })
 
   // AI-search competitor comparison — the sharpest, most on-brand element:
@@ -108,9 +126,13 @@ export default async function ReportPage({ params }: { params: { id: string } })
   const rivals = (probe && !probe.mentioned ? probe.competitors_mentioned : []).slice(0, 3)
   const tradeLabel = INDUSTRY_LABELS[p.industry] ?? p.industry.replace(/_/g, ' ')
   const social = p.ai_report?.social_activity
-  // "What your customers search" — only present once generated for an onboarding
-  // client (P35.12); cold prospects don't carry it, so the section simply omits.
-  const keywords = p.ai_report?.keyword_report ?? []
+  // "What your customers search" — prefer the real Discovery keyword set
+  // (P35.14, pilot batch only) over the $19.90-tier keyword_report; both are
+  // the same client-safe shape. Cold prospects outside the pilot get neither
+  // and the section simply omits.
+  const keywords = (report.keyword_opportunities?.length ?? 0) > 0
+    ? report.keyword_opportunities!
+    : p.ai_report?.keyword_report ?? []
 
   const keyFinding = report.summary_points[0] ?? ''
   // Pre-fill the lead form with what we already know (we emailed this owner):
@@ -132,9 +154,21 @@ export default async function ReportPage({ params }: { params: { id: string } })
   // The $99 one-page-site add-on shows when there is no website at all, or
   // when the current site is genuinely weak (insecure / slow / thin).
   const WEAK_SITE_SIGNALS = ['no_https', 'slow_lcp', 'thin_content', 'missing_title', 'missing_description', 'missing_h1']
+  // P35.14: when a completed, non-truncated Discovery scan ran (pilot batch),
+  // its onpage_audit is a real re-crawl and takes priority over the older
+  // rule-based score_breakdown signals for this same judgement. Reuses the
+  // SAME gate as buildLeakReport() (usableDiscovery) rather than a second,
+  // hand-rolled copy of the condition — a second copy silently drifts the
+  // moment the gate's logic changes (魏征 P35.14 implementation review).
+  const discoveryOnpage = usableDiscovery({
+    discovery_report: p.discovery_report,
+    discovery_report_status: discoveryStatus,
+  })?.onpage_audit
   const siteWeak = !hasWebsite ||
     p.audit?.https_ok === false ||
-    (p.score_breakdown ?? []).some(s => WEAK_SITE_SIGNALS.includes(s.signal))
+    (discoveryOnpage
+      ? !discoveryOnpage.checks.https || discoveryOnpage.checks.no_title || discoveryOnpage.checks.no_description
+      : (p.score_breakdown ?? []).some(s => WEAK_SITE_SIGNALS.includes(s.signal)))
 
   // Industries where the practitioner IS the brand — a presenter-video add-on
   // (AI avatar, plain-language, no vendor name) lands; trades don't need it.
@@ -187,6 +221,16 @@ export default async function ReportPage({ params }: { params: { id: string } })
             <p className="mt-1 text-xs" style={{ color: 'rgba(26,26,26,0.5)' }}>
               {tradeLabel} · {cityDisplay(p.city)}
             </p>
+            {report.verified_registration && (
+              <div className="mt-2">
+                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: 'rgba(92,138,74,0.12)', color: GREEN }}>
+                  ✓ Registered business{report.verified_registration.registered_since ? ` · since ${report.verified_registration.registered_since.slice(0, 4)}` : ''}
+                </span>
+                <p className="mt-1 text-[10px] leading-relaxed" style={{ color: 'rgba(26,26,26,0.4)' }}>
+                  Source: {report.verified_registration.source_label}
+                </p>
+              </div>
+            )}
             {keyFinding && (
               <p className="mt-4 border-l-2 pl-3 text-sm italic leading-relaxed" style={{ borderColor: GOLD, color: 'rgba(26,26,26,0.7)' }}>
                 &ldquo;{keyFinding}&rdquo;
@@ -246,6 +290,31 @@ export default async function ReportPage({ params }: { params: { id: string } })
             </div>
             <p className="mt-3 text-xs" style={{ color: 'rgba(26,26,26,0.5)' }}>
               More and more people ask AI instead of Googling. Right now it sends them to your competitors.
+            </p>
+          </section>
+        )}
+
+        {/* P35.14: anonymised industry traffic benchmark — 板桥 rule: never name
+            a competitor to this audience, show an industry average instead */}
+        {report.industry_benchmark && (
+          <section className="mt-4 rounded-[24px] p-6" style={{ background: '#fff', boxShadow: '0 1px 2px rgba(26,26,26,.04), 0 8px 28px rgba(26,26,26,.06)' }}>
+            <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{ color: OCHRE }}>
+              <span>📊</span> Where you sit in the market
+            </p>
+            <p className="mt-3 text-sm leading-relaxed" style={{ color: 'rgba(26,26,26,0.7)' }}>
+              Based on {report.industry_benchmark.sample_size} other {tradeLabel} businesses in {cityDisplay(p.city)},
+              the ones doing well online average about{' '}
+              <span className="font-semibold">{report.industry_benchmark.industry_avg_traffic.toLocaleString()}</span> visits a month.
+            </p>
+            <div className="mt-3 flex items-center gap-2.5 rounded-lg px-3 py-2" style={{ background: IVORY }}>
+              <span className="text-sm font-medium">
+                {report.industry_benchmark.your_traffic != null
+                  ? `You're currently around ${report.industry_benchmark.your_traffic.toLocaleString()} a month`
+                  : `We didn't find a comparable traffic signal for your own site yet`}
+              </span>
+            </div>
+            <p className="mt-3 text-xs" style={{ color: 'rgba(26,26,26,0.5)' }}>
+              This is a rough industry average, not a ranking — every business&apos;s starting point is different.
             </p>
           </section>
         )}

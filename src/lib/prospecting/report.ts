@@ -27,6 +27,8 @@
 import { INDUSTRY_LABELS, type ProspectAnalysis } from './analyze'
 import type { ScoreSignal } from './score'
 import type { TrackingSignals } from './tracking-detector'
+import { difficultyBand, type KeywordReportItem } from './keyword-report'
+import type { DiscoveryReport } from '@/lib/zhangqian/types'
 
 export type LeakStatus = 'leak' | 'weak' | 'ok'   // 🔴 leaking / 🟡 soft spot / 🟢 solid
 
@@ -43,6 +45,32 @@ export interface LeakStage {
   fix:     string
 }
 
+/**
+ * Anonymised traffic comparison (P35.14 · 板桥 rule: never name a competitor
+ * to a Chinese-business-community reader — face matters, a named "you're
+ * behind X" reads as an insult, not a diagnosis). `industry_avg_traffic` is
+ * the mean of the discovered competitors' monthly traffic; `your_traffic` is
+ * null when the prospect's own domain has no SEMrush signal.
+ */
+export interface IndustryBenchmark {
+  your_traffic:         number | null
+  industry_avg_traffic: number
+  /** How many competitors fed the average — shown so the number isn't read as absolute truth. */
+  sample_size:          number
+}
+
+/**
+ * Verified official business registration (ABR/NZBN). `source_label` is
+ * plain language for the report page's trust badge — 板桥 rule: always
+ * pair this with a visible "public registry, anyone can look this up" line
+ * so it reads as transparency, not surveillance.
+ */
+export interface VerifiedRegistration {
+  identifier_type:  'ABN' | 'NZBN'
+  registered_since: string | null
+  source_label:     string
+}
+
 export interface LeakReport {
   generated_at:   string
   business_name:  string
@@ -50,13 +78,30 @@ export interface LeakReport {
   headline:       string
   /** Count of stages currently leaking (status === 'leak'). */
   leak_count:     number
-  /** 0–100 lead-health score derived from the stages (100 = nothing leaking). */
+  /**
+   * 0–100 lead-health score derived from the stages (100 = nothing leaking).
+   * Always the rule-based funnel score, even when a full Discovery report is
+   * available — P35.14 design decision: DiscoveryReport.diagnosis.scores is a
+   * SEPARATE six-pillar AI score and must never become a second headline
+   * number on this page (two scores on one page fight each other). Discovery
+   * data only enriches evidence below, never the hero score.
+   */
   health_score:   number
   /** Short verdict label keyed off the score, for the hero badge. */
   verdict:        string
   stages:         LeakStage[]
   /** Sharpest findings (leaks first, then soft spots) for the cold-email body. */
   summary_points: string[]
+  /**
+   * P35.14: real (anonymised) traffic comparison. `buildLeakReport()` always
+   * sets this (to null when unavailable) — optional here only so hand-built
+   * `LeakReport` fixtures elsewhere (e.g. outreach.test.ts) don't need it.
+   */
+  industry_benchmark?:    IndustryBenchmark | null
+  /** P35.14: official registry verification. Null unless found and active. */
+  verified_registration?: VerifiedRegistration | null
+  /** P35.14: real keyword volumes from Discovery. Empty when unavailable — same shape as the existing $19.90-tier keyword report. */
+  keyword_opportunities?: KeywordReportItem[]
 }
 
 export interface LeakReportInput {
@@ -72,6 +117,17 @@ export interface LeakReportInput {
   tracking:      TrackingSignals | null
   breakdown:     ScoreSignal[] | null
   analysis:      ProspectAnalysis | null
+  /**
+   * P35.14: full 张骞 Discovery scan, when one was run for this prospect
+   * (~$0.57, only for a small reviewed pilot batch — most prospects have
+   * none of this and the report falls back to `analysis`/`breakdown` only).
+   */
+  discovery_report?:        DiscoveryReport | null
+  /**
+   * Distinguishes "never ran" from "ran but failed/truncated" — a null
+   * `discovery_report` alone can't tell those apart (子牙 P35.14 review).
+   */
+  discovery_report_status?: 'not_run' | 'running' | 'completed' | 'truncated' | 'failed' | null
 }
 
 /** Singular, client-facing trade noun ("dentists" seed → "dentist"). */
@@ -198,6 +254,67 @@ function noWebsiteStages(input: LeakReportInput): [LeakStage, LeakStage, LeakSta
   ]
 }
 
+// ─── P35.14: Discovery-sourced enrichment (whole-report gate, no field-level salvage) ─
+
+const REGISTRY_SOURCE_LABEL: Record<'AU' | 'NZ', string> = {
+  AU: 'Australian Business Register (ABR) — a public government registry, anyone can look this up',
+  NZ: 'New Zealand Companies Office (NZBN) — a public government registry, anyone can look this up',
+}
+
+/**
+ * Only a fully-completed, non-truncated Discovery report is trusted. A
+ * truncated report can have e.g. `competitors` populated but `seed_keywords`
+ * half-done — salvaging field-by-field would mix a complete section with an
+ * incomplete one on the same page with no way to tell them apart, so the
+ * whole report is discarded instead (子牙 P35.14 review).
+ *
+ * Exported so every consumer (this file's `buildLeakReport`, and
+ * `/report/[id]/page.tsx`'s `siteWeak` check) shares ONE gate — a second,
+ * hand-rolled copy of this condition drifts silently the moment this
+ * function's logic changes (魏征 P35.14 implementation review).
+ */
+export function usableDiscovery(
+  input: Pick<LeakReportInput, 'discovery_report' | 'discovery_report_status'>,
+): DiscoveryReport | null {
+  if (input.discovery_report_status !== 'completed') return null
+  if (!input.discovery_report) return null
+  if (input.discovery_report.meta?.truncated) return null
+  return input.discovery_report
+}
+
+function buildIndustryBenchmark(discovery: DiscoveryReport): IndustryBenchmark | null {
+  const values = (discovery.competitors ?? [])
+    .map(c => c.monthly_traffic)
+    .filter((v): v is number => v != null && v > 0)
+  if (values.length === 0) return null
+  return {
+    your_traffic: discovery.semrush_snapshot?.monthly_traffic ?? null,
+    industry_avg_traffic: Math.round(values.reduce((a, b) => a + b, 0) / values.length),
+    sample_size: values.length,
+  }
+}
+
+function buildVerifiedRegistration(discovery: DiscoveryReport): VerifiedRegistration | null {
+  const reg = discovery.business?.registration
+  if (!reg || reg.status !== 'active') return null
+  return {
+    identifier_type: reg.identifier_type,
+    registered_since: reg.registered_since,
+    source_label: REGISTRY_SOURCE_LABEL[reg.country] ?? 'a public official business registry',
+  }
+}
+
+function buildKeywordOpportunities(discovery: DiscoveryReport): KeywordReportItem[] {
+  return (discovery.seed_keywords ?? [])
+    .filter(k => (k.semrush_volume ?? k.estimated_volume ?? 0) > 0)
+    .slice(0, 8)
+    .map(k => ({
+      phrase: k.keyword,
+      volume: k.semrush_volume ?? k.estimated_volume ?? 0,
+      difficulty: difficultyBand(k.semrush_kd ?? null),
+    }))
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /** Build the customer-facing lead-leakage report. Pure — never throws, never invents. */
@@ -242,6 +359,8 @@ export function buildLeakReport(input: LeakReportInput): LeakReport {
     ? `${leak_count} ${leak_count === 1 ? 'place' : 'places'} where enquiries are leaking`
     : 'A few quick wins to bring in more enquiries'
 
+  const discovery = usableDiscovery(input)
+
   return {
     generated_at: new Date().toISOString(),
     business_name: input.business_name,
@@ -251,5 +370,8 @@ export function buildLeakReport(input: LeakReportInput): LeakReport {
     verdict,
     stages,
     summary_points,
+    industry_benchmark:    discovery ? buildIndustryBenchmark(discovery) : null,
+    verified_registration: discovery ? buildVerifiedRegistration(discovery) : null,
+    keyword_opportunities: discovery ? buildKeywordOpportunities(discovery) : [],
   }
 }

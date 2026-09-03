@@ -3,6 +3,7 @@ import { buildLeakReport, type LeakReportInput } from '../report'
 import type { ProspectAnalysis } from '../analyze'
 import type { TrackingSignals } from '../tracking-detector'
 import type { ScoreSignal } from '../score'
+import type { DiscoveryReport } from '@/lib/zhangqian/types'
 
 const TRACKING_ALL_GOOD: TrackingSignals = {
   ga4: true, gtm: true, meta_pixel: true, clarity: true, legacy_ua: false,
@@ -28,6 +29,32 @@ function analysis(over: Partial<ProspectAnalysis> = {}): ProspectAnalysis {
     geo_probe: null,
     social_activity: null,
     skips: [],
+    ...over,
+  }
+}
+
+function discoveryReport(over: Partial<DiscoveryReport> = {}): DiscoveryReport {
+  return {
+    schema_version: 1,
+    domain: 'sunnydental.co.nz',
+    business: {
+      name: 'Sunny Dental',
+      industry: ['dentists'],
+      location: { city: 'Auckland', region: 'Auckland', country: 'NZ' },
+      description: 'A dental clinic.',
+      target_audience: ['families'],
+      unique_selling_points: ['same-day appointments'],
+      confidence: 0.9,
+      registration: null,
+    },
+    social_profiles: [],
+    gbp: null,
+    review_platforms: [],
+    seed_keywords: [],
+    competitors: [],
+    ai_tracker_questions: [],
+    notes: '',
+    meta: { model: 'test', tool_calls: 10, cost_usd: 0.57, duration_ms: 1000, truncated: false },
     ...over,
   }
 }
@@ -198,5 +225,117 @@ describe('health_score + verdict', () => {
       }),
     }))
     expect(r.health_score).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('P35.14 — Discovery report enrichment (whole-report gate)', () => {
+  it('leaves the three new fields empty/null with no discovery_report at all — existing callers untouched', () => {
+    const r = buildLeakReport(baseInput())
+    expect(r.industry_benchmark).toBeNull()
+    expect(r.verified_registration).toBeNull()
+    expect(r.keyword_opportunities).toEqual([])
+  })
+
+  it('ignores a present discovery_report when discovery_report_status is not "completed"', () => {
+    const r = buildLeakReport(baseInput({
+      discovery_report: discoveryReport({
+        competitors: [{ domain: 'rival.co.nz', name: 'Rival', relevance: 'direct', rationale: '', monthly_traffic: 5000 }],
+      }),
+      discovery_report_status: 'running',
+    }))
+    expect(r.industry_benchmark).toBeNull()
+  })
+
+  it('discards the WHOLE report when meta.truncated is true — no field-level salvage (子牙 review)', () => {
+    const r = buildLeakReport(baseInput({
+      discovery_report: discoveryReport({
+        competitors: [{ domain: 'rival.co.nz', name: 'Rival', relevance: 'direct', rationale: '', monthly_traffic: 5000 }],
+        seed_keywords: [{ keyword: 'dentist auckland', type: 'local', rationale: '', semrush_volume: 900, semrush_kd: 20 }],
+        meta: { model: 'test', tool_calls: 18, cost_usd: 1.2, duration_ms: 9000, truncated: true },
+      }),
+      discovery_report_status: 'completed',
+    }))
+    expect(r.industry_benchmark).toBeNull()
+    expect(r.keyword_opportunities).toEqual([])
+  })
+
+  it('computes an anonymised industry-average benchmark — never a named competitor (板桥 rule)', () => {
+    const r = buildLeakReport(baseInput({
+      discovery_report: discoveryReport({
+        semrush_snapshot: { monthly_traffic: 800, trust_score: 20, keyword_count: 5, top_keywords: [] },
+        competitors: [
+          { domain: 'a.co.nz', name: 'Rival A', relevance: 'direct', rationale: '', monthly_traffic: 10_000 },
+          { domain: 'b.co.nz', name: 'Rival B', relevance: 'direct', rationale: '', monthly_traffic: 14_000 },
+        ],
+      }),
+      discovery_report_status: 'completed',
+    }))
+    expect(r.industry_benchmark).toEqual({ your_traffic: 800, industry_avg_traffic: 12_000, sample_size: 2 })
+    expect(JSON.stringify(r.industry_benchmark)).not.toMatch(/Rival/)
+  })
+
+  it('surfaces a verified-registration badge only when the registry status is active', () => {
+    const activeReg = buildLeakReport(baseInput({
+      discovery_report: discoveryReport({
+        business: {
+          ...discoveryReport().business,
+          registration: {
+            country: 'NZ', identifier: '9429000000000', identifier_type: 'NZBN',
+            entity_name: 'Sunny Dental Ltd', entity_type: 'Limited Company',
+            status: 'active', registered_since: '2019-03-01', gst_registered: true,
+          },
+        },
+      }),
+      discovery_report_status: 'completed',
+    }))
+    expect(activeReg.verified_registration).toMatchObject({ identifier_type: 'NZBN', registered_since: '2019-03-01' })
+    expect(activeReg.verified_registration?.source_label).toMatch(/public/i)
+
+    const cancelledReg = buildLeakReport(baseInput({
+      discovery_report: discoveryReport({
+        business: {
+          ...discoveryReport().business,
+          registration: {
+            country: 'NZ', identifier: '9429000000000', identifier_type: 'NZBN',
+            entity_name: 'Sunny Dental Ltd', entity_type: 'Limited Company',
+            status: 'cancelled', registered_since: '2019-03-01', gst_registered: true,
+          },
+        },
+      }),
+      discovery_report_status: 'completed',
+    }))
+    expect(cancelledReg.verified_registration).toBeNull()
+  })
+
+  it('maps seed_keywords to the same client-safe shape as the existing $19.90 keyword report', () => {
+    const r = buildLeakReport(baseInput({
+      discovery_report: discoveryReport({
+        seed_keywords: [
+          { keyword: 'dentist auckland', type: 'local', rationale: '', semrush_volume: 900, semrush_kd: 20 },
+          { keyword: 'emergency dentist', type: 'transactional', rationale: '', semrush_volume: 300, semrush_kd: 70 },
+          { keyword: 'no volume signal', type: 'brand', rationale: '', semrush_volume: 0, estimated_volume: 0 },
+        ],
+      }),
+      discovery_report_status: 'completed',
+    }))
+    expect(r.keyword_opportunities).toEqual([
+      { phrase: 'dentist auckland', volume: 900, difficulty: 'easy' },
+      { phrase: 'emergency dentist', volume: 300, difficulty: 'hard' },
+    ])
+  })
+
+  it('health_score is unaffected by discovery_report — never a second competing score (P35.14 design decision)', () => {
+    const withoutDiscovery = buildLeakReport(baseInput())
+    const withDiscovery = buildLeakReport(baseInput({
+      discovery_report: discoveryReport({
+        diagnosis: {
+          executive_summary: '', crisis_type: null,
+          scores: { seo: 12, social: 8, reputation: 5, ai_visibility: 3, overall: 7 },
+          money_flow: '', key_finding: '', actions: { quick_fix: [], important: [], talk_to_us: [] },
+        },
+      }),
+      discovery_report_status: 'completed',
+    }))
+    expect(withDiscovery.health_score).toBe(withoutDiscovery.health_score)
   })
 })
