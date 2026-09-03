@@ -30,7 +30,12 @@
  * 悄悄变成所有客户的规则。
  */
 
-import { readPaidSignal, evidenceIsVerbatim, looksLikeCustomerAddress } from './paid-signal'
+import {
+  readPaidSignal,
+  evidenceIsVerbatim,
+  looksLikeCustomerAddress,
+  isForwardedSubject,
+} from './paid-signal'
 import { applyMemberTags, type MailchimpTagsConfig } from './tags'
 
 /** 一封待判定的邮件。字段刻意只取 `microsoft/mail-graph` 已经给的那些。 */
@@ -130,7 +135,7 @@ export async function runPaidTagging(
       text,
       direction: mail.direction,
       // 转发信的收件人常常不是正文那句话说的人（魏征复审）
-      isForward: /^\s*(?:fw|fwd|re-?fw)\s*:/i.test(mail.subject ?? ''),
+      isForward: isForwardedSubject(mail.subject),
       // 客人带附件发来的转账回单是个真信号（Codex 复审）——只影响 needs_review 那一档
       hasAttachment: mail.hasAttachment,
     })

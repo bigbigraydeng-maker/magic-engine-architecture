@@ -188,6 +188,18 @@ function firstMatch(text: string, patterns: readonly RegExp[]): string | null {
 /** 否定词。放在匹配**内部**检查 —— 「payment has not been received」的 not 就在中间。 */
 const NEGATION = /\b(?:not|never|nt)\b|n['’]t\b/i
 
+/**
+ * 请求 / 询问语气 —— 「我们在问钱到没到」，不是「我们确认钱到了」。
+ *
+ * 光看句末问号不够（Codex 复审）：出站邮件常写成句号结尾的礼貌请求 ——
+ * `Please confirm whether your payment has been received.`
+ * `Can you confirm that your payment has been received.`
+ * 这两句用问号判据完全漏掉，会把一个**我们自己都还没确认到账**的客人
+ * 打成付费客户并停掉跟进。标点不是语气，得看措辞。
+ */
+const REQUEST_TONE =
+  /\b(?:please\s+(?:confirm|advise|check|let)|can\s+you\s+(?:confirm|advise|check)|could\s+you\s+(?:confirm|advise|check)|kindly\s+(?:confirm|advise)|confirm\s+(?:whether|if)|let\s+us\s+know\s+(?:whether|if)|checking\s+(?:whether|if)|wondering\s+(?:whether|if))\b/i
+
 /** 命中点所在句子的边界（绝对下标）。 */
 function sentenceBounds(text: string, index: number): { start: number; end: number } {
   const start =
@@ -217,8 +229,11 @@ function findConfirmation(text: string): string | null {
     const { start, end } = sentenceBounds(text, m.index)
     const sentence = text.slice(start, end)
 
-    // ① 疑问句 —— 我们在问对方收没收到，不是在确认。
+    // ① 疑问 / 请求语气 —— 我们在问对方收没收到，不是在确认。
+    //    问号和措辞都要看：`Please confirm whether your payment has been received.`
+    //    是句号结尾的请求，只看标点会漏。
     if (/\?\s*$/.test(sentence.trim())) continue
+    if (REQUEST_TONE.test(sentence)) continue
 
     // ② 否定 —— 「payment has **not** been received」。not 落在匹配**内部**，
     //    所以必须查匹配文本本身，只看前文是查不到的。
@@ -231,6 +246,21 @@ function findConfirmation(text: string): string | null {
     return m[0].trim().slice(0, EVIDENCE_MAX)
   }
   return null
+}
+
+/**
+ * 主题是不是一封转发。
+ *
+ * Outlook 会叠前缀链：`RE: Fw: China Tour`。首版正则只认开头就是 `Fw:` 的，
+ * 员工回复一封转发时 `isForward` 会是 false，于是针对原客户的收款确认句被
+ * 自动执行，标签打到当前收件人（代理 / 同事）身上（Codex 复审指出）。
+ *
+ * 判据：把开头连续的 `Re:` / `Fw:` / `Fwd:` 整条链取出来，链里出现过
+ * fw / fwd 就算转发。纯 `Re:` 回复不算 —— 那是正常往来。
+ */
+export function isForwardedSubject(subject: string | null | undefined): boolean {
+  const m = /^((?:\s*(?:re|fw|fwd)\s*:\s*)+)/i.exec(subject ?? '')
+  return m ? /\bfwd?\s*:/i.test(m[1]) : false
 }
 
 export interface PaidSignalInput {

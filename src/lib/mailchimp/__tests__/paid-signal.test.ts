@@ -8,7 +8,12 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { readPaidSignal, evidenceIsVerbatim, looksLikeCustomerAddress } from '../paid-signal'
+import {
+  readPaidSignal,
+  evidenceIsVerbatim,
+  looksLikeCustomerAddress,
+  isForwardedSubject,
+} from '../paid-signal'
 
 // ── 真实语料 ────────────────────────────────────────────────────────────────
 
@@ -93,6 +98,11 @@ describe('readPaidSignal · 🔴🔴 时态语气攻击（魏征复审语料）'
     ['否定缩写', "Sorry, the payment hasn't been received."],
     ['once let us know', 'let us know once payment received.'],
     ['引用客人原话', 'RE: payment. Not yet sorry. From: Nikki Subject: payment received?'],
+    // Codex 复审补充：请求语气用**句号**结尾，只看问号会漏
+    ['请求语气 please confirm', 'Please confirm whether your payment has been received.'],
+    ['请求语气 can you confirm', 'Can you confirm that your payment has been received.'],
+    ['请求语气 kindly confirm', 'Kindly confirm if the deposit has been received.'],
+    ['请求语气 let us know', 'Let us know whether your payment has been received.'],
   ]
   for (const [name, text] of MUST_NOT_CONFIRM) {
     it(`🔴 ${name} → 绝不能判成 confirmed`, () => {
@@ -256,6 +266,31 @@ describe('evidenceIsVerbatim · 说不出原话就不算数', () => {
 
 /** CTS 的真实自有域名（含 2026-08-04 事故里的关联公司）。由调用方算好传进来。 */
 const CTS_OWN = ['ctstours.co.nz', 'chinatravel.co.nz']
+
+describe('isForwardedSubject · Outlook 的前缀链', () => {
+  it('🔴 RE: Fw: —— 员工回复一封转发，首版正则认不出（Codex 复审）', () => {
+    expect(isForwardedSubject('RE: Fw: China Tour - November')).toBe(true)
+    expect(isForwardedSubject('Re: Fwd: booking')).toBe(true)
+    expect(isForwardedSubject('RE: RE: FW: payment')).toBe(true)
+  })
+
+  it('直接转发 → true', () => {
+    expect(isForwardedSubject('Fw: New Reborn Lead')).toBe(true)
+    expect(isForwardedSubject('Fwd: invoice')).toBe(true)
+  })
+
+  it('纯回复不算转发 —— 那是正常往来，不该降级', () => {
+    expect(isForwardedSubject('Re: China Tour')).toBe(false)
+    expect(isForwardedSubject('RE: RE: booking')).toBe(false)
+  })
+
+  it('普通主题 / 空 → false', () => {
+    expect(isForwardedSubject('Best of China - November')).toBe(false)
+    expect(isForwardedSubject(null)).toBe(false)
+    // 「Forward」出现在正文式主题里不算前缀链
+    expect(isForwardedSubject('Forwarding your itinerary')).toBe(false)
+  })
+})
 
 describe('looksLikeCustomerAddress · 别把同事标成付费客户', () => {
   it('🔴 自己人 @ctstours.co.nz → 挡掉', () => {
