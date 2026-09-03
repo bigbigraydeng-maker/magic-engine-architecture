@@ -26,6 +26,9 @@
  */
 
 import { createHash } from 'node:crypto'
+// 复用 client.ts 已经 export 且有测试的那份 —— 两份 key 解析规则一定会漂移，
+// Mailchimp 改 key 格式时只会有一个文件被改到（子牙复审 P2）。
+import { datacenterFromKey } from './client'
 
 const API_VERSION = '3.0'
 const REQUEST_TIMEOUT_MS = 20_000
@@ -33,12 +36,6 @@ const REQUEST_TIMEOUT_MS = 20_000
 /** Mailchimp 用 email 小写后的 md5 当 subscriber_hash。 */
 export function subscriberHash(email: string): string {
   return createHash('md5').update(email.trim().toLowerCase()).digest('hex')
-}
-
-function datacenterFromKey(apiKey: string): string {
-  const dc = apiKey.split('-').pop()
-  if (!dc) throw new Error('bad_api_key_format')
-  return dc
 }
 
 function authHeader(apiKey: string): string {
@@ -109,7 +106,10 @@ export async function findMemberByEmail(
 
   if (res.status === 404) return { status: 'not_in_audience' }
   if (res.status === 401) return { status: 'error', reason: 'unauthorized', retryable: false }
-  if (!res.ok) return { status: 'error', reason: `http_${res.status}`, retryable: res.status >= 500 }
+  // 429 是限流 —— 等一下就好，判成不可重试等于把「稍后再来」讲成「永远别来」。
+  if (!res.ok) {
+    return { status: 'error', reason: `http_${res.status}`, retryable: res.status >= 500 || res.status === 429 }
+  }
 
   try {
     const json = (await res.json()) as {
@@ -215,5 +215,5 @@ export async function applyMemberTags(
   // 打标签成功返回 204 No Content。
   if (res.status === 204 || res.ok) return { status: 'applied', added: toAdd, removed: toRemove }
   if (res.status === 401) return { status: 'error', reason: 'unauthorized', retryable: false }
-  return { status: 'error', reason: `http_${res.status}`, retryable: res.status >= 500 }
+  return { status: 'error', reason: `http_${res.status}`, retryable: res.status >= 500 || res.status === 429 }
 }

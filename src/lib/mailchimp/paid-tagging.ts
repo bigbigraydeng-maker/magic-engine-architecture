@@ -53,6 +53,18 @@ export interface PaidTaggingPolicy {
    * 都不一样，给默认等于把某一个客户的事实写成平台规则。
    */
   leadTagsToRemove: string[]
+  /**
+   * 这个客户「自己人」的邮件域名（含关联公司）。用来挡住把同事打成付费客户。
+   *
+   * 由调用方用 `microsoft/mail-ingest` 的 `ownDomainsOf(mailbox, clients.domain,
+   * leads_config.own_email_domains)` 算好传进来 —— 首版把它硬编码成
+   * `['ctstours.co.nz']` 写在 shared runtime 里，子牙复审判为平台化红线 2 违规
+   * （换个客户过滤器就完全失效，且失败是静默的）。
+   *
+   * 空数组是**合法但危险**的输入：意味着这个客户没配自有域名，同事有可能被打上
+   * 付费标签。调用方应保证至少能从邮箱地址推出一个域名。
+   */
+  ownDomains: readonly string[]
 }
 
 export const DEFAULT_PAID_TAG = 'paid_customer'
@@ -112,12 +124,16 @@ export async function runPaidTagging(
     const text = searchableText(mail)
     const address = mail.counterparty?.address ?? null
 
-    const verdict = readPaidSignal({ text, direction: mail.direction })
+    const verdict = readPaidSignal({
+      text,
+      direction: mail.direction,
+      isForward: /^\s*(?:fw|fwd|re-?fw)\s*:/i.test(mail.subject ?? ''),
+    })
     if (verdict.kind === 'not_payment') continue
 
     // 身份闸：自己人 / 机器人一律不当客人。一封 outbound 的收件人可能是同事，
     // 真实语料里就有 `Fw: New Reborn Lead: ...` 这种转发。
-    if (!looksLikeCustomerAddress(address)) continue
+    if (!looksLikeCustomerAddress(address, policy.ownDomains)) continue
     const email = (address as string).trim().toLowerCase()
 
     if (verdict.kind === 'chasing') {

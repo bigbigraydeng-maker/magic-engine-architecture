@@ -529,18 +529,48 @@ export async function pushPaidSignalReviewItems(
   items: ManualItem[],
   now: Date,
 ): Promise<void> {
-  // 只看最近一次跑的结果。翻更早的会让已经处理完的人反复出现在待办上。
+  /**
+   * 看**最近 7 天所有跑完的非预演运行**，按邮箱去重 —— 不是「最近一次」。
+   *
+   * 首版写的是 limit(1)，子牙复审指出三个具体漏法，每一个都会让待办静默消失：
+   *
+   *   1. **漏发**：日常只回溯 3 天。一条待确认在第 1 天出现、Baker 三天没处理，
+   *      第 4 天的运行已经扫不到那封信 → 待办凭空消失，再没人看见。
+   *      铁律 3 下半在第 4 天失效 —— 管道断头。
+   *   2. **被冲掉**：`?dry=1&days=365` 写的是同一个 job_name 的行。PM 跑一次预演，
+   *      待办被一年历史刷满；5:10 的 daily 一跑又全换掉。两个方向都不是预期。
+   *   3. **读到半截**：不筛 status 的话，最新一行可能是 `running`（summary 还是
+   *      null）→ 当天待办静默为空。cron 5:10 跑、今日待办也是早上生成，撞上概率不低。
+   *
+   * 去重之后，多看几次运行反而比只看一次轻 —— 同一个人不会出现两遍。
+   *
+   * 彻底的「人处理完就消失」需要一张 ack 表，那是 A 级改动，不塞进这个 PR。
+   */
+  const since = new Date(now.getTime() - 7 * 86_400_000).toISOString()
   const { data, error } = await supabase
     .from('cron_run_logs')
-    .select('summary, started_at')
+    .select('summary, started_at, status')
     .eq('job_name', 'mailchimp-paid-tagging')
+    .eq('status', 'completed')
+    .gte('started_at', since)
     .order('started_at', { ascending: false })
-    .limit(1)
+    .limit(30)
 
   if (error) throw new Error(`cron_run_logs query failed: ${error.message}`)
 
-  const summary = (data ?? [])[0]?.summary as { needsReview?: unknown } | null | undefined
-  const rows = Array.isArray(summary?.needsReview) ? summary.needsReview : []
+  const rows: unknown[] = []
+  const seen = new Set<string>()
+  for (const run of (data ?? []) as Array<{ summary?: { needsReview?: unknown; dryRun?: unknown } | null }>) {
+    // 预演不是真运行 —— 它的结果不该变成任何人的待办。
+    if (run.summary?.dryRun === true) continue
+    const list = Array.isArray(run.summary?.needsReview) ? run.summary.needsReview : []
+    for (const item of list) {
+      const email = typeof (item as { email?: unknown })?.email === 'string' ? (item as { email: string }).email : ''
+      if (!email || seen.has(email.toLowerCase())) continue
+      seen.add(email.toLowerCase())
+      rows.push(item)
+    }
+  }
 
   for (const raw of rows.slice(0, 20)) {
     const r = raw as {

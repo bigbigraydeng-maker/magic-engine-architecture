@@ -189,6 +189,24 @@ describe('applyMemberTags · 出错时分得清能不能重试', () => {
     expect(r).toEqual({ status: 'error', reason: 'unauthorized', retryable: false })
   })
 
+  it('🔴 429 限流 → **可重试**（判成不可重试等于把「稍后再来」讲成「永远别来」）', async () => {
+    const impl = async () => new Response(null, { status: 429 })
+    const r = await applyMemberTags({ ...CFG, fetchImpl: impl }, EMAIL, { add: ['x'] })
+    expect(r).toEqual({ status: 'error', reason: 'http_429', retryable: true })
+  })
+
+  it('🔴 查人时遇到 429 → 也要可重试', async () => {
+    const impl = async () => new Response(null, { status: 429 })
+    const r = await findMemberByEmail({ ...CFG, fetchImpl: impl }, EMAIL)
+    expect(r).toEqual({ status: 'error', reason: 'http_429', retryable: true })
+  })
+
+  it('400 → 不可重试（请求本身就是错的，重试一万次也一样）', async () => {
+    const impl = async () => new Response(null, { status: 400 })
+    const r = await applyMemberTags({ ...CFG, fetchImpl: impl }, EMAIL, { add: ['x'] })
+    expect(r).toEqual({ status: 'error', reason: 'http_400', retryable: false })
+  })
+
   it('500 → 可重试', async () => {
     const impl = async () => new Response(null, { status: 500 })
     const r = await applyMemberTags({ ...CFG, fetchImpl: impl }, EMAIL, { add: ['x'] })
