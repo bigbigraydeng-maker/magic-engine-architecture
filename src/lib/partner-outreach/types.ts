@@ -71,10 +71,18 @@ export interface PartnerCandidate {
  * source_url — this function's guarantee is narrower: "no URL → never
  * verified", not "the URL proves official status."
  *
- * This function does nothing on its own if nothing calls it — pass every
- * candidate through sanitizePartnerCandidate() before it's written anywhere
- * (DB insert, draft generation) rather than relying on the caller to
- * remember to call assertOfficialSourced() directly.
+ * This function does nothing on its own if nothing calls it. The real,
+ * unbypassable enforcement is the `official_partner_status_requires_source`
+ * CHECK constraint on the platform_partner_outreach table (see
+ * supabase/migrations/20260902030000_..._source_url_constraint.sql) — a raw
+ * SQL insert, a future import script, or any other write path that skips
+ * this function entirely still cannot get an unbacked 'verified' claim past
+ * the database (Codex review 2026-09-02, second pass: an exported TS helper
+ * with no enforced call site is not a choke point). Call
+ * sanitizePartnerCandidate() anyway in application code — it turns a
+ * would-be constraint violation into a quiet downgrade instead of a insert
+ * error, which is a better failure mode when it's an AI research step doing
+ * the writing.
  */
 export function assertOfficialSourced(input: OfficialPartnerStatus): OfficialPartnerStatus {
   const result: OfficialPartnerStatus = {}
@@ -89,12 +97,12 @@ export function assertOfficialSourced(input: OfficialPartnerStatus): OfficialPar
 }
 
 /**
- * The mandatory choke point before a candidate is persisted or drafted:
- * runs official_partner_status through assertOfficialSourced() so an
- * unbacked 'verified' claim can never reach the database, regardless of
- * where the candidate came from (AI research, manual entry, a future
- * import script). Call this, not assertOfficialSourced() directly, from
- * any write path.
+ * Application-level early pass before a candidate is persisted or drafted:
+ * runs official_partner_status through assertOfficialSourced() so a bad
+ * candidate never even reaches an insert attempt. The database CHECK
+ * constraint (see assertOfficialSourced() doc) is what actually makes this
+ * unbypassable — this function exists so the failure, when it happens, is a
+ * silent downgrade in application code rather than a raw constraint error.
  */
 export function sanitizePartnerCandidate(candidate: PartnerCandidate): PartnerCandidate {
   return {
