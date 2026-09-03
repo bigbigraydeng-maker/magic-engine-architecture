@@ -182,16 +182,43 @@ function findScalePairs(text: string): ScalePair[] {
   return pairs
 }
 
-/** 规则 1：中英数量级换算必须自洽（本次事故的直接错因）。 */
+/**
+ * 规则 1：中英数量级换算必须自洽（本次事故的直接错因）。
+ *
+ * 关键细节：一句话里常同时出现多组数量级对，例如
+ * 「NZ$169.2 亿（NZ$16.92 b）· 另含服务 NZ$13.7 亿（NZ$1.37 b）」。
+ * 早期实现只取窗口内第一个拉丁数字配对，会把 13.7亿 和 16.92b 配到一起误报。
+ * 现在改为：一个中文数字只要在窗口内**存在任意一个**能对上的拉丁数字就算通过，
+ * 只有窗口里有拉丁数字、但没有一个对得上时才拦。
+ * （2026-09-03 在 Vol.03 新西兰报告上首次跑真实输入时暴露）
+ */
 export function checkScaleConversion(text: string): PrepublishFinding[] {
   const findings: PrepublishFinding[] = []
-  for (const pair of findScalePairs(text)) {
+  const pairs = findScalePairs(text)
+
+  // 按「中文数字原文 + 单位」分组：同一个中文数字的所有候选配对放一起判。
+  const byCjk = new Map<string, ScalePair[]>()
+  for (const p of pairs) {
+    const key = `${p.cjk.raw}|${p.cjk.unit}`
+    const list = byCjk.get(key)
+    if (list) list.push(p)
+    else byCjk.set(key, [p])
+  }
+
+  for (const candidates of Array.from(byCjk.values())) {
+    const anyMatches = candidates.some((c) => {
+      const cv = toBaseUnits(c.cjk.raw, c.cjk.unit)
+      const lv = toBaseUnits(c.latin.raw, c.latin.unit)
+      if (cv === null || lv === null || lv === 0) return false
+      return Math.abs(cv - lv) / Math.abs(lv) <= SCALE_TOLERANCE
+    })
+    if (anyMatches) continue
+
+    // 没有任何候选对得上 —— 用最近的一个（数组首个即窗口内最近）来报错。
+    const pair = candidates[0]
     const cjkValue = toBaseUnits(pair.cjk.raw, pair.cjk.unit)
     const latinValue = toBaseUnits(pair.latin.raw, pair.latin.unit)
     if (cjkValue === null || latinValue === null || latinValue === 0) continue
-
-    const relativeError = Math.abs(cjkValue - latinValue) / Math.abs(latinValue)
-    if (relativeError <= SCALE_TOLERANCE) continue
 
     // 用「大/小 N 倍」而不是裸比值——0.10 倍这种说法人读起来要在脑子里再换算一次，
     // 而这条信息出现的时刻正是有人被拦住、最需要一眼看懂的时刻。
@@ -269,6 +296,41 @@ function collectMatches(text: string, patterns: ReadonlyArray<RegExp>): string[]
 }
 
 /**
+ * 指标值总是紧贴着指标词出现（「月搜索量 2,900」「CPC A$11–18」），
+ * 所以窗口必须收紧。放宽到 30 字符时，章节号（Vol.02、08 ·）这类无关数字
+ * 会把诚实的数据缺口声明误判成指标陈述。
+ */
+const METRIC_DIGIT_AFTER = 12
+const METRIC_DIGIT_BEFORE = 8
+
+/**
+ * 收集"确实带着数值出现"的指标命中。
+ *
+ * 报告里合法地提到指标名而不给值的情况很常见，最典型的就是数据缺口声明：
+ * 「本报告不包含任何搜索量、CPC 或 SERP 占位数据」。
+ * 对这种句子拦截是纯误报，而且会逼作者把诚实的缺口声明删掉——正好和闸门的目的相反。
+ * 判据改为：命中词前后 30 字符内要有数字，才算在陈述指标值。
+ * （2026-09-03 在 Vol.03 新西兰报告上首次跑真实输入时暴露）
+ */
+function collectMetricMatchesWithValues(text: string, patterns: ReadonlyArray<RegExp>): string[] {
+  const hits: string[] = []
+  for (const pattern of patterns) {
+    const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`)
+    let m = global.exec(text)
+    while (m !== null) {
+      const end = m.index + m[0].length
+      const before = text.slice(Math.max(0, m.index - METRIC_DIGIT_BEFORE), m.index)
+      const after = text.slice(end, end + METRIC_DIGIT_AFTER)
+      // 命中词自身含数字（如「搜索量 2,900」），或紧邻处有数字，才算在陈述指标值。
+      const hasValue = /\d/.test(m[0]) || /\d/.test(after) || /\d/.test(before)
+      if (hasValue && !hits.includes(m[0])) hits.push(m[0])
+      m = global.exec(text)
+    }
+  }
+  return hits
+}
+
+/**
  * 规则 4：声称做过一手调研，必须有产物；否则不能写。
  *
  * 只报一条：补一份产物就能同时解决所有命中，逐条刷屏只会让人想把闸关掉。
@@ -304,7 +366,7 @@ export function checkSearchMetricReceipts(
   receipts: ReadonlyArray<string>
 ): PrepublishFinding[] {
   if (receipts.length > 0) return []
-  const hits = collectMatches(text, SEARCH_METRIC_PATTERNS)
+  const hits = collectMetricMatchesWithValues(text, SEARCH_METRIC_PATTERNS)
   if (hits.length === 0) return []
 
   return [

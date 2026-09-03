@@ -61,6 +61,26 @@ describe('checkScaleConversion — 中英数量级换算', () => {
   it('容忍四舍五入：1,302 亿 vs 130.2 b 精确相等，不误报', () => {
     expect(checkScaleConversion('自华进口 A$1,302 亿（A$130.2 b）')).toHaveLength(0)
   })
+
+  // 下面两条是 2026-09-03 在 Vol.03 新西兰报告上跑真实输入时暴露的误报。
+  // 一句话里有多组数量级对时，早期实现只取窗口内第一个拉丁数字配对，会配错。
+  it('一句话里两组换算对都正确时不误报（NZ 报告实测误报）', () => {
+    const real = 'NZ 自中国进口 NZ$169.2 亿（NZ$16.92 b）· 另含服务 NZ$13.7 亿（NZ$1.37 b）'
+    expect(checkScaleConversion(real)).toHaveLength(0)
+  })
+
+  it('第二个实测误报：总额与增量两组对都正确', () => {
+    const real = 'NZ 线上消费 NZ$127 亿（NZ$12.7 b），较 2024 增 NZ$11 亿（NZ$1.1 b）'
+    expect(checkScaleConversion(real)).toHaveLength(0)
+  })
+
+  it('多组配对中确有一组错时仍然拦得住（不能因为放宽而漏拦）', () => {
+    // 第一组 169.2亿/16.92b 正确，第二组 13.7亿/13.7b 错了 10 倍 —— 必须报第二组。
+    const bad = 'NZ 自中国进口 NZ$169.2 亿（NZ$16.92 b）· 另含服务 NZ$13.7 亿（NZ$13.7 b）'
+    const findings = checkScaleConversion(bad)
+    expect(findings.length).toBeGreaterThanOrEqual(1)
+    expect(findings.some((f) => f.excerpt.includes('13.7'))).toBe(true)
+  })
 })
 
 describe('checkUnpairedCjkScale — 只写中文数量级不给原始口径', () => {
@@ -131,6 +151,29 @@ describe('checkSearchMetricReceipts — 铁律 8', () => {
 
   it('有 receipt 后放行', () => {
     expect(checkSearchMetricReceipts(claimed, ['receipts/dataforseo-2026-09-03.json'])).toHaveLength(0)
+  })
+
+  // 2026-09-03 Vol.03 实测误报：报告诚实声明"我没有这类数据"反而被拦，
+  // 等于逼作者删掉缺口声明——和闸门的目的正好相反。
+  it('数据缺口声明不应被拦（提到指标名但没给值）', () => {
+    const disclaimer = '本报告不包含任何搜索量、CPC 或 SERP 占位数据——这类数字必须来自实时拉取，未拉取就不写。'
+    expect(checkSearchMetricReceipts(disclaimer, [])).toHaveLength(0)
+  })
+
+  it('但带着数值出现时照拦不误（不能因为放宽而漏拦）', () => {
+    expect(checkSearchMetricReceipts('该词月搜索量 2,900', []).length).toBeGreaterThanOrEqual(1)
+  })
+
+  // 第二轮实测：窗口放宽到 30 字符时，章节号 Vol.02 / 08 会把缺口声明误判成指标陈述。
+  it('附近的章节号不算指标值（NZ 报告第二轮实测误报）', () => {
+    const real =
+      '新西兰英文物流关键词的搜索量与竞争格局 Vol.02（澳洲）中的关键词表在数据核查中被判定为不可采信。' +
+      ' 本报告不包含任何搜索量、CPC 或 SERP 占位数据 ——这类数字必须来自实时拉取，未拉取就不写。 08 · 五条动作建议'
+    expect(checkSearchMetricReceipts(real, [])).toHaveLength(0)
+  })
+
+  it('CPC 后面紧跟金额时仍然拦得住', () => {
+    expect(checkSearchMetricReceipts('CPC A$11–18', []).length).toBeGreaterThanOrEqual(1)
   })
 })
 
