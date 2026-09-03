@@ -34,11 +34,15 @@ function props(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** The component reads res.text() so it can tell JSON from a proxy's HTML. */
+function jsonResponse(body: unknown, status = 200) {
+  return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) }
+}
+
 function mockFetch(...responses: unknown[]) {
   const fn = vi.fn()
-  for (const body of responses) {
-    fn.mockResolvedValueOnce({ ok: true, json: async () => body })
-  }
+  for (const body of responses) fn.mockResolvedValueOnce(jsonResponse(body))
+  fn.mockResolvedValue(jsonResponse({ success: true }))
   global.fetch = fn as never
   return fn
 }
@@ -132,15 +136,14 @@ describe('publish panel — the dry run publishes nothing', () => {
   })
 
   it('reports an API refusal instead of pretending it succeeded', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      json: async () => ({ success: false, error: 'PAGE_ID_MISMATCH' }),
-    }) as never
+    global.fetch = vi.fn().mockResolvedValue(
+      jsonResponse({ success: false, error: 'PAGE_ID_MISMATCH' }, 409)
+    ) as never
     render(<CampaignDailyPublishPanel {...props()} />)
 
     await clickDryRun()
 
-    expect(screen.getByText(/PAGE_ID_MISMATCH/)).toBeTruthy()
+    expect(screen.getByText(/HTTP 409 · PAGE_ID_MISMATCH/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /确认发布/ })).toBeNull()
   })
 })
@@ -157,9 +160,9 @@ describe('publish panel — going live costs two deliberate clicks', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('sends no_publish false only after the final confirmation', async () => {
+  it('sends one live request per Post, each scoped to its own date', async () => {
     const onPublished = vi.fn()
-    const fetchMock = mockFetch(DRY_RUN_BODY, { success: true, status: 'PUBLISHED', receipt: { published: [] } })
+    const fetchMock = mockFetch(DRY_RUN_BODY)
     render(<CampaignDailyPublishPanel {...props({ onPublished })} />)
 
     await clickDryRun()
@@ -168,9 +171,49 @@ describe('publish panel — going live costs two deliberate clicks', () => {
       fireEvent.click(screen.getByRole('button', { name: /确定，发/ }))
     })
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(bodyOf(fetchMock, 1).no_publish).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(bodyOf(fetchMock, 1)).toMatchObject({ no_publish: false, dates: ['2026-09-03'] })
+    expect(bodyOf(fetchMock, 2)).toMatchObject({ no_publish: false, dates: ['2026-09-04'] })
     expect(onPublished).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops at the first failing Post and names the date instead of firing the rest', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(DRY_RUN_BODY))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: 'PAGE_TOKEN_UNAVAILABLE' }, 502))
+    global.fetch = fetchMock as never
+    render(<CampaignDailyPublishPanel {...props()} />)
+
+    await clickDryRun()
+    fireEvent.click(screen.getByRole('button', { name: /确认发布这 2 条/ }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /确定，发/ }))
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(screen.getByText(/2026-09-03 没发出去，已停下.*PAGE_TOKEN_UNAVAILABLE/)).toBeTruthy()
+  })
+
+  it('reports the status code when a proxy answers with HTML instead of JSON', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(DRY_RUN_BODY))
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 524,
+        text: async () => '<!DOCTYPE html><html><body><h1>A timeout occurred</h1></body></html>',
+      })
+    global.fetch = fetchMock as never
+    render(<CampaignDailyPublishPanel {...props()} />)
+
+    await clickDryRun()
+    fireEvent.click(screen.getByRole('button', { name: /确认发布这 2 条/ }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /确定，发/ }))
+    })
+
+    expect(screen.getByText(/HTTP 524/)).toBeTruthy()
+    expect(screen.getByText(/返回了一个网页/)).toBeTruthy()
+    expect(screen.queryByText(/Unexpected token/)).toBeNull()
   })
 
   it('cancelling backs all the way out without publishing', async () => {
@@ -195,14 +238,12 @@ describe('publish panel — going live costs two deliberate clicks', () => {
     expect(screen.queryByRole('button', { name: /确认发布/ })).toBeNull()
   })
 
-  it('refreshes and surfaces real ids even when the live call reports a partial failure', async () => {
+  it('still refreshes the receipt when a later Post fails after an earlier one succeeded', async () => {
     const onPublished = vi.fn()
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => DRY_RUN_BODY })
-      .mockResolvedValueOnce({
-        ok: false,
-        json: async () => ({ success: false, error: 'PUBLISH_RECEIPT_NOT_PERSISTED', receipt: { published: [{ post_id: 'x' }] } }),
-      })
+      .mockResolvedValueOnce(jsonResponse(DRY_RUN_BODY))
+      .mockResolvedValueOnce(jsonResponse({ success: true, status: 'PUBLISHED' }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: 'PUBLISH_RECEIPT_NOT_PERSISTED' }, 500))
     global.fetch = fetchMock as never
     render(<CampaignDailyPublishPanel {...props({ onPublished })} />)
 
@@ -212,8 +253,8 @@ describe('publish panel — going live costs two deliberate clicks', () => {
       fireEvent.click(screen.getByRole('button', { name: /确定，发/ }))
     })
 
+    expect(screen.getByText(/2026-09-04 没发出去/)).toBeTruthy()
     expect(onPublished).toHaveBeenCalledTimes(1)
-    expect(screen.getByText(/PUBLISH_RECEIPT_NOT_PERSISTED/)).toBeTruthy()
   })
 })
 

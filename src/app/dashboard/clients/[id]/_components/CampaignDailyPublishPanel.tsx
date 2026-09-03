@@ -52,6 +52,12 @@ interface DryRunResult {
   already_published: Array<{ date: string }>
 }
 
+interface PublishApiResult {
+  would_publish?: DryRunPost[]
+  already_published?: Array<{ date: string }>
+  receipt?: unknown
+}
+
 function formatWhen(iso: string): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime())
@@ -74,55 +80,109 @@ export function CampaignDailyPublishPanel({
   const [busy, setBusy] = useState<'none' | 'dry' | 'live'>('none')
   const [error, setError] = useState('')
   const [confirming, setConfirming] = useState(false)
+  const [progress, setProgress] = useState('')
 
   const identityReady = Boolean(planId && planRevision && reviewRevision)
   const canDryRun = identityReady && queueReceiptReady && Boolean(facebookPageId)
 
-  const call = useCallback(
-    async (live: boolean) => {
-      setError('')
-      setBusy(live ? 'live' : 'dry')
+  /**
+   * One publish request.
+   *
+   * `dates` scopes a live call to a single Post: publishing all seven in one
+   * request meant a single upstream timeout took down the whole batch and told
+   * us nothing about which Post it died on. One request per Post keeps every
+   * failure attributable and every success durable.
+   */
+  const post = useCallback(
+    async (body: Record<string, unknown>): Promise<PublishApiResult> => {
+      const res = await fetch(`/api/clients/${clientId}/campaign-daily-plan/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: clientId,
+          campaign_id: campaignId,
+          plan_id: planId,
+          plan_revision: planRevision,
+          review_revision: reviewRevision,
+          page_id: facebookPageId,
+          approved: true,
+          publish_authorization: true,
+          ...body,
+        }),
+      })
+
+      // The response is not always ours: a proxy in front of the app answers
+      // timeouts and gateway errors with an HTML page. Parsing that as JSON
+      // used to surface as "Unexpected token '<'", which hides the one thing
+      // worth knowing — the status code and who sent it.
+      const raw = await res.text()
+      let json: Record<string, unknown> | null = null
       try {
-        const res = await fetch(`/api/clients/${clientId}/campaign-daily-plan/publish`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            client_id: clientId,
-            campaign_id: campaignId,
-            plan_id: planId,
-            plan_revision: planRevision,
-            review_revision: reviewRevision,
-            page_id: facebookPageId,
-            approved: true,
-            publish_authorization: true,
-            no_publish: !live,
-          }),
-        })
-        const json = await res.json()
-        if (!res.ok || json.success === false) {
-          // A live run that published some Posts and failed others still
-          // returns the real ids — surface them instead of only the error.
-          if (live && json.receipt) {
-            await onPublished()
-            setConfirming(false)
-          }
-          throw new Error(json.error ?? '请求失败')
-        }
-        if (live) {
-          setConfirming(false)
-          setDryRun(null)
-          await onPublished()
-        } else {
-          setDryRun({ would_publish: json.would_publish ?? [], already_published: json.already_published ?? [] })
-        }
-      } catch (err) {
-        setError((err as Error).message)
-      } finally {
-        setBusy('none')
+        json = JSON.parse(raw) as Record<string, unknown>
+      } catch {
+        const snippet = raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)
+        throw new Error(`HTTP ${res.status} · 服务器没返回数据，返回了一个网页${snippet ? `：${snippet}` : ''}`)
       }
+
+      if (!res.ok || json.success === false) {
+        const err = new Error(
+          `HTTP ${res.status} · ${typeof json.error === 'string' ? json.error : '请求失败'}`
+        ) as Error & { receipt?: unknown }
+        err.receipt = json.receipt
+        throw err
+      }
+      return json as PublishApiResult
     },
-    [campaignId, clientId, facebookPageId, onPublished, planId, planRevision, reviewRevision]
+    [campaignId, clientId, facebookPageId, planId, planRevision, reviewRevision]
   )
+
+  const runDryRun = useCallback(async () => {
+    setError('')
+    setProgress('')
+    setBusy('dry')
+    try {
+      const json = await post({ no_publish: true })
+      setDryRun({
+        would_publish: (json.would_publish ?? []) as DryRunPost[],
+        already_published: (json.already_published ?? []) as Array<{ date: string }>,
+      })
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy('none')
+    }
+  }, [post])
+
+  /** Publish the dry-run list one Post at a time, stopping at the first failure. */
+  const runLive = useCallback(async () => {
+    if (!dryRun) return
+    setError('')
+    setBusy('live')
+    let done = 0
+    try {
+      for (const target of dryRun.would_publish) {
+        setProgress(`正在发第 ${done + 1} 条 / 共 ${dryRun.would_publish.length} 条（${target.date}）…`)
+        try {
+          await post({ no_publish: false, dates: [target.date] })
+        } catch (err) {
+          // Stop here rather than firing the rest blindly: whatever broke this
+          // Post is likely to break the next one too, and a half-finished
+          // batch nobody can name is exactly what we are trying to avoid.
+          setError(`${target.date} 没发出去，已停下：${(err as Error).message}`)
+          break
+        }
+        done += 1
+      }
+    } finally {
+      setProgress('')
+      setBusy('none')
+      setConfirming(false)
+      if (done > 0) {
+        setDryRun(null)
+        await onPublished()
+      }
+    }
+  }, [dryRun, onPublished, post])
 
   const publishedPosts = publishReceipt?.published ?? []
 
@@ -203,7 +263,7 @@ export function CampaignDailyPublishPanel({
         <button
           type="button"
           disabled={!canDryRun || busy !== 'none'}
-          onClick={() => void call(false)}
+          onClick={() => void runDryRun()}
           className="rounded-md bg-me-charcoal/[.08] px-3 py-1.5 text-xs font-medium text-me-charcoal/70 transition-colors hover:bg-me-charcoal/[.12] disabled:opacity-50"
         >
           {busy === 'dry' ? '检查中…' : '试发布（只看，不发）'}
@@ -226,7 +286,7 @@ export function CampaignDailyPublishPanel({
             <button
               type="button"
               disabled={busy !== 'none'}
-              onClick={() => void call(true)}
+              onClick={() => void runLive()}
               className="rounded bg-[#C2453A] px-2.5 py-1 text-[11px] font-medium text-white hover:bg-[#A63A30] disabled:opacity-50"
             >
               {busy === 'live' ? '发布中…' : '确定，发'}
@@ -243,6 +303,7 @@ export function CampaignDailyPublishPanel({
         )}
       </div>
 
+      {progress && <p className="mt-2 text-[11px] text-me-charcoal/55">{progress}</p>}
       {error && <p className="mt-2 text-[11px] text-[#C2453A]">✗ {error}</p>}
     </div>
   )
