@@ -14,7 +14,7 @@
  * （见 reachable=false 那条红字存在的理由），所以这不是边角情况。
  */
 import React from 'react'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { FacebookPagePanel } from '../FacebookPagePanel'
 
@@ -119,6 +119,83 @@ describe('FacebookPagePanel — 绑定值不在列表里', () => {
   })
 })
 
+/**
+ * 魏征复审（2026-09-03）打出来的盲区：上面那批只断言「渲染成什么样」，
+ * 交互一条没测。他做的变异证明了这有多空 —— 把 `value={draft}` 换成
+ * `value={page_id}`（下拉框彻底失效、选了不生效）5 个测试全绿；把保存键的
+ * dirty 闸门整个拿掉，也是 5 个全绿。而 commit message 通篇在讲「保存键灰着
+ * 人想改都改不了」「动一下下拉框就静默改绑」—— 那两句话当时没有任何测试盯着。
+ */
+describe('FacebookPagePanel — 交互（不是只看渲染）', () => {
+  it('下拉框选了就得生效 —— 锁住 value 必须绑 draft', async () => {
+    mockGet({
+      page_id: BOUND_PAGE,
+      publish_target_page_id: null,
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
+
+    fireEvent.change(select, { target: { value: OTHER_PAGES[1].id } })
+
+    // value 若绑在 page_id 上，这里会顽固地停在原绑定 —— 用户选了个寂寞。
+    expect(select.value).toBe(OTHER_PAGES[1].id)
+  })
+
+  it('没改动时保存键必须是灰的 —— 锁住 dirty 闸门', async () => {
+    mockGet({
+      page_id: OTHER_PAGES[0].id,
+      publish_target_page_id: null,
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: true,
+    })
+
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+    await screen.findByRole('combobox')
+
+    const save = screen.getByRole('button', { name: '保存' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: OTHER_PAGES[1].id } })
+    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  /**
+   * 魏征「必改 1」：第一版修复只盖住了一半。
+   *
+   * 新 <option> 当时挂在 page_id（已保存值）上，而 <select value={draft}> 绑的是
+   * draft（待保存值）。手填路径上这两者会分叉：绑定在列表外 → 点「手动填 ID」→
+   * 填一个**新的**列表外 ID → 点「回到主页列表」。draft 匹配不到任何 option，
+   * 屏幕又回到「— 不接私信 —」，而这次 dirty=true、保存键是**亮的** ——
+   * 按下去真的会把这个值存进去。比原 bug 更危险：原 bug 至少存不进去。
+   */
+  it('手填一个列表外的新 ID 再切回列表模式，不许又变回「不接私信」', async () => {
+    mockGet({
+      page_id: BOUND_PAGE,
+      publish_target_page_id: null,
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+    await screen.findByRole('combobox')
+
+    fireEvent.click(screen.getByRole('button', { name: /手动填 ID/ }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '999999999999' } })
+    fireEvent.click(screen.getByRole('button', { name: /回到主页列表/ }))
+
+    const select = (await screen.findByRole('combobox')) as HTMLSelectElement
+    expect(select.value).toBe('999999999999')
+    // 而且要讲明这是「还没保存的」，不能跟已生效的绑定混为一谈。
+    expect(screen.getByRole('option', { selected: true }).textContent).toMatch(/待保存/)
+  })
+})
+
 describe('FacebookPagePanel — 授权失败的原因要说全', () => {
   it('page_not_granted 要提「应用没加进客户的商务组合」这条真实原因', async () => {
     mockGet({
@@ -139,7 +216,36 @@ describe('FacebookPagePanel — 授权失败的原因要说全', () => {
       // 2026-09-03 实测：主页 ID 是对的、账号在 Business Suite 里也看得到该主页，
       // 真因是客户的商务组合里没添加 Magic Engine 这个应用。旧文案只说「换账号 /
       // 查 ID」，把人引向两条死路 —— 我自己就先按它查了一轮才发现方向错了。
-      expect(body).toMatch(/商务组合|应用/)
+      //
+      // 魏征复审：原来这里只断言 /商务组合|应用/，太松 —— 把整段换成 no_pages
+      // 的文案照样全绿，锁不住「显示的是不是该显示的那条」。改断言本条独有的短语。
+      expect(body).toMatch(/没把这个主页交给我们/)
+      expect(body).toMatch(/页面访问权限/)
+    })
+  })
+
+  it('publishing 那条分支要指回视频工厂配置，不能一律指去客户后台', async () => {
+    mockGet({
+      page_id: BOUND_PAGE,
+      publish_target_page_id: '748077268383005',
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    window.history.replaceState({}, '', `/dashboard/clients/${CLIENT_ID}?meta=page_not_granted`)
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+
+    await waitFor(() => {
+      // 魏征「必改 3」：intent=publishing 时 targetPageId 来自
+      // factory_config.publish_target，不是本面板绑的主页，本面板也不给编辑它。
+      // 这时候把人指去「客户的 Business 设置」是指错门。
+      //
+      // ⚠ 断言必须挑这条错误提示**独有**的话。第一版写的是 /视频工厂配置/，
+      // 结果没改文案就绿了 —— 面板底部那段常驻说明里本来就有这四个字，
+      // 断言抓到的是它，跟错误提示没关系。这正是魏征批评的「断言太松」，
+      // 我在同一轮里又犯了一次。
+      expect(document.body.textContent ?? '').toMatch(/它认的根本不是这里绑的主页/)
     })
   })
 })

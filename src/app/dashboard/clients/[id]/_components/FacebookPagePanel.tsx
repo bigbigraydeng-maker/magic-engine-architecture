@@ -146,19 +146,28 @@ export function FacebookPagePanel({ clientId }: Props) {
   const dirty = draft.trim() !== (page_id ?? '').trim()
 
   /**
-   * 绑好的主页不在「我们能操作的主页」列表里 —— 常态，不是边角情况：这正是
-   * reachable=false 那条红字存在的理由。
+   * 当前**要显示**的值不在「我们能操作的主页」列表里 —— 常态，不是边角情况：
+   * 这正是 reachable=false 那条红字存在的理由。
    *
    * 必须为它单独补一个 <option>，否则 <select value={draft}> 匹配不到任何项，
-   * 浏览器回退显示第一项「— 不接私信 —」：屏幕上同时出现「绑了主页，但线索
+   * React 回退选中第一项「— 不接私信 —」：屏幕上同时出现「绑了主页，但线索
    * 进不来」和「不接私信」两句自相矛盾的话（2026-09-03 NewAsian 实测）。
    *
    * 更要命的是随之而来的静默改绑：draft 仍等于 page_id，dirty=false、保存键灰着，
    * 人想改都改不了；而他只要在下拉框里动一下，draft 就变成别人的主页 ID 或空，
    * 保存键亮起 —— 一次「确认当前设置」的动作，实际把这个客户改绑到了别的主页。
+   *
+   * ⚠ 判断必须跟着 `draft`（要显示的值），不能跟着 `page_id`（已保存的值）。
+   * 魏征复审 2026-09-03 抓到：第一版挂在 page_id 上只盖住了一半 —— 走「手动填
+   * ID → 填一个新的列表外 ID → 回到主页列表」这条路时两者分叉，屏幕又变回
+   * 「不接私信」，而这次 dirty=true、保存键是**亮的**，按下去真会把它存进去。
+   * 那比原来的 bug 更糟：原来的至少存不进去。
    */
-  const boundOutsideList =
-    page_id !== null && pages !== null && !pages.some((p) => p.id === page_id)
+  const draftValue = draft.trim()
+  const draftOutsideList =
+    draftValue !== '' && pages !== null && !pages.some((p) => p.id === draftValue)
+  /** 这个列表外的值是「已经在生效的绑定」还是「你刚填的、还没存」—— 两件事不能混说。 */
+  const draftIsSavedBinding = draftValue === (page_id ?? '')
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -182,9 +191,15 @@ export function FacebookPagePanel({ clientId }: Props) {
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
         >
           <option value="">— 不接私信 —</option>
-          {boundOutsideList && (
-            <option value={page_id as string}>
-              当前绑定：{page_id}（ME 读不到）
+          {draftOutsideList && (
+            <option value={draft}>
+              {/* 「读不到」直接读 reachable，不在这里第二次推导。今天它跟
+                  draftOutsideList 严格互补（都源自同一次响应的 pages），但哪天
+                  reachable 改成直接探测主页，两者就会分叉 —— 那时这里会跟上面
+                  LiveStatus 说反话，正是本次要消灭的那种自相矛盾（魏征复审）。*/}
+              {draftIsSavedBinding
+                ? `当前绑定：${draftValue}${reachable === false ? '（ME 读不到）' : ''}`
+                : `待保存：${draftValue}（不在列表里）`}
             </option>
           )}
           {pages.map((p) => (
@@ -286,19 +301,34 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
   // 的事。所以这里按实测的可能性排序，把最常中的原因放第一条。
   no_pages: {
     ok: false,
+    // ⚠ 措辞刻意不写成「Meta 说没有主页」。listPagesWithTokens 在 Meta 报错或
+    // 网络抖动时同样 return []（见 meta-oauth/client.ts），callback 只看
+    // length===0，所以这条也可能是一次抖动。把它说成 Meta 的确定回答，会让人
+    // 拿着一个不存在的结论去改客户后台的配置。
     text:
-      '授权成功了，但 Meta 说这个账号名下一个主页都没有。先查这两条（比「登错账号」常见得多）：' +
-      '① 客户的商务组合里没有添加 Magic Engine 应用 —— 去客户的 Business 设置 →「应用」→ 添加；' +
-      '② 你对主页只有商务组合里的资产分配，缺主页本身的管理员角色，要客户在主页「页面访问权限」里加你。' +
-      '两条都排除了，才考虑是不是登错了账号。',
+      '授权走完了，但我们没从这个账号拿到任何主页。可能是 Meta 当时没答上来（先隔几分钟重点一次），' +
+      '也可能是权限没到位。重试仍旧这样的话按顺序查：' +
+      '① 客户的商务组合里有没有添加 Magic Engine 应用 —— 客户的 Business 设置 →「应用」→ 添加（应用编号 1752513682785923，后台显示的名字不一定就叫 Magic Engine，按编号找最稳）；' +
+      '② 你对主页是不是只有商务组合里的资产分配，缺主页本身的管理员角色 —— 要客户在主页「页面访问权限」里加你；' +
+      '③ 是不是登错了账号。',
   },
   page_not_granted: {
     ok: false,
+    // 2026-09-03 NewAsian 实测：主页 ID 正确、授权账号在 Business Suite 里也看得到
+    // 该主页消息，仍然失败 —— 真因是客户的商务组合里没添加 Magic Engine 应用。
+    // 旧文案只给「换账号 / 查 ID」两条路，把人引向死路。
+    //
+    // 但也不能反过来断言「跟 ID 无关」（魏征复审）：本面板在列不出主页时默认就
+    // 打开手填框，而 normalisePageId 只校验「≥8 位数字」，手打错一个数字照样存得
+    // 进去 —— 手填错 ID 恰恰是这个界面自己制造的一类常见原因。所以三条并列摆出
+    // 来，只说「先查哪条」，不替人排除任何一条。
     text:
-      '授权成功了，但 Meta 没把这个主页交给我们 —— 注意这跟「主页 ID 填错」「账号看不到这个主页」通常都无关，' +
-      '按实测的可能性从高到低查：① 客户的商务组合里没有添加 Magic Engine 应用（去客户的 Business 设置 →「应用」→ 添加）；' +
-      '② 你对这个主页只是商务组合里的「资产分配」，缺主页本身的管理员角色 —— 需要客户在主页「页面访问权限」里把你加上；' +
-      '③ 最后才轮到登错账号或主页 ID 不对。',
+      '授权走完了，但 Meta 没把这个主页交给我们。三个方向都查一下，第①条是 2026-09 实测遇到过的：' +
+      '① 客户的商务组合里有没有添加 Magic Engine 应用 —— 客户的 Business 设置 →「应用」→ 添加（应用编号 1752513682785923，后台显示的名字不一定就叫 Magic Engine，按编号找最稳）；' +
+      '② 你对这个主页是不是只有商务组合里的「资产分配」，缺主页本身的管理员角色 —— 要客户在主页「页面访问权限」里把你加上；' +
+      '③ 上面那个主页 ID 是不是手填错了、或者登错了账号。' +
+      '另外：如果你刚点的是「重新授权 Meta 发布权限」，那它认的根本不是这里绑的主页，' +
+      '而是「视频工厂配置」里那个发布主页 —— 要查的是那个 ID，别在这里绕。',
   },
   no_page_bound: { ok: false, text: '还没绑定主页 —— 先在上面选好主页并保存，再点连接。' },
   bad_state: { ok: false, text: '这个连接链接已经过期了，请重新点一次「连接 Meta」。' },
