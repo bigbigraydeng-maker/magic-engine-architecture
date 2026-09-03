@@ -81,6 +81,8 @@ describe('pushMailchimpExportItems', () => {
     const chain = {
       select: () => chain,
       eq: () => chain,
+      not: () => chain,
+      in: () => chain,
       order: () => chain,
       limit: async () => ({ data: row ? [row] : [], error: null }),
     }
@@ -135,11 +137,17 @@ describe('pushMailchimpExportItems', () => {
   })
 
   it('只挑跑完的运行记录 —— 卡在 running（finished_at 永远 NULL）的记录不该挡住后续告警', async () => {
-    const eqCalls: Array<[string, unknown]> = []
+    const notCalls: Array<[string, unknown]> = []
+    const inCalls: Array<[string, unknown]> = []
     const chain = {
       select: () => chain,
-      eq: (col: string, val: unknown) => {
-        eqCalls.push([col, val])
+      eq: () => chain,
+      not: (col: string, op: string, val: unknown) => {
+        notCalls.push([col, val])
+        return chain
+      },
+      in: (col: string, vals: unknown) => {
+        inCalls.push([col, vals])
         return chain
       },
       order: () => chain,
@@ -158,14 +166,39 @@ describe('pushMailchimpExportItems', () => {
     const items: ManualItem[] = []
     await pushMailchimpExportItems(supabase, items, NOW)
 
-    expect(eqCalls).toContainEqual(['status', 'completed'])
+    expect(notCalls).toContainEqual(['finished_at', null])
+    expect(inCalls).toContainEqual(['status', ['completed', 'failed']])
     expect(items).toHaveLength(1)
+  })
+
+  it('那一轮因为别的客户 Meta 取数报错被 run-logger 标成 failed，本客户真实的 Mailchimp 出口故障依然要下发', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T08:30:00Z',
+      summary: {
+        results: [
+          { clientId: 'c-meta-broken', clientName: '另一个客户', error: 'Meta token expired' },
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'failed:auth': 2 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken' })
   })
 
   it('查运行记录本身报错 → 必须抛出，不能当成「没有记录」静默吞掉', async () => {
     const chain = {
       select: () => chain,
       eq: () => chain,
+      not: () => chain,
+      in: () => chain,
       order: () => chain,
       limit: async () => ({ data: null, error: { message: 'permission denied' } }),
     }

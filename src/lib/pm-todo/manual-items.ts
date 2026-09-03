@@ -683,6 +683,13 @@ function isMailchimpExportFailureKey(key: string): boolean {
  * 只报 `failed:*` 和 `client_config_read_failed`：`no_audience_config` /
  * `no_email` / `no_api_key` 是客户压根没配 Mailchimp 的正常状态，报了等于
  * 天天骚扰不用管的人。
+ *
+ * 🔴 **不能只挑 `status = 'completed'`**：`meta-leads-sync/route.ts` 只要有
+ * 任一客户 Meta 取数报错，就会把 `summariseFailures` 的结果传给 `finish()`
+ * 的 `error`，`run-logger.ts` 因此把这一整轮标成 `failed` —— 但同一轮里其他
+ * 客户的 `results[].mailchimp` 完全可能是真实的出口故障。只查 `completed`
+ * 会让这些故障在 Meta 取数一出错的那些轮次里彻底消失。排除运行中记录该看
+ * `finished_at` 是否非空，而不是硬编码某一个终态。
  */
 export async function pushMailchimpExportItems(
   supabase: SupabaseClient,
@@ -693,7 +700,8 @@ export async function pushMailchimpExportItems(
     .from('cron_run_logs')
     .select('finished_at, summary')
     .eq('job_name', 'meta-leads-sync')
-    .eq('status', 'completed')
+    .not('finished_at', 'is', null)
+    .in('status', ['completed', 'failed'])
     .order('finished_at', { ascending: false })
     .limit(1)
 
