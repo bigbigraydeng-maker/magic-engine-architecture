@@ -106,8 +106,15 @@ describe('buildMetaAuthTodo', () => {
 
 // ---------------------------------------------------------------------------
 
-/** 只对 cron_run_logs 建模 —— 碰别的表就炸，暴露越界读取。 */
-function fakeSupabase(run: unknown) {
+/**
+ * 只对 cron_run_logs 建模 —— 碰别的表就炸，暴露越界读取。
+ *
+ * 收一个数组（最新一行在前，模拟 order by started_at desc）或单行；limit(n) 返回
+ * 前 n 行。多行是关键：待办层要能越过「最新一行还在跑 / 失败没 summary」拿到上一
+ * 条有结果的完成轮，单行的假库根本测不出这条链。
+ */
+function fakeSupabase(runs: unknown) {
+  const rows = runs === null ? [] : Array.isArray(runs) ? runs : [runs]
   return {
     from(table: string) {
       if (table !== 'cron_run_logs') throw new Error(`fake supabase: table '${table}' is not modelled`)
@@ -115,7 +122,7 @@ function fakeSupabase(run: unknown) {
       chain.select = () => chain
       chain.eq = () => chain
       chain.order = () => chain
-      chain.limit = () => Promise.resolve({ data: run === null ? [] : [run], error: null })
+      chain.limit = (n: number) => Promise.resolve({ data: rows.slice(0, n), error: null })
       return chain
     },
   } as never
@@ -136,8 +143,28 @@ describe('fetchMetaAuthTodos', () => {
     expect(todos).toEqual([])
   })
 
-  it('跑到一半没写完 finished_at 的不用', async () => {
-    expect(await fetchMetaAuthTodos(fakeSupabase({ finished_at: null, summary }), NOW)).toEqual([])
+  it('最新一行还在跑（summary 空）时，跳过它回落到上一条有结果的完成轮 —— 不静默清空', async () => {
+    const todos = await fetchMetaAuthTodos(
+      fakeSupabase([
+        { finished_at: null, summary: null }, // 今天这轮还在跑
+        { finished_at: '2026-09-04T07:00:00Z', summary }, // 昨晚那轮：CTS rejected，仍在 2 天窗口内
+      ]),
+      NOW,
+    )
+    expect(todos).toHaveLength(1)
+    expect(todos[0].kind).toBe('meta_auth_rejected')
+  })
+
+  it('🔴 最新一行失败没写 summary 时，绝不抹掉上一条已知的失效待办', async () => {
+    const todos = await fetchMetaAuthTodos(
+      fakeSupabase([
+        { finished_at: '2026-09-04T19:30:00Z', summary: null }, // 今天这轮失败（读名单挂了）
+        { finished_at: '2026-09-04T07:00:00Z', summary }, // 昨晚那轮：CTS rejected
+      ]),
+      NOW,
+    )
+    expect(todos).toHaveLength(1)
+    expect(todos[0].client_id).toBe(CLIENT)
   })
 
   it('从没跑过 / 没有 summary 都不出待办，也不炸', async () => {

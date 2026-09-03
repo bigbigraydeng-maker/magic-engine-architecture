@@ -22,6 +22,13 @@ import {
 /** 运行记录多旧就不能用了 —— 这条 cron 每天一轮，两天足够宽松。 */
 const RUN_STALE_DAYS = 2
 
+/**
+ * 往回看几行才找得到有结果的那一轮。卡死的 running 行、失败没写 summary 的行会
+ * 堆在最前面；每天一轮的话，5 行足以越过连着几次没跑成的坏日子找到上一条好结果，
+ * 再往前 RUN_STALE_DAYS 也会把它当太旧丢掉了。
+ */
+const RUN_LOOKBACK = 5
+
 export type MetaAuthTodoKind =
   | 'meta_auth_no_token'
   | 'meta_auth_rejected'
@@ -157,12 +164,24 @@ export async function fetchMetaAuthTodos(
     .select('finished_at, summary')
     .eq('job_name', META_AUTH_HEALTH_JOB)
     .order('started_at', { ascending: false })
-    .limit(1)
+    .limit(RUN_LOOKBACK)
 
-  const run = (data ?? [])[0] as
-    | { finished_at: string | null; summary: MetaAuthRunSummary | null }
-    | undefined
-  if (!run?.summary) return []
+  const rows = (data ?? []) as Array<{
+    finished_at: string | null
+    summary: MetaAuthRunSummary | null
+  }>
+
+  // 🔴 只认最近一条**真正写下了 summary** 的运行 —— 不是最新那一行。
+  //
+  // startCronRun 一开跑就先插一行 status='running'（summary 还是空的），summary
+  // 要 finish() 才写。所以最新那一行随时可能是「正在跑 / 超时卡死没 finish / 失败
+  // 没带 summary」——这几种都**不代表没问题**，只代表这一轮还没给出结果。若照
+  // `rows[0]?.summary` 取最新一行，那一刻这道本该报警的待办会自己闭嘴，昨天已知的
+  // CTS 失效被静默抹掉 —— 正是这个功能存在的意义要消灭的事。跳过它们，回落到上一
+  // 条有结果的完成轮（mailbox-run.ts 文件头记着同一个坑；comment-scope-items 那个
+  // 模板没防住）。「该跑没跑」另有 pushCronHealthItems 负责，这里不重复报。
+  const run = rows.find((r) => r.summary)
+  if (!run) return []
 
   // 「该跑没跑」有 pushCronHealthItems 在管，这里不重复报，只在结果够新时说话。
   const age = daysSince(run.finished_at, now)
