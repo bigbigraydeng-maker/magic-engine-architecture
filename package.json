@@ -15,7 +15,10 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "db:check-policies": "node scripts/check-policy-to-clause.mjs",
+    "db:check-policies:all": "node scripts/check-policy-to-clause.mjs --all",
+    "db:verify": "bash scripts/db-replay-and-verify.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
