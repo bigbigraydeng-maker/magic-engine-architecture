@@ -141,9 +141,44 @@ docs/magic-insight/
 
 ---
 
+## 图表体系
+
+**目标**：报告要有足够的信息密度，少留白，用图把结论摆出来而不是只靠文字。
+每卷至少 4–6 张图（条形 / 堆叠 / 甜甜圈 / 分叉），表格与图表交替出现。
+
+**技术选择：手写 CSS + inline SVG，禁用 JS 图表库。**
+
+理由是 PDF：报告最终产物是 headless Chrome 打印的 PDF。Chart.js / ECharts 要等 canvas 渲染，
+与 `--virtual-time-budget` 抢时序，偶发画一半或全白——**而 PDF 出错没人会发现**（图是空的但版面正常）。
+CSS 与 SVG 是声明式的，浏览器一次布局就定稿。
+
+- 共享模板：[`_shared/charts.css`](./_shared/charts.css)
+- **必须内联进每份 `report.html`**，不要外链——报告要对外发送、单独另存，外链一旦脱离目录图表全散
+- 改进了样式请回写共享模板，让后续卷受益
+
+**图表数值必须与 `sources.md` 台账一致。** 改数字要同时改台账，否则图和台账会漂移。
+
+**做完必须真看一眼**（2026-09-04 教训）：发布闸查不出图表画错。
+预览面板把本地文件当静态快照加载时视口为 0，`1fr` 列会塌成 0 宽，
+**所有柱子不可见但版面完全正常**。用真实宽度截图肉眼确认：
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --disable-gpu --hide-scrollbars \
+  --window-size=1180,2400 --virtual-time-budget=12000 \
+  --screenshot=/tmp/check.png \
+  "file://$(pwd)/docs/magic-insight/volNN-<主题>/report.html"
+```
+
+---
+
 ## 品牌约束
 
 - 署名统一为 **Magic Insight 数据研究院**，副题 `Research Series · Vol.NN`
+- **封面与页脚必须出现公司名与官网**：`Magic Engine · magicengine.com.au`。
+  封面用「隶属」一栏，页脚版权行写 `© 2026 Magic Engine · Magic Insight 数据研究院出品`。
+  ⚠️ **不要写法律主体名** —— 官网页脚本身只声明「© 2026 Magic Engine」，
+  且 ME 实体对齐尚未完成，编一个主体名上去会造成对外文件与工商信息不一致
 - Magic Insight 是 Magic Engine 旗下**研究出品子品牌**，VI 与 ME 主品牌分开管理
   （主品牌 VI 见 [[reference-magic-engine-vi-package-location]]）
 - 页脚必须写明数据分层说明与「不构成经营决策依据」

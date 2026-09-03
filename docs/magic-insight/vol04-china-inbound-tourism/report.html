@@ -32,7 +32,7 @@
   a{color:var(--me-blue-soft);text-decoration:none;border-bottom:1px solid transparent}
   a:hover{border-bottom-color:currentColor}
   .wrap{max-width:1120px;margin:0 auto;padding:0 32px}
-  section{padding:76px 0;border-top:1px solid var(--rule)}
+  section{padding:46px 0;border-top:1px solid var(--rule)}
   section:first-of-type{border-top:none}
 
   .brandbar{display:flex;align-items:center;justify-content:space-between;
@@ -47,7 +47,7 @@
   .brandbar .meta{font-size:11px;color:var(--ink-muted);text-align:right;line-height:1.5}
   .brandbar .meta strong{color:var(--ink-soft);font-weight:600;display:block;font-size:11.5px}
 
-  .cover{background:var(--grad-cover);padding:104px 0 88px;border-top:none;position:relative;overflow:hidden}
+  .cover{background:var(--grad-cover);padding:72px 0 56px;border-top:none;position:relative;overflow:hidden}
   .cover:before{content:'';position:absolute;right:-100px;top:40px;width:520px;height:520px;
     border-radius:50%;background:radial-gradient(circle at center,rgba(244,194,96,.10) 0%,transparent 65%)}
   .cover .kicker{display:inline-flex;align-items:center;gap:10px;padding:6px 14px;
@@ -61,12 +61,12 @@
   .cover .lead{max-width:62ch;font-family:'Newsreader',Georgia,serif;
     font-size:clamp(18px,1.7vw,22px);line-height:1.55;color:var(--ink-soft);margin:26px 0 0}
   .cover .lead strong{color:var(--gold-soft);font-weight:500}
-  .cover-meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:22px;
-    margin-top:44px;font-size:11px;color:var(--ink-muted)}
+  .cover-meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:20px;
+    margin-top:30px;font-size:11px;color:var(--ink-muted)}
   .cover-meta .label{text-transform:uppercase;letter-spacing:.18em;font-weight:600;
     color:var(--ink-soft);display:block;margin-bottom:4px;font-size:9.5px}
 
-  .stance{margin-top:40px;padding:22px 24px;background:color-mix(in srgb,var(--me-blue) 8%,transparent);
+  .stance{margin-top:26px;padding:22px 24px;background:color-mix(in srgb,var(--me-blue) 8%,transparent);
     border:1px solid color-mix(in srgb,var(--me-blue) 26%,var(--rule));border-radius:12px}
   .stance .lbl{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--me-blue-soft);
     font-weight:600;margin-bottom:10px}
@@ -80,9 +80,9 @@
   .chip.alert{background:color-mix(in srgb,var(--alert) 20%,transparent);color:var(--alert)}
   .chip.muted{background:color-mix(in srgb,var(--ink-muted) 15%,transparent);color:var(--ink-muted)}
 
-  .sec-head{display:flex;flex-direction:column;gap:8px;margin-bottom:38px;max-width:70ch}
+  .sec-head{display:flex;flex-direction:column;gap:6px;margin-bottom:24px;max-width:74ch}
   .sec-head .en{font-family:'Newsreader',Georgia,serif;font-size:14.5px;font-style:italic;color:var(--ink-muted)}
-  .callout{margin-top:28px;padding:18px 22px;border-left:3px solid var(--gold);
+  .callout{margin-top:20px;padding:18px 22px;border-left:3px solid var(--gold);
     background:color-mix(in srgb,var(--gold) 8%,transparent);border-radius:0 8px 8px 0;
     color:var(--ink-soft);font-size:14.5px;line-height:1.65}
   .callout strong{color:var(--ink);font-weight:600}
@@ -101,8 +101,8 @@
   .kpi .delta.flat{color:var(--ink-muted)}
   .kpi .foot{font-size:11px;color:var(--ink-muted);margin-top:10px;line-height:1.45}
 
-  .findings{display:grid;gap:16px}
-  .finding{display:grid;grid-template-columns:58px 1fr;gap:20px;padding:24px;
+  .findings{display:grid;gap:12px}
+  .finding{display:grid;grid-template-columns:52px 1fr;gap:16px;padding:18px 20px;
     background:var(--surface);border:1px solid var(--rule);border-radius:12px}
   @media(max-width:600px){.finding{grid-template-columns:1fr;gap:12px}}
   .finding .num-big{font-family:'JetBrains Mono',monospace;font-size:30px;font-weight:600;
@@ -157,7 +157,7 @@
   .fn.new .dur{color:var(--growth)}
   .fn-arrow{font-family:'JetBrains Mono',monospace;font-size:20px;color:var(--gold-soft);text-align:center;font-weight:600}
 
-  .priority{display:flex;gap:22px;padding:24px 0;border-bottom:1px solid var(--rule)}
+  .priority{display:flex;gap:20px;padding:18px 0;border-bottom:1px solid var(--rule)}
   .priority:last-child{border-bottom:none}
   .priority .p-num{font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:600;
     color:var(--gold);line-height:1;flex-shrink:0;width:60px;padding-top:5px}
@@ -193,14 +193,177 @@
     html,body{background:#070E1A!important;color:#EDF3FA!important;
       -webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
     *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
-    section{padding:42px 0}
-    .cover{padding:70px 0 54px;page-break-after:always;break-after:page}
+    section{padding:30px 0}
+    .cover{padding:52px 0 40px;page-break-after:always;break-after:page}
     .sec-head{break-after:avoid-page}h1,h2,h3{break-after:avoid}
     .finding,.myth-card,.kpi,.gap-item,.fn{break-inside:avoid;page-break-inside:avoid}
     .tab-wrap{overflow:visible}.tab{min-width:0;font-size:10.5px}
     .tab th,.tab td{padding:7px 9px}
   }
-  @page{size:A4;margin:13mm 11mm 15mm;background:#070E1A}
+/* ==== CHART SYSTEM (inlined from docs/magic-insight/_shared/charts.css) ==== */
+/*
+ * Magic Insight 报告图表系统 —— 手写 CSS + inline SVG，不依赖任何 JS 图表库。
+ *
+ * ⚠️ 本文件是【起新卷时的共享模板】，不是被 report.html 外链引用的样式表。
+ *    每份 report.html 必须把这段 CSS **内联**进自己的 <style> 里。
+ *    原因：报告要对外发送（邮件附件、单独另存、转发），外链 CSS 一旦脱离目录
+ *    图表会全部散版，而 PDF 里看不出问题。自包含是硬要求。
+ *    起新卷时把本文件内容复制进去；改进了图表样式请回写本文件，让后续卷受益。
+ *
+ * 为什么不用 Chart.js / ECharts：报告最终产物是 headless Chrome 打印的 PDF。
+ * JS 图表库要等 canvas 渲染完成，与 --virtual-time-budget 抢时序，
+ * 偶发画一半或全白，而 PDF 一旦出错没人会发现（图是空的但版面正常）。
+ * SVG 与 CSS 是声明式的，浏览器一次布局就定稿，确定性 100%。
+ *
+ * 所有图表的数值必须与 sources.md 台账一致。改数字请同时改台账。
+ */
+
+/* ---------- 图表外壳 ---------- */
+.chart {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 18px 20px 16px;
+}
+.chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.chart-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: .01em;
+}
+.chart-unit {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.chart-note {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--rule);
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+/* ---------- 横向条形图（含正负分叉） ---------- */
+.bars { display: flex; flex-direction: column; gap: 7px; }
+.bar-row {
+  display: grid;
+  grid-template-columns: 76px minmax(90px, 1fr) 52px;
+  align-items: center;
+  gap: 10px;
+}
+.bar-label {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar-track {
+  position: relative;
+  height: 15px;
+  /* 保底宽度：grid 的 1fr 在容器宽度不确定时会塌成 0，
+     导致所有柱子不可见而版面看起来正常——PDF 里没人会发现。
+     给一个 min-width 让它在任何容器下都画得出来。 */
+  min-width: 90px;
+  background: color-mix(in srgb, var(--surface-3) 60%, transparent);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.bar-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+}
+.bar-fill.pos { background: linear-gradient(90deg, color-mix(in srgb, var(--growth) 55%, transparent), var(--growth)); }
+.bar-fill.neg { background: linear-gradient(270deg, color-mix(in srgb, var(--alert) 55%, transparent), var(--alert)); }
+.bar-fill.gold { background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 55%, transparent), var(--gold)); }
+.bar-fill.blue { background: linear-gradient(90deg, color-mix(in srgb, var(--me-blue) 55%, transparent), var(--me-blue)); }
+.bar-fill.muted { background: color-mix(in srgb, var(--ink-muted) 45%, transparent); }
+/* 零轴 */
+.bar-track .zero {
+  position: absolute; top: 0; bottom: 0; width: 1px;
+  background: var(--rule-strong);
+}
+.bar-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: right;
+}
+.bar-value.pos { color: var(--growth); }
+.bar-value.neg { color: var(--alert); }
+.bar-value.neutral { color: var(--ink); }
+
+/* 高亮某一行（用于点出结论所在） */
+.bar-row.hl .bar-label { color: var(--ink); font-weight: 600; }
+
+/* ---------- 堆叠条形图 ---------- */
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.stack-row .sl {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11.5px; margin-bottom: 5px;
+}
+.stack-row .sl .nm { color: var(--ink); font-weight: 600; }
+.stack-row .sl .tot { font-family: 'JetBrains Mono', monospace; color: var(--ink-muted); font-size: 10.5px; }
+.stack-bar { display: flex; height: 20px; border-radius: 3px; overflow: hidden; }
+.stack-seg { display: flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 600; }
+.stack-seg.foreign { background: var(--me-blue); color: #06101F; }
+.stack-seg.other { background: color-mix(in srgb, var(--ink-muted) 42%, transparent); color: var(--ink-soft); }
+.stack-seg.hkmt { background: var(--gold); color: #06101F; }
+
+/* ---------- 图例 ---------- */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 10.5px; color: var(--ink-muted); }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+/* ---------- 甜甜圈 ---------- */
+.donut-wrap { display: grid; grid-template-columns: 168px 1fr; gap: 18px; align-items: center; }
+@media (max-width: 560px) { .donut-wrap { grid-template-columns: 1fr; } }
+.donut { position: relative; }
+.donut svg { display: block; transform: rotate(-90deg); }
+.donut-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; pointer-events: none;
+}
+.donut-center .v { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 600; color: var(--gold-soft); line-height: 1; }
+.donut-center .l { font-size: 9.5px; color: var(--ink-muted); margin-top: 4px; letter-spacing: .06em; }
+.donut-key { display: flex; flex-direction: column; gap: 8px; }
+.donut-key .row { display: grid; grid-template-columns: 12px 1fr auto; gap: 9px; align-items: center; font-size: 11.5px; }
+.donut-key .sw { width: 10px; height: 10px; border-radius: 2px; }
+.donut-key .nm { color: var(--ink-soft); }
+.donut-key .pc { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--ink); }
+
+/* ---------- 图表并排网格 ---------- */
+.chart-grid { display: grid; gap: 14px; }
+.chart-grid.two { grid-template-columns: 1fr 1fr; }
+.chart-grid.side { grid-template-columns: 1.15fr .85fr; }
+@media (max-width: 760px) { .chart-grid.two, .chart-grid.side { grid-template-columns: 1fr; } }
+
+/* ---------- 打印保真 ---------- */
+@media print {
+  .chart { break-inside: avoid; page-break-inside: avoid; }
+  .bar-fill, .stack-seg, .donut svg circle {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+  @page{size:A4;margin:11mm 10mm 13mm;background:#070E1A}
 </style>
 
 <div class="brandbar">
@@ -244,6 +407,7 @@
 
     <div class="cover-meta">
       <div><span class="label">出品</span>Magic Insight 数据研究院</div>
+      <div><span class="label">隶属</span>Magic Engine · magicengine.com.au</div>
       <div><span class="label">数据核查</span>2026-09-04 · 逐条打开发布方页面</div>
       <div><span class="label">口径</span>全国 / 城市 / 民航 三层</div>
       <div><span class="label">版本</span>Vol.04 · v1.0</div>
@@ -310,6 +474,67 @@
       </div>
     </div>
 
+    <div class="chart-grid side" style="margin-top:20px">
+      <div class="chart">
+        <div class="chart-head">
+          <span class="chart-title">图 1 · 同一个"入境游"，三种口径三种增速</span>
+          <span class="chart-unit">2025 同比 %</span>
+        </div>
+        <div class="bars">
+          <div class="bar-row hl">
+            <span class="bar-label">外国游客</span>
+            <div class="bar-track"><div class="bar-fill pos" style="left:0;width:100%"></div></div>
+            <span class="bar-value pos">+30.6</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">入境游客整体</span>
+            <div class="bar-track"><div class="bar-fill gold" style="left:0;width:55.9%"></div></div>
+            <span class="bar-value pos">+17.1</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">港澳台居民</span>
+            <div class="bar-track"><div class="bar-fill muted" style="left:0;width:44.8%"></div></div>
+            <span class="bar-value pos">+13.7</span>
+          </div>
+        </div>
+        <div class="chart-note">
+          体量：外国游客 3,517 万人次 · 港澳台 11,932 万人次 · 合计 15,450 万人次。<strong style="color:var(--ink)">港澳台体量是外国游客的 3.4 倍但增速最低</strong>，把整体拉到 +17.1%。
+        </div>
+      </div>
+
+      <div class="chart">
+        <div class="chart-head">
+          <span class="chart-title">图 2 · 单方免签 50 国的区域分布</span>
+          <span class="chart-unit">名单更新至 2026-02-17</span>
+        </div>
+        <div class="bars">
+          <div class="bar-row hl">
+            <span class="bar-label">欧洲</span>
+            <div class="bar-track"><div class="bar-fill blue" style="left:0;width:100%"></div></div>
+            <span class="bar-value neutral">35 国</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">亚洲</span>
+            <div class="bar-track"><div class="bar-fill blue" style="left:0;width:20%"></div></div>
+            <span class="bar-value neutral">7 国</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">美洲</span>
+            <div class="bar-track"><div class="bar-fill blue" style="left:0;width:17.1%"></div></div>
+            <span class="bar-value neutral">6 国</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">大洋洲</span>
+            <div class="bar-track"><div class="bar-fill blue" style="left:0;width:5.7%"></div></div>
+            <span class="bar-value neutral">2 国</span>
+          </div>
+        </div>
+        <div class="chart-note">
+          <strong style="color:var(--ink)">欧洲占 70%（35/50）</strong>，是政策覆盖最密的区域——这也是为什么欧洲各国的到访分化（第 02 节）比政策本身更值得看：同样的政策条件下，结果差了 60 个百分点。
+        </div>
+      </div>
+    </div>
+
     <div class="callout">
       <strong>第一个值得注意的地方</strong> · 外国游客 <strong>+30.6%</strong>，而入境游客整体只有 <strong>+17.1%</strong>。差距来自港澳台居民（+13.7%）——它体量大（11,932 万人次）但增长慢，把整体增速拉低了。<strong>真正在长的是外国客源这一块，而它恰恰是需要海外数字营销去触达的那一块。</strong>用"入境游 +17%"来判断海外投放规模会低估机会。
     </div>
@@ -354,6 +579,132 @@
       <strong>口径</strong> · 上海：上海市文化和旅游局数据，新华社 2026-01-23 报道，原文为「超 936 万人次」「增长近四成」「713.9 万人次外国游客，同比增长近五成」，<strong>官方表述为约数，本表照录未做精确化</strong>。北京：北京市文化和旅游局《北京市接待入境游情况》2025 年 1–12 月累计。广州：广州市统计局《2025 年广州市国民经济和社会发展统计公报》（2026-05-10 发布）。全国：文化和旅游部《2025 年文化和旅游发展统计公报》。「占全国外国游客」一列为本报告用各市外国游客数除以全国 3,517 万所得<span class="chip gold">推算</span>。三市统计口径可能存在差异（如是否含过夜/不过夜、如何归属中转旅客），跨市比较仅供结构参考。
     </div>
 
+    <div class="chart-grid side" style="margin-bottom:26px">
+      <div class="chart">
+        <div class="chart-head">
+          <span class="chart-title">图 3 · 三个口岸承接的外国游客量与增速</span>
+          <span class="chart-unit">万人次 / 同比</span>
+        </div>
+        <div class="bars">
+          <div class="bar-row hl">
+            <span class="bar-label">上海</span>
+            <div class="bar-track"><div class="bar-fill blue" style="left:0;width:100%"></div></div>
+            <span class="bar-value neutral">713.9</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">北京</span>
+            <div class="bar-track"><div class="bar-fill blue" style="left:0;width:63.8%"></div></div>
+            <span class="bar-value neutral">455.7</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">广州</span>
+            <div class="bar-track"><div class="bar-fill blue" style="left:0;width:36.4%"></div></div>
+            <span class="bar-value neutral">260.0</span>
+          </div>
+        </div>
+        <div class="chart-note">条长按外国游客绝对量。上海是北京的 <strong style="color:var(--gold-soft)">1.57 倍</strong>——把北京当作全国代表会低估上海方向的权重。</div>
+      </div>
+
+      <div class="chart">
+        <div class="chart-head">
+          <span class="chart-title">图 4 · 外国游客增速对比</span>
+          <span class="chart-unit">同比 %</span>
+        </div>
+        <div class="bars">
+          <div class="bar-row hl">
+            <span class="bar-label">上海</span>
+            <div class="bar-track"><div class="bar-fill pos" style="left:0;width:100%"></div></div>
+            <span class="bar-value pos">≈50</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">北京</span>
+            <div class="bar-track"><div class="bar-fill pos" style="left:0;width:83.6%"></div></div>
+            <span class="bar-value pos">41.8</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">全国</span>
+            <div class="bar-track"><div class="bar-fill gold" style="left:0;width:61.2%"></div></div>
+            <span class="bar-value pos">30.6</span>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">广州</span>
+            <div class="bar-track"><div class="bar-fill muted" style="left:0;width:54.0%"></div></div>
+            <span class="bar-value pos">27.0</span>
+          </div>
+        </div>
+        <div class="chart-note">金色为全国基准线。<strong style="color:var(--ink)">广州是三城中唯一低于全国增速的口岸。</strong>上海为官方约数「近五成」。</div>
+      </div>
+    </div>
+
+    <div class="chart-grid side" style="margin-bottom:26px">
+      <div class="chart">
+        <div class="chart-head">
+          <span class="chart-title">图 5 · 三城入境构成：外国人 vs 港澳台及其他</span>
+          <span class="chart-unit">占本市入境总量 %</span>
+        </div>
+        <div class="stack">
+          <div class="stack-row">
+            <div class="sl"><span class="nm">北京</span><span class="tot">总 548.0 万人次</span></div>
+            <div class="stack-bar">
+              <div class="stack-seg foreign" style="width:83.2%">外国人 83.2%</div>
+              <div class="stack-seg other" style="width:16.8%">16.8%</div>
+            </div>
+          </div>
+          <div class="stack-row">
+            <div class="sl"><span class="nm">上海</span><span class="tot">总 936.0 万人次</span></div>
+            <div class="stack-bar">
+              <div class="stack-seg foreign" style="width:76.3%">外国人 76.3%</div>
+              <div class="stack-seg other" style="width:23.7%">23.7%</div>
+            </div>
+          </div>
+          <div class="stack-row">
+            <div class="sl"><span class="nm">广州</span><span class="tot">总 571.8 万人次</span></div>
+            <div class="stack-bar">
+              <div class="stack-seg foreign" style="width:45.5%">外国人 45.5%</div>
+              <div class="stack-seg hkmt" style="width:54.5%">港澳台 54.5%</div>
+            </div>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--me-blue)"></i>外国人</span>
+          <span><i style="background:var(--gold)"></i>港澳台同胞</span>
+          <span><i style="background:color-mix(in srgb,var(--ink-muted) 42%,transparent)"></i>其他 / 未细分</span>
+        </div>
+        <div class="chart-note"><strong style="color:var(--ink)">广州过半入境客是港澳台同胞</strong>（311.8 万人次，+5.2%）——它做的是另一门生意，不能与京沪放进同一营销框架。</div>
+      </div>
+
+      <div class="chart">
+        <div class="chart-head">
+          <span class="chart-title">图 6 · 三城合计占全国外国游客</span>
+          <span class="chart-unit">分母 3,517 万人次</span>
+        </div>
+        <div class="donut-wrap">
+          <div class="donut">
+            <svg width="168" height="168" viewBox="0 0 168 168" role="img" aria-label="三城占全国外国游客比例">
+              <circle cx="84" cy="84" r="70" fill="none" stroke="var(--surface-3)" stroke-width="22"/>
+              <circle cx="84" cy="84" r="70" fill="none" stroke="var(--me-blue)" stroke-width="22"
+                      stroke-dasharray="89.3 350.5" stroke-dashoffset="0"/>
+              <circle cx="84" cy="84" r="70" fill="none" stroke="var(--gold)" stroke-width="22"
+                      stroke-dasharray="57.0 382.8" stroke-dashoffset="-89.3"/>
+              <circle cx="84" cy="84" r="70" fill="none" stroke="var(--growth)" stroke-width="22"
+                      stroke-dasharray="32.5 407.3" stroke-dashoffset="-146.3"/>
+            </svg>
+            <div class="donut-center">
+              <span class="v">40.7%</span>
+              <span class="l">三城合计</span>
+            </div>
+          </div>
+          <div class="donut-key">
+            <div class="row"><span class="sw" style="background:var(--me-blue)"></span><span class="nm">上海</span><span class="pc">20.3%</span></div>
+            <div class="row"><span class="sw" style="background:var(--gold)"></span><span class="nm">北京</span><span class="pc">13.0%</span></div>
+            <div class="row"><span class="sw" style="background:var(--growth)"></span><span class="nm">广州</span><span class="pc">7.4%</span></div>
+            <div class="row"><span class="sw" style="background:var(--surface-3)"></span><span class="nm">其他口岸</span><span class="pc">59.3%</span></div>
+          </div>
+        </div>
+        <div class="chart-note">占比为本报告用各市外国游客数除以全国 3,517 万所得<span class="chip gold">推算</span>。<strong style="color:var(--ink)">近六成外国游客从这三城之外入境</strong>——全国结构仍有大片盲区。</div>
+      </div>
+    </div>
+
     <h3 style="margin-bottom:14px;">分国别数据：只有北京公布了完整年表</h3>
     <p style="font-size:13.5px;color:var(--ink-soft);line-height:1.65;margin:0 0 20px;max-width:70ch">
       上海与广州公布了总量与外国人分项，但<strong>未见公开的完整分国别年度表</strong>。目前唯一可用于分国别判断的是北京——而由上表可知，<strong>北京只占全国外国游客的 13.0%</strong>。以下这张表因此只能作为长途客源的结构参考，不能当作全国客源画像。
@@ -385,7 +736,49 @@
       <strong>但必须同时记住上一张表的结论</strong>：北京只占全国外国游客 13.0%，且上海的外国客量是它的 1.57 倍。<strong>本表能说明的是「长途客源在北京口岸的结构」，不能直接外推为全国客源结构。</strong>上海最大客源国是韩国（90.9 万人次，+103.6%），与北京的欧美结构差异明显——这本身就说明不同口岸的客源画像不能互相替代。
     </div>
 
-    <h3 style="margin-top:48px;margin-bottom:16px;">英国的下滑有一个具体解释，德国没有</h3>
+    <div class="chart" style="margin-top:24px">
+      <div class="chart-head">
+        <span class="chart-title">图 7 · 北京 2025 分国别到访增速 —— 整张表只有两个负值</span>
+        <span class="chart-unit">同比 % · 零轴在 6% 位置</span>
+      </div>
+      <div class="bars">
+        <div class="bar-row"><span class="bar-label">俄罗斯</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill pos" style="left:6%;width:86.0%"></div></div>
+          <span class="bar-value pos">+72.2</span></div>
+        <div class="bar-row"><span class="bar-label">韩国</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill pos" style="left:6%;width:79.0%"></div></div>
+          <span class="bar-value pos">+66.3</span></div>
+        <div class="bar-row"><span class="bar-label">澳大利亚</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill pos" style="left:6%;width:73.8%"></div></div>
+          <span class="bar-value pos">+62.0</span></div>
+        <div class="bar-row hl"><span class="bar-label">西班牙</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill pos" style="left:6%;width:68.7%"></div></div>
+          <span class="bar-value pos">+57.7</span></div>
+        <div class="bar-row hl"><span class="bar-label">加拿大</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill pos" style="left:6%;width:61.5%"></div></div>
+          <span class="bar-value pos">+51.7</span></div>
+        <div class="bar-row"><span class="bar-label">新西兰</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill pos" style="left:6%;width:54.3%"></div></div>
+          <span class="bar-value pos">+45.6</span></div>
+        <div class="bar-row hl"><span class="bar-label">意大利</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill pos" style="left:6%;width:50.2%"></div></div>
+          <span class="bar-value pos">+42.2</span></div>
+        <div class="bar-row"><span class="bar-label">法国</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill pos" style="left:6%;width:29.6%"></div></div>
+          <span class="bar-value pos">+24.9</span></div>
+        <div class="bar-row hl"><span class="bar-label">英国</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill neg" style="left:1.2%;width:4.8%"></div></div>
+          <span class="bar-value neg">−4.0</span></div>
+        <div class="bar-row hl"><span class="bar-label">德国</span>
+          <div class="bar-track"><div class="zero" style="left:6%"></div><div class="bar-fill neg" style="left:0;width:6.0%"></div></div>
+          <span class="bar-value neg">−5.0</span></div>
+      </div>
+      <div class="chart-note">
+        条长按增速，竖线为零轴。<strong style="color:var(--ink)">高亮的四行是被普遍误判的四个市场</strong>——西班牙、加拿大、意大利被严重低估，英国德国被高估。北京 2025 全年外国人到访 4,556,984 人次（+41.8%），在此大盘下英德不是「增长慢」，是逆势下滑。
+      </div>
+    </div>
+
+    <h3 style="margin-top:32px;margin-bottom:16px;">英国的下滑有一个具体解释，德国没有</h3>
     <div class="myth">
       <div class="myth-card wrong">
         <div class="t">英国 · 有解释</div>
@@ -735,12 +1128,17 @@
         </svg>
       </div>
       <div class="nm">Magic Insight 数据研究院<span>Research Series · Vol. 04 · Inbound Tourism</span></div>
+      <div style="margin-left:auto;text-align:right;font-size:11.5px;line-height:1.6">
+        <div style="color:var(--ink);font-weight:600">Magic Engine</div>
+        <div><a href="https://magicengine.com.au" style="color:var(--me-blue-soft)">magicengine.com.au</a></div>
+        <div style="color:var(--ink-muted);font-size:10.5px;margin-top:2px">AI Growth Engine for AU / NZ Businesses</div>
+      </div>
     </div>
 
     <div class="grid">
       <div>
         <h4>关于本系列</h4>
-        <p>Magic Insight 是 Magic Engine 旗下的研究出品品牌。本系列不为任何单一客户撰写，是我们对 digital marketing（海外市场）赛道的观察与思考——事实在前，营销含义在后。</p>
+        <p><strong>Magic Insight 数据研究院</strong>是 <strong>Magic Engine</strong>（<a href="https://magicengine.com.au">magicengine.com.au</a>）旗下的研究出品品牌。本系列不为任何单一客户撰写，也不提供针对某一家公司的方案——它是我们对 digital marketing（海外市场）赛道的观察与思考：拉取数据、分析数据、寻找增长机会。事实在前，营销含义在后。</p>
       </div>
       <div>
         <h4>数据分层</h4>
@@ -753,7 +1151,7 @@
     </div>
 
     <div class="legal">
-      <div>© 2026 Magic Insight 数据研究院 · Magic Engine 出品 · 高级会员专属</div>
+      <div>© 2026 Magic Engine · Magic Insight 数据研究院出品 · 高级会员专属 · <a href="https://magicengine.com.au">magicengine.com.au</a></div>
       <div>Vol.04 · v1.0 · <span class="num">2026-09-04</span></div>
     </div>
   </div>
