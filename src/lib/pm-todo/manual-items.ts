@@ -689,12 +689,15 @@ export async function pushMailchimpExportItems(
   items: ManualItem[],
   now: Date,
 ): Promise<void> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('cron_run_logs')
     .select('finished_at, summary')
     .eq('job_name', 'meta-leads-sync')
+    .eq('status', 'completed')
     .order('finished_at', { ascending: false })
     .limit(1)
+
+  if (error) throw new Error(`cron_run_logs query failed: ${error.message}`)
 
   const run = (data ?? [])[0] as
     | {

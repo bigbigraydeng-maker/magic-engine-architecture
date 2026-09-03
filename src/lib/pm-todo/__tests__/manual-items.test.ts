@@ -133,6 +133,47 @@ describe('pushMailchimpExportItems', () => {
 
     expect(items).toEqual([])
   })
+
+  it('只挑跑完的运行记录 —— 卡在 running（finished_at 永远 NULL）的记录不该挡住后续告警', async () => {
+    const eqCalls: Array<[string, unknown]> = []
+    const chain = {
+      select: () => chain,
+      eq: (col: string, val: unknown) => {
+        eqCalls.push([col, val])
+        return chain
+      },
+      order: () => chain,
+      limit: async () => ({
+        data: [
+          {
+            finished_at: '2026-09-03T08:30:00Z',
+            summary: { results: [{ clientId: 'c-broken', clientName: 'CTS', mailchimp: { 'failed:auth': 1 } }] },
+          },
+        ],
+        error: null,
+      }),
+    }
+    const supabase = { from: () => chain } as unknown as SupabaseClient
+
+    const items: ManualItem[] = []
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(eqCalls).toContainEqual(['status', 'completed'])
+    expect(items).toHaveLength(1)
+  })
+
+  it('查运行记录本身报错 → 必须抛出，不能当成「没有记录」静默吞掉', async () => {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      order: () => chain,
+      limit: async () => ({ data: null, error: { message: 'permission denied' } }),
+    }
+    const supabase = { from: () => chain } as unknown as SupabaseClient
+
+    const items: ManualItem[] = []
+    await expect(pushMailchimpExportItems(supabase, items, NOW)).rejects.toThrow('permission denied')
+  })
 })
 
 describe('buildTodoEmail — manual lane', () => {
