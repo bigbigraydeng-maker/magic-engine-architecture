@@ -41,6 +41,8 @@ export interface CandidateMail {
   receivedAt: string
   direction: 'inbound' | 'outbound'
   counterparty: { address: string; name: string | null } | null
+  /** 带附件吗 —— 付款截图/回单常常整封信只有一句「见附件」，正文判不出来。 */
+  hasAttachment?: boolean
 }
 
 export interface PaidTaggingPolicy {
@@ -127,7 +129,10 @@ export async function runPaidTagging(
     const verdict = readPaidSignal({
       text,
       direction: mail.direction,
+      // 转发信的收件人常常不是正文那句话说的人（魏征复审）
       isForward: /^\s*(?:fw|fwd|re-?fw)\s*:/i.test(mail.subject ?? ''),
+      // 客人带附件发来的转账回单是个真信号（Codex 复审）——只影响 needs_review 那一档
+      hasAttachment: mail.hasAttachment,
     })
     if (verdict.kind === 'not_payment') continue
 

@@ -51,7 +51,7 @@ export type PaidSignal =
       /** 有付款的意思，但不是我们确认的 —— 下发给人点一下，不自动打。 */
       kind: 'needs_review'
       evidence: string
-      reason: 'inbound_claim' | 'mixed_with_chasing' | 'forwarded'
+      reason: 'inbound_claim' | 'mixed_with_chasing' | 'forwarded' | 'attachment_only'
     }
   | {
       /** 明确是在催款 —— 这个人**还没付**，碰都不要碰。 */
@@ -130,13 +130,57 @@ const INBOUND_CLAIM_PATTERNS: readonly RegExp[] = [
   /\bpaid\s+the\s+(?:deposit|balance|invoice)\b[^.!\n]*/i,
 ]
 
+/**
+ * 客人回一句「附件里」就不写别的 —— 付款截图 / 银行回单本身，正文只字不提。
+ *
+ * 单看 `hasAttachment` 什么都证明不了：一封带附件的询价信（行程单、护照照片）
+ * 一样会有附件。只有正文本身**已经在谈付款**（`payment` / `deposit` /
+ * `invoice` / `receipt` / `balance` 这类词），证据却止步于文字、真正的凭证
+ * 藏在附件里没法读的时候，才够格降级成 `needs_review`。
+ */
+const ATTACHMENT_PAYMENT_CONTEXT_PATTERNS: readonly RegExp[] = [
+  /\b(?:payment|deposit|balance|invoice|receipt)\b[^.!\n]*/i,
+]
+
 /** 逐字截出命中的那一句，供调用方回原文核对。截断只是为了日志好读。 */
 const EVIDENCE_MAX = 200
 
+/**
+ * 「一旦 / 当 / 如果」收到钱 —— 这是**还没发生的事**，不是确认句。
+ *
+ * 真实语料里就有这种写法：`Once your payment is received, we will send the
+ * invoice.` / `Once we have received your payment, ...`。它们跟
+ * `Your payment has been received` 长得几乎一样（都含 `payment ... received`），
+ * 但语义完全相反 —— 前者还在等钱，后者钱已经到账。判断依据是**整个分句**开头
+ * 是不是条件词，而不是只看紧贴在命中短语前面的那几个字：「Once we have
+ * received your payment」里，条件词 `once` 隔着 `we have` 才挨到
+ * `received your payment`，只看紧邻前缀会漏掉它。命中 RECEIVED_PATTERNS 后
+ * 必须回头看它所在分句开头，不然就是把「还没付」判成「已付」，比催款误判更隐蔽。
+ */
+const CONDITIONAL_CLAUSE_START = /^\s*(?:once|when|if|after|upon|as\s+soon\s+as|provided\s+that|assuming)\b/i
+
+/** 分句边界：句号/问号/感叹号/换行/逗号 —— 条件从句常见的收尾都在这几个字符上。 */
+function clauseStart(text: string, index: number): number {
+  for (let i = index - 1; i >= 0; i--) {
+    if (/[.!?\n,]/.test(text[i])) return i + 1
+  }
+  return 0
+}
+
+function hasConditionalPrefix(text: string, matchIndex: number): boolean {
+  const clause = text.slice(clauseStart(text, matchIndex), matchIndex)
+  return CONDITIONAL_CLAUSE_START.test(clause)
+}
+
+/** 命中就返回逐字原句；跳过被「once/when/if」等条件句管辖的假命中，继续往后找。 */
 function firstMatch(text: string, patterns: readonly RegExp[]): string | null {
   for (const re of patterns) {
-    const m = re.exec(text)
-    if (m) return m[0].trim().slice(0, EVIDENCE_MAX)
+    const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)
+    let m: RegExpExecArray | null
+    while ((m = global.exec(text))) {
+      if (!hasConditionalPrefix(text, m.index)) return m[0].trim().slice(0, EVIDENCE_MAX)
+      if (global.lastIndex === m.index) global.lastIndex += 1
+    }
   }
   return null
 }
@@ -202,6 +246,15 @@ export interface PaidSignalInput {
    * 代理会被打成付费客户并踢出营销名单，真正付钱的 Nikki 什么都没拿到。
    */
   isForward?: boolean
+  /**
+   * 这封带附件吗。
+   *
+   * 我在首版把它当死代码删了（当时全仓确实没有路径产出 `attachment_only`），
+   * Codex 复审同时把它**真接上了**：`mail-graph` 现在 `$select` 里带
+   * `hasAttachments`，客人带转账回单附件发来的信因此能进 needs_review。
+   * 合并时保留 Codex 这一侧 —— 信号是真的，只是首版没接线。
+   */
+  hasAttachment?: boolean
 }
 
 /**
@@ -215,6 +268,8 @@ export interface PaidSignalInput {
  *      单独标出来而不是并进 not_payment，是为了让调用方能把它记成
  *      「这个人被催过款」，将来做跟进用。
  *   3. 最后才看客人的声明 —— 只到 needs_review，永不自动打标签。
+ *   4. 声明都没有、但带附件又在谈付款 —— 证据可能就在附件里，同样只到
+ *      needs_review，理由标成 `attachment_only` 方便人工核对时先看附件。
  */
 export function readPaidSignal(input: PaidSignalInput): PaidSignal {
   const text = (input.text ?? '').replace(/\s+/g, ' ').trim()
@@ -248,6 +303,12 @@ export function readPaidSignal(input: PaidSignalInput): PaidSignal {
   if (input.direction === 'inbound') {
     const claim = firstMatch(text, INBOUND_CLAIM_PATTERNS)
     if (claim) return { kind: 'needs_review', evidence: claim, reason: 'inbound_claim' }
+
+    // ④ 正文没写声明，但带附件、又在谈付款 —— 证据大概率在附件里，别静默丢掉。
+    if (input.hasAttachment) {
+      const ctx = firstMatch(text, ATTACHMENT_PAYMENT_CONTEXT_PATTERNS)
+      if (ctx) return { kind: 'needs_review', evidence: ctx, reason: 'attachment_only' }
+    }
   }
 
   return { kind: 'not_payment' }
