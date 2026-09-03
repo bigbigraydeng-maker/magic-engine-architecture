@@ -5,6 +5,20 @@
 
 ---
 
+### 2026-09-03（Magic Insight 信源健康度提醒修复：meta_ads/tiktok_ads 零命中 + Search Engine Land 反爬停用，PR [#1376](https://github.com/bigbigraydeng-maker/magic-engine/pull/1376)）
+
+**发生了什么**：Magic Insight（market-intel）发来「⚠ 3 项需要检查」健康度提醒——Search Engine Land 连续 16 天 403、分类 `meta_ads` 与 `tiktok_ads` 各连续 5 天候选池零命中。直连生产库（`glbdnayojixmexgofbsd`）逐条核查真实数据，而非按邮件字面猜测。
+
+**真根因（与邮件提示不同）**：两类广告分类零命中**不是信源死了**——覆盖它们的 AdExchanger/Digiday/Social Media Today 全部 `consecutive_fail_count=0`、当天抓取成功。而是**归类逻辑过严**：v1 白名单只认 `"Meta Ads"/"TikTok Ads"` 这类完整产品名短语，真实标题几乎不逐字这么写，条目全被 `matchCategory` 判 null 丢弃（Social Media Today 这种 Meta/TikTok 主力源 14 天 0 条入库）；外加一个顺序 bug——Digiday 声明 `['marketing','tiktok_ads']`，无白名单的 marketing 按声明顺序先吃光所有条目（实测 45 条全落 marketing），tiktok_ads 永远轮不到。
+
+**修了什么**：给三类广告分类加「平台词 + 广告词共现」召回路径（词边界匹配，`"Meta earnings"` 这类只提平台不谈广告的仍不命中）；`matchCategory` 改为受控分类优先于「来源即数」分类。Search Engine Land 是真反爬——`last_success_at` 从上线起始终为 null、生产出口 IP 被站点 WAF 硬拦（403≠404），话题已被 SEJ/SEJ·PPC/Marketing Dive 冗余覆盖，生产库 `enabled=false` 停用止住假警报。一轮对抗式复审又抓出两处误判（`'IG Ads'⊂"big ads"`、平台词 `"Reels"` 撞英文动词），已用 `hasBoundedPhrase` 词边界 + 下放为 `"Reels ad(s)"` 强短语修复。测试 8→19 全绿，`npm run build` 通过。
+
+**Reuse First**：完全复用现有 market-intel 平台管线，未新增能力线/表/对外 endpoint；归类内核改进是 platform-shared，任何行业版本共用；零客户名/客户 ID/行业判断写入 shared runtime。
+
+**遗留**：Search Engine Land 若要恢复，需一条能绕过反爬且可验证的抓取方式（参照 MenaBytes→Campaign Middle East 的换源处理）——本环境无法验证外部抓取，未擅自塞入未验证替代 URL。
+
+---
+
 ### 2026-09-03（Magic Insight 研究报告系列：数据完整性事故 + 发布前机械闸上线，PR [#1337](https://github.com/bigbigraydeng-maker/magic-engine/pull/1337)）
 
 **发生了什么**：PM 要求把行业市场研究报告固化为 ME 常规能力，以「Magic Insight 数据研究院」名义面向 499 档高级会员出品。产出 Vol.01（中国入境游）与 Vol.02（中国→澳洲物流）两卷后，PM 追问「这里的数据是真实的吗」——如实核查后确认：**两卷在起草时未跑任何一次实时数据查询**，却给自造数字配上了权威来源标注（ABS、Google Ads Keyword Planner、国家移民管理局、Trip.com 财报），直接违反 CLAUDE.md 铁律 8。
