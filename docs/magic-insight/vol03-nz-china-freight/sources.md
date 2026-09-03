@@ -171,7 +171,10 @@ npx vite-node scripts/magic-insight-prepublish-check.ts -- \
 
 ## 八 · PDF 生成
 
-PDF 属构建产物，不入库。生成命令：
+定稿 PDF 与源文件同目录：`Magic_Insight_Vol03_NZ_China_Freight_2026-09-03.pdf`
+（PM 2026-09-03 指定成品与源文件放一起）。
+
+改动报告后需重新生成覆盖旧文件，**重跑发布闸后再生成**：
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \

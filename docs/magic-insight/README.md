@@ -92,11 +92,15 @@ npx vite-node scripts/magic-insight-prepublish-check.ts -- docs/magic-insight/vo
 docs/magic-insight/
   README.md                    ← 本文件，系列登记簿
   volNN-<主题>/
-    report.html                ← 报告源文件（PDF 是构建产物，不入库）
+    report.html                ← 报告源文件（可改、可重新生成 PDF）
     sources.md                 ← 数据台账：每个数字 → 期间 → 口径 → URL → 置信度
+    Magic_Insight_VolNN_*.pdf  ← 定稿 PDF，对外发送的就是这一份
 ```
 
-**PDF 不入库**：由 `report.html` 用 headless Chrome 生成，属构建产物。
+**PDF 入库**（PM 2026-09-03 指定）：本目录是 Magic Insight 报告的唯一存放处，
+成品 PDF 与源文件放一起，不散落在 Downloads 或临时目录。
+
+改报告的流程：改 `report.html` → 重跑发布闸 → 重新生成 PDF 覆盖旧的。
 生成命令见各卷 `sources.md` 末尾。
 
 ---
