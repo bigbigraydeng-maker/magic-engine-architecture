@@ -24,7 +24,7 @@ else
 fi
 
 wd_refresh_debt_bg "$CWD"
-DEBT=$(wd_debt_line)
+DEBT=$(wd_debt_line "$CWD")
 DIRTY_TXT=$([ "${DIRTY:-0}" -gt 0 ] && echo "$DIRTY 个文件还没提交" || echo "干净")
 
 if [ -f "$BRIEF" ]; then

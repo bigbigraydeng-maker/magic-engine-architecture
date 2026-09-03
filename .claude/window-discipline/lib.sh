@@ -15,30 +15,55 @@ wd_branch() { wd_git "$1" rev-parse --abbrev-ref HEAD; }
 
 wd_dirty_count() { wd_git "$1" status --porcelain | grep -c . | tr -d ' '; }
 
-# 欠账缓存：扫所有工作副本要 1-2 秒，所以后台刷新、前台读旧值
+# 欠账缓存按仓库区分（用 git-common-dir 当 key，同一仓库的所有工作副本共享一份），
+# 缓存里存的是不排除任何人的完整每副本统计，排除 $self 放到读取时做——
+# 这样窗口 A 刷新的缓存，窗口 B 读的时候也能正确排除 B 自己，不会互相顶掉。
+wd_debt_cache_key() {
+  local common_dir
+  common_dir=$(wd_git "$1" rev-parse --git-common-dir)
+  [ -z "$common_dir" ] && return 1
+  case "$common_dir" in
+    /*) : ;;
+    *) common_dir="$1/$common_dir" ;;
+  esac
+  printf '%s' "$common_dir" | md5 -q 2>/dev/null || printf '%s' "$common_dir" | md5sum | cut -d' ' -f1
+}
+
 wd_debt_line() {
-  local cache="$WD_HOME/cache/debt.txt"
-  [ -f "$cache" ] && cat "$cache"
+  local self="$1"
+  local key cache
+  key=$(wd_debt_cache_key "$self") || return
+  cache="$WD_HOME/cache/debt-$key.txt"
+  [ -f "$cache" ] || return
+  local total_wt=0 total_files=0 wt n
+  while IFS=$'\t' read -r wt n; do
+    [ -z "$wt" ] && continue
+    [ "$wt" = "$self" ] && continue
+    if [ "${n:-0}" -gt 0 ]; then
+      total_wt=$((total_wt+1)); total_files=$((total_files+n))
+    fi
+  done < "$cache"
+  if [ "$total_wt" -gt 0 ]; then
+    printf '另有 %s 个窗口躺着 %s 个没提交的文件' "$total_wt" "$total_files"
+  else
+    printf '其他窗口都收干净了'
+  fi
 }
 
 wd_refresh_debt_bg() {
   local self="$1"
+  local key
+  key=$(wd_debt_cache_key "$self") || return
   (
-    local out="" total_wt=0 total_files=0
+    local cache="$HOME/.claude/window-discipline/cache/debt-$key.txt"
+    local tmp="$cache.tmp.$$"
+    : > "$tmp"
     while read -r wt; do
       [ -z "$wt" ] && continue
-      [ "$wt" = "$self" ] && continue
       local n
       n=$(git -C "$wt" status --porcelain 2>/dev/null | grep -c . | tr -d ' ')
-      if [ "${n:-0}" -gt 0 ]; then
-        total_wt=$((total_wt+1)); total_files=$((total_files+n))
-      fi
+      printf '%s\t%s\n' "$wt" "${n:-0}" >> "$tmp"
     done < <(git -C "$self" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}')
-    if [ "$total_wt" -gt 0 ]; then
-      out="另有 ${total_wt} 个窗口躺着 ${total_files} 个没提交的文件"
-    else
-      out="其他窗口都收干净了"
-    fi
-    printf '%s' "$out" > "$HOME/.claude/window-discipline/cache/debt.txt"
+    mv "$tmp" "$cache"
   ) >/dev/null 2>&1 &
 }

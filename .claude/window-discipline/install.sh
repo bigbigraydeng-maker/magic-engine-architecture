@@ -21,19 +21,20 @@ echo "② 挂三个提醒 → $SETTINGS"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 cp "$SETTINGS" "$SETTINGS.bak-$(date +%Y%m%d-%H%M%S)"
 
-#   只替换带本工具标记（$d 路径）的旧条目，其他工具挂的钩子（比如
-#   scripts/team-memory/install.mjs 挂的 SessionStart/Stop）原样保留。
+#   只摘掉带本工具标记（$d 路径）的内层 hook 命令，同一条目里挂的其他工具
+#   （比如 scripts/team-memory/install.mjs 挂的 SessionStart/Stop）原样保留；
+#   只有摘完内层数组变空的条目才整条丢弃。
 jq --arg d "$DST" '
-  def ours: [.hooks[]?.command // "" | contains($d)] | any;
+  def strip_ours: .hooks = [(.hooks // [])[] | select((.command // "") | contains($d) | not)];
   .hooks //= {} |
-  .hooks.SessionStart = ([(.hooks.SessionStart // [])[] | select(ours | not)] + [{
+  .hooks.SessionStart = ([(.hooks.SessionStart // [])[] | strip_ours | select((.hooks | length) > 0)] + [{
     matcher: "startup|resume|clear|compact",
     hooks: [{type:"command", command:($d + "/session-start.sh")}]
   }]) |
-  .hooks.UserPromptSubmit = ([(.hooks.UserPromptSubmit // [])[] | select(ours | not)] + [{
+  .hooks.UserPromptSubmit = ([(.hooks.UserPromptSubmit // [])[] | strip_ours | select((.hooks | length) > 0)] + [{
     hooks: [{type:"command", command:($d + "/drift-check.sh")}]
   }]) |
-  .hooks.Stop = ([(.hooks.Stop // [])[] | select(ours | not)] + [{
+  .hooks.Stop = ([(.hooks.Stop // [])[] | strip_ours | select((.hooks | length) > 0)] + [{
     hooks: [{type:"command", command:($d + "/wrap-up.sh")}]
   }])
 ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
