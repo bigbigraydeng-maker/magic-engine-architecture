@@ -71,6 +71,8 @@ export type ManualItemKind =
   | 'dm_maybe_stop'
   /** 平台候选（docs/registry/platform-candidates.md）到了复查日期 —— 见 me-platform-tier-gate skill */
   | 'platform_candidate_review_due'
+  /** 客人像是说他付款了，但不是我们自己确认的 —— 只有人能核对到账，不许机器自己打 paid 标签 */
+  | 'paid_signal_needs_review'
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
@@ -230,6 +232,10 @@ export async function loadManualItems(
   // ME 产品动态自动发 LinkedIn —— 敏感内容待审 / 账号未连 / 发布失败三种卡点
   await pushLinkedinProgressItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] LinkedIn 进度贴待办检查失败（不阻塞其他待办）:', e),
+  )
+  // 客人说他付款了但没法自动确认 —— 只有人能对银行流水，不许机器自己打 paid 标签
+  await pushPaidSignalReviewItems(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] 待确认付款读取失败（不阻塞其他待办）:', e),
   )
   if (clientsError) {
     items.push(clientListUnreadableItem(clientsError.message))
@@ -508,6 +514,97 @@ async function pushVideoCreditsItem(
     how: '打开链接充值（这是我们生成视频画面用的账户）。充完回我一句，我把断掉的那几单重跑',
     href: MUAPI_TOPUP_URL,
   })
+}
+
+/** Mailchimp 后台的联系人页 —— 登录后一定打得开的稳定入口。 */
+const MAILCHIMP_AUDIENCE_URL = 'https://admin.mailchimp.com/audience/contacts/'
+
+/**
+ * 客人像是说他付款了，但**不是我们自己确认的** → 下发给人核一眼。
+ *
+ * 为什么不自动打标签：`mailchimp/paid-signal` 里那条红线 —— 一封写着
+ * 「I'll transfer tomorrow」或者甩了张回单截图的邮件，不等于钱到账。看账不看话。
+ * 错打一个 `paid_customer`，这个正在谈的客人会被停掉全部跟进邮件，这单就丢了。
+ *
+ * 所以这一档只能是人工：Baker 去银行对一眼，到账了就在 Mailchimp 点上标签。
+ *
+ * 数据来自 `mailchimp-paid-tagging` cron 写进 `cron_run_logs.summary.needsReview`
+ * —— 不为它单开一张表（新表要 migration，而这条信息本来就是那次运行的产物）。
+ */
+export async function pushPaidSignalReviewItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  /**
+   * 看**最近 7 天所有跑完的非预演运行**，按邮箱去重 —— 不是「最近一次」。
+   *
+   * 首版写的是 limit(1)，子牙复审指出三个具体漏法，每一个都会让待办静默消失：
+   *
+   *   1. **漏发**：日常只回溯 3 天。一条待确认在第 1 天出现、Baker 三天没处理，
+   *      第 4 天的运行已经扫不到那封信 → 待办凭空消失，再没人看见。
+   *      铁律 3 下半在第 4 天失效 —— 管道断头。
+   *   2. **被冲掉**：`?dry=1&days=365` 写的是同一个 job_name 的行。PM 跑一次预演，
+   *      待办被一年历史刷满；5:10 的 daily 一跑又全换掉。两个方向都不是预期。
+   *   3. **读到半截**：不筛 status 的话，最新一行可能是 `running`（summary 还是
+   *      null）→ 当天待办静默为空。cron 5:10 跑、今日待办也是早上生成，撞上概率不低。
+   *
+   * 去重之后，多看几次运行反而比只看一次轻 —— 同一个人不会出现两遍。
+   *
+   * 彻底的「人处理完就消失」需要一张 ack 表，那是 A 级改动，不塞进这个 PR。
+   */
+  const since = new Date(now.getTime() - 7 * 86_400_000).toISOString()
+  const { data, error } = await supabase
+    .from('cron_run_logs')
+    .select('summary, started_at, status')
+    .eq('job_name', 'mailchimp-paid-tagging')
+    .eq('status', 'completed')
+    .gte('started_at', since)
+    .order('started_at', { ascending: false })
+    .limit(30)
+
+  if (error) throw new Error(`cron_run_logs query failed: ${error.message}`)
+
+  const rows: unknown[] = []
+  const seen = new Set<string>()
+  for (const run of (data ?? []) as Array<{ summary?: { needsReview?: unknown; dryRun?: unknown } | null }>) {
+    // 预演不是真运行 —— 它的结果不该变成任何人的待办。
+    if (run.summary?.dryRun === true) continue
+    const list = Array.isArray(run.summary?.needsReview) ? run.summary.needsReview : []
+    for (const item of list) {
+      const email = typeof (item as { email?: unknown })?.email === 'string' ? (item as { email: string }).email : ''
+      if (!email || seen.has(email.toLowerCase())) continue
+      seen.add(email.toLowerCase())
+      rows.push(item)
+    }
+  }
+
+  for (const raw of rows.slice(0, 20)) {
+    const r = raw as {
+      email?: unknown
+      name?: unknown
+      evidence?: unknown
+      receivedAt?: unknown
+      clientId?: unknown
+      clientName?: unknown
+    }
+    const email = typeof r.email === 'string' ? r.email : ''
+    if (!email) continue
+    const who = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : email
+    const quote = typeof r.evidence === 'string' ? r.evidence.trim() : ''
+    const days = daysAgo(typeof r.receivedAt === 'string' ? r.receivedAt : null, now)
+    const when = days === null ? '' : days === 0 ? '今天' : `${days} 天前`
+
+    items.push({
+      kind: 'paid_signal_needs_review',
+      client_id: typeof r.clientId === 'string' ? r.clientId : 'infra',
+      client_name: typeof r.clientName === 'string' ? r.clientName : 'Magic Engine 后台',
+      // 原话逐字带上 —— 人一眼就知道该不该信，不用回邮箱翻
+      what: `${who}${when ? `（${when}）` : ''}像是说他付款了${quote ? `：「${quote}」` : ''} —— 但这是他自己说的，不是我们确认到账，所以系统没敢自动标成已付款客户。不标的话，他还会继续收到招揽邮件`,
+      how: '去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 paid_customer 标签（加完他就自动退出群发名单了）；没到就不用管',
+      href: MAILCHIMP_AUDIENCE_URL,
+    })
+  }
 }
 
 /** Keyword Intelligence 余额告罄只认供应商的明确 40210，不猜其它错误。 */

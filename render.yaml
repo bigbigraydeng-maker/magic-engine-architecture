@@ -977,6 +977,34 @@ services:
     envVars:
       - fromGroup: me-shared-cron-secret
 
+  # 付款邮件 → Mailchimp `paid_customer` 标签（付了钱的人自动退出群发名单）。
+  #
+  # 在这之前这件事完全是手工的：CTS 那 19 个 paid_customer 标签是 2026-08-30
+  # 有人翻 info@ 邮箱手打的，之后再没人打过。代价当天就付了 —— 9/1 那次 192 人
+  # 的群发混进 2 个已付款客户，其中一个是 Baker 亲口回过
+  # 「your payment has been received in full」的 Nikki Smith。
+  #
+  # 只自动做「我们自己确认收款」那一档；客人自己说付了的一律不自动打，
+  # 攒进 summary.needsReview 由今日待办下发给人点一下（判据见 lib/mailchimp/paid-signal，
+  # 那里有一条红线：这个邮箱里催款信和收款信长得几乎一样，判错会把正在谈的客人停掉）。
+  #
+  # 排在 activity-sync（4:40）之后 —— 那条把邮件反应搬进 CRM，这条改标签，
+  # 两条都碰 Mailchimp，错开避免同一分钟撞 API 限流。
+  #
+  # 补历史：手动 POST 带 ?days=N（如 ?days=365），跟每天对账同一套代码。
+  #
+  # ⚠️ 密钥用 fromGroup 自动挂，**不要**改回 `sync: false`（同上一条的坑）。
+  - type: cron
+    name: mailchimp-paid-tagging-daily
+    env: node
+    schedule: "10 5 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/mailchimp-paid-tagging
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
   # ─────────────────────────────────────────────────────────────────────────
   # Team Working Memory 兜底清扫 — 每 30 分钟
   #

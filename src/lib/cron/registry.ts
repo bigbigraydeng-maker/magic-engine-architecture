@@ -82,6 +82,7 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   // （新增服务要有人进 Render 点一次 Apply，而这件事不报任何错），现在挂在 messenger-hourly
   // 里跑。留在清单里会天天误报「没跑」——正是这套告警最怕的东西。
   { service: 'mailchimp-activity-daily', jobName: 'mailchimp-activity-sync', schedule: '40 4 * * *', logsRuns: true },
+  { service: 'mailchimp-paid-tagging-daily', jobName: 'mailchimp-paid-tagging', schedule: '10 5 * * *', logsRuns: true, addedAt: '2026-09-02' },
   { service: 'messenger-hourly', jobName: 'messenger-sync-hourly', schedule: '10 * * * *', logsRuns: true },
   { service: 'meta-leads-hourly', jobName: 'meta-leads-sync', schedule: '25 * * * *', logsRuns: true },
   { service: 'oztop-seo-optimizer', jobName: 'oztop-seo-optimizer', schedule: '0 5 * * 1', logsRuns: true },
