@@ -12,6 +12,7 @@ import {
   loadManualItems,
   pushPlatformCandidateReviewItems,
   pushDataForSeoCreditsItem,
+  pushLinkedinProgressItems,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -70,6 +71,154 @@ describe('pushDataForSeoCreditsItem', () => {
     await pushDataForSeoCreditsItem(query.supabase, items, new Date('2026-09-01T00:00:00Z'))
 
     expect(items).toEqual([])
+  })
+})
+
+describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏', () => {
+  const NOW = new Date('2026-09-03T09:00:00Z')
+
+  /** 假 content_posts 查询：`.select().eq().eq().in().order().limit()` 后 await。 */
+  function fakePostsQuery(rows: unknown[]): SupabaseClient {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      in: () => chain,
+      order: () => chain,
+      limit: async () => ({ data: rows, error: null }),
+    }
+    return { from: () => chain } as unknown as SupabaseClient
+  }
+
+  const draft = (reason: string) => ({
+    id: `p-${reason}-${Math.random()}`,
+    status: 'draft',
+    updated_at: '2026-09-01T00:00:00Z',
+    generation_context_snapshot: { reason },
+  })
+
+  it('🔴 三条待审草稿 → 只出一条、带「3 条」，不是三行一模一样的重复', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        draft('sensitive_content_flagged'),
+        draft('sensitive_content_flagged'),
+        draft('sensitive_content_flagged'),
+      ]),
+      items,
+      NOW,
+    )
+
+    const review = items.filter((i) => i.kind === 'linkedin_progress_needs_review')
+    expect(review).toHaveLength(1)
+    expect(review[0].what).toContain('3 条')
+    expect(review[0].client_name).toBe('ME 产品动态（LinkedIn）')
+  })
+
+  it('一条待审草稿 → 保留原来的单数文案（多轮 review 磨过的话术不回退）', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([draft('sensitive_content_flagged')]),
+      items,
+      NOW,
+    )
+
+    expect(items).toHaveLength(1)
+    expect(items[0].kind).toBe('linkedin_progress_needs_review')
+    expect(items[0].what).toBe(
+      '这周的 LinkedIn 进度贴草稿里可能带了客户敏感信息，系统没敢自动发，等你看一眼',
+    )
+    // 单数不该出现条数噪音
+    expect(items[0].what).not.toContain('条')
+  })
+
+  it('账号未连的多条草稿 → 只出一条 needs_setup（账号连一次就都能发）', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        draft('linkedin_account_not_configured'),
+        draft('linkedin_account_not_configured'),
+      ]),
+      items,
+      NOW,
+    )
+
+    const setup = items.filter((i) => i.kind === 'linkedin_progress_needs_setup')
+    expect(setup).toHaveLength(1)
+    expect(setup[0].what).toContain('2 条')
+  })
+
+  it('已发布但回写失败 → 合并成一条，且保住「千万别重发」红线话术', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        {
+          id: 'a',
+          status: 'approved',
+          updated_at: '2026-09-01T00:00:00Z',
+          generation_context_snapshot: { reason: 'published_but_db_sync_failed' },
+        },
+        {
+          id: 'b',
+          status: 'approved',
+          updated_at: '2026-09-01T00:00:00Z',
+          generation_context_snapshot: { reason: 'published_but_db_sync_failed' },
+        },
+      ]),
+      items,
+      NOW,
+    )
+
+    expect(items).toHaveLength(1)
+    expect(items[0].kind).toBe('linkedin_progress_needs_review')
+    expect(items[0].what).toContain('2 条')
+    expect(items[0].what).toContain('千万别')
+    // 绝不能引导去"重试/重新批准"——那会发出重复的公开帖子
+    expect(items[0].how).toContain('手动把这几条记录的状态改成')
+  })
+
+  it('approved 但还没卡过 2 小时阈值 → 不下发（系统还没试着发）', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        {
+          id: 'fresh',
+          status: 'approved',
+          updated_at: new Date(NOW.getTime() - 30 * 60 * 1000).toISOString(),
+          generation_context_snapshot: { reason: 'published' },
+        },
+      ]),
+      items,
+      NOW,
+    )
+    expect(items).toEqual([])
+  })
+
+  it('发布失败多条、报错各不相同 → 一条汇总，条数 + 去重后的原因都带上', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        {
+          id: 'x',
+          status: 'approved',
+          updated_at: '2026-09-01T00:00:00Z',
+          generation_context_snapshot: { publish_error: '401 授权失效' },
+        },
+        {
+          id: 'y',
+          status: 'approved',
+          updated_at: '2026-09-01T00:00:00Z',
+          generation_context_snapshot: { publish_error: '429 限流' },
+        },
+      ]),
+      items,
+      NOW,
+    )
+
+    const failed = items.filter((i) => i.kind === 'linkedin_progress_failed')
+    expect(failed).toHaveLength(1)
+    expect(failed[0].what).toContain('2 条')
+    expect(failed[0].what).toContain('401 授权失效')
+    expect(failed[0].what).toContain('429 限流')
   })
 })
 
