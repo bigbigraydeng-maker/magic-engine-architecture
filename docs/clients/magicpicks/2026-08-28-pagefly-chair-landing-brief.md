@@ -30,7 +30,6 @@
 | 次要文字 | `#6E6459` |
 | 标题字体 | Noto Serif（PageFly 字体库搜 "Noto Serif" 直接选）|
 | 正文字体 | Noto Sans |
-| Jing 签名字体 | Caveat（仅签名那一行用）|
 | 圆角 | 按钮/卡片用 12px，大容器用 20px |
 
 ---
@@ -40,7 +39,7 @@
 ### ① Hero
 
 - **组件**：PageFly "Hero Banner" 或 "Image + Text"
-- **背景**：暂用产品占位图（等 Jing 实物图替换）或纯色 `#1F3B4D` 深蓝背景
+- **背景**：暂用产品占位图（等仓库实物图替换）或纯色 `#1F3B4D` 深蓝背景
 - **标题**（Noto Serif, 深蓝或白字取决于背景）：
   ```
   Auckland's chair, ready to sit on.
@@ -61,11 +60,11 @@
   this one does, without the $500 price tag.
   ```
 
-### ③ 产品实拍（等 Jing 图片）
+### ③ 产品实拍（等仓库实物图片）
 
 - **组件**：PageFly "Image Gallery" 或 "Slider"
 - **占位说明**：现在放 1 张产品占位图 + 一行文字 `[Real photos from our Mt Wellington warehouse coming soon]`
-- 收到 Jing 拍的图后替换（5-8 张：主图/侧面/后背/扶手/底轮/细节）
+- 收到仓库实拍图后替换（5-8 张：主图/侧面/后背/扶手/底轮/细节）
 
 ### ④ 规格 + 差异化对比
 
@@ -76,7 +75,7 @@
   | 发货地 | Auckland（本地）| 跨境 |
   | 到货时间 | 1-2 天 | 数周 |
   | 价格 | NZ$119 | 更贵 |
-  | 主理人 | Jing 亲选 | 无 |
+  | 品控 | 到货前逐件检查 | 无 |
 
 ### ⑤ 信任信号带
 
@@ -85,7 +84,7 @@
 - ↩️ 14-day returns（unopened）
 - 🛡️ 12-month warranty
 - 🚚 Free NZ shipping over NZ$110
-- ✅ Hand-picked by Jing
+- ✅ Hand-picked, quality-checked
 
 ### ⑥ 社会证明
 
@@ -108,16 +107,14 @@
   5. How do I pay? → Apple Pay / Google Pay / card / Shopify Pay Installments
   6. Do you deliver outside Auckland? → Yes, NZ-wide, free over NZ$110
 
-### ⑧ Jing 签名收尾 + 最终 CTA
+### ⑧ 品牌收尾 + 最终 CTA
 
-- **组件**：PageFly "Text + Signature Image"
-- **文案**（Noto Serif 正文 + Caveat 签名字体）：
+- **组件**：PageFly "Text Block"（普通 Noto Serif 正文，不用签名字体）
+- **文案**：
   ```
-  I only ship things I'd put in my own home.
-  If it wouldn't hold up for my family, I don't stock it.
+  We only ship things we'd put in our own home.
+  If it wouldn't hold up for our family, we don't stock it.
   This chair is one of them.
-
-  — Jing
   ```
 - **最终 CTA**：大按钮 `Add to Cart`（Warm Clay 背景）
 
