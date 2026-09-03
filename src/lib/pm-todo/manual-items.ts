@@ -23,6 +23,7 @@ import { pushAttributionItems, type AttributionItemKind } from './attribution-it
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
+import { pushEmailReplyItems, type EmailReplyItemKind } from './email-reply-items'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
 import { LINKEDIN_PROGRESS_CLIENT_ID, LINKEDIN_PROGRESS_SOURCE } from '@/lib/linkedin-progress/constants'
@@ -78,6 +79,7 @@ export type ManualItemKind =
   | 'linkedin_progress_needs_review'
   | 'linkedin_progress_needs_setup'
   | 'linkedin_progress_failed'
+  | EmailReplyItemKind
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -293,6 +295,11 @@ export async function loadManualItems(
   // 刻意**不自动封渠道**，只提示 —— 理由见 lib/crm/messenger-stop-signal.ts 文件头。
   await pushMessengerStopItems(supabase, items, ids, now, nameOf).catch((e) =>
     console.warn('[manual-items] 私信拒联提示生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 客人来信超过一天没人回 + 公司邮箱同步哑了（后者会让前者假装成零条），见 email-reply-items.ts
+  await pushEmailReplyItems(supabase, items, ids, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 客人来信没回待办生成失败（不阻塞其他待办）:', e),
   )
 
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
