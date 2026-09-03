@@ -75,9 +75,7 @@ describe('readAudienceId', () => {
     expect(seen).toHaveLength(1)
   })
 
-  it('专列存在但为空 → 空串关闭出口，**不许**掉回 leads_config 的旧值', async () => {
-    // migration 注释把这一列的语义写死成「NULL disables the outlet」。空值还
-    // 掉回旧 JSON，运营就关不掉出口，会给本该停掉的人继续发订阅。
+  it('专列存在但被显式设为空 → 空串是权威结果，绝不回落 leads_config（运营就是靠置空关出口）', async () => {
     // 假件**故意**把 leads_config 的旧值一并递回来（真库上两处可以同时有值，
     // 而且第一条查询将来若被人加宽就真会带回它）。代码必须视而不见 ——
     // 只靠「没 select 它」来保证正确是脆的，行为本身也得钉住。
