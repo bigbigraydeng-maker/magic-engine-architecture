@@ -489,11 +489,11 @@ function ConnectMeta({
   return (
     <div className="mt-3 border-t border-slate-100 pt-3">
       {result && (
-        <p
+        <div
           className={`mb-2 text-xs leading-relaxed ${result.ok ? 'text-cyan-700' : 'text-amber-700'}`}
         >
           {result.text}
-        </p>
+        </div>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
