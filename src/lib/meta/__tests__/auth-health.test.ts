@@ -23,7 +23,7 @@ vi.mock('@/lib/meta-oauth/client', () => ({
   META_PAGE_SCOPES: ['pages_show_list', 'pages_manage_posts', 'leads_retrieval'] as const,
 }))
 
-import { checkMetaAuth, needsHuman, isHealthy, type MetaAuthHealth } from '../auth-health'
+import { checkMetaAuth, needsHuman, isHealthy, META_AUTH_HEALTH_JOB, type MetaAuthHealth } from '../auth-health'
 import { getStoredPageToken } from '@/lib/meta/token-manager'
 import { listGrantedScopes } from '@/lib/meta-oauth/client'
 
@@ -101,6 +101,14 @@ function input(over: Record<string, unknown> = {}) {
   return { clientId: CLIENT, pageId: PAGE, domain: 'ctstours.co.nz', ...over } as never
 }
 
+describe('运行记录名字', () => {
+  it('🔴 常量与 cron 路由里的字面量同值 —— 待办查的 job_name 必须等于日志里写的', () => {
+    // 路由为了静态对账用字面量 startCronRun('meta-auth-health')；待办层用这个常量
+    // 查同一批记录。两者一旦漂移，待办会查一个没人写的名字、永远空。
+    expect(META_AUTH_HEALTH_JOB).toBe('meta-auth-health')
+  })
+})
+
 describe('健康的那一种', () => {
   it('存下来的主页授权能读到主页、权限齐全 → ok', async () => {
     mockStored.mockResolvedValue('stored-page-token')
@@ -171,6 +179,32 @@ describe('🔴 fail-closed —— 问不到不许算成没问题', () => {
     expect(h.state).toBe('scope_missing')
     expect(h.granted_scopes).toEqual([])
     expect(h.missing_scopes).toEqual(ALL_SCOPES)
+  })
+
+  it('🔴 HTTP 200 但返回体不是这张主页（代理错误页 / 登录墙）→ unknown，不许塌成健康', async () => {
+    mockStored.mockResolvedValue('stored-page-token')
+    const htmlErrorPage = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => null }) as never
+    const h = await checkMetaAuth(
+      fakeSupabase({ scopes: ALL_SCOPES, status: 'active', token_expiry: null }),
+      input(),
+      { now: NOW, fetcher: htmlErrorPage },
+    )
+    expect(h.state).toBe('unknown')
+  })
+
+  it('🔴 HTTP 200 但 id 是别的主页 → unknown，不认作这张主页活着', async () => {
+    mockStored.mockResolvedValue('stored-page-token')
+    const wrongPage = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: '999999999', name: '别人的主页' }),
+    }) as never
+    const h = await checkMetaAuth(
+      fakeSupabase({ scopes: ALL_SCOPES, status: 'active', token_expiry: null }),
+      input(),
+      { now: NOW, fetcher: wrongPage },
+    )
+    expect(h.state).toBe('unknown')
   })
 })
 

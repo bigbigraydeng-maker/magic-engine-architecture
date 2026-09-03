@@ -175,7 +175,15 @@ async function probePage(
   const url = `${GRAPH_BASE}/${encodeURIComponent(pageId)}?fields=id,name&access_token=${encodeURIComponent(token)}`
   try {
     const res = await fetcher(url)
-    if (res.ok) return { result: 'alive', error: null }
+    if (res.ok) {
+      // 2xx 还不够 —— 必须确认返回体真的是这张主页。CDN / 登录墙可能回一个
+      // HTTP 200 的 HTML 错误页（本文件头记的 2026-09-03 事故真因就被这种页盖过），
+      // 那种响应 res.ok=true 但根本不是 Graph 成功。读不出 `id === pageId` 一律按
+      // fail-closed 归到「问不到」，绝不让一个非真成功的 200 塌成 alive。
+      const okBody = (await res.json().catch(() => null)) as { id?: unknown } | null
+      if (okBody && okBody.id === pageId) return { result: 'alive', error: null }
+      return { result: 'unreachable', error: '返回 200 但不是这个主页的 Graph 响应（可能是代理错误页 / 登录墙）' }
+    }
 
     const body = (await res.json().catch(() => null)) as
       | { error?: { message?: string; code?: number; type?: string } }

@@ -114,13 +114,20 @@ describe('buildMetaAuthTodo', () => {
  * 条有结果的完成轮，单行的假库根本测不出这条链。
  */
 function fakeSupabase(runs: unknown) {
-  const rows = runs === null ? [] : Array.isArray(runs) ? runs : [runs]
+  const all = runs === null ? [] : Array.isArray(runs) ? runs : [runs]
   return {
     from(table: string) {
       if (table !== 'cron_run_logs') throw new Error(`fake supabase: table '${table}' is not modelled`)
+      let rows = all as Array<Record<string, unknown>>
       const chain: Record<string, unknown> = {}
       chain.select = () => chain
       chain.eq = () => chain
+      // 建模 `.not('summary','is',null)` —— 服务端就把没结果的行滤掉，正是修复所在。
+      // 假库不遵守它的话，「重跑塞满窗口」那条回归会假绿。
+      chain.not = (col: string, op: string, val: unknown) => {
+        if (col === 'summary' && op === 'is' && val === null) rows = rows.filter((r) => r.summary != null)
+        return chain
+      }
       chain.order = () => chain
       chain.limit = (n: number) => Promise.resolve({ data: rows.slice(0, n), error: null })
       return chain
@@ -165,6 +172,17 @@ describe('fetchMetaAuthTodos', () => {
     )
     expect(todos).toHaveLength(1)
     expect(todos[0].client_id).toBe(CLIENT)
+  })
+
+  it('🔴 同一天超时后被反复手动重跑、堆了一串没结果的行，也漏不掉昨天那条失效', async () => {
+    // 服务端 .not 过滤保证：不管前面堆多少行 summary=null，都撑不爆、直取有结果的那条。
+    const noise = Array.from({ length: 8 }, () => ({ finished_at: '2026-09-04T20:00:00Z', summary: null }))
+    const todos = await fetchMetaAuthTodos(
+      fakeSupabase([...noise, { finished_at: '2026-09-04T07:00:00Z', summary }]),
+      NOW,
+    )
+    expect(todos).toHaveLength(1)
+    expect(todos[0].kind).toBe('meta_auth_rejected')
   })
 
   it('从没跑过 / 没有 summary 都不出待办，也不炸', async () => {

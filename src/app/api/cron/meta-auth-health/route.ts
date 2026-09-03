@@ -31,12 +31,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { startCronRun } from '@/lib/cron/run-logger'
 import { loadActiveClients } from '@/lib/pm-todo/client-roster'
 import { fetchAll } from '@/lib/supabase-paginate'
-import {
-  checkMetaAuth,
-  needsHuman,
-  META_AUTH_HEALTH_JOB,
-  type MetaAuthHealth,
-} from '@/lib/meta/auth-health'
+import { checkMetaAuth, needsHuman, type MetaAuthHealth } from '@/lib/meta/auth-health'
 
 export const maxDuration = 300
 
@@ -81,7 +76,7 @@ export async function GET(req: NextRequest) {
   }
 
   const now = new Date()
-  const run = await startCronRun(META_AUTH_HEALTH_JOB)
+  const run = await startCronRun('meta-auth-health')
 
   try {
     const { clients, error } = await loadActiveClients(supabaseAdmin)
