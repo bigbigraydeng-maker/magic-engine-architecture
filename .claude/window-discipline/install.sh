@@ -21,18 +21,21 @@ echo "② 挂三个提醒 → $SETTINGS"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 cp "$SETTINGS" "$SETTINGS.bak-$(date +%Y%m%d-%H%M%S)"
 
+#   只替换带本工具标记（$d 路径）的旧条目，其他工具挂的钩子（比如
+#   scripts/team-memory/install.mjs 挂的 SessionStart/Stop）原样保留。
 jq --arg d "$DST" '
+  def ours: [.hooks[]?.command // "" | contains($d)] | any;
   .hooks //= {} |
-  .hooks.SessionStart = [{
+  .hooks.SessionStart = ([(.hooks.SessionStart // [])[] | select(ours | not)] + [{
     matcher: "startup|resume|clear|compact",
     hooks: [{type:"command", command:($d + "/session-start.sh")}]
-  }] |
-  .hooks.UserPromptSubmit = [{
+  }]) |
+  .hooks.UserPromptSubmit = ([(.hooks.UserPromptSubmit // [])[] | select(ours | not)] + [{
     hooks: [{type:"command", command:($d + "/drift-check.sh")}]
-  }] |
-  .hooks.Stop = [{
+  }]) |
+  .hooks.Stop = ([(.hooks.Stop // [])[] | select(ours | not)] + [{
     hooks: [{type:"command", command:($d + "/wrap-up.sh")}]
-  }]
+  }])
 ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 
 jq -e . "$SETTINGS" >/dev/null || { echo "❌ 配置写坏了，从 .bak-* 还原"; exit 1; }

@@ -36,11 +36,19 @@ A = 安全 / 改数据库 / 花钱 / 对外发布；B = 普通业务；C = 界�
 
 ## 想关掉
 
+只删本工具挂的那几条（按路径标记过滤，其他工具的钩子——比如团队记忆的
+`SessionStart`/`Stop`——不受影响）：
+
 ```bash
-jq 'del(.hooks)' ~/.claude/settings.json > /tmp/s.json && mv /tmp/s.json ~/.claude/settings.json
+jq '
+  .hooks |= (
+    with_entries(.value |= map(select((.hooks[]?.command // "" | contains("window-discipline")) | not)))
+    | with_entries(select(.value != []))
+  )
+' ~/.claude/settings.json > /tmp/s.json && mv /tmp/s.json ~/.claude/settings.json
 ```
 
-只关其中一个，就把 `.hooks` 里对应那条删掉。原始配置备份在 `~/.claude/settings.json.bak-*`。
+只关其中一个，就把对应事件数组里含 `window-discipline` 路径的那一条删掉。原始配置备份在 `~/.claude/settings.json.bak-*`。
 
 ## 已知边界
 
