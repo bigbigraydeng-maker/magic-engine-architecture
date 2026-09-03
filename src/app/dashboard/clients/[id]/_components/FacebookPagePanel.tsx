@@ -33,6 +33,10 @@ interface Payload {
   /** factory_config.publish_target 里配的发布主页（platform=facebook）。跟收件箱
    *  page_id 是两个独立字段：这个决定「重新授权发布」按钮能不能点。 */
   publish_target_page_id: string | null
+  /** 当前环境实际生效的 Meta 应用编号（来自服务端 FACEBOOK_APP_ID），null = 未配置。
+   *  「去客户商务组合里添加 Magic Engine 应用」这类提示必须用这个值，不能写死——
+   *  测试/预发布环境或应用迁移后这个编号可能跟生产不一样。 */
+  meta_app_id: string | null
   pages: ManagedPage[] | null
   pages_error: PagesError | null
   /** Live答案：ME 现在读不读得到这个主页。false = 绑了但拉不到东西。 */
@@ -105,6 +109,7 @@ export function FacebookPagePanel({ clientId }: Props) {
           // PATCH only touches the inbox binding — the publish target is a
           // separate field, so carry the last-loaded value through unchanged.
           publish_target_page_id: state.phase === 'ready' ? state.data.publish_target_page_id : null,
+          meta_app_id: state.phase === 'ready' ? state.data.meta_app_id : null,
           pages: json.pages ?? null,
           pages_error: json.pages_error ?? null,
           reachable: json.reachable ?? null,
@@ -142,7 +147,7 @@ export function FacebookPagePanel({ clientId }: Props) {
     )
   }
 
-  const { page_id, publish_target_page_id, pages, pages_error, reachable } = state.data
+  const { page_id, publish_target_page_id, meta_app_id, pages, pages_error, reachable } = state.data
   const dirty = draft.trim() !== (page_id ?? '').trim()
 
   /**
@@ -255,7 +260,12 @@ export function FacebookPagePanel({ clientId }: Props) {
         {!dirty && page_id === null && <span className="text-xs text-slate-400">未接私信</span>}
       </div>
 
-      <ConnectMeta clientId={clientId} pageId={page_id} publishTargetPageId={publish_target_page_id} />
+      <ConnectMeta
+        clientId={clientId}
+        pageId={page_id}
+        publishTargetPageId={publish_target_page_id}
+        metaAppId={meta_app_id}
+      />
 
       <p className="mt-4 border-t border-slate-100 pt-3 text-xs leading-relaxed text-slate-400">
         主页网址里的名字（facebook.com/<span className="font-mono">CTSTOURS</span>）不是 ID。
@@ -308,7 +318,7 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
     text:
       '授权走完了，但我们没从这个账号拿到任何主页。可能是 Meta 当时没答上来（先隔几分钟重点一次），' +
       '也可能是权限没到位。重试仍旧这样的话按顺序查：' +
-      '① 客户的商务组合里有没有添加 Magic Engine 应用 —— 客户的 Business 设置 →「应用」→ 添加（应用编号 1752513682785923，后台显示的名字不一定就叫 Magic Engine，按编号找最稳）；' +
+      '① 客户的商务组合里有没有添加 Magic Engine 应用 —— 客户的 Business 设置 →「应用」→ 添加（应用编号 {{META_APP_ID}}，后台显示的名字不一定就叫 Magic Engine，按编号找最稳）；' +
       '② 你对主页是不是只有商务组合里的资产分配，缺主页本身的管理员角色 —— 要客户在主页「页面访问权限」里加你；' +
       '③ 是不是登错了账号。',
   },
@@ -324,7 +334,7 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
     // 来，只说「先查哪条」，不替人排除任何一条。
     text:
       '授权走完了，但 Meta 没把这个主页交给我们。三个方向都查一下，第①条是 2026-09 实测遇到过的：' +
-      '① 客户的商务组合里有没有添加 Magic Engine 应用 —— 客户的 Business 设置 →「应用」→ 添加（应用编号 1752513682785923，后台显示的名字不一定就叫 Magic Engine，按编号找最稳）；' +
+      '① 客户的商务组合里有没有添加 Magic Engine 应用 —— 客户的 Business 设置 →「应用」→ 添加（应用编号 {{META_APP_ID}}，后台显示的名字不一定就叫 Magic Engine，按编号找最稳）；' +
       '② 你对这个主页是不是只有商务组合里的「资产分配」，缺主页本身的管理员角色 —— 要客户在主页「页面访问权限」里把你加上；' +
       '③ 上面那个主页 ID 是不是手填错了、或者登错了账号。' +
       '另外：如果你刚点的是「重新授权 Meta 发布权限」，那它认的根本不是这里绑的主页，' +
@@ -347,10 +357,14 @@ function ConnectMeta({
   clientId,
   pageId,
   publishTargetPageId,
+  metaAppId,
 }: {
   clientId: string
   pageId: string | null
   publishTargetPageId: string | null
+  /** Env-specific Meta app id, from GET's meta_app_id — see the {{META_APP_ID}}
+   *  placeholder in META_RESULT below. */
+  metaAppId: string | null
 }) {
   const [outcome, setOutcome] = useState<string | null>(null)
   // Publishing reauth targets factory_config.publish_target, so it is available
@@ -369,7 +383,19 @@ function ConnectMeta({
     window.history.replaceState({}, '', url.toString())
   }, [])
 
-  const result = outcome ? META_RESULT[outcome] : null
+  const rawResult = outcome ? META_RESULT[outcome] : null
+  // Two entries tell the operator to add "the Magic Engine app" by id — that id
+  // must reflect this deployment's actual FACEBOOK_APP_ID, not a fixed literal,
+  // or the instructions add the wrong app in any environment where it differs.
+  const result = rawResult
+    ? {
+        ...rawResult,
+        text: rawResult.text.replace(
+          /\{\{META_APP_ID\}\}/g,
+          metaAppId ?? '（当前环境未配置 FACEBOOK_APP_ID，请联系工程团队确认）',
+        ),
+      }
+    : null
 
   return (
     <div className="mt-3 border-t border-slate-100 pt-3">
