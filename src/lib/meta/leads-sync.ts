@@ -21,6 +21,7 @@ import { getMetaTokenForClient, getStoredPageToken } from '@/lib/meta/token-mana
 import { getPageAccessToken } from '@/lib/meta/page-posts'
 import { fetchFormLeads, fetchPageLeadForms } from '@/lib/meta/lead-forms'
 import { ingestMetaLead } from '@/lib/crm/meta-lead'
+import type { SubscribeMemberResult } from '@/lib/mailchimp/client'
 
 export interface MetaLeadsSyncClient {
   id: string
@@ -45,8 +46,29 @@ export interface MetaLeadsSyncResult {
   skippedNoIdentity: number
   /** 单条出错跳过的条数。 */
   failed: number
+  /**
+   * Mailchimp 出口这一轮的结果分布，key = `subscribed` / `already_member` /
+   * `skipped:<reason>` / `failed:<reason>`，value = 条数。
+   *
+   * **为什么要有这个字段**：在此之前 `ingestMetaLead` 返回的 `mailchimp` 结果
+   * 在这一层被整个丢掉 —— 不计数、不上报。于是 2026-08~09 生产上「每一条
+   * lead 的 Mailchimp 出口都因为读不到配置被 skip」这件事，在 cron 日志里
+   * **一个字都看不到**（`clients.mailchimp_audience_id` 那一列根本没 apply，
+   * 见 `lib/mailchimp/audience-config.ts`）。这个 tally 会进
+   * `cron_run_logs.summary.results`，让「跳过了」和「真没有」能被分开看。
+   *
+   * 没有任何 lead 进到出口时是 `{}`，不是缺字段。
+   */
+  mailchimp: Record<string, number>
   skipped?: 'no_page_id' | 'no_meta_token' | 'no_page_token'
   error?: string
+}
+
+/** 把一条 `SubscribeMemberResult` 压成 tally 的 key。 */
+function mailchimpTallyKey(res: SubscribeMemberResult): string {
+  return res.status === 'skipped' || res.status === 'failed'
+    ? `${res.status}:${res.reason}`
+    : res.status
 }
 
 /**
@@ -108,6 +130,7 @@ export async function syncClientMetaLeads(
     newContacts: 0,
     skippedNoIdentity: 0,
     failed: 0,
+    mailchimp: {} as Record<string, number>,
   }
 
   const pageId = client.facebook_page_id
@@ -142,6 +165,7 @@ export async function syncClientMetaLeads(
   let newContacts = 0
   let skippedNoIdentity = 0
   let failed = 0
+  const mailchimp: Record<string, number> = {}
 
   for (const form of formsRead.rows) {
     forms++
@@ -153,6 +177,12 @@ export async function syncClientMetaLeads(
       for (const lead of leadsRead.rows) {
         // ingestMetaLead 自己吞异常，这里的 try 是给「它之外还能炸的东西」兜底。
         const res = await ingestMetaLead({ clientId: client.id, defaultCountry, lead })
+        // 出口结果先记账再分流 —— 无论这条 lead 后面算 ingested 还是 skipped，
+        // 「它有没有进邮件名单」都必须留下痕迹。
+        if (res.mailchimp) {
+          const key = mailchimpTallyKey(res.mailchimp)
+          mailchimp[key] = (mailchimp[key] ?? 0) + 1
+        }
         if (res.skipped === 'no_identity') skippedNoIdentity++
         else if (res.skipped === 'error') failed++
         else {
@@ -175,6 +205,7 @@ export async function syncClientMetaLeads(
     newContacts,
     skippedNoIdentity,
     failed,
+    mailchimp,
     ...(errors.length ? { error: errors.join(' | ') } : {}),
   }
 }
