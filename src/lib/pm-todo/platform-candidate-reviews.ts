@@ -30,4 +30,8 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '借助 Claude Design 生成品牌 VI 视觉资产（logo · 品牌手册 · 视觉规范）',
     reviewDate: '2026-09-27',
   },
+  {
+    name: 'Deep Dive · 竞品情报深挖产品（Agent 形态 · 由张骞承担）',
+    reviewDate: '2026-09-28',
+  },
 ]

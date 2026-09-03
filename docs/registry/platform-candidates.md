@@ -63,6 +63,7 @@
 | 候选名 | 建议层级 | 建议实现形态 | 归属 | 来源客户 | 来源行业 | 硬证据进度 | 当前状态 | 首次登记日 | 复查日 | GitHub Issue | 登记人 | 备注 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 借助 Claude Design 生成品牌 VI 视觉资产（logo · 品牌手册 · 视觉规范）| L1 Capability（候选 · 需硬证据）| Hybrid（Skill 规范 + Agent 深度生成）| 待定 · VI 不在 6 支柱 · **PM 拍板项** | HBay Water | 瓶装水 / FMCG | 1/2 行业（仅 HBay）| candidate | 2026-08-27 | 2026-09-27 | [#1200](https://github.com/bigbigraydeng-maker/magic-engine/issues/1200) | happy-cori-796b21 worktree | HBay Deploy 档扩展；PM 明确 ME 借助 Claude Design 做；未来 CTS / Roman / 其他客户若也用同类能力则可升 L1；me2.0-punch-list 首例（张良 v2.2 落地） |
+| **Deep Dive** · 竞品情报深挖产品（Agent 形态 · 由张骞承担） | L1 Capability（**硬证据已达标 · 直建晋升 · 走 2 审**）| Agent（张骞 v2 升级 · 加竞品情报维度） | ME 6 支柱之**竞品分析** | HBay Water（触发案例：27000 深挖） | 瓶装水 / FMCG（但横跨旅游 / 地产 / 电商 4 个已实现行业） | **4/4 客户跨行业复制 · 已达标**（HBay 瓶装水 + CTS 旅游 + Roman 地产 + Magic Picks 电商） | `promotion_proposed`（PM 2026-08-29 拍板产品名 Deep Dive · 开 issue） | 2026-08-28 | 2026-09-28 | [#1224](https://github.com/bigbigraydeng-maker/magic-engine/issues/1224) | happy-cori-796b21 worktree · PM 主动召唤张良判定 | 产品名 Deep Dive（2026-08-29 PM 拍板）· 一个能力三种包装（Lead Magnet / Standalone / Retention Pack）· 归 6 支柱既有"竞品"柱 · 复用张骞不新增 agent · 待走子牙+魏征 2 审 |
 
 <!--
 示例（不作为真实条目）：
