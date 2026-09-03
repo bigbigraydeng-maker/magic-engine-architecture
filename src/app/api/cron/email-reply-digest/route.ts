@@ -133,6 +133,24 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // 🔴 发信总闸，**默认关**。PM 2026-09-03 拍板暂停：拿生产库核对名单时发现，
+  // 现有排除规则只挡「自己人域名」和「同行域名」，挡不住陌生公司群发的推销
+  // （Afterpay / MyMotorland / 各地接社）。CTS 当天 32 条候选里噪音占七成，
+  // 而排序按「等最久」，等最久的恰恰是没人理的营销邮件 —— 前 10 条里 8 条是
+  // 垃圾，真正欠回复的客人反而被挤出名单。这种信发出去比不发更糟。
+  //
+  // 判据和文案本身没问题（1058 个测试全绿），差的是一层噪音过滤。加好并用
+  // 生产数据验证准确率之后，由 PM 决定把这个开关打开。
+  //
+  // fail-safe：读不到或不是 'true' 一律不发。漏配的后果是「不发信」而不是
+  // 「发错信」—— 这条通道的失败方向必须是沉默，不是打扰。
+  if (process.env.EMAIL_REPLY_DIGEST_ENABLED !== 'true') {
+    return NextResponse.json({
+      ok: true,
+      skipped: '发信总闸未打开（EMAIL_REPLY_DIGEST_ENABLED != true）',
+    })
+  }
+
   const now = new Date()
 
   // 幂等闸放在开跑之前 —— 重跑一次不该连运行记录都多插一行。

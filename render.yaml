@@ -1066,16 +1066,26 @@ services:
   #
   # 密钥直接走 fromGroup，不留「记得手动 link」这一步 —— daily-cron-digest 就是
   # 靠人记住这件事，51 天没人发现地哑了。
-  - type: cron
-    name: email-reply-digest
-    env: node
-    schedule: "0 20 * * *"
-    buildCommand: ""
-    # --max-time 要比路由自己的 maxDuration(300s) 宽：curl 先断开的话 Render 把这次
-    # 记成失败，可路由还在跑、信照样发出去 —— 运维照着「失败」重跑一次就是重复发信。
-    # 重跑本身另有幂等闸挡着（见路由里的 RESEND_GUARD_HOURS），这里只是别去主动制造它。
-    startCommand: |
-      curl -fsS --max-time 360 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/email-reply-digest
-    envVars:
-      - fromGroup: me-shared-cron-secret
+  #
+  # 🔴 2026-09-03 PM 拍板**暂停调度**（上线当天，一封都还没发出去过）。
+  # 原因：拿生产库核对名单发现，现有排除规则只挡「自己人域名」和「同行域名」，
+  # 挡不住陌生公司群发的推销。CTS 当天 32 条候选里噪音占七成，而排序按「等最久」，
+  # 等最久的恰好是没人理的营销邮件 —— 前 10 条里 8 条是垃圾，真正欠回复的客人
+  # （Julie Cawte 的发票、Torran Lepper 的日本行程）反而被挤出名单。
+  #
+  # 判据和文案本身没问题，差的是一层噪音过滤。加好、并用生产数据验证准确率之后，
+  # 把下面整段取消注释、同时把 EMAIL_REPLY_DIGEST_ENABLED 设成 true（两道闸都要开）。
+  #
+  # - type: cron
+  #   name: email-reply-digest
+  #   env: node
+  #   schedule: "0 20 * * *"
+  #   buildCommand: ""
+  #   # --max-time 要比路由自己的 maxDuration(300s) 宽：curl 先断开的话 Render 把这次
+  #   # 记成失败，可路由还在跑、信照样发出去 —— 运维照着「失败」重跑一次就是重复发信。
+  #   # 重跑本身另有幂等闸挡着（见路由里的 RESEND_GUARD_HOURS），这里只是别去主动制造它。
+  #   startCommand: |
+  #     curl -fsS --max-time 360 -H "Authorization: Bearer $CRON_SECRET" \
+  #       https://app.magicengine.com.au/api/cron/email-reply-digest
+  #   envVars:
+  #     - fromGroup: me-shared-cron-secret
