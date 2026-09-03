@@ -1,5 +1,6 @@
 /**
- * #1347 · GEO 预算账本：fail-closed + 并发不双花 + budgetUsd 来源唯一。
+ * #1347 · GEO 预算账本应用层判据：fail-closed + 不双花 + 幂等（三审必改）+ budgetUsd 唯一来源。
+ * 🔴 SQL 层原子/并发行为另由 scripts/geo-budget-ledger-check.sh 在真 postgres 断言。
  */
 import { describe, it, expect } from 'vitest'
 import { resolveClientGeoBudget, geoBudgetPeriodKey } from '../budget-ledger'
@@ -7,78 +8,89 @@ import { FakeGeoBudgetStore } from './fake-budget-store'
 
 const C = 'c0000000-0000-0000-0000-000000000000'
 const P = '2026-09'
+const rid = (s: string) => `batch-${s}`
 
 describe('resolveClientGeoBudget — fail-closed', () => {
-  it('没有预算行 → 不授权（PM 没批额度就不许自动花钱）', async () => {
-    const store = new FakeGeoBudgetStore() // 不 setCap
-    const r = await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: 1.8 })
-    expect(r.authorized).toBe(false)
-    if (!r.authorized) expect(r.reason).toBe('no_budget_row')
+  it('没有预算行 → 不授权（no_budget_row）', async () => {
+    const s = new FakeGeoBudgetStore()
+    const r = await resolveClientGeoBudget(s, { reservationId: rid('1'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    expect(r.authorized).toBe(false); if (!r.authorized) expect(r.reason).toBe('no_budget_row')
   })
-  it('worstCase 非正数 / NaN → 不授权，且不碰 store', async () => {
-    const store = new FakeGeoBudgetStore(); store.setCap(C, P, 100)
+  it('缺 reservationId → 不授权，不碰 store', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 100)
+    const r = await resolveClientGeoBudget(s, { reservationId: '', clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    expect(r.authorized).toBe(false); if (!r.authorized) expect(r.reason).toBe('invalid_reservation_id')
+    expect(s.snapshot(C, P)).toEqual({ cap: 100, reserved: 0, spent: 0 })
+  })
+  it('worstCase 非正/NaN/Inf → 不授权', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 100)
     for (const bad of [0, -1, NaN, Infinity]) {
-      const r = await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: bad })
+      const r = await resolveClientGeoBudget(s, { reservationId: rid(String(bad)), clientId: C, periodKey: P, worstCaseUsd: bad })
       expect(r.authorized).toBe(false)
     }
-    expect(store.snapshot(C, P)).toEqual({ cap: 100, reserved: 0, spent: 0 }) // 一分没预留
+    expect(s.snapshot(C, P)!.reserved).toBe(0)
   })
 })
 
-describe('resolveClientGeoBudget — 授权额度就是预留额度', () => {
-  it('额度足 → 授权，budgetUsd 恰等于 worstCase（不多不少，非 env）', async () => {
-    const store = new FakeGeoBudgetStore(); store.setCap(C, P, 5)
-    const r = await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+describe('授权额度 = 预留额度', () => {
+  it('额度足 → budgetUsd 恰等于 worstCase，reservationId 回传', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 5)
+    const r = await resolveClientGeoBudget(s, { reservationId: rid('x'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
     expect(r.authorized).toBe(true)
-    if (r.authorized) {
-      expect(r.budgetUsd).toBe(1.8)
-      expect(r.remainingUsd).toBeCloseTo(3.2)
-    }
-    expect(store.snapshot(C, P)).toEqual({ cap: 5, reserved: 1.8, spent: 0 })
+    if (r.authorized) { expect(r.budgetUsd).toBe(1.8); expect(r.reservationId).toBe(rid('x')) }
+    expect(s.snapshot(C, P)).toEqual({ cap: 5, reserved: 1.8, spent: 0 })
   })
 })
 
-describe('并发不双花（魏征 #1 的核心）', () => {
-  it('额度只够一次时，两次预留只有一次成功', async () => {
-    const store = new FakeGeoBudgetStore(); store.setCap(C, P, 2) // 只够一次 1.8
-    const a = await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: 1.8 })
-    const b = await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: 1.8 })
-    const authed = [a, b].filter((x) => x.authorized).length
-    expect(authed).toBe(1) // 第二个入口被账本拦下，不是两个都满额通过
-    const refused = [a, b].find((x) => !x.authorized)
-    if (refused && !refused.authorized) expect(refused.reason).toBe('insufficient')
-    expect(store.snapshot(C, P)!.reserved).toBe(1.8) // 只预留了一次
+describe('不双花（魏征 #1）', () => {
+  it('额度只够一次时，两个不同批次只有一个成功', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 2)
+    const a = await resolveClientGeoBudget(s, { reservationId: rid('a'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    const b = await resolveClientGeoBudget(s, { reservationId: rid('b'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    expect([a, b].filter((x) => x.authorized).length).toBe(1)
+    expect(s.snapshot(C, P)!.reserved).toBe(1.8)
   })
-  it('reserved + spent 永不超过 cap（多次预留累加到顶就拒）', async () => {
-    const store = new FakeGeoBudgetStore(); store.setCap(C, P, 5)
-    let ok = 0
-    for (let i = 0; i < 10; i++) {
-      const r = await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: 1.8 })
-      if (r.authorized) ok++
-    }
-    expect(ok).toBe(2) // 5 / 1.8 = 2 次
-    const snap = store.snapshot(C, P)!
-    expect(snap.reserved + snap.spent).toBeLessThanOrEqual(5)
+})
+
+describe('幂等（三审必改：Inngest 会重试）', () => {
+  it('同一 reservationId 重复 reserve → 只累加一次', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 5)
+    await resolveClientGeoBudget(s, { reservationId: rid('same'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    const again = await resolveClientGeoBudget(s, { reservationId: rid('same'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    expect(again.authorized).toBe(true)
+    expect(s.snapshot(C, P)!.reserved).toBe(1.8) // 不是 3.6
+  })
+  it('重复 settle 同一批次 → 花费只记一次（魏征实测 0.63→1.26 的根治）', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 5)
+    await resolveClientGeoBudget(s, { reservationId: rid('s'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    const first = await s.settle(rid('s'), 0.63)
+    const second = await s.settle(rid('s'), 0.63)
+    expect(first.chargedUsd).toBeCloseTo(0.63)
+    expect(second.idempotent).toBe(true)
+    expect(s.snapshot(C, P)!.spent).toBeCloseTo(0.63) // 不是 1.26
+    expect(s.snapshot(C, P)!.reserved).toBe(0)
   })
 })
 
 describe('结算把预留挪成实际花费', () => {
-  it('actual < reserved → 释放预留、只按 actual 扣，余额回补', async () => {
-    const store = new FakeGeoBudgetStore(); store.setCap(C, P, 5)
-    await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: 1.8 })
-    await store.settle(C, P, 1.8, 0.63) // 最坏 1.8，实际只花 0.63
-    const snap = store.snapshot(C, P)!
-    expect(snap.reserved).toBe(0)
-    expect(snap.spent).toBeCloseTo(0.63)
-    // 释放后又能再预留（余额回来了）
-    const again = await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: 4 })
+  it('actual < worstCase → 只按 actual 扣，余额回补可再预留', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 5)
+    await resolveClientGeoBudget(s, { reservationId: rid('1'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    await s.settle(rid('1'), 0.63)
+    expect(s.snapshot(C, P)!.spent).toBeCloseTo(0.63)
+    const again = await resolveClientGeoBudget(s, { reservationId: rid('2'), clientId: C, periodKey: P, worstCaseUsd: 4 })
     expect(again.authorized).toBe(true)
   })
-  it('actual 报得比预留还高 → 不采信，最多按预留上界扣（provider 成本是输入不是事实）', async () => {
-    const store = new FakeGeoBudgetStore(); store.setCap(C, P, 5)
-    await resolveClientGeoBudget(store, { clientId: C, periodKey: P, worstCaseUsd: 1.8 })
-    const s = await store.settle(C, P, 1.8, 999)
-    expect(s.chargedUsd).toBe(1.8)
+  it('actual 报得比预留高 → 最多按预留上界扣', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 5)
+    await resolveClientGeoBudget(s, { reservationId: rid('1'), clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    const r = await s.settle(rid('1'), 999)
+    expect(r.chargedUsd).toBe(1.8)
+  })
+  it('结算不存在的预留 → no_reservation（不凭空扣）', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 5)
+    const r = await s.settle('ghost', 1)
+    expect(r.settled).toBe(false); expect(r.reason).toBe('no_reservation')
   })
 })
 

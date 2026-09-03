@@ -1,42 +1,51 @@
 /**
- * 假 GeoBudgetStore：内存建模 geo_client_budgets 表 + 同一套原子判据。
- * 🔴 按**表**建模（cap/reserved/spent 三个累加器），不是按调用次序 —— 这样改了 migration
- *    的判据、这里没同步，测试会红（feedback-fake-supabase-must-model-table-not-callorder）。
+ * 假 GeoBudgetStore：内存建模 geo_client_budgets + geo_budget_reservations 两表 + 同一套判据。
+ * 🔴 这是**应用层判据**的镜像（幂等、fail-closed 分支）。SQL 层的真实并发/原子行为由
+ *    scripts/geo-budget-ledger-check.sh 在真 postgres 上单独断言（魏征 #3：假件的 JS 单线程
+ *    模拟不了 postgres 行锁并发，不能替代 SQL 测试）。两处判据必须手动保持一致。
  */
 import type { GeoBudgetStore, GeoBudgetReserveResult, GeoBudgetSettleResult } from '../budget-ledger'
 
-interface Row { cap: number; reserved: number; spent: number }
+interface BudgetRow { cap: number; reserved: number; spent: number }
+interface ResRow { clientId: string; periodKey: string; worstCase: number; status: 'reserved' | 'settled' | 'expired'; charged?: number }
 
 export class FakeGeoBudgetStore implements GeoBudgetStore {
-  private rows = new Map<string, Row>()
+  private budgets = new Map<string, BudgetRow>()
+  private reservations = new Map<string, ResRow>()
 
-  /** 测试初始化：给某客户某窗口设一个 PM 授权额度。不调 = 没有预算行（fail-closed 场景）。 */
   setCap(clientId: string, periodKey: string, capUsd: number): void {
-    this.rows.set(`${clientId}::${periodKey}`, { cap: capUsd, reserved: 0, spent: 0 })
+    this.budgets.set(`${clientId}::${periodKey}`, { cap: capUsd, reserved: 0, spent: 0 })
   }
-  snapshot(clientId: string, periodKey: string): Row | undefined {
-    const r = this.rows.get(`${clientId}::${periodKey}`)
+  snapshot(clientId: string, periodKey: string): BudgetRow | undefined {
+    const r = this.budgets.get(`${clientId}::${periodKey}`)
     return r ? { ...r } : undefined
   }
 
-  async reserve(clientId: string, periodKey: string, worstCaseUsd: number): Promise<GeoBudgetReserveResult> {
-    if (!(worstCaseUsd > 0)) return { reserved: false, reason: 'invalid_worst_case' }
-    const row = this.rows.get(`${clientId}::${periodKey}`)
-    if (!row) return { reserved: false, reason: 'no_budget_row' } // fail-closed：没批额度
-    const remaining = row.cap - row.reserved - row.spent
+  async reserve(reservationId: string, clientId: string, periodKey: string, worstCaseUsd: number): Promise<GeoBudgetReserveResult> {
+    if (!reservationId) return { reserved: false, reason: 'invalid_reservation_id' }
+    if (!Number.isFinite(worstCaseUsd) || !(worstCaseUsd > 0)) return { reserved: false, reason: 'invalid_worst_case' }
+    const existing = this.reservations.get(reservationId)
+    if (existing) return { reserved: existing.status !== 'expired', idempotent: true } // 幂等：不重复累加
+    const b = this.budgets.get(`${clientId}::${periodKey}`)
+    if (!b) return { reserved: false, reason: 'no_budget_row' } // fail-closed
+    const remaining = b.cap - b.reserved - b.spent
     if (remaining < worstCaseUsd) return { reserved: false, reason: 'insufficient', remainingUsd: remaining }
-    row.reserved += worstCaseUsd // 原子累加：第二次预留看到的是累加后的 reserved
+    b.reserved += worstCaseUsd
+    this.reservations.set(reservationId, { clientId, periodKey, worstCase: worstCaseUsd, status: 'reserved' })
     return { reserved: true, remainingUsd: remaining - worstCaseUsd }
   }
 
-  async settle(clientId: string, periodKey: string, reservedUsd: number, actualUsd: number): Promise<GeoBudgetSettleResult> {
-    if (reservedUsd < 0 || actualUsd < 0) return { settled: false, reason: 'invalid_amounts' }
-    const row = this.rows.get(`${clientId}::${periodKey}`)
-    if (!row) return { settled: false, reason: 'no_budget_row' }
-    const release = Math.min(row.reserved, reservedUsd)
-    const charge = Math.min(actualUsd, reservedUsd)
-    row.reserved -= release
-    row.spent += charge
+  async settle(reservationId: string, actualUsd: number): Promise<GeoBudgetSettleResult> {
+    if (!Number.isFinite(actualUsd) || actualUsd < 0) return { settled: false, reason: 'invalid_actual' }
+    const r = this.reservations.get(reservationId)
+    if (!r) return { settled: false, reason: 'no_reservation' }
+    if (r.status === 'settled') return { settled: true, idempotent: true, chargedUsd: r.charged } // 幂等：不重复扣
+    if (r.status === 'expired') return { settled: false, reason: 'expired' }
+    const charge = Math.min(actualUsd, r.worstCase)
+    const b = this.budgets.get(`${r.clientId}::${r.periodKey}`)!
+    b.reserved -= r.worstCase
+    b.spent += charge
+    r.status = 'settled'; r.charged = charge
     return { settled: true, chargedUsd: charge }
   }
 }
