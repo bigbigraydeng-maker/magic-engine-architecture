@@ -215,3 +215,67 @@ export async function getPageAccessToken(
   const body = (await res.json()) as { data?: Array<{ id: string; access_token: string }> }
   return body.data?.find((p) => p.id === pageId)?.access_token ?? null
 }
+
+export interface PublishedPagePost {
+  /** The feed post id — this is what Insights and permalinks key off. */
+  postId: string
+  /** Which Graph field the id came from. `/photos` returns both `id` (the
+   *  photo object) and `post_id` (the feed story); they are not the same
+   *  object and only the latter is a Page post. We prefer `post_id` and record
+   *  when we had to fall back, rather than silently passing off a photo id as
+   *  a post id. */
+  postIdSource: 'post_id' | 'id'
+  permalink: string
+  /** Raw response, kept verbatim so a receipt can be audited later. */
+  raw: Record<string, unknown>
+}
+
+/**
+ * Publish a photo Post to a Facebook Page.
+ *
+ * Uses the Page's own `/photos` edge with a remote image `url`, so ME never
+ * has to stage the bytes itself. Requires a *Page* access token — a User token
+ * is rejected by Graph for this edge.
+ *
+ * Throws on any non-2xx or Graph-level error; the caller decides whether that
+ * is fatal for the batch. It never retries: a retry here could double-post,
+ * and duplicate suppression belongs to the caller's idempotency key.
+ */
+export async function publishPagePhotoPost(input: {
+  pageId: string
+  pageAccessToken: string
+  message: string
+  imageUrl: string
+  fetcher?: typeof fetch
+}): Promise<PublishedPagePost> {
+  const doFetch = input.fetcher ?? fetch
+  const res = await doFetch(`${GRAPH_BASE}/${input.pageId}/photos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url: input.imageUrl,
+      caption: input.message,
+      published: true,
+      access_token: input.pageAccessToken,
+    }),
+  })
+
+  const body = (await res.json().catch(() => null)) as
+    | { id?: string; post_id?: string; error?: { message?: string } }
+    | null
+
+  if (!res.ok || body?.error) {
+    const detail = body?.error?.message ?? `HTTP ${res.status}`
+    throw new Error(`publishPagePhotoPost ${input.pageId}: ${detail}`)
+  }
+
+  const postId = body?.post_id ?? body?.id
+  if (!postId) throw new Error(`publishPagePhotoPost ${input.pageId}: provider returned no post id`)
+
+  return {
+    postId,
+    postIdSource: body?.post_id ? 'post_id' : 'id',
+    permalink: `https://www.facebook.com/${postId}`,
+    raw: (body ?? {}) as Record<string, unknown>,
+  }
+}

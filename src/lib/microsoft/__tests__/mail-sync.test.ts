@@ -47,6 +47,7 @@ function inboundFrom(address: string, at: string, convId: string): MailMessage {
     conversationId: convId,
     subject: '想问一下行程',
     preview: '你好',
+    hasAttachment: false,
     receivedAt: at,
     counterparty: { address, name: null },
     direction: 'inbound',

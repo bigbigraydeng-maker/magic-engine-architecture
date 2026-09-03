@@ -45,6 +45,8 @@ export interface MailMessage {
   /** 对方是谁 —— 收件箱取发件人，已发送取第一个收件人。 */
   counterparty: { address: string; name: string | null } | null
   direction: 'inbound' | 'outbound'
+  /** 带附件吗 —— 付款截图/回单常常整封信只有一句「见附件」，正文判不出来。 */
+  hasAttachment: boolean
 }
 
 interface GraphAddress {
@@ -60,6 +62,7 @@ interface RawMessage {
   from?: GraphAddress | null
   sender?: GraphAddress | null
   toRecipients?: GraphAddress[] | null
+  hasAttachments?: boolean | null
 }
 
 function pickAddress(a: GraphAddress | null | undefined): MailMessage['counterparty'] {
@@ -84,6 +87,7 @@ function toMessage(raw: RawMessage, direction: 'inbound' | 'outbound'): MailMess
         ? pickAddress(raw.from ?? raw.sender)
         : pickAddress(raw.toRecipients?.[0]),
     direction,
+    hasAttachment: raw.hasAttachments === true,
   }
 }
 
@@ -111,7 +115,7 @@ export async function fetchMailSince(
   // 只是把整个邮箱都拉回来（或者一封都不给）。用 %20 不赌服务器怎么解。
   const query = [
     // 只取用得上的字段。不写 $select 的话 Graph 会把整封正文一起塞回来。
-    `$select=${encodeURIComponent('id,conversationId,subject,bodyPreview,receivedDateTime,from,sender,toRecipients')}`,
+    `$select=${encodeURIComponent('id,conversationId,subject,bodyPreview,receivedDateTime,from,sender,toRecipients,hasAttachments')}`,
     // 用 receivedDateTime：晚到的邮件按发送时间算会直接跳过水位线，永远读不到。
     `$filter=${encodeURIComponent(`receivedDateTime ge ${since.toISOString()}`)}`,
     // 从旧到新 —— 万一中途失败，下一次的水位线还能接着走，不留空洞。
