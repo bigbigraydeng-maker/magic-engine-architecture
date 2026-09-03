@@ -41,6 +41,8 @@ export interface CandidateMail {
   receivedAt: string
   direction: 'inbound' | 'outbound'
   counterparty: { address: string; name: string | null } | null
+  /** 带附件吗 —— 付款截图/回单常常整封信只有一句「见附件」，正文判不出来。 */
+  hasAttachment?: boolean
 }
 
 export interface PaidTaggingPolicy {
@@ -112,7 +114,7 @@ export async function runPaidTagging(
     const text = searchableText(mail)
     const address = mail.counterparty?.address ?? null
 
-    const verdict = readPaidSignal({ text, direction: mail.direction })
+    const verdict = readPaidSignal({ text, direction: mail.direction, hasAttachment: mail.hasAttachment })
     if (verdict.kind === 'not_payment') continue
 
     // 身份闸：自己人 / 机器人一律不当客人。一封 outbound 的收件人可能是同事，

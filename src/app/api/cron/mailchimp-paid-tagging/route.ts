@@ -87,6 +87,7 @@ function toCandidate(m: MailMessage): CandidateMail {
     receivedAt: m.receivedAt,
     direction: m.direction,
     counterparty: m.counterparty,
+    hasAttachment: m.hasAttachment,
   }
 }
 
@@ -136,7 +137,14 @@ function audienceFromLeadsConfig(leadsConfig: unknown): string {
   return typeof cfg.mailchimp_audience_id === 'string' ? cfg.mailchimp_audience_id.trim() : ''
 }
 
-/** 读一个邮箱的两个文件夹。一个读失败就整个邮箱失败 —— 只拿到一半会漏判。 */
+/**
+ * 读一个邮箱的两个文件夹。一个读失败就整个邮箱失败 —— 只拿到一半会漏判。
+ *
+ * `truncated` 也按失败处理：`fetchMailSince` 按时间升序翻满 20 页就会截断，
+ * 剩下的还是同一批最旧的信。如果这里把 `truncated: true` 当成功报告，重跑会
+ * 一直卡在同一个 `since` 读同一批信，后面真正的收款确认永远轮不到 ——
+ * 那就是「静默什么都没做」，还看起来一切正常。
+ */
 async function readMailbox(
   connectionId: string,
   since: Date,
@@ -152,8 +160,15 @@ async function readMailbox(
   const mails: CandidateMail[] = []
   for (const folder of folders) {
     const res = await fetchMailSince(token, folder, since)
+    const folderName = folder === 'inbox' ? '收件箱' : '已发送'
     if (!res.ok) {
-      return { ok: false, error: `读${folder === 'inbox' ? '收件箱' : '已发送'}失败: ${res.error}` }
+      return { ok: false, error: `读${folderName}失败: ${res.error}` }
+    }
+    if (res.truncated) {
+      return {
+        ok: false,
+        error: `读${folderName}还没读完（信太多，翻到分页上限还有剩）—— 缩小 ?days 窗口分批补，避免漏判`,
+      }
     }
     mails.push(...res.messages.map(toCandidate))
   }

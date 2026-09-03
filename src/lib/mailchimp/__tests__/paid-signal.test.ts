@@ -103,6 +103,67 @@ describe('readPaidSignal · 客人自己说付了 → 只到 needs_review', () =
   })
 })
 
+describe('readPaidSignal · 🔴 条件式收款句不能当成 confirmed', () => {
+  it('🔴 「Once your payment is received, ...」→ 不是 confirmed（钱还没到）', () => {
+    const v = readPaidSignal({
+      text: 'Once your payment is received, we will send the invoice.',
+      direction: 'outbound',
+    })
+    expect(v.kind).not.toBe('confirmed')
+  })
+
+  it('🔴 「Once we have received your payment, ...」→ 不是 confirmed（条件词隔着几个词）', () => {
+    const v = readPaidSignal({
+      text: 'Once we have received your payment, we will ship your tickets.',
+      direction: 'outbound',
+    })
+    expect(v.kind).not.toBe('confirmed')
+  })
+
+  it('🔴 「When your deposit has been received, ...」→ 不是 confirmed', () => {
+    const v = readPaidSignal({
+      text: 'When your deposit has been received, our team will confirm your seats.',
+      direction: 'outbound',
+    })
+    expect(v.kind).not.toBe('confirmed')
+  })
+
+  it('真实确认句不受影响：「Your payment has been received in full」仍是 confirmed', () => {
+    const v = readPaidSignal({ text: REAL_CONFIRM, direction: 'outbound' })
+    expect(v.kind).toBe('confirmed')
+  })
+})
+
+describe('readPaidSignal · 附件里的付款凭证 → needs_review(attachment_only)', () => {
+  it('客人只写「Please see attached」但主题在谈付款、带附件 → needs_review/attachment_only', () => {
+    const v = readPaidSignal({
+      text: 'Payment of Invoice - Best of China Tour Please see attached.',
+      direction: 'inbound',
+      hasAttachment: true,
+    })
+    expect(v.kind).toBe('needs_review')
+    if (v.kind === 'needs_review') expect(v.reason).toBe('attachment_only')
+  })
+
+  it('同样的文本没有附件 → 不触发 attachment_only', () => {
+    const v = readPaidSignal({
+      text: 'Payment of Invoice - Best of China Tour Please see attached.',
+      direction: 'inbound',
+      hasAttachment: false,
+    })
+    expect(v.kind).not.toBe('needs_review')
+  })
+
+  it('带附件但正文完全没提付款 → 不触发（避免把行程单附件也当成付款凭证）', () => {
+    const v = readPaidSignal({
+      text: 'Please see attached for the updated itinerary',
+      direction: 'inbound',
+      hasAttachment: true,
+    })
+    expect(v.kind).toBe('not_payment')
+  })
+})
+
 describe('readPaidSignal · 无关邮件', () => {
   it('普通行程询问 → not_payment', () => {
     expect(readPaidSignal({ text: 'Can you please forward me the full itinerary', direction: 'inbound' }).kind)
