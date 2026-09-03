@@ -9,6 +9,7 @@
 
 import { z } from 'zod'
 import type { CampaignBrief } from '@/types/magic-engine'
+import type { CampaignDailyPublishMeta } from '@/lib/campaign/daily-plan-publish'
 
 export const CAMPAIGN_DAILY_PLAN_KIND = 'campaign_daily_v1' as const
 
@@ -97,6 +98,13 @@ export interface CampaignDailyPlanData {
    * provider publish receipt.
    */
   publish_queue_meta?: CampaignDailyPublishQueueMeta
+  /**
+   * Provider publish receipt written by the Facebook publish bridge. Unlike
+   * `publish_queue_meta` this one *can* record a real side effect: post ids,
+   * page id, published_at and the raw provider response. Its presence with a
+   * matching plan+review revision is what makes a re-run idempotent.
+   */
+  publish_meta?: CampaignDailyPublishMeta
 }
 
 export type CampaignDailyPostReviewVerdict = 'PASS' | 'NEEDS_REVISION'
