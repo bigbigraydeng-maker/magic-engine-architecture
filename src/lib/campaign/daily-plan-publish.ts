@@ -23,8 +23,16 @@ import { z } from 'zod'
 
 export const DAILY_PLAN_POST_PUBLISHED_EVENT = 'daily_plan.post.published' as const
 
-/** Hours after publish at which the measurement workflow should read back. */
-export const PUBLISH_MEASUREMENT_OFFSETS_HOURS = [24, 72] as const
+/**
+ * Hours after publish at which the measurement workflow should read back.
+ *
+ * First pass at T+4, not T+24: on Facebook the bulk of a post's early reach
+ * and engagement lands within the first few hours, so a 4-hour read gives a
+ * usable early signal a full day sooner — fast enough to act on the same day
+ * the post went out. The T+72 pass stays as the settled-numbers read once the
+ * post has finished circulating.
+ */
+export const PUBLISH_MEASUREMENT_OFFSETS_HOURS = [4, 72] as const
 
 // Same loose UUID *shape* check as daily-plan.ts — this repo's seeded client
 // ids (e.g. CTS `c0000000-…`) are not RFC4122-valid, so `z.uuid()` rejects them.

@@ -115,9 +115,9 @@ describe('duplicate suppression', () => {
 })
 
 describe('measurement handoff', () => {
-  it('schedules T+24 and T+72 from the real publish time', () => {
+  it('schedules T+4 (early signal) and T+72 (settled) from the real publish time', () => {
     expect(measurementSchedule('2026-09-03T00:00:00.000Z')).toEqual([
-      { hours: 24, at: '2026-09-04T00:00:00.000Z' },
+      { hours: 4, at: '2026-09-03T04:00:00.000Z' },
       { hours: 72, at: '2026-09-06T00:00:00.000Z' },
     ])
   })
