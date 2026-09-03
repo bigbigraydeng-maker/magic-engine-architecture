@@ -25,7 +25,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { sendInngestEvent } from '@/lib/workflows/inngest-event'
-import { getMetaTokenForClient } from '@/lib/meta/token-manager'
+import { getMetaTokenForClient, getStoredPageToken } from '@/lib/meta/token-manager'
 import { getPageAccessToken, publishPagePhotoPost } from '@/lib/meta/page-posts'
 import {
   CAMPAIGN_DAILY_PLAN_KIND,
@@ -214,7 +214,7 @@ function reviewedPostsFromQueueReceipt(row: PlanRow) {
 async function resolvePageToken(
   clientId: string,
   pageId: string,
-): Promise<{ token: string } | NextResponse> {
+): Promise<{ token: string; tokenSource: 'stored_connection' | 'env_user_token' } | NextResponse> {
   const { data: client, error } = await supabaseAdmin
     .from('clients')
     .select('facebook_page_id')
@@ -225,8 +225,21 @@ async function resolvePageToken(
   if (!registered) return conflict('CLIENT_HAS_NO_FACEBOOK_PAGE')
   if (registered !== pageId) return conflict('PAGE_ID_MISMATCH', { registered_page_id: registered })
 
-  const userToken = await getMetaTokenForClient(clientId)
-  const token = userToken ? await getPageAccessToken(userToken, pageId) : null
+  // Prefer the Page token stored by the "连接 Meta" button, exactly as
+  // leads-sync and page-metrics-sync do. The env-var path below derives a Page
+  // token from a *user* token someone pasted in by hand; for a client with no
+  // Business Manager (CTS) that is a 60-day User Access Token, so it expires on
+  // a clock and takes every dependent feature down with it. Reaching for it
+  // first — as this route originally did — meant a stored, still-valid
+  // connection was ignored in favour of the one guaranteed to rot.
+  let token = await getStoredPageToken(clientId, pageId)
+  let tokenSource: 'stored_connection' | 'env_user_token' = 'stored_connection'
+  let userToken: string | null = null
+  if (!token) {
+    tokenSource = 'env_user_token'
+    userToken = await getMetaTokenForClient(clientId)
+    token = userToken ? await getPageAccessToken(userToken, pageId) : null
+  }
   if (!token) {
     // 424, not 502. A CDN in front of the app (Cloudflare here) treats an
     // origin 502 as "origin is broken" and replaces our body with its own
@@ -239,13 +252,13 @@ async function resolvePageToken(
         success: false,
         error: 'PAGE_TOKEN_UNAVAILABLE',
         detail: userToken
-          ? '拿到了 Meta 令牌，但它换不出这个主页的 Page token —— 通常是授权过期或这个令牌没有该主页的权限，需要重新授权。'
-          : '这个客户没有配置可用的 Meta 令牌。',
+          ? '没有存下来的主页授权，退回到手工配置的 Meta 令牌，但它换不出这个主页的 Page token —— 通常是那个令牌过期了（手工令牌 60 天到期），或它的账号没有这个主页的角色。请在客户设置 →「平台连接」点一次「连接 Meta」重新授权。'
+          : '这个客户既没有存下来的主页授权，也没有配置 Meta 令牌。请在客户设置 →「平台连接」点一次「连接 Meta」。',
       },
       { status: 424 }
     )
   }
-  return { token }
+  return { token, tokenSource }
 }
 
 interface LiveOutcome {
