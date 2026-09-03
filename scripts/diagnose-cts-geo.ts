@@ -36,9 +36,9 @@ const CTS_BATCH_ID = '77124a10-d22b-4722-94c2-aeae69f73d76'
  */
 const CTS_ENTITY_PROFILE: GeoEntityProfile = {
   canonicalDisplayName: 'CTS Tours',
-  // 行业锚点：PM 给中文「旅游 / 入境旅游」，此处为英译草案（M1 判英文答案、小写子串匹配）。
-  // 🔴 待 PM 定稿；若覆盖率异常低，多半是锚点太窄，需补英文行业词（tour operator / travel 等）。
-  disambiguationAnchors: ['tourism', 'inbound tourism'],
+  // 行业锚点：PM 2026-09-04 定稿。中文「旅游 / 入境旅游」→ 英文；tour/tours/travel 是 AI 答案
+  // 描述 CTS 时实际使用的词（锚点敏感度探针实证：覆盖全部 13 条正文提及的最小集）。
+  disambiguationAnchors: ['tourism', 'inbound tourism', 'tour', 'tours', 'travel'],
   geoAnchorsMultiword: ['new zealand', 'auckland'],
   geoAnchorsShortWordBoundary: ['nz'],
 }
