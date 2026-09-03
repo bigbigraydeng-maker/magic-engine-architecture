@@ -181,3 +181,27 @@ PDF 属构建产物，不入库。生成命令：
   --print-to-pdf="Magic_Insight_Vol04_China_Inbound_Tourism_2026-09-04.pdf" \
   "file://$(pwd)/docs/magic-insight/vol04-china-inbound-tourism/report.html"
 ```
+
+---
+
+## 图表与本台账的关系
+
+报告中所有图表的**条长、弧长、百分比均由本台账的数值直接计算**，不含任何独立数据源。
+几何量（如甜甜圈弧长、条形宽度百分比）为按台账数值等比换算的 `推算`，算法见图表下方注释。
+
+**改台账数字必须同时改图表，反之亦然。** 两者漂移时以本台账为准。
+
+图表实现为手写 CSS + inline SVG（模板见 [`_shared/charts.css`](../_shared/charts.css)），
+不使用 JS 图表库——避免 headless Chrome 打印 PDF 时的渲染时序问题。
+
+---
+
+## 封面图片来源
+
+| 用途 | 内容 | 摄影师 | 授权 | 链接 |
+|---|---|---|---|---|
+| 封面背景 | 上海外滩天际线（东方明珠 + 陆家嘴） | Alejo Meza（@alejomeza） | Unsplash License（免费商用，无需署名，本报告仍署名） | https://unsplash.com/photos/shanghai-china-H23f-2byY_E |
+
+图片以 **base64 内嵌**进 report.html，不外链。原因：报告主要发给中国境内合作方，
+images.unsplash.com 在大陆访问不稳定，外链会裂；内嵌保证离线可开、国内可靠。
+封面为纯氛围背景图，不含任何数据主张，不构成对来源机构或数据的暗示。
