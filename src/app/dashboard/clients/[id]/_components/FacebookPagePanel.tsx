@@ -33,6 +33,10 @@ interface Payload {
   /** factory_config.publish_target 里配的发布主页（platform=facebook）。跟收件箱
    *  page_id 是两个独立字段：这个决定「重新授权发布」按钮能不能点。 */
   publish_target_page_id: string | null
+  /** 当前环境实际生效的 Meta 应用编号（来自服务端 FACEBOOK_APP_ID），null = 未配置。
+   *  「去客户商务组合里添加 Magic Engine 应用」这类提示必须用这个值，不能写死——
+   *  测试/预发布环境或应用迁移后这个编号可能跟生产不一样。 */
+  meta_app_id: string | null
   pages: ManagedPage[] | null
   pages_error: PagesError | null
   /** Live答案：ME 现在读不读得到这个主页。false = 绑了但拉不到东西。 */
@@ -105,6 +109,7 @@ export function FacebookPagePanel({ clientId }: Props) {
           // PATCH only touches the inbox binding — the publish target is a
           // separate field, so carry the last-loaded value through unchanged.
           publish_target_page_id: state.phase === 'ready' ? state.data.publish_target_page_id : null,
+          meta_app_id: state.phase === 'ready' ? state.data.meta_app_id : null,
           pages: json.pages ?? null,
           pages_error: json.pages_error ?? null,
           reachable: json.reachable ?? null,
@@ -142,7 +147,7 @@ export function FacebookPagePanel({ clientId }: Props) {
     )
   }
 
-  const { page_id, publish_target_page_id, pages, pages_error, reachable } = state.data
+  const { page_id, publish_target_page_id, meta_app_id, pages, pages_error, reachable } = state.data
   const dirty = draft.trim() !== (page_id ?? '').trim()
 
   /**
@@ -255,7 +260,12 @@ export function FacebookPagePanel({ clientId }: Props) {
         {!dirty && page_id === null && <span className="text-xs text-slate-400">不接私信</span>}
       </div>
 
-      <ConnectMeta clientId={clientId} pageId={page_id} publishTargetPageId={publish_target_page_id} />
+      <ConnectMeta
+        clientId={clientId}
+        pageId={page_id}
+        publishTargetPageId={publish_target_page_id}
+        metaAppId={meta_app_id}
+      />
 
       <p className="mt-4 border-t border-slate-100 pt-3 text-xs leading-relaxed text-slate-400">
         主页网址里的名字（facebook.com/<span className="font-mono">CTSTOURS</span>）不是 ID。
@@ -301,15 +311,24 @@ function BizLink() {
  * Magic Engine（按编号找）、「主页访问权限」在有的界面写「页面访问权限」。
  * 这类防御要么都给要么都不给 —— 只给一半，没给的那半就是下一个卡点。
  */
-function TroubleshootSteps() {
+function TroubleshootSteps({ metaAppId }: { metaAppId: string | null }) {
   return (
     <>
       <ol className="mt-1.5 list-decimal space-y-1.5 pl-4">
         <li>
           客户的<span className="font-bold">商务组合</span>里有没有把 Magic Engine 这个应用加进去 ——
           请客户打开 <BizLink />，左边「设置」→「应用」→ 添加。
-          应用编号 <span className="font-mono">1752513682785923</span>；
-          后台显示的名字不一定就叫 Magic Engine，按编号找最稳。
+          {/* 应用编号来自服务端的 FACEBOOK_APP_ID，不写死（另一窗口 0b3ec4b1 的
+              修正，我认）：硬编码的编号在测试/预发布/应用迁移后与生产不一致，
+              照着提示做会把**错的**应用加进客户的商务组合，白跑一趟还查不出为什么。*/}
+          {metaAppId ? (
+            <>
+              应用编号 <span className="font-mono">{metaAppId}</span>；
+              后台显示的名字不一定就叫 Magic Engine，按编号找最稳。
+            </>
+          ) : (
+            <>当前环境没配 FACEBOOK_APP_ID，报给工程团队要一下应用编号再动手 —— 按名字找容易加错应用。</>
+          )}
         </li>
         <li>
           客户在商务组合里把主页「分给」你，跟客户在主页本身把你加成管理人，
@@ -335,7 +354,10 @@ function TroubleshootSteps() {
  * 放不下链接，也没法把三条排查拆成看得清的列表（板桥复审 2026-09-03：300 多字
  * 挤成一坨 12px 小字，人在客户后台和这个面板之间来回切时找不回读到哪）。
  */
-const META_RESULT: Record<string, { ok: boolean; text: React.ReactNode }> = {
+function metaResult(
+  metaAppId: string | null,
+): Record<string, { ok: boolean; text: React.ReactNode }> {
+  return {
   connected: { ok: true, text: '✓ 连接成功。下一个整点开始同步这个主页的私信。' },
   publish_ready: {
     ok: true,
@@ -380,7 +402,7 @@ const META_RESULT: Record<string, { ok: boolean; text: React.ReactNode }> = {
           先隔几分钟重新点一次「连接 Meta」。
         </p>
         <p className="mt-1">还是这样的话，按顺序查：</p>
-        <TroubleshootSteps />
+        <TroubleshootSteps metaAppId={metaAppId} />
       </>
     ),
   },
@@ -396,8 +418,8 @@ const META_RESULT: Record<string, { ok: boolean; text: React.ReactNode }> = {
     // 来，只说「先查哪条」，不替人排除任何一条。
     //
     // publishing 那句提到最前面当分流（板桥复审）：它原来挂在末尾无条件显示，
-    // 读到的人得回头重判前面①②③还算不算数。META_RESULT 是静态表、拿不到 intent，
-    // 所以做不到真正分岔，只能让人自己先分清点的是哪个按钮。
+    // 读到的人得回头重判前面①②③还算不算数。这张表拿不到 intent，所以做不到
+    // 真正分岔，只能让人自己先分清点的是哪个按钮。
     text: (
       <>
         <p>
@@ -407,13 +429,14 @@ const META_RESULT: Record<string, { ok: boolean; text: React.ReactNode }> = {
           如果点的是「连接 Meta」，往下看。
         </p>
         <p className="mt-1.5">授权走完了，但 Meta 没把这个主页交给我们。三个方向都查一下：</p>
-        <TroubleshootSteps />
+        <TroubleshootSteps metaAppId={metaAppId} />
       </>
     ),
   },
   no_page_bound: { ok: false, text: '还没绑定主页 —— 先在上面选好主页并保存，再点连接。' },
   bad_state: { ok: false, text: '这个连接链接已经过期了，请重新点一次「连接 Meta」。' },
-  exchange_failed: { ok: false, text: 'Meta 那边没有换出凭证，请稍后再试一次。' },
+    exchange_failed: { ok: false, text: 'Meta 那边没有换出凭证，请稍后再试一次。' },
+  }
 }
 
 /**
@@ -428,10 +451,14 @@ function ConnectMeta({
   clientId,
   pageId,
   publishTargetPageId,
+  metaAppId,
 }: {
   clientId: string
   pageId: string | null
   publishTargetPageId: string | null
+  /** Env-specific Meta app id, from GET's meta_app_id — see the {{META_APP_ID}}
+   *  placeholder in META_RESULT below. */
+  metaAppId: string | null
 }) {
   const [outcome, setOutcome] = useState<string | null>(null)
   // Publishing reauth targets factory_config.publish_target, so it is available
@@ -450,7 +477,12 @@ function ConnectMeta({
     window.history.replaceState({}, '', url.toString())
   }, [])
 
-  const result = outcome ? META_RESULT[outcome] : null
+  // 应用编号必须是这套部署真实的 FACEBOOK_APP_ID，不能写死字面量，否则在编号
+  // 不同的环境（测试/预发布/应用迁移后）会指挥人把错的应用加进客户商务组合。
+  //
+  // 传参而不是 {{META_APP_ID}} 字符串替换：这些提示已经是 ReactNode（要放可点
+  // 链接和有序列表），字符串 replace 对 JSX 不生效，会把占位符原样显示给用户。
+  const result = outcome ? metaResult(metaAppId)[outcome] ?? null : null
 
   return (
     <div className="mt-3 border-t border-slate-100 pt-3">
