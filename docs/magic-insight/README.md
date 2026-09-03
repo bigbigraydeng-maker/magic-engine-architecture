@@ -148,19 +148,22 @@ PM 2026-09-04 要求：**每卷一张设计好的封面，Unsplash 配图 + 醒�
 
 - 模板：[`_shared/cover.css`](./_shared/cover.css)（全幅照片 + 暗色遮罩 + 大标题 + 品牌角标）
 - 每卷换一张**贴题**的 Unsplash 照片（旅游卷用目的地地标，物流卷用港口/货运……）
-- **照片必须 base64 内嵌进 report.html，禁止外链** —— 报告主要发给中国境内合作方，
-  `images.unsplash.com` 在大陆访问不稳定，外链图会裂。内嵌 = 自带图、离线可开、国内可靠
+- **图片存成卷目录里的 `cover.jpg`，HTML 用相对路径 `url(cover.jpg)` 引用**——
+  不用 base64。对外交付物是 PDF，生成时图会烘焙进 PDF，国内照样能看；
+  换图 = 换一个文件，report.html 保持几十 K 可读可 diff
+- **禁用 `text-shadow`**：PDF 阅读器（微信 / macOS 预览）会把文字阴影渲染成白色横条
+  （2026-09-04 实测事故）。文字可读性靠底部实色遮罩，不靠 shadow
 - 遮罩已保证白色标题在任何照片上可读，换图不用调标题颜色
 - **图片来源必须记进该卷 `sources.md`**（摄影师 + Unsplash 链接 + License）——来源可追溯红线
 - 封面照片只作氛围背景，**不含数据主张**，不得选会让人误以为是数据来源或实拍证据的图
 
-选图 + 内嵌流程（脚本）：
+选图 + 放置流程：
 ```bash
 # 1. 从 unsplash.com 图片页拿到 CDN 直链（images.unsplash.com/photo-xxx）与摄影师
-# 2. 下载并优化体积
-curl -sSL "https://images.unsplash.com/photo-XXX?w=1600&q=80&fm=jpg" -o /tmp/cover.jpg
-sips -Z 1500 -s formatOptions 68 /tmp/cover.jpg --out /tmp/cover-opt.jpg
-# 3. 转 base64 内嵌为 .cover-img 的 background-image: url(data:image/jpeg;base64,...)
+# 2. 下载 + 优化体积，直接存进卷目录
+curl -sSL "https://images.unsplash.com/photo-XXX?w=1600&q=80&fm=jpg" -o /tmp/c.jpg
+sips -Z 1500 -s formatOptions 68 /tmp/c.jpg --out docs/magic-insight/volNN-<主题>/cover.jpg
+# 3. HTML 里 .cover-img 用 background-image: url(cover.jpg)（相对路径，同目录）
 ```
 
 ---
