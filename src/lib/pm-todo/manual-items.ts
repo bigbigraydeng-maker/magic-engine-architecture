@@ -893,6 +893,16 @@ const LINKEDIN_CONNECTORS_URL = `https://app.magicengine.com.au/dashboard/client
 const LINKEDIN_PUBLISH_FAILURE_STALE_HOURS = 2
 
 /**
+ * 一次取多少行来数。
+ *
+ * 🔴 数条数就不能截断（Codex P2, PR #1375）：待办文案会明确说「有 N 条」，
+ * 而 N 一旦是 `.limit()` 截断后的数，PM 清完这些会以为积压清空、更旧的还卡着。
+ * 这条线是单客户、每周 ~2 条，500 远高于任何真实积压（≈ 5 年全无人处理）；
+ * 万一真到顶，`countLabel` 用「N+」兜底，绝不把截断数当成总数。
+ */
+export const LINKEDIN_PROGRESS_FETCH_LIMIT = 500
+
+/**
  * ME 产品动态自动发 LinkedIn（P24 新建）—— 三种"这条本该自动完成却没完成"的状态，
  * 全部要下发,不能只写进 cron_run_logs：
  *   1. 敏感内容命中硬过滤,转人审草稿(status='draft', reason='sensitive_content_flagged')
@@ -915,7 +925,7 @@ export async function pushLinkedinProgressItems(
     .eq('source', LINKEDIN_PROGRESS_SOURCE)
     .in('status', ['draft', 'approved'])
     .order('updated_at', { ascending: false })
-    .limit(20)
+    .limit(LINKEDIN_PROGRESS_FETCH_LIMIT)
 
   /**
    * 🔴 **同一类卡点只出一条、带上条数 —— 绝不许一条草稿一行。**
@@ -930,18 +940,25 @@ export async function pushLinkedinProgressItems(
    * 要处理，而不是被同一句话重复轰炸。单条时的文案逐字保留（那几句是多轮 review
    * 磨出来的，尤其"已发布但回写失败"那条的红线话术不能回退）。
    */
+  const rows = (data ?? []) as Array<{
+    id: string
+    status: string
+    updated_at: string
+    generation_context_snapshot: { reason?: string; publish_error?: string } | null
+  }>
+  // 取满上限 = 可能还有更旧的没数进来。此时任何「N 条」都要显示成「N+」，
+  // 并一律走多条文案，绝不把截断数说成总数（见上 LINKEDIN_PROGRESS_FETCH_LIMIT 头注）。
+  const truncated = rows.length >= LINKEDIN_PROGRESS_FETCH_LIMIT
+  const many = (n: number) => n > 1 || truncated
+  const countLabel = (n: number) => (truncated ? `${n}+` : `${n}`)
+
   let sensitiveReview = 0
   let needsSetup = 0
   let unknownDraft = 0
   let dbSyncFailed = 0
   const publishErrors: string[] = []
 
-  for (const row of (data ?? []) as Array<{
-    id: string
-    status: string
-    updated_at: string
-    generation_context_snapshot: { reason?: string; publish_error?: string } | null
-  }>) {
+  for (const row of rows) {
     const reason = row.generation_context_snapshot?.reason
 
     if (row.status === 'draft') {
@@ -980,14 +997,12 @@ export async function pushLinkedinProgressItems(
       kind: 'linkedin_progress_needs_review',
       client_id: LINKEDIN_PROGRESS_CLIENT_ID,
       client_name: 'ME 产品动态（LinkedIn）',
-      what:
-        n === 1
-          ? '这周的 LinkedIn 进度贴草稿里可能带了客户敏感信息，系统没敢自动发，等你看一眼'
-          : `有 ${n} 条 LinkedIn 进度贴草稿可能带了客户敏感信息，系统都没敢自动发，等你看一眼`,
-      how:
-        n === 1
-          ? '打开内容工厂看板，找到标题带「(needs review)」的那条草稿，读一遍确认没问题就批准发布；不想发就直接拒绝，下周照常自动生成新的'
-          : '打开内容工厂看板，找到标题带「(needs review)」的这几条草稿，逐条读一遍确认没问题就批准发布；不想发就直接拒绝，下周照常自动生成新的',
+      what: many(n)
+        ? `有 ${countLabel(n)} 条 LinkedIn 进度贴草稿可能带了客户敏感信息，系统都没敢自动发，等你看一眼`
+        : '这周的 LinkedIn 进度贴草稿里可能带了客户敏感信息，系统没敢自动发，等你看一眼',
+      how: many(n)
+        ? '打开内容工厂看板，找到标题带「(needs review)」的这几条草稿，逐条读一遍确认没问题就批准发布；不想发就直接拒绝，下周照常自动生成新的'
+        : '打开内容工厂看板，找到标题带「(needs review)」的那条草稿，读一遍确认没问题就批准发布；不想发就直接拒绝，下周照常自动生成新的',
       href: LINKEDIN_CONTENT_BOARD_URL,
     })
   }
@@ -1000,17 +1015,15 @@ export async function pushLinkedinProgressItems(
       kind: 'linkedin_progress_needs_setup',
       client_id: LINKEDIN_PROGRESS_CLIENT_ID,
       client_name: 'ME 产品动态（LinkedIn）',
-      what:
-        n === 1
-          ? 'LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，该发的这条卡着没发出去'
-          : `LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，已经有 ${n} 条卡着没发出去`,
+      what: many(n)
+        ? `LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，已经有 ${countLabel(n)} 条卡着没发出去`
+        : 'LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，该发的这条卡着没发出去',
       // 账号连好之后这些草稿不会自己重新尝试发布——没有额外的重试 cron，
       // 得靠 PM 回内容工厂看板对每条草稿再点一次"确认"（那个按钮现在会
       // 真的调发布，不是走视频那套），不写清楚这一步就是永久卡死。
-      how:
-        n === 1
-          ? '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板找到这条卡住的草稿，点一次"确认"，这条就会真的发出去，不用等下一次自动跑'
-          : '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板，把卡住的这几条草稿逐条点一次"确认"，它们就会真的发出去，不用等下一次自动跑',
+      how: many(n)
+        ? '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板，把卡住的这几条草稿逐条点一次"确认"，它们就会真的发出去，不用等下一次自动跑'
+        : '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板找到这条卡住的草稿，点一次"确认"，这条就会真的发出去，不用等下一次自动跑',
       href: LINKEDIN_CONNECTORS_URL,
     })
   }
@@ -1021,14 +1034,12 @@ export async function pushLinkedinProgressItems(
       kind: 'linkedin_progress_needs_review',
       client_id: LINKEDIN_PROGRESS_CLIENT_ID,
       client_name: 'ME 产品动态（LinkedIn）',
-      what:
-        n === 1
-          ? '有一条 LinkedIn 进度贴草稿卡在待处理，系统没能说清具体原因'
-          : `有 ${n} 条 LinkedIn 进度贴草稿卡在待处理，系统没能说清具体原因`,
-      how:
-        n === 1
-          ? '打开内容工厂看板看一眼这条草稿，读一遍决定发不发'
-          : '打开内容工厂看板看一眼这几条草稿，逐条读一遍决定发不发',
+      what: many(n)
+        ? `有 ${countLabel(n)} 条 LinkedIn 进度贴草稿卡在待处理，系统没能说清具体原因`
+        : '有一条 LinkedIn 进度贴草稿卡在待处理，系统没能说清具体原因',
+      how: many(n)
+        ? '打开内容工厂看板看一眼这几条草稿，逐条读一遍决定发不发'
+        : '打开内容工厂看板看一眼这条草稿，读一遍决定发不发',
       href: LINKEDIN_CONTENT_BOARD_URL,
     })
   }
@@ -1039,14 +1050,12 @@ export async function pushLinkedinProgressItems(
       kind: 'linkedin_progress_needs_review',
       client_id: LINKEDIN_PROGRESS_CLIENT_ID,
       client_name: 'ME 产品动态（LinkedIn）',
-      what:
-        n === 1
-          ? '这条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子'
-          : `有 ${n} 条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子`,
-      how:
-        n === 1
-          ? '回我一句，我去手动把这条记录的状态改成"已发布"，不用你操作'
-          : '回我一句，我去手动把这几条记录的状态改成"已发布"，不用你操作',
+      what: many(n)
+        ? `有 ${countLabel(n)} 条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子`
+        : '这条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子',
+      how: many(n)
+        ? '回我一句，我去手动把这几条记录的状态改成"已发布"，不用你操作'
+        : '回我一句，我去手动把这条记录的状态改成"已发布"，不用你操作',
       href: LINKEDIN_CONTENT_BOARD_URL,
     })
   }
@@ -1060,10 +1069,9 @@ export async function pushLinkedinProgressItems(
       kind: 'linkedin_progress_failed',
       client_id: LINKEDIN_PROGRESS_CLIENT_ID,
       client_name: 'ME 产品动态（LinkedIn）',
-      what:
-        n === 1
-          ? `这周的 LinkedIn 进度贴生成好了但没能发出去${errText}`
-          : `这周有 ${n} 条 LinkedIn 进度贴生成好了但没能发出去${errText}`,
+      what: many(n)
+        ? `这周有 ${countLabel(n)} 条 LinkedIn 进度贴生成好了但没能发出去${errText}`
+        : `这周的 LinkedIn 进度贴生成好了但没能发出去${errText}`,
       how: '打开 Publer 连接器设置页，看看 LinkedIn 账号是不是掉线了；账号看起来没问题的话，回我一句，我来查具体原因',
       href: LINKEDIN_CONNECTORS_URL,
     })

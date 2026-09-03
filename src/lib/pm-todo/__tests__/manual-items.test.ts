@@ -13,6 +13,7 @@ import {
   pushPlatformCandidateReviewItems,
   pushDataForSeoCreditsItem,
   pushLinkedinProgressItems,
+  LINKEDIN_PROGRESS_FETCH_LIMIT,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -191,6 +192,20 @@ describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏'
       NOW,
     )
     expect(items).toEqual([])
+  })
+
+  it('🔴 取满上限（可能还有更旧的没数进来）→ 显示「N+」，绝不把截断数当总数', async () => {
+    const items: ManualItem[] = []
+    // 假 supabase 的 .limit() 是空操作，会原样返回全部行 —— 给满上限条数
+    // 即模拟「数到上限、后面可能还有」这个生产会遇到的截断态。
+    const full = Array.from({ length: LINKEDIN_PROGRESS_FETCH_LIMIT }, () =>
+      draft('sensitive_content_flagged'),
+    )
+    await pushLinkedinProgressItems(fakePostsQuery(full), items, NOW)
+
+    const review = items.filter((i) => i.kind === 'linkedin_progress_needs_review')
+    expect(review).toHaveLength(1)
+    expect(review[0].what).toContain(`${LINKEDIN_PROGRESS_FETCH_LIMIT}+`)
   })
 
   it('发布失败多条、报错各不相同 → 一条汇总，条数 + 去重后的原因都带上', async () => {
