@@ -185,8 +185,12 @@ function mockDb(opts: MockDbOptions = {}) {
               }
               const row: Record<string, unknown> = {}
               if (cols.includes('leads_config')) {
+                // 专列 present 时故意在 leads_config 里留一个**不一样**的旧值：
+                // 真库上这两处可以同时有值，代码必须只认专列。
                 row.leads_config =
-                  dedicatedColumn === 'present' ? {} : { mailchimp_audience_id: audienceId }
+                  dedicatedColumn === 'present'
+                    ? { mailchimp_audience_id: 'stale-leads-config-value' }
+                    : { mailchimp_audience_id: audienceId }
               }
               if (wantsDedicated) row.mailchimp_audience_id = audienceId
               return Promise.resolve({ data: row, error: null })
@@ -1517,13 +1521,23 @@ describe('Mailchimp audience id 的读法（防静默失败）', () => {
     expect(console.error).not.toHaveBeenCalled()
   })
 
-  it('专列 apply 之后 → 优先用专列的值（不用回来改代码）', async () => {
+  it('专列 apply 之后 → 只认专列，leads_config 里的旧值一律不看', async () => {
     mockDb({ audienceId: 'from-column', dedicatedColumn: 'present' })
     provideOnce({ status: 'subscribed' })
 
     await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
 
     expect(subscribeMock.mock.calls[0][0]).toMatchObject({ audienceId: 'from-column' })
+  })
+
+  it('专列 apply 之后被清空 → 出口真的关掉，不许被 leads_config 的旧值复活', async () => {
+    // 运营清空专列 = 明确要停这个客户的出口。假件里 leads_config 仍留着旧值。
+    mockDb({ audienceId: null, dedicatedColumn: 'present' })
+
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
+
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'no_audience_config' })
+    expect(subscribeMock).not.toHaveBeenCalled()
   })
 
   it('专列没 apply + leads_config 也没配 → no_audience_config（查得到，就是没配）', async () => {

@@ -69,23 +69,31 @@ describe('audienceFromLeadsConfig', () => {
 
 describe('readAudienceId', () => {
   it('专列存在且有值 → 用专列，只查一次', async () => {
-    const seen = mockSelects([
-      { data: { leads_config: {}, mailchimp_audience_id: 'from-column' }, error: null },
-    ])
+    const seen = mockSelects([{ data: { mailchimp_audience_id: 'from-column' }, error: null }])
 
     await expect(readAudienceId(CLIENT)).resolves.toEqual({ ok: true, audienceId: 'from-column' })
     expect(seen).toHaveLength(1)
   })
 
-  it('专列存在但空 → 落到 leads_config，仍然只查一次', async () => {
-    mockSelects([
+  it('专列存在但为空 → 空串关闭出口，**不许**掉回 leads_config 的旧值', async () => {
+    // migration 注释把这一列的语义写死成「NULL disables the outlet」。空值还
+    // 掉回旧 JSON，运营就关不掉出口，会给本该停掉的人继续发订阅。
+    // 假件**故意**把 leads_config 的旧值一并递回来（真库上两处可以同时有值，
+    // 而且第一条查询将来若被人加宽就真会带回它）。代码必须视而不见 ——
+    // 只靠「没 select 它」来保证正确是脆的，行为本身也得钉住。
+    const seen = mockSelects([
       {
-        data: { leads_config: { mailchimp_audience_id: 'dda97b7e61' }, mailchimp_audience_id: null },
+        data: { mailchimp_audience_id: null, leads_config: { mailchimp_audience_id: 'stale-old' } },
         error: null,
       },
+      { data: { leads_config: { mailchimp_audience_id: 'stale-old' } }, error: null },
     ])
 
-    await expect(readAudienceId(CLIENT)).resolves.toEqual({ ok: true, audienceId: 'dda97b7e61' })
+    await expect(readAudienceId(CLIENT)).resolves.toEqual({ ok: true, audienceId: '' })
+    // 连查都不该再查第二次 —— 专列在，它就是唯一权威
+    expect(seen).toHaveLength(1)
+    // 而且第一条查询压根不该点 leads_config：专列在的时候它毫无话语权
+    expect(seen[0]).not.toContain('leads_config')
   })
 
   it('专列没 apply（42703）→ 降级只查 leads_config，拿到值继续干活', async () => {
@@ -96,7 +104,8 @@ describe('readAudienceId', () => {
 
     await expect(readAudienceId(CLIENT)).resolves.toEqual({ ok: true, audienceId: 'dda97b7e61' })
     expect(seen).toHaveLength(2)
-    // 第二次绝不能再点那一列，否则又是同一个 42703
+    // 第一次点了专列（所以才 42703），第二次绝不能再点，否则又是同一个错
+    expect(seen[0]).toContain('mailchimp_audience_id')
     expect(seen[1]).not.toContain('mailchimp_audience_id')
   })
 

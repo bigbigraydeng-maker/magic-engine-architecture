@@ -50,10 +50,20 @@ interface ClientAudienceRow {
   mailchimp_audience_id?: unknown
 }
 
-/** 从一行 clients 记录里取 audience id：专列优先，`leads_config` 兜底。 */
-function pickAudienceId(row: ClientAudienceRow | null): string {
-  const dedicated = typeof row?.mailchimp_audience_id === 'string' ? row.mailchimp_audience_id.trim() : ''
-  return dedicated || audienceFromLeadsConfig(row?.leads_config)
+/**
+ * 专列查询成功时，**专列就是唯一权威 —— 包括它是空的时候**。
+ *
+ * 为什么不是 `专列 || leads_config`：那一列的 migration 注释把语义写死成
+ * 「NULL disables the outlet for this client (zero provider calls)」。如果空值
+ * 还会掉回 `leads_config` 的旧值，运营把专列清空来关出口就关不掉，会给本该
+ * 停掉的人继续发订阅 —— 一个「关不掉的开关」比读不到配置更糟。
+ *
+ * ⚠️ **apply 那条 migration 之前必须先把 `leads_config` 里配过的 audience id
+ * 搬进专列**，否则专列一出现（除 CTS 由 migration 自己种下之外全是 NULL），
+ * 那些客户的出口会当场静默关闭。2026-09-03 全库只有 CTS 一家配过。
+ */
+function dedicatedAudienceId(row: ClientAudienceRow | null): string {
+  return typeof row?.mailchimp_audience_id === 'string' ? row.mailchimp_audience_id.trim() : ''
 }
 
 /**
@@ -65,12 +75,13 @@ function pickAudienceId(row: ClientAudienceRow | null): string {
 export async function readAudienceId(clientId: string): Promise<AudienceIdRead> {
   const withDedicated = await supabaseAdmin
     .from('clients')
-    .select('leads_config, mailchimp_audience_id')
+    .select('mailchimp_audience_id')
     .eq('id', clientId)
     .maybeSingle()
 
   if (!withDedicated.error) {
-    return { ok: true, audienceId: pickAudienceId(withDedicated.data as ClientAudienceRow | null) }
+    // 专列在 → 只认专列（空值 = 明确关闭出口，不许掉回 leads_config）。
+    return { ok: true, audienceId: dedicatedAudienceId(withDedicated.data as ClientAudienceRow | null) }
   }
   if (!isUndefinedColumn(withDedicated.error)) {
     return { ok: false, message: withDedicated.error.message }
@@ -86,5 +97,8 @@ export async function readAudienceId(clientId: string): Promise<AudienceIdRead> 
   if (fallback.error) {
     return { ok: false, message: fallback.error.message }
   }
-  return { ok: true, audienceId: pickAudienceId(fallback.data as ClientAudienceRow | null) }
+  return {
+    ok: true,
+    audienceId: audienceFromLeadsConfig((fallback.data as ClientAudienceRow | null)?.leads_config),
+  }
 }
