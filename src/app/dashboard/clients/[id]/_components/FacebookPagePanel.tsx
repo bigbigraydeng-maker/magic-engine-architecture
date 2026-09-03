@@ -62,7 +62,14 @@ export function FacebookPagePanel({ clientId }: Props) {
   const [manual, setManual] = useState(false)
   const [saving, setSaving] = useState(false)
   const [errMsg, setErrMsg] = useState<string | null>(null)
-  const [result, setResult] = useState<{ ok: boolean; text: React.ReactNode } | null>(null)
+  /**
+   * 保存后的一句话反馈。**故意是 string 不是 ReactNode**（子牙复审 2026-09-03）：
+   * 它唯一的来源 describeSave 只返回字符串，而它的容器是下面那个 <p>。放宽成
+   * ReactNode 等于开一扇没人走的门，还会引诱下一个人往 describeSave 里塞 <ol>
+   * —— 塞进去就是 <p> 里套块级元素，正是 4c0eda7a 刚在 ConnectMeta 修掉的那个
+   * 非法嵌套。真要给这条也配排查步骤，先把容器改成 <div> 再放宽类型，别反过来。
+   */
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
 
   const load = useCallback(async () => {
     setState({ phase: 'loading' })
@@ -148,7 +155,23 @@ export function FacebookPagePanel({ clientId }: Props) {
   }
 
   const { page_id, publish_target_page_id, meta_app_id, pages, pages_error, reachable } = state.data
-  const dirty = draft.trim() !== (page_id ?? '').trim()
+
+  /**
+   * ⚠ 这一段的所有比较只认这两个规范化后的值，别再直接拿 `draft` / `page_id` 比。
+   *
+   * 子牙复审 2026-09-03 实测：原来 dirty 两边都 trim、draftIsSavedBinding 只 trim
+   * 左边，于是 page_id 带一个前导空格就够了 —— 一个**已经生效**的绑定被显示成
+   * 「你刚填的、还没保存」，同时保存键灰着，上面红字还在喊「绑了主页但线索进不来」。
+   *
+   * 而 page_id 确实可能不干净：normalisePageId 只管 PATCH 进来的值，管不住这一列
+   * 在 PATCH 端点存在**之前**由 SQL 直写落下的历史数据（见本文件头注释），
+   * 后端 GET 也明确只用 trim 判空、返回原值。
+   *
+   * 同一个值在四个地方用四种口径比较，就会有第四种走法 —— 所以这里定一次口径。
+   */
+  const draftValue = draft.trim()
+  const boundValue = (page_id ?? '').trim()
+  const dirty = draftValue !== boundValue
 
   /**
    * 当前**要显示**的值不在「我们能操作的主页」列表里 —— 常态，不是边角情况：
@@ -168,11 +191,10 @@ export function FacebookPagePanel({ clientId }: Props) {
    * 「不接私信」，而这次 dirty=true、保存键是**亮的**，按下去真会把它存进去。
    * 那比原来的 bug 更糟：原来的至少存不进去。
    */
-  const draftValue = draft.trim()
   const draftOutsideList =
     draftValue !== '' && pages !== null && !pages.some((p) => p.id === draftValue)
   /** 这个列表外的值是「已经在生效的绑定」还是「你刚填的、还没存」—— 两件事不能混说。 */
-  const draftIsSavedBinding = draftValue === (page_id ?? '')
+  const draftIsSavedBinding = draftValue === boundValue
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -191,13 +213,16 @@ export function FacebookPagePanel({ clientId }: Props) {
 
       {pages && pages.length > 0 && !manual && (
         <select
-          value={draft}
+          // 用规范化后的值，跟下面 <option> 的 value 同一口径 —— 否则 page_id 带个
+          // 空格就又匹配不上，React 回退选中第一项，正是本次要消灭的那个显示 bug。
+          // （手填框那边保持原值 draft，实时 trim 会让打字时光标乱跳。）
+          value={draftValue}
           onChange={(e) => setDraft(e.target.value)}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
         >
           <option value="">— 不接私信 —</option>
           {draftOutsideList && (
-            <option value={draft}>
+            <option value={draftValue}>
               {/* 「读不到」直接读 reachable，不在这里第二次推导。今天它跟
                   draftOutsideList 严格互补（都源自同一次响应的 pages），但哪天
                   reachable 改成直接探测主页，两者就会分叉 —— 那时这里会跟上面
@@ -311,7 +336,25 @@ function BizLink() {
  * Magic Engine（按编号找）、「主页访问权限」在有的界面写「页面访问权限」。
  * 这类防御要么都给要么都不给 —— 只给一半，没给的那半就是下一个卡点。
  */
-function TroubleshootSteps({ metaAppId }: { metaAppId: string | null }) {
+function TroubleshootSteps({
+  metaAppId,
+  showPageIdCheck = true,
+}: {
+  metaAppId: string | null
+  /**
+   * 要不要显示第③条「主页 ID 是不是填错了」。
+   *
+   * no_pages 传 false（子牙复审 2026-09-03）：callback 在 `pages.length === 0` 处
+   * 就 return 了（route.ts:81），而读 clients.facebook_page_id 在那之后（:92）——
+   * 走到 no_pages 时服务端**从没拿主页 ID 跟任何东西比过**，所以「ID 填错」在
+   * 逻辑上不可能是原因。让人去查一件已知无关的事，就是这次改动自己反对的
+   * 「把人引向死路」，只是程度轻。
+   *
+   * ①② 对 no_pages 仍然成立（组合里没加应用、账号名下真没主页，都会让
+   * /me/accounts 返回空），所以只摘这一条，不整块拆。
+   */
+  showPageIdCheck?: boolean
+}) {
   return (
     <>
       <ol className="mt-1.5 list-decimal space-y-1.5 pl-4">
@@ -336,7 +379,7 @@ function TroubleshootSteps({ metaAppId }: { metaAppId: string | null }) {
           要客户在主页设置的「主页访问权限」（有的界面写「页面访问权限」）里，
           把你加成有完全控制权限的人（有的界面写「管理员」）。
         </li>
-        <li>上面那个主页 ID 是不是手填错了、或者登错了账号。</li>
+        {showPageIdCheck && <li>上面那个主页 ID 是不是手填错了、或者登错了账号。</li>}
       </ol>
       <p className="mt-1.5">
         ①②这两步都得<span className="font-bold">客户自己去点</span>，你没权限 ——
@@ -402,7 +445,7 @@ function metaResult(
           先隔几分钟重新点一次「连接 Meta」。
         </p>
         <p className="mt-1">还是这样的话，按顺序查：</p>
-        <TroubleshootSteps metaAppId={metaAppId} />
+        <TroubleshootSteps metaAppId={metaAppId} showPageIdCheck={false} />
       </>
     ),
   },

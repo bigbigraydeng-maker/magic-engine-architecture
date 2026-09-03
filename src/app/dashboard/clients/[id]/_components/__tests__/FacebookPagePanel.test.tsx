@@ -251,6 +251,38 @@ describe('FacebookPagePanel — 常驻文案不许指回死路', () => {
 })
 
 /**
+ * 子牙复审（2026-09-03）实测跑出来的第三种走法：trim 口径不一致。
+ *
+ *   dirty              = draft.trim() !== (page_id ?? '').trim()   两边都 trim
+ *   draftIsSavedBinding = draftValue === (page_id ?? '')            只 trim 左边
+ *
+ * 后端 GET 对 page_id 是「非空就原样返回」（facebook-page/route.ts 只用 trim 判空），
+ * 而这一列早于 PATCH 端点存在 —— 文件头注释自己写着「唯一写入方式曾是 SQL UPDATE」，
+ * 所以库里存在带空格的值完全可能。那时一个**已经生效**的绑定会被说成「你刚填的、
+ * 还没保存」，同时叫人去按一个灰着的保存键，上面红字还在说「绑了主页但线索进不来」。
+ * 跟本次要消灭的自相矛盾 + 管道断头是同一件事，只是换了个入口。
+ */
+describe('FacebookPagePanel — page_id 不干净时也不能说反话', () => {
+  it('绑定值带前导空格，仍要认出这是「现在绑的」而不是「你刚填的」', async () => {
+    mockGet({
+      page_id: ` ${BOUND_PAGE}`,
+      publish_target_page_id: null,
+      meta_app_id: null,
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+    await screen.findByRole('combobox')
+
+    const selected = screen.getByRole('option', { selected: true })
+    expect(selected.textContent).toMatch(/现在绑的/)
+    expect(selected.textContent).not.toMatch(/你刚填的/)
+  })
+})
+
+/**
  * 应用编号必须来自服务端的 FACEBOOK_APP_ID，不能写死。
  *
  * 我第一版把 1752513682785923 直接写进了文案，另一个窗口（0b3ec4b1）指出问题：
@@ -329,6 +361,30 @@ describe('FacebookPagePanel — 授权失败的原因要说全', () => {
       // 的文案照样全绿，锁不住「显示的是不是该显示的那条」。改断言本条独有的短语。
       expect(body).toMatch(/没把这个主页交给我们/)
       expect(body).toMatch(/页面访问权限/)
+    })
+  })
+
+  it('no_pages 不许让人去查「主页 ID 填错了」—— 服务端已知无关', async () => {
+    mockGet({
+      page_id: BOUND_PAGE,
+      publish_target_page_id: null,
+      meta_app_id: '999888777666555',
+      pages: OTHER_PAGES,
+      pages_error: null,
+      reachable: false,
+    })
+
+    window.history.replaceState({}, '', `/dashboard/clients/${CLIENT_ID}?meta=no_pages`)
+    render(<FacebookPagePanel clientId={CLIENT_ID} />)
+
+    await waitFor(() => {
+      const body = document.body.textContent ?? ''
+      // ①② 仍要给（组合没加应用、账号名下真没主页，都会让 /me/accounts 返回空）
+      expect(body).toMatch(/商务组合/)
+      // ③ 不许给：callback 在 pages.length===0 处就 return 了（route.ts:81），
+      // 读 clients.facebook_page_id 在那之后（:92）—— 服务端从没拿主页 ID 比过
+      // 任何东西，让人去查它就是把人引向死路。
+      expect(body).not.toMatch(/主页 ID 是不是手填错了/)
     })
   })
 
