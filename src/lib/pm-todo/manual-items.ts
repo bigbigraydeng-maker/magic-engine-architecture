@@ -933,8 +933,11 @@ export async function pushLinkedinProgressItems(
       .eq('client_id', LINKEDIN_PROGRESS_CLIENT_ID)
       .eq('source', LINKEDIN_PROGRESS_SOURCE)
       .in('status', ['draft', 'approved'])
-      // range 必须配 order，否则分页之间顺序不稳、会重复或漏行
+      // range 必须配**全序** order，否则分页之间顺序不稳、会重复或漏行。
+      // updated_at 有并列值，单靠它不是全序 —— 相同 updated_at 的行跨 1000 行
+      // 页边界时相对位置不固定（Codex P2 #1375）。补 id 作唯一 tie-breaker。
       .order('updated_at', { ascending: false })
+      .order('id', { ascending: true })
       .range(from, to),
   )
 

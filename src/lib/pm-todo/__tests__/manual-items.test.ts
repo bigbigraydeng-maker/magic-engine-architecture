@@ -83,17 +83,22 @@ describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏'
    * 才被如实模拟，不会因为每页都返回全量而重复计数或死循环。
    */
   function fakePostsQuery(rows: unknown[]): SupabaseClient {
+    // 记录 .order() 的列 —— 用来断言分页带了唯一 tie-breaker（见 tie-breaker 用例）。
+    const orderedCols: string[] = []
     const chain = {
       select: () => chain,
       eq: () => chain,
       in: () => chain,
-      order: () => chain,
+      order: (col: string) => {
+        orderedCols.push(col)
+        return chain
+      },
       range: async (from: number, to: number) => ({
         data: (rows as unknown[]).slice(from, to + 1),
         error: null,
       }),
     }
-    return { from: () => chain } as unknown as SupabaseClient
+    return { from: () => chain, __orderedCols: orderedCols } as unknown as SupabaseClient
   }
 
   const draft = (reason: string) => ({
@@ -221,6 +226,17 @@ describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏'
     const dbSync = review.find((i) => i.what.includes('千万别'))
     expect(sensitive?.what).toContain('600')
     expect(dbSync).toBeTruthy()
+  })
+
+  it('🔴 分页排序带唯一 tie-breaker(id) → 跨页相同 updated_at 也不会重复/漏行', async () => {
+    const items: ManualItem[] = []
+    const client = fakePostsQuery([draft('sensitive_content_flagged')])
+    await pushLinkedinProgressItems(client, items, NOW)
+
+    // 单靠 updated_at 不是全序：并列值跨 1000 行页边界会顺序不稳。必须补 id。
+    const orderedCols = (client as unknown as { __orderedCols: string[] }).__orderedCols
+    expect(orderedCols).toContain('updated_at')
+    expect(orderedCols).toContain('id')
   })
 
   it('发布失败多条、报错各不相同 → 一条汇总，条数 + 去重后的原因都带上', async () => {
