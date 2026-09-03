@@ -124,7 +124,7 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 |---|---|---|
 | **L1 Capability** | 6 支柱打分规范 · 归因公式 | AI 可见度追踪引擎 · 竞品监控 |
 | **L2 Playbook** | 瓶装水行业内容模板 | 地产版 GEO 全流程 |
-| **L3 Connector** | HBay VI 生成模板 | DataForSEO 数据拉取 |
+| **L3 Connector** | Publer 发布格式映射规则 | DataForSEO 数据拉取 |
 | **L4 Client Config** | 客户品牌调性指引 | 客户专属自动化 workflow |
 
 ### 4 问判据（判"用 Skill 还是 Agent"）
@@ -136,10 +136,16 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 3. **是可复用工种被反复召唤吗**？（多场景反复调用同一角色 · 如子牙每次架构审）
 4. **必须融入主对话节奏吗**？（跟班式 · 3 句话说完继续 · 不能跳出去）
 
-**判定规则**：
-- 只满足第 4 条（融入节奏），或全不满足 → **Skill 实现**
-- 满足 3 条或以上（1-3） → **Agent 实现**
-- 满足 1-2 条 + 有时也需要融入节奏 → **Hybrid 实现**：Skill 触发 + spawn Agent 深度
+**判定规则**（Codex 复审修正：把 4 问压缩成两个独立信号，穷举覆盖全部组合，互斥且完备）：
+- **信号 A · 独立处理需求** = 第 1/2/3 条**任一**为 ✓（哪怕只中一条，也说明这件事需要脱离主对话独立处理，例如"只需要一次性深度架构分析、不反复召唤、也不用融入对话"就命中第 1 条）
+- **信号 B · 主对话融入需求** = 第 4 条是否为 ✓
+
+| 信号 A（1/2/3 任一 ✓） | 信号 B（第 4 条） | 判定 |
+|---|---|---|
+| ✗（1/2/3 全否） | ✗ | **Skill 实现** —— 无独立处理需求也不强求融入节奏，默认走最省资源的 Skill |
+| ✗（1/2/3 全否） | ✓ | **Skill 实现** —— 融入节奏是唯一诉求 |
+| ✓（1/2/3 任一） | ✗ | **Agent 实现** —— 有独立处理需求且不强求嵌在主对话，走独立进程（含"仅第 1 条为真的一次性复杂分析"这类场景） |
+| ✓（1/2/3 任一） | ✓ | **Hybrid 实现** —— 既要独立深度处理，又要嵌进主对话节奏：Skill 触发 + spawn Agent 深度 |
 
 ### 三种形态的典型场景
 
@@ -254,7 +260,7 @@ Industry Playbook / Profile / Version 只能装：行业级 / 版本级的 6 支
 3 句话完成，融入正常对话不打断节奏：
 
 ```
-> [跟班 · Tier] 这是 L3（KOL 撮合），挂在既有社媒 / 口碑支柱下 · 不新增能力线 · 不用登记 candidates。
+> [跟班 · Tier] 这是 L3（KOL 撮合，Agent 实现——信号 A 命中"独立处理需求"），挂在既有社媒 / 口碑支柱下 · 不新增能力线 · 不用登记 candidates。
 > [跟班 · 红线] 保持 ME 不从 MCN 抽佣的一贯原则。
 > [跟班 · 继续吗？] 判定完了，你 `继续` 我就走下一步。
 ```
@@ -265,8 +271,8 @@ Industry Playbook / Profile / Version 只能装：行业级 / 版本级的 6 支
 - 明显归属既有能力线时
 - 判定为 L3 Connector 且不占用候选名额时（按红线 3 直接归位）
 
-**Inline 三句话结构**：
-1. **[跟班 · Tier]**：层级判定 + 挂在哪 + 要不要登记
+**Inline 三句话结构**（v2.2 起第 1 句必须同时给出层级与实现形态两条轴——不得只出 Tier）：
+1. **[跟班 · Tier]**：层级判定 + 挂在哪 + **实现形态（Skill / Agent / Hybrid，附一句 4 问判据里命中的信号）** + 要不要登记
 2. **[跟班 · 红线 / 判据]**：关键红线是哪条 · 或者用了哪条判据
 3. **[跟班 · 继续吗？]**：等 PM 明确 `继续`
 
@@ -305,7 +311,7 @@ Inline 判定后建议登记时，用轻量条目：
 ```
 
 **PM 响应**：
-- `记` / `记下` / `mark it` → agent 追加进 `docs/registry/platform-candidates.md`，走 Low bar schema（可以先只填 5 个字段，其余等后续），并同步登记进 [`src/lib/pm-todo/platform-candidate-reviews.ts`](../../../src/lib/pm-todo/platform-candidate-reviews.ts) 让复查日到期自动下发待办
+- `记` / `记下` / `mark it` → agent 追加进 `docs/registry/platform-candidates.md`，走 Low bar schema（可以先只填 5 个字段，其余等后续），并同步登记进 [`src/lib/pm-todo/platform-candidate-reviews.ts`](../../../src/lib/pm-todo/platform-candidate-reviews.ts) 让复查日到期自动下发待办 —— **同时**必须按下方"GitHub Issue 自动生成规则"派生一份精简版 Issue Draft（沿用 Low bar 已有的 5 个字段，缺的字段标 TBD，不得因为是 Inline 判定就跳过 draft），等 PM 说 `开 issue` 再创建，保证 L1/L2 候选不论走 Low bar 还是 High bar 都能进 `me2.0-punch-list` 标签筛选与冲刺跟踪
 - `不记` / `skip` → 跳过登记，继续原任务
 - `跑 full` → 升级到 Full Report + High bar 完整登记
 
@@ -381,7 +387,7 @@ Full Report 模式完整格式：
 - [ ] 平台基础设施：[Kernel / Measurement Contract / Attribution / Memory / Verification / 其他]
 - [ ] 都不是 → 强制降为 L2 或 PM 拍板"是否新增支柱 / 版本"
 
-**建议实现形态**（若声明 L1/L2/L3，必填一项 · v2.2 新增）:
+**建议实现形态**（不论声明 L1/L2/L3/L4，必填一项 · 层级与实现形态是独立轴 · v2.2 新增）:
 - [ ] Skill · 规则型：融入主对话 · 无独立进程
 - [ ] Agent · 服务型：独立 context · 可 spawn
 - [ ] Hybrid · Skill 触发 + Agent 深度
@@ -417,7 +423,7 @@ Full Report 模式完整格式：
 - 原本想法层级 / 形态：[X]
 - Skill 判定层级 / 形态：[Y]
 - 若 X ≠ Y：改口话术为 "[具体如何重新表述]"
-- 若判定 L1 / L2 候选：已登记进 `docs/registry/platform-candidates.md` + 关联 GitHub Issue [#N]
+- 若判定 L1 / L2 候选：已登记进 `docs/registry/platform-candidates.md`；GitHub Issue draft 待 PM 批准（PM 说 `开 issue` 后创建，创建成功后回填实际 issue 编号，创建前不得声称已关联具体 issue 号）
 - 下一步：[继续原任务 / 走五道 Build Gate / 抛 PM 拍板 / 拒]
 ```
 
@@ -425,7 +431,7 @@ Full Report 模式完整格式：
 
 ## GitHub Issue 自动生成规则（v2.2 新增 · ME 2.0 Punch List 机制）
 
-当 Full Report 判定为 **L1 / L2 候选**（含 L1 潜在候选）时，agent **必须**同时输出 GitHub Issue Draft：
+当 **Full Report 判定为 L1 / L2 候选**（含 L1 潜在候选），**或 Inline 模式下 PM 回复 `记` 确认 Low bar 登记**时，agent **必须**同时输出 GitHub Issue Draft（Low bar 场景字段不全时用 TBD 占位，不得省略 draft 本身）：
 
 ```
 ## GitHub Issue Draft（等 PM 一句"开 issue"执行）
@@ -552,6 +558,9 @@ Full Report 模式完整格式：
 
 ## 版本
 
+- **v2.2.3 · 2026-08-27** · Codex PR #1201 第 3 轮复审修正：Inline 三句话结构第 1 句补齐实现形态输出（之前默认路径只给层级判定，导致日常单客户判定 / 已有能力挂载 / L3 Connector 判定这些绝大多数走 Inline 的场景永远拿不到 Skill/Agent/Hybrid 结论）· 关联登记表 issue template 的登记表 / 张良 skill 链接改为仓库根目录可解析的绝对 GitHub URL（原相对路径 `../../` 在 GitHub Issue 页面上下文里会指向仓库外部，无法打开）
+- **v2.2.2 · 2026-08-27** · Codex PR #1201 第 2 轮复审修正：Low bar 登记（PM 回 `记`）补齐同步生成 GitHub Issue Draft，不再只有 Full Report 才派生 draft，避免 L1/L2 候选走 Inline 路径时永远进不了 `me2.0-punch-list` 标签筛选与冲刺跟踪 · Full Report "建议实现形态"必填范围从 L1/L2/L3 扩到含 L4，修复最常见的单客户配置场景反而拿不到 v2.2 新增实现形态结论的漏洞
+- **v2.2.1 · 2026-08-27** · Codex PR #1201 第 1 轮复审修正：4 问判据补全为互斥且完备的信号 A/B 矩阵（修复"仅第 1 条为真但不需融入主对话"无法判定的漏洞）· L3 Skill 示例把不符合外部系统边界判据的"HBay VI 生成模板"换成"Publer 发布格式映射规则"（HBay VI 已在 L4 正确归位，避免误导 agent 把客户专属模板登记成 Connector）· Full Report 结论行改为"Issue draft 待 PM 批准"，禁止在 PM 授权创建前声称已关联具体 issue 编号
 - **v2.2 · 2026-08-27** · 加"实现形态判定"（第二独立轴 · Skill/Agent/Hybrid · 4 问判据 · 4×2 落点矩阵）· Full Report 加实现形态字段 · 新增 GitHub Issue 自动生成规则（ME 2.0 punch list 机制 · me2.0-punch-list label 系统 · issue template 落地文件 · L1/L2 候选自动派生 issue draft · candidates.md 加 GitHub Issue 列）· 别名张良正式登记（PM 可从任意窗口用 `@张良` `召张良` `张良判定` 等自然语言召唤）
 - **v2.1 · 2026-08-27** · Codex 第 4 轮复审修正：停等 PM 的硬约束分档（日常触发 Inline 后可继续 · 只有登记候选 / 商业决策 / 新支柱 / 红线冲突 / 升 Full 才停等）· 避免普通代码 review 出现 `module` / `interface` / `service` 等日常词也硬停 PM（违反 CLAUDE.md §2 PM 不决策架构与接口）
 - **v2 · 2026-08-27** · 跟班式 PM 模式升级：语言级触发扩面 · Inline / Full 双输出 · Low / High 双门槛登记 · 分档式对话协议 · 版本词从 registry 动态推导 · 吸收 Codex 复审 3 轮修正（L3 Connector 与 ME_PRODUCT_DEFINITION §7 对齐 · 纯技术分歧不升 PM · 红线 3 显式排除 L3 · 复查日接入 pm-daily-todo 自动待办）
