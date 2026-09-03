@@ -63,6 +63,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 静态闸要算 origin/main...HEAD 的 diff，浅克隆拿不到 origin/main。
+          fetch-depth: 0
 
       - name: Install psql client
         run: |

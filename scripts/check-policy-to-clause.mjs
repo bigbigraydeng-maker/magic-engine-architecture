@@ -59,32 +59,83 @@ function findViolations(file) {
   return out
 }
 
-function changedFiles() {
+/**
+ * 本次改动**新增**的 CREATE POLICY 语句。
+ *
+ * 为什么不是「改动过的文件里的全部策略」：那样太粗 —— 只改了某文件的一行种子，
+ * 会把该文件里本来就存在的历史策略一起算成违规，把无关 PR 拦下。
+ * 这里只看 diff 里的**新增行**：新建文件的全部内容算新增，改动文件只算 + 的那些行。
+ *
+ * 返回 null 表示拿不到 origin/main（浅克隆），调用方应退回盘点模式而不是判失败。
+ */
+function addedPolicyStatements() {
   try {
     execFileSync('git', ['rev-parse', '--verify', 'origin/main'], { stdio: 'ignore' })
   } catch {
-    return null // 没有 origin/main（浅克隆等），退回全仓
+    return null
   }
-  const diff = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', 'origin/main...HEAD'],
-    { encoding: 'utf8' })
-  return diff.split('\n').filter(f => f.startsWith(MIGRATIONS + '/') && f.endsWith('.sql') && existsSync(f))
+  // -U0：只要变更行本身，不要上下文
+  const diff = execFileSync(
+    'git', ['diff', '-U0', 'origin/main...HEAD', '--', MIGRATIONS],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+  )
+
+  // 按文件收集新增行
+  const addedByFile = new Map()
+  let cur = null
+  for (const line of diff.split('\n')) {
+    const m = line.match(/^\+\+\+ b\/(.+)$/)
+    if (m) { cur = m[1]; if (!addedByFile.has(cur)) addedByFile.set(cur, []); continue }
+    if (!cur) continue
+    if (line.startsWith('+') && !line.startsWith('+++')) addedByFile.get(cur).push(line.slice(1))
+  }
+
+  const out = []
+  for (const [file, lines] of addedByFile) {
+    if (!file.endsWith('.sql') || !existsSync(file)) continue
+    // 新增行拼回一段文本再按语句解析。跨越新旧行的语句会被拆散，
+    // 但那种情况下 CREATE POLICY 本身若是新增的，它的关键行必然在这里。
+    const chunk = lines.join('\n')
+    if (!/\bcreate\s+policy\b/i.test(stripComments(chunk))) continue
+    for (const v of findViolations2(chunk)) out.push({ file, ...v })
+  }
+  return out
+}
+
+/** 跟 findViolations 同逻辑，但吃字符串而不是文件路径。 */
+function findViolations2(rawText) {
+  const text = stripComments(rawText)
+  const out = []
+  for (const stmt of text.split(';')) {
+    if (!/\bcreate\s+policy\b/i.test(stmt)) continue
+    if (/\bfor\s+\w+\s+to\s+/i.test(stmt) || /\bon\s+[^\s]+\s+(as\s+\w+\s+)?(for\s+\w+\s+)?to\s+/i.test(stmt)) continue
+    const name = (stmt.match(/create\s+policy\s+("?[^"\s]+"?)/i) || [])[1] || '<未命名>'
+    const on = (stmt.match(/\bon\s+((?:public\.)?"?[a-z_][a-z0-9_]*"?)/i) || [])[1] || '<未知表>'
+    out.push({ policy: name, table: on })
+  }
+  return out
 }
 
 const allFiles = globSync(`${MIGRATIONS}/*.sql`).sort()
-let targets
-if (scanAll) {
-  targets = allFiles
-} else {
-  targets = changedFiles()
-  if (targets === null) {
-    console.log('（拿不到 origin/main，退回全仓盘点模式，不影响退出码）')
-    targets = allFiles
-  }
-}
+let violations = []
 
-const violations = []
-for (const f of targets) {
-  for (const v of findViolations(f)) violations.push({ file: f, ...v })
+if (scanAll) {
+  for (const f of allFiles) {
+    for (const v of findViolations(f)) violations.push({ file: f, ...v })
+  }
+} else {
+  const added = addedPolicyStatements()
+  if (added === null) {
+    // 浅克隆等拿不到 origin/main 的情况：退回盘点，**不判失败**。
+    // 判失败会让 120 条历史存量把每个 PR 都拦下 —— 那不是这道闸的职责。
+    console.log('（拿不到 origin/main，无法算 diff。退回全仓盘点，不影响退出码。）')
+    let n = 0
+    for (const f of allFiles) n += findViolations(f).length
+    console.log(`全仓存量：${n} 条 CREATE POLICY 漏写 TO 子句。`)
+    console.log('提示：CI 里给 actions/checkout 配 fetch-depth: 0 才能算 diff。')
+    process.exit(0)
+  }
+  violations = added
 }
 
 if (scanAll) {
@@ -103,11 +154,11 @@ if (scanAll) {
 }
 
 if (violations.length === 0) {
-  console.log(`✅ CREATE POLICY TO 子句检查通过（检查了 ${targets.length} 个文件）`)
+  console.log('✅ CREATE POLICY TO 子句检查通过：本次改动没有新增漏写 TO 的策略')
   process.exit(0)
 }
 
-console.error(`🛑 有 ${violations.length} 条 CREATE POLICY 漏写 TO 子句：\n`)
+console.error(`🛑 本次改动新增了 ${violations.length} 条漏写 TO 子句的 CREATE POLICY：\n`)
 for (const v of violations) {
   console.error(`  ${v.file.replace(MIGRATIONS + '/', '')}`)
   console.error(`      策略 ${v.policy} ON ${v.table}`)
