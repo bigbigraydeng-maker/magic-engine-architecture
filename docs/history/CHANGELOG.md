@@ -15,6 +15,22 @@
 
 ---
 
+### 2026-08-29（`content_factory_render_jobs` RLS 策略补回 `TO service_role`）
+
+**发生了什么**：复审 CTS tailor-made 行程超时修复时顺手翻到 `20260731081328_content_factory_render_jobs.sql`，发现建表 migration 漏写了 `TO service_role`（`CREATE POLICY ... FOR ALL USING (true)` 不写 `TO` 等价于 `TO PUBLIC`，对 anon 生效），跟 2026-08-03 那次 118 条策略泄露事故是同一根因、同一模板遗漏。直连生产 Supabase 查 `pg_policies` 核实：**生产库当前该策略 `roles` 已是 `{service_role}`，不是活的漏洞**——建表时间（07-31）早于 `20260803020000_rls_lock_policies_to_service_role.sql` 那次批量收紧扫描（08-03 02:00），已被顺带收紧，只是源文件本身没跟着改。
+
+**风险评估**：建表到批量扫描之间（07-31 08:45 ~ 08-03 02:00）约 3 天窗口内写入过 25 行数据，全部属于同一 `client_id`（Magic Lab Class，内部自有 IP 品牌，非付费客户），逐条核对 `scenes`/`error`/`vo_urls`/`output_url`/`clip_urls` 字段未发现邮箱、API key、签名 URL 等敏感内容；无法倒查历史访问日志确认是否真被匿名读取过，但即使读到也只是自家内容工厂做片记录，不涉及客户机密。
+
+**修复**：新增 `20260829120000_fix_content_factory_render_jobs_rls_role.sql`，用 `ALTER POLICY`（只改角色不动条件，无「表裸奔」窗口）把源码模板也钉死到 `TO service_role`，跟 `client_connectors`（`20260818000001`）、`client_projects`（`20260819000001`）同一手法——目的是让**源码**（未来任何环境从零重建这张表时会读到的模板）恢复正确，避免下次重建环境时先裸奔一段再指望批量扫描"蒙对"补上。PM 在 Supabase SQL Editor 手工执行（会话内 Supabase MCP 写操作与浏览器自动化均被 auto mode 分类器拦截，无法由 Claude 直接执行），确认 `Success`。
+
+**复审**：子牙（架构，通过）+ 魏征（挑刺）两轮。魏征发现并证伪了一个真实盲区——`client_projects` 表用小写 `create policy` 语法逃过了最初的大小写敏感 grep，且建表时间晚于 08-03 扫描、未被覆盖；核实后确认已于 08-19 由另一次修复（`20260819000001`）合并到 main，不是新坑，但暴露了排查方法论的漏洞（grep 需不区分大小写）。
+
+**未完成**：全仓库还有 ~39 个建表 migration 存在同一模板遗漏（建表时间早于 08-03 扫描，理论上生产已被顺带收紧，但除 `content_factory_render_jobs`/`client_connectors`/`client_projects` 外均未逐张拿 `pg_policies` 核实过）。已作为独立任务（子牙开出的 `task_0550d1f9`）派发，PM 已在另一个会话启动核对。
+
+**Reuse Statement**：复用既有 `ALTER POLICY`（只改角色不动条件）修复手法与验证脚本结构，与 `20260803020000`/`20260818000001`/`20260819000001` 三次同类修复完全一致，无新增抽象。改动只限 `content_factory_render_jobs` 一张表的策略角色，不动条件、不动其他表、不动 app 代码（所有读写路径本就用 service role key）。无客户/行业专属逻辑写入 shared runtime——这是平台安全基线的源码纠偏，不含任何客户判断。
+
+---
+
 ### 2026-08-28（Tailor Made 长行程生成失败修复 —— 输出截断 + CF 代理超时两层根因，PR [#1212](https://github.com/bigbigraydeng-maker/magic-engine/pull/1212) + [#1226](https://github.com/bigbigraydeng-maker/magic-engine/pull/1226)）
 
 **发生了什么**：CTS 顾问给一份 27 天的「China Panorama」出行程单，后台报 `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`。查生产库发现更严重的一面：`tailor_made_itineraries` 里 `CTS-2026-0024`（终端客户 Shirley Gordon & Steven Birchall）**已经存进去了一份只有 2 天的草稿**——不是生成失败没存，是把写了一半的行程当成功结果静默落库了。状态还是 `draft` 没发出去，未造成对外事故。

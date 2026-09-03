@@ -113,16 +113,23 @@ ALTER TABLE clients ADD COLUMN IF NOT EXISTS leads_config JSONB NOT NULL DEFAULT
 -- ON CONFLICT DO NOTHING:生产库已 seed,这段对它是无操作;只在全新 db reset 时
 -- 重建初始 9 档。label 为初始默认值,生产以库内实际(运营可能已改)为准。
 -- ---------------------------------------------------------------------------
+-- 2026-09-03：加 WHERE EXISTS。生产库里 CTS 这个 client 在，所以行为不变；
+-- 但从零重建的空库（Dev / CI 重放）里它不存在，没有这道过滤会撞外键直接挂，
+-- 让整个 migration 集重放不了 —— 而「能从零重放」是 CI 安全不变量探针
+-- （scripts/db-replay-and-verify.sh）的前提。本机 PostgreSQL 17.11 实测。
 INSERT INTO client_pipeline_stages
   (client_id, stage_key, label, sort_order, marketing_action, is_terminal)
-VALUES
-  ('c0000000-0000-0000-0000-000000000000', 'new',            '新线索',       10, 'nurture',  FALSE),
-  ('c0000000-0000-0000-0000-000000000000', 'contacted',      '已联系',       20, 'nurture',  FALSE),
-  ('c0000000-0000-0000-0000-000000000000', 'quoted',         '已报价',       30, 'nurture',  FALSE),
-  ('c0000000-0000-0000-0000-000000000000', 'deposit_paid',   '已付定金',     40, 'suppress', FALSE),
-  ('c0000000-0000-0000-0000-000000000000', 'paid_full',      '已付全款',     50, 'won',      TRUE),
-  ('c0000000-0000-0000-0000-000000000000', 'no_response',    '无下文',       60, 'nurture',  FALSE),
-  ('c0000000-0000-0000-0000-000000000000', 'deferred',       '短期内不考虑', 70, 'defer',    FALSE),
-  ('c0000000-0000-0000-0000-000000000000', 'not_interested', '不感兴趣',     80, 'suppress', TRUE),
-  ('c0000000-0000-0000-0000-000000000000', 'traveling_soon', '即将出行',     90, 'postsale', FALSE)
+SELECT v.client_id, v.stage_key, v.label, v.sort_order, v.marketing_action, v.is_terminal
+FROM (VALUES
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'new',            '新线索',       10, 'nurture',  FALSE),
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'contacted',      '已联系',       20, 'nurture',  FALSE),
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'quoted',         '已报价',       30, 'nurture',  FALSE),
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'deposit_paid',   '已付定金',     40, 'suppress', FALSE),
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'paid_full',      '已付全款',     50, 'won',      TRUE),
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'no_response',    '无下文',       60, 'nurture',  FALSE),
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'deferred',       '短期内不考虑', 70, 'defer',    FALSE),
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'not_interested', '不感兴趣',     80, 'suppress', TRUE),
+  ('c0000000-0000-0000-0000-000000000000'::uuid, 'traveling_soon', '即将出行',     90, 'postsale', FALSE)
+) AS v(client_id, stage_key, label, sort_order, marketing_action, is_terminal)
+WHERE EXISTS (SELECT 1 FROM clients c WHERE c.id = v.client_id)
 ON CONFLICT (client_id, stage_key) DO NOTHING;

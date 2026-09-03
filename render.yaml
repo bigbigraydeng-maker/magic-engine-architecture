@@ -1082,3 +1082,28 @@ services:
         https://app.magicengine.com.au/api/cron/market-intel-daily
     envVars:
       - fromGroup: me-shared-cron-secret
+
+  # 客人来信没人回 —— 每天早上给销售发一封汇总信（测试期发到 ME 自己的信箱）。
+  #
+  # 判据 src/lib/crm/email-reply-due.ts（超时 24 小时，PM 2026-09-03 拍板），
+  # 文案 src/lib/crm/email-reply-digest.ts（主题和正文都带「【测试功能】」）。
+  #
+  # 时区换算：NZ 冬令时 NZST = UTC+12，所以 **UTC 20:00 = 次日 NZ 08:00**。
+  # 夏令时 NZDT = UTC+13（9 月底～4 月初）时同一条排班落在 NZ 09:00 ——
+  # 「上班后第一件事」这个位置两季都成立，不为夏令时另开一条。
+  #
+  # 密钥直接走 fromGroup，不留「记得手动 link」这一步 —— daily-cron-digest 就是
+  # 靠人记住这件事，51 天没人发现地哑了。
+  - type: cron
+    name: email-reply-digest
+    env: node
+    schedule: "0 20 * * *"
+    buildCommand: ""
+    # --max-time 要比路由自己的 maxDuration(300s) 宽：curl 先断开的话 Render 把这次
+    # 记成失败，可路由还在跑、信照样发出去 —— 运维照着「失败」重跑一次就是重复发信。
+    # 重跑本身另有幂等闸挡着（见路由里的 RESEND_GUARD_HOURS），这里只是别去主动制造它。
+    startCommand: |
+      curl -fsS --max-time 360 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/email-reply-digest
+    envVars:
+      - fromGroup: me-shared-cron-secret
