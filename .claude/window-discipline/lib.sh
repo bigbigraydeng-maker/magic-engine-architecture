@@ -11,6 +11,10 @@ wd_git() { git -C "$1" "${@:2}" 2>/dev/null; }
 
 wd_is_repo() { git -C "$1" rev-parse --git-dir >/dev/null 2>&1; }
 
+# 把当前目录规范化成仓库根 —— 从子目录开窗口时 $1 可能是 /repo/subdir，
+# 而 git worktree list 报的永远是仓库根 /repo，两者不比对齐会把自己当成别的窗口。
+wd_toplevel() { wd_git "$1" rev-parse --show-toplevel || printf '%s' "$1"; }
+
 wd_branch() { wd_git "$1" rev-parse --abbrev-ref HEAD; }
 
 wd_dirty_count() { wd_git "$1" status --porcelain | grep -c . | tr -d ' '; }
@@ -30,7 +34,8 @@ wd_debt_cache_key() {
 }
 
 wd_debt_line() {
-  local self="$1"
+  local self
+  self=$(wd_toplevel "$1")
   local key cache
   key=$(wd_debt_cache_key "$self") || return
   cache="$WD_HOME/cache/debt-$key.txt"
@@ -51,19 +56,20 @@ wd_debt_line() {
 }
 
 wd_refresh_debt_bg() {
-  local self="$1"
+  local self
+  self=$(wd_toplevel "$1")
   local key
   key=$(wd_debt_cache_key "$self") || return
   (
     local cache="$HOME/.claude/window-discipline/cache/debt-$key.txt"
     local tmp="$cache.tmp.$$"
     : > "$tmp"
-    while read -r wt; do
+    while IFS= read -r wt; do
       [ -z "$wt" ] && continue
       local n
       n=$(git -C "$wt" status --porcelain 2>/dev/null | grep -c . | tr -d ' ')
       printf '%s\t%s\n' "$wt" "${n:-0}" >> "$tmp"
-    done < <(git -C "$self" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}')
+    done < <(git -C "$self" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
     mv "$tmp" "$cache"
   ) >/dev/null 2>&1 &
 }

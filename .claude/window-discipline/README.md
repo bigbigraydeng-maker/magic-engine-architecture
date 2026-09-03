@@ -42,7 +42,12 @@ A = 安全 / 改数据库 / 花钱 / 对外发布；B = 普通业务；C = 界�
 ```bash
 jq '
   .hooks |= (
-    with_entries(.value |= map(select((.hooks[]?.command // "" | contains("window-discipline")) | not)))
+    with_entries(
+      .value |= (
+        map(.hooks |= map(select((.command // "" | contains("window-discipline")) | not)))
+        | map(select((.hooks | length) > 0))
+      )
+    )
     | with_entries(select(.value != []))
   )
 ' ~/.claude/settings.json > /tmp/s.json && mv /tmp/s.json ~/.claude/settings.json
