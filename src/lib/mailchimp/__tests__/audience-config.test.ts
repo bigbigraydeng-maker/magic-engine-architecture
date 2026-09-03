@@ -77,15 +77,16 @@ describe('readAudienceId', () => {
     expect(seen).toHaveLength(1)
   })
 
-  it('专列存在但空 → 落到 leads_config，仍然只查一次', async () => {
-    mockSelects([
+  it('专列存在但被显式设为空 → 空串是权威结果，绝不回落 leads_config（运营就是靠置空关出口）', async () => {
+    const seen = mockSelects([
       {
         data: { leads_config: { mailchimp_audience_id: 'dda97b7e61' }, mailchimp_audience_id: null },
         error: null,
       },
     ])
 
-    await expect(readAudienceId(CLIENT)).resolves.toEqual({ ok: true, audienceId: 'dda97b7e61' })
+    await expect(readAudienceId(CLIENT)).resolves.toEqual({ ok: true, audienceId: '' })
+    expect(seen).toHaveLength(1)
   })
 
   it('专列没 apply（42703）→ 降级只查 leads_config，拿到值继续干活', async () => {

@@ -12,6 +12,7 @@ import {
   loadManualItems,
   pushPlatformCandidateReviewItems,
   pushDataForSeoCreditsItem,
+  pushMailchimpExportItems,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -68,6 +69,67 @@ describe('pushDataForSeoCreditsItem', () => {
     const items: ManualItem[] = []
     const query = fakeDiscoveryQuery([])
     await pushDataForSeoCreditsItem(query.supabase, items, new Date('2026-09-01T00:00:00Z'))
+
+    expect(items).toEqual([])
+  })
+})
+
+describe('pushMailchimpExportItems', () => {
+  const NOW = new Date('2026-09-03T09:00:00Z')
+
+  function fakeLastRun(row: { finished_at: string; summary: unknown } | null) {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      order: () => chain,
+      limit: async () => ({ data: row ? [row] : [], error: null }),
+    }
+    return { from: () => chain } as unknown as SupabaseClient
+  }
+
+  it('非预期失败（配置读不出来 / API key 失效）逐客户下发，正常的「没配 Mailchimp」不下发', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T08:00:00Z',
+      summary: {
+        results: [
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'skipped:client_config_read_failed': 3, 'failed:auth': 2 },
+          },
+          {
+            clientId: 'c-not-configured',
+            clientName: 'Oztop',
+            mailchimp: { 'skipped:no_audience_config': 5, 'skipped:no_email': 1 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken', client_name: 'CTS Tours NZ' })
+    expect(items[0].what).toContain('5 条')
+    expect(items[0].href).toBe('https://app.magicengine.com.au/dashboard/clients/c-broken/settings')
+  })
+
+  it('最近一次运行早就过期（超过 6 小时）→ 不再报旧问题', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T00:00:00Z',
+      summary: { results: [{ clientId: 'c-broken', clientName: 'CTS', mailchimp: { 'failed:auth': 1 } }] },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toEqual([])
+  })
+
+  it('压根没有运行记录 → 不报', async () => {
+    const items: ManualItem[] = []
+    await pushMailchimpExportItems(fakeLastRun(null), items, NOW)
 
     expect(items).toEqual([])
   })

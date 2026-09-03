@@ -60,6 +60,8 @@ export type ManualItemKind =
   | 'leads_metric_untrusted'
   | 'factory_worker_idle'
   | 'ad_readback_blocker'
+  /** Mailchimp 出口 tally 里出现非预期失败（配置读不出来 / API key 失效 / 被限流 / provider 5xx） */
+  | 'mailchimp_export_broken'
   | 'blog_draft_waiting'
   | 'cross_client_leak'
   | 'price_claim_unbacked'
@@ -226,6 +228,11 @@ export async function loadManualItems(
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
   await pushAdReadbackItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 广告闸门结果读取失败（不阻塞其他待办）:', e),
+  )
+  // Mailchimp 出口在 tally 里非预期失败（配置读不出来 / API key 失效 / 被限流 / 5xx）——
+  // 这类失败从不设置 cron 结果的 error，cron 整体照样显示 completed，不单独捞出来就永远没人看见
+  await pushMailchimpExportItems(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] Mailchimp 出口检查失败（不阻塞其他待办）:', e),
   )
   // ME 产品动态自动发 LinkedIn —— 敏感内容待审 / 账号未连 / 发布失败三种卡点
   await pushLinkedinProgressItems(supabase, items, now).catch((e) =>
@@ -652,6 +659,71 @@ async function pushAdReadbackItems(
         )}&selected_adset_ids=${s.adSetId}`,
       })
     }
+  }
+}
+
+/** meta-leads-sync 跑得多稀 —— 超过这个窗口就是这条最新记录已经过期，别再报旧问题。 */
+const MAILCHIMP_EXPORT_STALE_HOURS = 6
+
+/** 只挑「非预期」失败：配置读不出来 / API key 失效 / audience 找不到 / 限流 / provider 5xx。 */
+function isMailchimpExportFailureKey(key: string): boolean {
+  return key.startsWith('failed:') || key === 'skipped:client_config_read_failed'
+}
+
+/**
+ * Mailchimp 出口在 `meta-leads-sync` 每小时的 tally 里非预期失败 → 下发。
+ *
+ * 为什么必须下发：`lib/meta/leads-sync.ts` 把每条 lead 的 Mailchimp 结果压进
+ * `results[].mailchimp` tally，但 tally 从不写进 `results[].error`——
+ * `summariseFailures`（`lib/meta/leads-sync-alert.ts`）读不到它，cron 整体
+ * 照样标 completed。真实事故：`clients.mailchimp_audience_id` 那一列没 apply
+ * 到生产，出口每小时都因为 `client_config_read_failed` 静默 skip 掉，连着
+ * 一个月没人发现（见 `lib/mailchimp/audience-config.ts` 文件头）。
+ *
+ * 只报 `failed:*` 和 `client_config_read_failed`：`no_audience_config` /
+ * `no_email` / `no_api_key` 是客户压根没配 Mailchimp 的正常状态，报了等于
+ * 天天骚扰不用管的人。
+ */
+export async function pushMailchimpExportItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  const { data } = await supabase
+    .from('cron_run_logs')
+    .select('finished_at, summary')
+    .eq('job_name', 'meta-leads-sync')
+    .order('finished_at', { ascending: false })
+    .limit(1)
+
+  const run = (data ?? [])[0] as
+    | {
+        finished_at: string | null
+        summary: {
+          results?: Array<{ clientId: string; clientName: string | null; mailchimp?: Record<string, number> }>
+        } | null
+      }
+    | undefined
+  if (!run?.summary) return
+
+  const hoursOld = run.finished_at ? (now.getTime() - Date.parse(run.finished_at)) / 3_600_000 : null
+  if (hoursOld !== null && hoursOld > MAILCHIMP_EXPORT_STALE_HOURS) return
+
+  for (const r of run.summary.results ?? []) {
+    const badKeys = Object.entries(r.mailchimp ?? {}).filter(([k]) => isMailchimpExportFailureKey(k))
+    if (badKeys.length === 0) continue
+
+    const total = badKeys.reduce((n, [, count]) => n + count, 0)
+    const detail = badKeys.map(([k, count]) => `${k.replace(/^(failed|skipped):/, '')} ×${count}`).join('、')
+
+    items.push({
+      kind: 'mailchimp_export_broken',
+      client_id: r.clientId,
+      client_name: r.clientName ?? '未知客户',
+      what: `这个客户有 ${total} 条 lead 本该进 Mailchimp 邮件名单，但出口坏了没进去：${detail}。不会自己好，客户的邮件名单会一直缺这些人`,
+      how: '打开链接进设置页确认 Mailchimp audience 配置还在；配置没问题的话多半是 MAILCHIMP_API_KEY 失效或被限流了，回我一句我去查',
+      href: `https://app.magicengine.com.au/dashboard/clients/${r.clientId}/settings`,
+    })
   }
 }
 

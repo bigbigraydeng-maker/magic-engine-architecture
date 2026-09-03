@@ -50,10 +50,16 @@ interface ClientAudienceRow {
   mailchimp_audience_id?: unknown
 }
 
-/** 从一行 clients 记录里取 audience id：专列优先，`leads_config` 兜底。 */
-function pickAudienceId(row: ClientAudienceRow | null): string {
-  const dedicated = typeof row?.mailchimp_audience_id === 'string' ? row.mailchimp_audience_id.trim() : ''
-  return dedicated || audienceFromLeadsConfig(row?.leads_config)
+/**
+ * 专列查询**成功**时取值：只信专列，哪怕是空串。
+ *
+ * 空串在这里必须是权威结果 —— 运营就是靠把 `clients.mailchimp_audience_id`
+ * 设成 `NULL` / 空串来关闭这个客户的 Mailchimp 出口。如果专列已经能查到，还
+ * 倒回去读旧 `leads_config`，关闭出口的操作会被旧配置悄悄盖回去，本该停止
+ * 的订阅继续发生。旧 `leads_config` 只在专列**不存在**（42703，见下）时才有资格兜底。
+ */
+function pickDedicatedAudienceId(row: ClientAudienceRow | null): string {
+  return typeof row?.mailchimp_audience_id === 'string' ? row.mailchimp_audience_id.trim() : ''
 }
 
 /**
@@ -70,13 +76,14 @@ export async function readAudienceId(clientId: string): Promise<AudienceIdRead> 
     .maybeSingle()
 
   if (!withDedicated.error) {
-    return { ok: true, audienceId: pickAudienceId(withDedicated.data as ClientAudienceRow | null) }
+    // 专列查得到就是权威结果，不再兜底 leads_config —— 空串代表运营已明确关闭出口。
+    return { ok: true, audienceId: pickDedicatedAudienceId(withDedicated.data as ClientAudienceRow | null) }
   }
   if (!isUndefinedColumn(withDedicated.error)) {
     return { ok: false, message: withDedicated.error.message }
   }
 
-  // 专列还没 apply —— 退到只读 jsonb。这一次再失败就是真失败。
+  // 专列还没 apply（42703）—— 这时才有资格退到只读 jsonb。这一次再失败就是真失败。
   const fallback = await supabaseAdmin
     .from('clients')
     .select('leads_config')
@@ -86,5 +93,8 @@ export async function readAudienceId(clientId: string): Promise<AudienceIdRead> 
   if (fallback.error) {
     return { ok: false, message: fallback.error.message }
   }
-  return { ok: true, audienceId: pickAudienceId(fallback.data as ClientAudienceRow | null) }
+  return {
+    ok: true,
+    audienceId: audienceFromLeadsConfig((fallback.data as ClientAudienceRow | null)?.leads_config),
+  }
 }
