@@ -186,3 +186,15 @@ npx vite-node scripts/magic-insight-prepublish-check.ts -- \
 ```
 
 输出：A4 · 8 页 · 约 2.6 MB
+
+---
+
+## 图表与本台账的关系
+
+报告中所有图表的**条长、弧长、百分比均由本台账的数值直接计算**，不含任何独立数据源。
+几何量（如甜甜圈弧长、条形宽度百分比）为按台账数值等比换算的 `推算`，算法见图表下方注释。
+
+**改台账数字必须同时改图表，反之亦然。** 两者漂移时以本台账为准。
+
+图表实现为手写 CSS + inline SVG（模板见 [`_shared/charts.css`](../_shared/charts.css)），
+不使用 JS 图表库——避免 headless Chrome 打印 PDF 时的渲染时序问题。

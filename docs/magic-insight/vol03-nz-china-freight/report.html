@@ -33,7 +33,7 @@
   a{color:var(--me-blue-soft);text-decoration:none;border-bottom:1px solid transparent}
   a:hover{border-bottom-color:currentColor}
   .wrap{max-width:1120px;margin:0 auto;padding:0 32px}
-  section{padding:76px 0;border-top:1px solid var(--rule)}
+  section{padding:48px 0;border-top:1px solid var(--rule)}
   section:first-of-type{border-top:none}
 
   .brandbar{display:flex;align-items:center;justify-content:space-between;
@@ -96,7 +96,7 @@
   .chip.alert{background:color-mix(in srgb,var(--alert) 20%,transparent);color:var(--alert)}
   .chip.muted{background:color-mix(in srgb,var(--ink-muted) 15%,transparent);color:var(--ink-muted)}
 
-  .sec-head{display:flex;flex-direction:column;gap:8px;margin-bottom:38px;max-width:68ch}
+  .sec-head{display:flex;flex-direction:column;gap:6px;margin-bottom:24px;max-width:68ch}
   .sec-head .en{font-family:'Newsreader',Georgia,serif;font-size:14.5px;font-style:italic;color:var(--ink-muted)}
   .callout{margin-top:28px;padding:18px 22px;border-left:3px solid var(--gold);
     background:color-mix(in srgb,var(--gold) 8%,transparent);border-radius:0 8px 8px 0;
@@ -214,6 +214,168 @@
     .tab-wrap{overflow:visible}.tab{min-width:0;font-size:10.5px}
     .tab th,.tab td{padding:7px 9px}
   }
+  /* ==== CHART SYSTEM (inlined from docs/magic-insight/_shared/charts.css) ==== */
+/*
+ * Magic Insight 报告图表系统 —— 手写 CSS + inline SVG，不依赖任何 JS 图表库。
+ *
+ * ⚠️ 本文件是【起新卷时的共享模板】，不是被 report.html 外链引用的样式表。
+ *    每份 report.html 必须把这段 CSS **内联**进自己的 <style> 里。
+ *    原因：报告要对外发送（邮件附件、单独另存、转发），外链 CSS 一旦脱离目录
+ *    图表会全部散版，而 PDF 里看不出问题。自包含是硬要求。
+ *    起新卷时把本文件内容复制进去；改进了图表样式请回写本文件，让后续卷受益。
+ *
+ * 为什么不用 Chart.js / ECharts：报告最终产物是 headless Chrome 打印的 PDF。
+ * JS 图表库要等 canvas 渲染完成，与 --virtual-time-budget 抢时序，
+ * 偶发画一半或全白，而 PDF 一旦出错没人会发现（图是空的但版面正常）。
+ * SVG 与 CSS 是声明式的，浏览器一次布局就定稿，确定性 100%。
+ *
+ * 所有图表的数值必须与 sources.md 台账一致。改数字请同时改台账。
+ */
+
+/* ---------- 图表外壳 ---------- */
+.chart {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 18px 20px 16px;
+}
+.chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.chart-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: .01em;
+}
+.chart-unit {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.chart-note {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--rule);
+  font-size: 10.5px;
+  color: var(--ink-muted);
+  line-height: 1.5;
+}
+
+/* ---------- 横向条形图（含正负分叉） ---------- */
+.bars { display: flex; flex-direction: column; gap: 7px; }
+.bar-row {
+  display: grid;
+  grid-template-columns: 76px minmax(90px, 1fr) 52px;
+  align-items: center;
+  gap: 10px;
+}
+.bar-label {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar-track {
+  position: relative;
+  height: 15px;
+  /* 保底宽度：grid 的 1fr 在容器宽度不确定时会塌成 0，
+     所有柱子不可见但版面看起来正常——PDF 里没人会发现。 */
+  min-width: 90px;
+  background: color-mix(in srgb, var(--surface-3) 60%, transparent);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.bar-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+}
+.bar-fill.pos { background: linear-gradient(90deg, color-mix(in srgb, var(--growth) 55%, transparent), var(--growth)); }
+.bar-fill.neg { background: linear-gradient(270deg, color-mix(in srgb, var(--alert) 55%, transparent), var(--alert)); }
+.bar-fill.gold { background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 55%, transparent), var(--gold)); }
+.bar-fill.blue { background: linear-gradient(90deg, color-mix(in srgb, var(--me-blue) 55%, transparent), var(--me-blue)); }
+.bar-fill.muted { background: color-mix(in srgb, var(--ink-muted) 45%, transparent); }
+/* 零轴 */
+.bar-track .zero {
+  position: absolute; top: 0; bottom: 0; width: 1px;
+  background: var(--rule-strong);
+}
+.bar-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: right;
+}
+.bar-value.pos { color: var(--growth); }
+.bar-value.neg { color: var(--alert); }
+.bar-value.neutral { color: var(--ink); }
+
+/* 高亮某一行（用于点出结论所在） */
+.bar-row.hl .bar-label { color: var(--ink); font-weight: 600; }
+
+/* ---------- 堆叠条形图 ---------- */
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.stack-row .sl {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11.5px; margin-bottom: 5px;
+}
+.stack-row .sl .nm { color: var(--ink); font-weight: 600; }
+.stack-row .sl .tot { font-family: 'JetBrains Mono', monospace; color: var(--ink-muted); font-size: 10.5px; }
+.stack-bar { display: flex; height: 20px; border-radius: 3px; overflow: hidden; }
+.stack-seg { display: flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 600; }
+.stack-seg.foreign { background: var(--me-blue); color: #06101F; }
+.stack-seg.other { background: color-mix(in srgb, var(--ink-muted) 42%, transparent); color: var(--ink-soft); }
+.stack-seg.hkmt { background: var(--gold); color: #06101F; }
+
+/* ---------- 图例 ---------- */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 10.5px; color: var(--ink-muted); }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+/* ---------- 甜甜圈 ---------- */
+.donut-wrap { display: grid; grid-template-columns: 168px 1fr; gap: 18px; align-items: center; }
+@media (max-width: 560px) { .donut-wrap { grid-template-columns: 1fr; } }
+.donut { position: relative; }
+.donut svg { display: block; transform: rotate(-90deg); }
+.donut-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; pointer-events: none;
+}
+.donut-center .v { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 600; color: var(--gold-soft); line-height: 1; }
+.donut-center .l { font-size: 9.5px; color: var(--ink-muted); margin-top: 4px; letter-spacing: .06em; }
+.donut-key { display: flex; flex-direction: column; gap: 8px; }
+.donut-key .row { display: grid; grid-template-columns: 12px 1fr auto; gap: 9px; align-items: center; font-size: 11.5px; }
+.donut-key .sw { width: 10px; height: 10px; border-radius: 2px; }
+.donut-key .nm { color: var(--ink-soft); }
+.donut-key .pc { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--ink); }
+
+/* ---------- 图表并排网格 ---------- */
+.chart-grid { display: grid; gap: 14px; }
+.chart-grid.two { grid-template-columns: 1fr 1fr; }
+.chart-grid.side { grid-template-columns: 1.15fr .85fr; }
+@media (max-width: 760px) { .chart-grid.two, .chart-grid.side { grid-template-columns: 1fr; } }
+
+/* ---------- 打印保真 ---------- */
+@media print {
+  .chart { break-inside: avoid; page-break-inside: avoid; }
+  .bar-fill, .stack-seg, .donut svg circle {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
   @page{size:A4;margin:13mm 11mm 15mm;background:#070E1A}
 </style>
 
@@ -270,6 +432,7 @@
 
     <div class="cover-meta">
       <div><span class="label">出品</span>Magic Insight 数据研究院</div>
+      <div><span class="label">隶属</span>Magic Engine · magicengine.com.au</div>
       <div><span class="label">数据截至</span>2026-09-03 核查</div>
       <div><span class="label">覆盖</span>监管 · 贸易 · 电商 · 港口 · 运价</div>
       <div><span class="label">版本</span>Vol.03 · v1.0</div>
@@ -283,6 +446,60 @@
       <span class="eyebrow">01 · 五条核心判断</span>
       <h2>只看一页就看这页</h2>
       <div class="en">What the verified data actually says — and where it differs from the Australia picture.</div>
+    </div>
+
+    <div class="chart-grid side" style="margin-bottom:22px">
+      <div class="chart">
+        <div class="chart-head">
+          <span class="chart-title">图 1 · NZ$1,000 界线两侧的每票管理征费</span>
+          <span class="chart-unit">NZD / 票 · 不含 GST</span>
+        </div>
+        <div class="bars">
+          <div class="bar-row"><span class="bar-label">海运 ≤1,000</span>
+            <div class="bar-track"><div class="bar-fill muted" style="left:0;width:1.8%"></div></div>
+            <span class="bar-value neutral">2.09</span></div>
+          <div class="bar-row"><span class="bar-label">空运 ≤1,000</span>
+            <div class="bar-track"><div class="bar-fill muted" style="left:0;width:1.9%"></div></div>
+            <span class="bar-value neutral">2.21</span></div>
+          <div class="bar-row hl"><span class="bar-label">空运 &gt;1,000</span>
+            <div class="bar-track"><div class="bar-fill gold" style="left:0;width:43.7%"></div></div>
+            <span class="bar-value neutral">51.81</span></div>
+          <div class="bar-row hl"><span class="bar-label">海运 &gt;1,000</span>
+            <div class="bar-track"><div class="bar-fill neg" style="left:0;width:100%"></div></div>
+            <span class="bar-value neg">118.44</span></div>
+        </div>
+        <div class="chart-note">
+          条长按金额等比。海运跨过 NZ$1,000 这条线，单票固定成本从 2 块变成 118 块——<strong style="color:var(--alert)">56.7 倍</strong>。这不是税率，是固定管理费，与货值大小无关。
+        </div>
+      </div>
+
+      <div class="chart">
+        <div class="chart-head">
+          <span class="chart-title">图 2 · 线上消费：本地商家 vs 海外商家</span>
+          <span class="chart-unit">2025 · 同比 %</span>
+        </div>
+        <div class="bars">
+          <div class="bar-row hl"><span class="bar-label">本地增速</span>
+            <div class="bar-track"><div class="bar-fill pos" style="left:0;width:100%"></div></div>
+            <span class="bar-value pos">+11</span></div>
+          <div class="bar-row"><span class="bar-label">海外增速</span>
+            <div class="bar-track"><div class="bar-fill muted" style="left:0;width:45.5%"></div></div>
+            <span class="bar-value pos">+5</span></div>
+        </div>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--rule)">
+          <div class="bars">
+            <div class="bar-row hl"><span class="bar-label">本地客单</span>
+              <div class="bar-track"><div class="bar-fill blue" style="left:0;width:100%"></div></div>
+              <span class="bar-value neutral">$136</span></div>
+            <div class="bar-row"><span class="bar-label">海外客单</span>
+              <div class="bar-track"><div class="bar-fill muted" style="left:0;width:61.0%"></div></div>
+              <span class="bar-value neutral">$83</span></div>
+          </div>
+        </div>
+        <div class="chart-note">
+          本地商家占 80% 份额且增速翻倍于海外；<strong style="color:var(--ink)">海外客单价还在跌（−1%）</strong>。跨境 B2C 直邮在失速，本地履约在赢。
+        </div>
+      </div>
     </div>
 
     <div class="findings">
@@ -700,7 +917,7 @@
     </div>
 
     <div class="legal">
-      <div>© 2026 Magic Insight 数据研究院 · Magic Engine 出品 · 高级会员专属</div>
+      <div>© 2026 Magic Engine · Magic Insight 数据研究院出品 · 高级会员专属 · <a href="https://magicengine.com.au">magicengine.com.au</a></div>
       <div>Vol.03 · v1.0 · <span class="num">2026-09-03</span></div>
     </div>
   </div>

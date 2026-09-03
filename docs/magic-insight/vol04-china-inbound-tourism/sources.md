@@ -181,3 +181,15 @@ PDF 属构建产物，不入库。生成命令：
   --print-to-pdf="Magic_Insight_Vol04_China_Inbound_Tourism_2026-09-04.pdf" \
   "file://$(pwd)/docs/magic-insight/vol04-china-inbound-tourism/report.html"
 ```
+
+---
+
+## 图表与本台账的关系
+
+报告中所有图表的**条长、弧长、百分比均由本台账的数值直接计算**，不含任何独立数据源。
+几何量（如甜甜圈弧长、条形宽度百分比）为按台账数值等比换算的 `推算`，算法见图表下方注释。
+
+**改台账数字必须同时改图表，反之亦然。** 两者漂移时以本台账为准。
+
+图表实现为手写 CSS + inline SVG（模板见 [`_shared/charts.css`](../_shared/charts.css)），
+不使用 JS 图表库——避免 headless Chrome 打印 PDF 时的渲染时序问题。
