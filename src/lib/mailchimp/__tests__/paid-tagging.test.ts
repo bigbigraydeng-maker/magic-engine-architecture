@@ -6,10 +6,15 @@
  * 正在谈的客人停掉全部跟进。
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { runPaidTagging, DEFAULT_PAID_TAG, type CandidateMail } from '../paid-tagging'
+import * as signal from '../paid-signal'
 
-const POLICY = { paidTag: DEFAULT_PAID_TAG, leadTagsToRemove: ['fb_lead', 'reborn_leadform'] }
+const POLICY = {
+  paidTag: DEFAULT_PAID_TAG,
+  leadTagsToRemove: ['fb_lead', 'reborn_leadform'],
+  ownDomains: ['ctstours.co.nz', 'chinatravel.co.nz'],
+}
 const CFG_BASE = { apiKey: 'key-us19', audienceId: 'dda97b7e61' }
 
 /** 假 Mailchimp：按「名单里有谁、他有什么标签」建模，不按调用次序。 */
@@ -51,7 +56,7 @@ describe('runPaidTagging · 自动打标签', () => {
   it('真实语料：Baker 确认收款 → 打上 paid_customer 并摘掉线索标签', async () => {
     const { cfg, writes } = fakeMailchimp({ 'enrkay@gmail.com': ['fb_lead', 'reborn_leadform'] })
     const r = await runPaidTagging(
-      [mail({ subject: 'Fw: New Reborn Lead: Nikki Smith', preview: 'Hi Nikki Your payment has been received in full. Thank you so much.' })],
+      [mail({ subject: 'Best of China - November', preview: 'Hi Nikki Your payment has been received in full. Thank you so much.' })],
       cfg,
       POLICY,
     )
@@ -125,6 +130,17 @@ describe('runPaidTagging · 🔴 什么时候不做', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('🔴 关联公司的同事（pa@chinatravel.co.nz）→ 跳过，不打标签', async () => {
+    const { cfg, writes } = fakeMailchimp({ 'pa@chinatravel.co.nz': ['fb_lead'] })
+    const r = await runPaidTagging(
+      [mail({ preview: 'Your payment has been received', counterparty: { address: 'pa@chinatravel.co.nz', name: 'PA' } })],
+      cfg,
+      POLICY,
+    )
+    expect(r.tagged).toHaveLength(0)
+    expect(writes).toHaveLength(0)
+  })
+
   it('普通询价邮件 → 什么都不做', async () => {
     const { cfg, writes } = fakeMailchimp({ 'enrkay@gmail.com': [] })
     const r = await runPaidTagging(
@@ -135,6 +151,62 @@ describe('runPaidTagging · 🔴 什么时候不做', () => {
     expect(r.scanned).toBe(1)
     expect(r.tagged).toHaveLength(0)
     expect(r.needsReview).toHaveLength(0)
+    expect(writes).toHaveLength(0)
+  })
+})
+
+describe('runPaidTagging · 🔴 铁律 8：说不出原话就不算数', () => {
+  /**
+   * 魏征复审发现的真空洞：`evidenceIsVerbatim` 那道闸此前**只有函数自身的单测**，
+   * 编排层从没有一条行为测试 —— 把 `runPaidTagging` 里那句 if 删掉，8 个测试
+   * 全绿。也就是说这道防编造的闸随时可能被删掉而没人发现。
+   *
+   * 这里用一段「判据能匹配、但证据无法在原文里逐字找回」的输入把它钉住。
+   * evidence 是从 `text` 上截的，正常路径下必然逐字命中；要让它对不上，就得
+   * 让判定看到的文本和核对用的文本不是同一份 —— 这正是那道闸要防的漂移。
+   */
+  it('🔴 evidence 在原文里对不上 → 整条丢掉，绝不打标签', async () => {
+    const { cfg, writes } = fakeMailchimp({ 'enrkay@gmail.com': ['fb_lead'] })
+    const spy = vi.spyOn(signal, 'evidenceIsVerbatim').mockReturnValue(false)
+    try {
+      const r = await runPaidTagging(
+        [mail({ preview: 'Hi Nikki Your payment has been received in full.' })],
+        cfg,
+        POLICY,
+      )
+      expect(r.tagged).toHaveLength(0)
+      expect(writes).toHaveLength(0)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('evidence 对得上 → 正常打（证明上一条不是因为别的原因空的）', async () => {
+    const { cfg, writes } = fakeMailchimp({ 'enrkay@gmail.com': ['fb_lead'] })
+    const r = await runPaidTagging(
+      [mail({ preview: 'Hi Nikki Your payment has been received in full.' })],
+      cfg,
+      POLICY,
+    )
+    expect(r.tagged).toHaveLength(1)
+    expect(writes).toHaveLength(1)
+  })
+})
+
+describe('runPaidTagging · 转发信降级', () => {
+  it('🔴 Fw: 开头的确认信 → needs_review，不自动打（收件人可能是代理/同事）', async () => {
+    const { cfg, writes } = fakeMailchimp({ 'agent@housesoftravel.co.nz': ['fb_lead'] })
+    const r = await runPaidTagging(
+      [mail({
+        subject: 'Fw: New Reborn Lead: Nikki Smith',
+        preview: 'Hi Sarah, Your payment has been received in full for Nikki.',
+        counterparty: { address: 'agent@housesoftravel.co.nz', name: 'Sarah' },
+      })],
+      cfg,
+      POLICY,
+    )
+    expect(r.tagged).toHaveLength(0)
+    expect(r.needsReview).toHaveLength(1)
     expect(writes).toHaveLength(0)
   })
 })

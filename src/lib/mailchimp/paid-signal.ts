@@ -51,7 +51,7 @@ export type PaidSignal =
       /** 有付款的意思，但不是我们确认的 —— 下发给人点一下，不自动打。 */
       kind: 'needs_review'
       evidence: string
-      reason: 'inbound_claim' | 'attachment_only'
+      reason: 'inbound_claim' | 'mixed_with_chasing' | 'forwarded' | 'attachment_only'
     }
   | {
       /** 明确是在催款 —— 这个人**还没付**，碰都不要碰。 */
@@ -72,12 +72,34 @@ export type PaidSignal =
  *   · "we have your deposit"  —— 没在真实语料里出现过，凭空加等于放宽判据
  */
 const RECEIVED_PATTERNS: readonly RegExp[] = [
-  /\b(?:your |the )?(?:payment|deposit|balance)\s+(?:has\s+been|is|was)\s+received\b[^.!\n]*/i,
-  /\bwe(?:'ve| have)\s+received\s+(?:your|the)\s+(?:payment|deposit|balance|funds)\b[^.!\n]*/i,
-  /\breceived\s+(?:your|the)\s+(?:payment|deposit|balance)\s+(?:in\s+full|today|yesterday)?\b[^.!\n]*/i,
-  /\bthank\s+you\s+(?:so\s+much\s+|very\s+much\s+|again\s+)?for\s+(?:your|the)\s+(?:payment|deposit)\b[^.!\n]*/i,
-  /\b(?:payment|deposit)\s+received\b[^.!\n]*/i,
+  // 允许中间插一个副词：真实语料里有「payment has been **well** received」
+  // 和「deposit has **now** been received」。不允许插词是首版最大的假阴性来源。
+  /\b(?:your |the )?(?:payment|deposit|balance|funds)\s+(?:has|have|is|was|were)\s+(?:\w+\s+){0,2}?(?:been\s+)?(?:\w+\s+){0,1}?received\b[^.!?\n]*/i,
+  /\bwe(?:'ve| have)\s+received\s+(?:your|the)\s+(?:\w+\s+){0,2}?(?:payment|deposit|balance|funds)\b[^.!?\n]*/i,
+  /\breceived\s+(?:your|the)\s+(?:\w+\s+){0,2}?(?:payment|deposit|balance|funds)\b[^.!?\n]*/i,
+  /\b(?:thank\s+you|thanks|many\s+thanks)\s+(?:so\s+much\s+|very\s+much\s+|again\s+)?for\s+(?:your|the)\s+(?:\w+\s+){0,2}?(?:payment|deposit)\b[^.!?\n]*/i,
+  /\bconfirming\s+receipt\s+of\s+(?:your|the)\s+(?:payment|deposit|balance)\b[^.!?\n]*/i,
+  // 裸「payment received」只在它是**主题式独立短句**时才认（句首 + 后面不再跟词）。
+  // 首版是裸相邻匹配，被页脚样板「payment received receipts are issued…」直接攻破。
+  /(?:^|[.!?]\s+)(?:payment|deposit)\s+received\s*(?=[.!?]|$)/i,
 ]
+
+/**
+ * 条件 / 将来 / 否定词 —— 出现在确认句**前面**就说明钱还没到。
+ *
+ * 这是魏征复审攻破首版的那一刀，用一句旅行社发票标准条款：
+ *
+ *   "Please find the credit card payment link below: https://…
+ *    Your booking will be confirmed **once** payment has been received in full."
+ *
+ * 首版判成 confirmed，于是一个**刚收到付款链接、还没付钱**的客人被打上
+ * paid_customer、线索标签被摘光、从此收不到任何跟进 —— 正是本文件开头承诺要防的事故。
+ *
+ * 同族的还有 "will be issued **after** payment is received"、
+ * "cannot hold the seats **until** the deposit has been received"。
+ */
+const CONDITIONAL_LEADINS =
+  /\b(?:once|after|until|till|when|unless|whenever|if|provided|assuming|as\s+soon\s+as|before|upon|subject\s+to|pending|in\s+order\s+to|so\s+that|will\s+be|cannot|can't|won't|not\s+yet|has\s+not|have\s+not|hasn't|haven't)\b/i
 
 /**
  * 催款句 —— 命中这些说明**钱还没到**。
@@ -167,12 +189,75 @@ function firstMatch(text: string, patterns: readonly RegExp[]): string | null {
   return null
 }
 
+/** 否定词。放在匹配**内部**检查 —— 「payment has not been received」的 not 就在中间。 */
+const NEGATION = /\b(?:not|never|nt)\b|n['’]t\b/i
+
+/** 命中点所在句子的边界（绝对下标）。 */
+function sentenceBounds(text: string, index: number): { start: number; end: number } {
+  const start =
+    Math.max(
+      text.lastIndexOf('.', index),
+      text.lastIndexOf('!', index),
+      text.lastIndexOf('?', index),
+      text.lastIndexOf('\n', index),
+    ) + 1
+  const endRel = text.slice(index).search(/[.!?\n]/)
+  return { start, end: endRel === -1 ? text.length : index + endRel + 1 }
+}
+
+/**
+ * 找一句**真正断言钱已经到账**的确认句。
+ *
+ * 光匹配 received 的词形不够 —— 必须排掉三类看起来一样、意思相反的：
+ *   1. 条件 / 将来（`once payment has been received` → 还没付）
+ *   2. 疑问（`has your payment been received?` → 我们在问对方）
+ *   3. 否定（`payment has not been received` → 明确没收到）
+ */
+function findConfirmation(text: string): string | null {
+  for (const re of RECEIVED_PATTERNS) {
+    const m = re.exec(text)
+    if (!m) continue
+
+    const { start, end } = sentenceBounds(text, m.index)
+    const sentence = text.slice(start, end)
+
+    // ① 疑问句 —— 我们在问对方收没收到，不是在确认。
+    if (/\?\s*$/.test(sentence.trim())) continue
+
+    // ② 否定 —— 「payment has **not** been received」。not 落在匹配**内部**，
+    //    所以必须查匹配文本本身，只看前文是查不到的。
+    if (NEGATION.test(m[0])) continue
+
+    // ③ 条件 / 将来 —— 只看命中点**之前**那一段（绝对下标切，别自己算偏移），
+    //    避免被句尾的「…received in full, we will send the itinerary」误伤。
+    if (CONDITIONAL_LEADINS.test(text.slice(start, m.index))) continue
+
+    return m[0].trim().slice(0, EVIDENCE_MAX)
+  }
+  return null
+}
+
 export interface PaidSignalInput {
   /** 主题 + 正文摘要拼起来的可搜文本。 */
   text: string
   /** 这封是我们发出去的还是客人发进来的。 */
   direction: 'inbound' | 'outbound'
-  /** 这封带附件吗（客人的回单/截图通常是附件）。 */
+  /**
+   * 这封是转发吗（主题以 Fw:/FW:/Fwd: 开头）。
+   *
+   * 转发信的「第一个收件人」常常不是正文里那句话说的人 —— 魏征实测：Baker 把
+   * 「your payment has been received in full for Nikki」发给客人的旅行代理，
+   * 代理会被打成付费客户并踢出营销名单，真正付钱的 Nikki 什么都没拿到。
+   */
+  isForward?: boolean
+  /**
+   * 这封带附件吗。
+   *
+   * 我在首版把它当死代码删了（当时全仓确实没有路径产出 `attachment_only`），
+   * Codex 复审同时把它**真接上了**：`mail-graph` 现在 `$select` 里带
+   * `hasAttachments`，客人带转账回单附件发来的信因此能进 needs_review。
+   * 合并时保留 Codex 这一侧 —— 信号是真的，只是首版没接线。
+   */
   hasAttachment?: boolean
 }
 
@@ -204,8 +289,22 @@ export function readPaidSignal(input: PaidSignalInput): PaidSignal {
 
   // ① 我们自己确认收款 —— 唯一能自动打标签的信号，且只认 outbound。
   if (input.direction === 'outbound') {
-    const confirmed = firstMatch(text, RECEIVED_PATTERNS)
-    if (confirmed) return { kind: 'confirmed', evidence: confirmed }
+    const confirmed = findConfirmation(text)
+    if (confirmed) {
+      const chasingToo = firstMatch(text, CHASING_PATTERNS)
+      // 同一封信里既确认收款、又在催款：可能是「定金收到了，尾款请点链接」
+      // （他确实付过），也可能是一句条款样板混进了催款信（他没付）。
+      // 分不出来就**不自动执行** —— 降级成人工确认，这一档本来就是为拿不准准备的。
+      if (chasingToo) {
+        return { kind: 'needs_review', evidence: confirmed, reason: 'mixed_with_chasing' }
+      }
+      // 一封转发（Fw:）的收件人常常不是这句话说的那个人 —— 真实语料里
+      // 有 `Fw: New Reborn Lead: …`，也有把地接回单转给客人的。降级给人看一眼。
+      if (input.isForward) {
+        return { kind: 'needs_review', evidence: confirmed, reason: 'forwarded' }
+      }
+      return { kind: 'confirmed', evidence: confirmed }
+    }
   }
 
   if (input.direction === 'inbound') {
@@ -250,10 +349,25 @@ export function evidenceIsVerbatim(evidence: string, sourceText: string): boolea
  * 就有 `Fw: New Reborn Lead: ...` 这种转发后又回给客人的信。把同事的邮箱打上
  * `paid_customer` 不只是脏数据，还会把他从所有营销名单里踢出去。
  *
- * 这里只挡最硬的两类（自己人 / 机器人）。**真正的护栏在调用方**：找不到
- * Mailchimp 名单里已有的这个人就跳过，绝不新建 —— 同 `mailchimp/sync` 的做法。
+ * ## `ownDomains` 为什么是必填参数、而且没有默认值
+ *
+ * 首版这里硬编码了 `['ctstours.co.nz']`，并且辩解说「真正的护栏在调用方 ——
+ * 只给已在 Mailchimp 名单里的人打标签」。**那条辩解是错的**，子牙复审时用这个
+ * 仓库自己的事故记录驳倒了：`mail-ingest.ts` 的注释记着 2026-08-04 的真实事件，
+ * `pa@chinatravel.co.nz`（CTS 关联公司的员工）**已经进了客人名单**，客户当场反馈。
+ * 同事完全可能自己订阅过、就在 audience 里 —— 「在名单里」根本不是「不是自己人」
+ * 的代理判据。唯一能判自己人的就是域名清单。
+ *
+ * 而域名清单一旦写死成第一个客户，换成 Oztop 这个过滤器就完全失效：一封写着
+ * 「payment has been received」、收件人是同事且在名单里的转发，会把这位同事打成
+ * 付费客户并摘掉线索标签，从所有群发里消失，没有任何人会发现（平台化红线 2）。
+ *
+ * 所以域名从客户配置来，由调用方用 `microsoft/mail-ingest` 里已有的
+ * `ownDomainsOf(mailbox, clients.domain, leads_config.own_email_domains)` 算好传进来。
+ * **不给默认值**：给了默认就等于允许「忘了传」这件事静默发生。
+ *
+ * `ROBOT_LOCALPARTS` 留在这里 —— 那份清单是真通用的，跟客户无关。
  */
-const OWN_DOMAINS: readonly string[] = ['ctstours.co.nz']
 const ROBOT_LOCALPARTS: readonly string[] = [
   'noreply',
   'no-reply',
@@ -265,11 +379,15 @@ const ROBOT_LOCALPARTS: readonly string[] = [
   'bounce',
 ]
 
-export function looksLikeCustomerAddress(address: string | null | undefined): boolean {
+export function looksLikeCustomerAddress(
+  address: string | null | undefined,
+  ownDomains: readonly string[],
+): boolean {
   const email = (address ?? '').trim().toLowerCase()
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return false
   const [local, domain] = email.split('@')
-  if (OWN_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`))) return false
+  const own = ownDomains.map((d) => d.trim().toLowerCase()).filter(Boolean)
+  if (own.some((d) => domain === d || domain.endsWith(`.${d}`))) return false
   if (ROBOT_LOCALPARTS.some((r) => local === r || local.startsWith(`${r}+`) || local.startsWith(`${r}-`))) {
     return false
   }

@@ -44,6 +44,7 @@ import { startCronRun } from '@/lib/cron/run-logger'
 import { getValidTokenForConnection } from '@/lib/platform-oauth/token-manager'
 import { fetchMailSince, type MailFolder, type MailMessage } from '@/lib/microsoft/mail-graph'
 import { MICROSOFT_MAIL_PROVIDER } from '@/lib/microsoft/mail-oauth'
+import { ownDomainsOf } from '@/lib/microsoft/mail-ingest'
 import { CONNECTION_STATUS } from '@/lib/platform-oauth/vocabulary'
 import {
   runPaidTagging,
@@ -66,7 +67,7 @@ const MAX_LOOKBACK_DAYS = 400
  * 客户决定「哪些标签算线索」，而那是每家都不一样的事。空数组的后果只是
  * 「只加不摘」，安全；给错默认的后果是摘掉别人有用的标签。
  */
-function readPolicy(leadsConfig: unknown): PaidTaggingPolicy {
+function readPolicy(leadsConfig: unknown, ownDomains: readonly string[]): PaidTaggingPolicy {
   const cfg = (leadsConfig ?? {}) as {
     paid_tagging?: { paid_tag?: unknown; lead_tags_to_remove?: unknown }
   }
@@ -76,7 +77,7 @@ function readPolicy(leadsConfig: unknown): PaidTaggingPolicy {
   const leadTagsToRemove = Array.isArray(raw.lead_tags_to_remove)
     ? raw.lead_tags_to_remove.filter((t): t is string => typeof t === 'string' && !!t.trim())
     : []
-  return { paidTag, leadTagsToRemove }
+  return { paidTag, leadTagsToRemove, ownDomains }
 }
 
 function toCandidate(m: MailMessage): CandidateMail {
@@ -94,6 +95,8 @@ function toCandidate(m: MailMessage): CandidateMail {
 interface ClientRow {
   id: string
   name: string | null
+  /** ownDomainsOf 要用 —— 官网域名可能跟收信域名不同。 */
+  domain: string | null
   leads_config: unknown
 }
 
@@ -114,14 +117,22 @@ interface ClientRow {
  * 所以这里从 `leads_config`（jsonb，一定存在）读，并在专列真的 apply 之后
  * 自动优先用它 —— 探测失败就当没有，不让一列的缺席拖垮整条管道。
  */
+/** PostgREST 的 undefined_column。只有这一种错才该被当成「专列还没 apply」。 */
+function isUndefinedColumn(err: { code?: string; message?: string }): boolean {
+  return err.code === '42703' || /does not exist/i.test(err.message ?? '')
+}
+
 async function audienceIdsByClient(clientIds: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
 
-  // 专列：apply 过就用，没 apply 就整条忽略（error 不 throw，正好当探测）。
+  // 专列：apply 过就用。**只吞「这一列不存在」这一种错**（PostgREST 42703）——
+  // 早先写成 `if (!error)` 会把权限被回收、网络抖动、schema cache 没刷新全部
+  // 静默降级，那正是这个仓库反复吃过的「空有三种来路」。
   const { data, error } = await supabaseAdmin
     .from('clients')
     .select('id, mailchimp_audience_id')
     .in('id', clientIds)
+  if (error && !isUndefinedColumn(error)) throw new Error(`audience id 查询失败: ${error.message}`)
   if (!error) {
     for (const r of (data ?? []) as Array<{ id: string; mailchimp_audience_id: string | null }>) {
       const v = (r.mailchimp_audience_id ?? '').trim()
@@ -129,6 +140,14 @@ async function audienceIdsByClient(clientIds: string[]): Promise<Map<string, str
     }
   }
   return out
+}
+
+/** 设置页上填的「客户自己的邮件域名」（关联公司）—— 同 mailbox-sync 的读法。 */
+function readOwnEmailDomains(leadsConfig: unknown): string[] {
+  const cfg = (leadsConfig ?? {}) as { own_email_domains?: unknown }
+  return Array.isArray(cfg.own_email_domains)
+    ? cfg.own_email_domains.filter((d): d is string => typeof d === 'string' && !!d.trim())
+    : []
 }
 
 /** leads_config.mailchimp_audience_id —— 专列没 apply 时的落脚点。 */
@@ -148,7 +167,7 @@ function audienceFromLeadsConfig(leadsConfig: unknown): string {
 async function readMailbox(
   connectionId: string,
   since: Date,
-): Promise<{ ok: true; mails: CandidateMail[] } | { ok: false; error: string }> {
+): Promise<{ ok: true; mails: CandidateMail[]; truncated: boolean } | { ok: false; error: string }> {
   let token: string
   try {
     token = await getValidTokenForConnection(connectionId)
@@ -158,6 +177,7 @@ async function readMailbox(
 
   const folders: MailFolder[] = ['inbox', 'sentitems']
   const mails: CandidateMail[] = []
+  let truncated = false
   for (const folder of folders) {
     const res = await fetchMailSince(token, folder, since)
     const folderName = folder === 'inbox' ? '收件箱' : '已发送'
@@ -171,8 +191,13 @@ async function readMailbox(
       }
     }
     mails.push(...res.messages.map(toCandidate))
+    // 🔴 必须接住：fetchMailSince 每个文件夹硬上限 1000 封，而且
+    // `$orderby=receivedDateTime asc` —— 被丢掉的正是**最新**那些，也就是补历史
+    // 最想抓的近期付款。丢掉这个标志，结果会报成 `ok, scanned: 1000` 而没有任何人
+    // 能分辨「读全了」和「读了最旧的一部分」。
+    truncated = truncated || res.truncated
   }
-  return { ok: true, mails }
+  return { ok: true, mails, truncated }
 }
 
 async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse> {
@@ -203,7 +228,7 @@ async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse>
 
   const { data: clients, error: cErr } = await supabaseAdmin
     .from('clients')
-    .select('id, name, leads_config')
+    .select('id, name, domain, leads_config')
     .in('id', Array.from(new Set(connections.map((c) => c.client_id))))
 
   if (cErr) {
@@ -236,7 +261,13 @@ async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse>
       continue
     }
 
-    const policy = readPolicy(client.leads_config)
+    // 自有域名从客户配置算 —— 复用 mail-ingest 已有的那份（含设置页填的关联公司）
+    const own = ownDomainsOf(
+      conn.account_id,
+      client.domain,
+      readOwnEmailDomains(client.leads_config),
+    )
+    const policy = readPolicy(client.leads_config, own)
     const r = await runPaidTagging(read.mails, { apiKey, audienceId }, policy, { dryRun })
 
     for (const item of r.needsReview) {
@@ -247,6 +278,8 @@ async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse>
       client: client.name,
       mailbox: conn.account_id,
       scanned: r.scanned,
+      // 读截断了 = 这次结果不完整，最新的信可能没读到。必须显式报出来。
+      truncated: read.truncated,
       tagged: r.tagged.length,
       taggedDetail: r.tagged,
       needsReview: r.needsReview.length,
@@ -256,7 +289,15 @@ async function run(lookbackDays: number, dryRun: boolean): Promise<NextResponse>
     })
   }
 
-  const failed = results.filter((x) => 'error' in x).length
+  // 🔴 每个客户条目里放的是 `errors`（复数，逐人错误），不是 `error`。首版只数
+  // `error`，于是 300 次 Mailchimp 调用全挂、failed 依然是 0、status=completed
+  // —— 监控一片绿而实际什么都没写成。读截断同理：结果不完整就不算成功。
+  const failed = results.filter(
+    (x) =>
+      'error' in x ||
+      (Array.isArray(x.errors) && x.errors.length > 0) ||
+      x.truncated === true,
+  ).length
   await cronRun.finish({
     processed: results.length,
     completed: results.length - failed,
