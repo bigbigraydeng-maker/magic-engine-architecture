@@ -7,6 +7,7 @@ import {
   publishIdempotencyKey,
   resolvePublishSchedule,
   resolvePublishStatus,
+  shiftDateString,
 } from '../daily-plan-publish'
 
 const CLIENT_ID = 'c0000000-0000-0000-0000-000000000000'
@@ -124,6 +125,86 @@ describe('measurement handoff', () => {
 
   it('uses a client-agnostic event name so other clients share the workflow', () => {
     expect(DAILY_PLAN_POST_PUBLISHED_EVENT).toBe('daily_plan.post.published')
+  })
+})
+
+describe('date_offset_days — shift a batch forward when morning has passed', () => {
+  // 2026-09-04 13:12 NZ = 2026-09-04 01:12 UTC. This is the exact clock the
+  // recall-and-reschedule scenario ran at; 09-04 08:00 NZ was 5 hours past,
+  // so with offset:0 that post would fire immediately. offset:1 must push
+  // every post one calendar day so 09-04 content lands 09-05 morning.
+  const NOW_AFTER_MORNING = new Date('2026-09-04T01:12:00Z')
+
+  it('offset:0 (default) is a no-op — behaviour identical to no offset', () => {
+    const a = resolvePublishSchedule('2026-09-05', NOW_AFTER_MORNING)
+    const b = resolvePublishSchedule('2026-09-05', NOW_AFTER_MORNING, 0)
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+
+  it('offset:1 turns "publish now" into "schedule for the next morning"', () => {
+    // Without offset: 09-04 08:00 NZ has passed → publish now.
+    expect(resolvePublishSchedule('2026-09-04', NOW_AFTER_MORNING).publishNow).toBe(true)
+    // With offset:1: target moves to 09-05 08:00 NZ → schedule.
+    const r = resolvePublishSchedule('2026-09-04', NOW_AFTER_MORNING, 1)
+    expect(r.publishNow).toBe(false)
+    if (r.publishNow) return
+    expect(r.scheduledPublishTime.toISOString()).toBe('2026-09-04T20:00:00.000Z')
+  })
+
+  it('offset:1 keeps every one of the six posts scheduled for morning — no immediate leak', () => {
+    const outcomes = ['2026-09-04', '2026-09-05', '2026-09-06', '2026-09-07', '2026-09-08', '2026-09-09']
+      .map((d) => resolvePublishSchedule(d, NOW_AFTER_MORNING, 1))
+    expect(outcomes.every((o) => !o.publishNow)).toBe(true)
+    const times = outcomes.map((o) => (o.publishNow ? '' : o.scheduledPublishTime.toISOString()))
+    // Six distinct instants, exactly 24h apart, first one is 09-05 morning.
+    expect(new Set(times).size).toBe(6)
+    expect(times[0]).toBe('2026-09-04T20:00:00.000Z') // 09-05 08:00 NZST
+    for (let i = 1; i < times.length; i++) {
+      expect(new Date(times[i]).getTime() - new Date(times[i - 1]).getTime()).toBe(24 * 3600 * 1000)
+    }
+  })
+
+  it('negative offset pulls a scheduled batch forward (a launch date moves in)', () => {
+    // 09-10 with offset:-2 = 09-08 08:00 NZ target. Given NOW_AFTER_MORNING is
+    // 09-04 13:12 NZ, 09-08 morning is still a few days ahead → scheduled.
+    const r = resolvePublishSchedule('2026-09-10', NOW_AFTER_MORNING, -2)
+    expect(r.publishNow).toBe(false)
+    if (r.publishNow) return
+    expect(r.scheduledPublishTime.toISOString()).toBe('2026-09-07T20:00:00.000Z') // 09-08 08:00 NZST
+  })
+
+  it('the command schema defaults date_offset_days to 0 and rejects wild values', () => {
+    const cmd = {
+      client_id: 'c0000000-0000-0000-0000-000000000000',
+      campaign_id: 'a0000000-0000-0000-0000-000000000001',
+      plan_id: 'b0000000-0000-0000-0000-000000000001',
+      plan_revision: '2026-09-01T15:00:04.513Z',
+      review_revision: '10000000-0000-0000-0000-000000000001',
+      page_id: '227633594573276',
+      approved: true, publish_authorization: true,
+    }
+    expect(CampaignDailyPublishCommandSchema.parse(cmd).date_offset_days).toBe(0)
+    expect(CampaignDailyPublishCommandSchema.parse({ ...cmd, date_offset_days: 1 }).date_offset_days).toBe(1)
+    expect(CampaignDailyPublishCommandSchema.safeParse({ ...cmd, date_offset_days: 31 }).success).toBe(false)
+    expect(CampaignDailyPublishCommandSchema.safeParse({ ...cmd, date_offset_days: 1.5 }).success).toBe(false)
+    expect(CampaignDailyPublishCommandSchema.safeParse({ ...cmd, date_offset_days: '1' }).success).toBe(false)
+  })
+})
+
+describe('shiftDateString — DST-safe calendar arithmetic', () => {
+  it('adds days across a month boundary', () => {
+    expect(shiftDateString('2026-09-29', 3)).toBe('2026-10-02')
+  })
+  it('subtracts days across a year boundary', () => {
+    expect(shiftDateString('2027-01-02', -3)).toBe('2026-12-30')
+  })
+  it('crosses the NZ DST boundary (2026-09-28) without gaining or losing a day', () => {
+    expect(shiftDateString('2026-09-27', 1)).toBe('2026-09-28')
+    expect(shiftDateString('2026-09-28', 1)).toBe('2026-09-29')
+    expect(shiftDateString('2026-09-27', 3)).toBe('2026-09-30')
+  })
+  it('zero-shift is the identity', () => {
+    expect(shiftDateString('2026-09-04', 0)).toBe('2026-09-04')
   })
 })
 

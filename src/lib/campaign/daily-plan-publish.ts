@@ -71,6 +71,24 @@ export const CampaignDailyPublishCommandSchema = z.object({
   no_publish: z.boolean().default(true),
   /** Optional allow-list of dates to publish. Omitted = every reviewed Post. */
   dates: z.array(dateStringSchema).min(1).optional(),
+  /**
+   * Shift every post's publish target by this many calendar days before the
+   * scheduler decides "now vs schedule". Content stays labelled with its
+   * planned date in the receipt; only the *delivery slot* moves.
+   *
+   * Why this exists: on 2026-09-04 we recalled the burst-published batch and
+   * wanted to re-publish 09-04..09-09 with proper morning slots, but 09-04
+   * 08:00 NZ had already passed by then. Without an offset, 09-04's content
+   * would publish immediately at 13:12 NZ (afternoon) — the cadence we were
+   * trying to escape from. Passing `date_offset_days: 1` shifts every post by
+   * one day, so 09-04's content lands 09-05 08:00 NZ and the batch keeps its
+   * morning rhythm.
+   *
+   * Bounded to ±30 to prevent a typo from producing months of drift. Negative
+   * offsets are allowed because pulling a scheduled batch forward is a
+   * legitimate business action (a launch date moves in).
+   */
+  date_offset_days: z.number().int().min(-30).max(30).default(0),
 })
 
 export type CampaignDailyPublishCommand = z.infer<typeof CampaignDailyPublishCommandSchema>
@@ -128,6 +146,9 @@ export interface CampaignDailyPublishMeta {
   failed: CampaignDailyPublishFailure[]
   /** Inngest receipt ids, one per successfully emitted published event. */
   event_ids: string[]
+  /** The date_offset_days the caller passed for this batch (0 by default).
+   *  Persisted so an audit can tell why 09-04 content landed 09-05 morning. */
+  date_offset_days?: number
   /** Posts that were subsequently recalled — see `daily-plan-recall.ts`. The
    *  original entry stays out of `published[]` so a reader can trust that field
    *  as "currently live on the Page"; the recall row keeps the post_id for audit. */
@@ -168,6 +189,7 @@ export const CampaignDailyPublishMetaSchema = z.object({
     failed_at: z.string().datetime(),
   })),
   event_ids: z.array(z.string().min(1)),
+  date_offset_days: z.number().int().min(-30).max(30).optional(),
   recalled: z.array(z.object({
     date: dateStringSchema,
     idempotency_key: z.string().min(1),
@@ -224,6 +246,22 @@ export function partitionByIdempotency<T extends { idempotency_key: string }>(
  * Sep/Apr, and hardcoding either would silently shift the send by an hour for
  * half the year.
  */
+/**
+ * Add N calendar days to a `YYYY-MM-DD` string, staying in that format.
+ *
+ * Uses UTC midnight so DST transitions and local-timezone quirks never bump
+ * the date. The date field is a calendar label, not a wall-clock instant —
+ * timezone comes into play later in nzMorningUtc when we resolve to a slot.
+ */
+export function shiftDateString(dateString: string, days: number): string {
+  const [y, m, d] = dateString.split('-').map(Number)
+  const shifted = new Date(Date.UTC(y, m - 1, d + days))
+  const yy = shifted.getUTCFullYear().toString().padStart(4, '0')
+  const mm = (shifted.getUTCMonth() + 1).toString().padStart(2, '0')
+  const dd = shifted.getUTCDate().toString().padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
 function nzMorningUtc(dateString: string): Date {
   const [y, m, d] = dateString.split('-').map(Number)
   // Guess: interpret 08:00 as if NZ were UTC+12; then correct against the
@@ -263,8 +301,10 @@ function nzMorningUtc(dateString: string): Date {
 export function resolvePublishSchedule(
   candidateDate: string,
   now: Date,
+  offsetDays = 0,
 ): { publishNow: true } | { publishNow: false; scheduledPublishTime: Date } {
-  const target = nzMorningUtc(candidateDate)
+  const effectiveDate = offsetDays === 0 ? candidateDate : shiftDateString(candidateDate, offsetDays)
+  const target = nzMorningUtc(effectiveDate)
   const leadMs = target.getTime() - now.getTime()
   const MIN_LEAD_MS = 15 * 60 * 1000
   const MAX_LEAD_MS = 175 * 24 * 3_600_000 // 175 days, well inside Meta's ~6 month ceiling

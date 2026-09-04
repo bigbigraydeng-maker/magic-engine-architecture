@@ -287,7 +287,11 @@ async function publishPending(
     // immediately — otherwise a "7-day plan" becomes "7 posts in one minute",
     // which is exactly the 2026-09-03 incident this contract now guards.
     // For today / past dates, resolvePublishSchedule returns publishNow: true.
-    const schedule = resolvePublishSchedule(candidate.date, new Date())
+    // The command's date_offset_days shifts every post by the same number of
+    // days first, so a "recall + reschedule" batch after morning has passed
+    // can push the whole rhythm forward by 1 day and keep every post landing
+    // at 08:00 NZ instead of "today afternoon + morning tomorrow onward".
+    const schedule = resolvePublishSchedule(candidate.date, new Date(), context.command.date_offset_days)
 
     let result: Awaited<ReturnType<typeof publishPagePhotoPost>>
     try {
@@ -467,6 +471,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       published: merged,
       failed: outcome.failed,
       event_ids: [...(previous?.event_ids ?? []), ...outcome.eventIds],
+      // Persist only when non-default. Absent means "labels match delivery" —
+      // future audits shouldn't see date_offset_days:0 on every legacy receipt.
+      ...(command.date_offset_days !== 0 ? { date_offset_days: command.date_offset_days } : {}),
+      // Preserve prior recalls so a re-publish doesn't lose the audit trail
+      // (the recall entries live on the receipt, not on separate rows).
+      ...(previous?.recalled ? { recalled: previous.recalled } : {}),
     }
 
     // Posts are already live at this point. If the receipt cannot be stored we
