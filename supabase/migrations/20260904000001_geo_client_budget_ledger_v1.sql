@@ -118,8 +118,17 @@ BEGIN
        OR v_res.worst_case_usd <> p_worst_case_usd THEN
       RETURN jsonb_build_object('reserved', false, 'reason', 'reservation_mismatch');
     END IF;
-    RETURN jsonb_build_object('reserved', v_res.status IN ('reserved','settled'),
-                              'idempotent', true, 'status', v_res.status);
+    -- 🔴 已结算/已回收的预留**不是**执行授权：再放行下游会重跑付费任务、真钱花两遍而账本只
+    --    记一次（Codex P2）。已 settled → already_settled；已 expired → 预留额度早已释放。
+    IF v_res.status = 'settled' THEN
+      RETURN jsonb_build_object('reserved', false, 'reason', 'already_settled',
+                                'charged_usd', v_res.charged_usd);
+    END IF;
+    IF v_res.status = 'expired' THEN
+      RETURN jsonb_build_object('reserved', false, 'reason', 'reservation_expired');
+    END IF;
+    -- 到这里 status='reserved'：真幂等成功（顺序重试同一次未结算的预留）。
+    RETURN jsonb_build_object('reserved', true, 'idempotent', true, 'status', v_res.status);
   END IF;
 
   -- 锁聚合账，判额度。budget 行锁把同 (client, period) 的并发预留串行化。
@@ -147,8 +156,15 @@ BEGIN
        OR v_res.worst_case_usd <> p_worst_case_usd THEN
       RETURN jsonb_build_object('reserved', false, 'reason', 'reservation_mismatch');
     END IF;
-    RETURN jsonb_build_object('reserved', v_res.status IN ('reserved','settled'),
-                              'idempotent', true, 'status', v_res.status);
+    -- 🔴 已结算/已回收的预留不是执行授权（Codex P2）—— 与快路径一致处理。
+    IF v_res.status = 'settled' THEN
+      RETURN jsonb_build_object('reserved', false, 'reason', 'already_settled',
+                                'charged_usd', v_res.charged_usd);
+    END IF;
+    IF v_res.status = 'expired' THEN
+      RETURN jsonb_build_object('reserved', false, 'reason', 'reservation_expired');
+    END IF;
+    RETURN jsonb_build_object('reserved', true, 'idempotent', true, 'status', v_res.status);
   END IF;
 
   -- 只有抢到预留身份的这一支才动预算。

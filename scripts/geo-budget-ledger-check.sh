@@ -125,6 +125,33 @@ BEGIN
   IF (r->>'idempotent')::bool IS NOT TRUE THEN RAISE EXCEPTION '同身份重复 期望 idempotent, 实得 %', r; END IF;
   RAISE NOTICE '✅ reservation_id 身份核对生效（跨客户/月/金额拒，同身份幂等）';
 END $$;
+
+-- 已结算/已回收的预留不再是执行授权（Codex P2）
+DO $$
+DECLARE r jsonb; v_spent_before numeric; v_spent_after numeric;
+BEGIN
+  PERFORM public.geo_reserve_budget_v1('P2A','c0000000-0000-0000-0000-000000000000','2026-09',0.5);
+  PERFORM public.geo_settle_budget_v1('P2A', 0.3);
+  SELECT spent_usd INTO v_spent_before FROM public.geo_client_budgets
+    WHERE client_id='c0000000-0000-0000-0000-000000000000' AND period_key='2026-09';
+  -- 关键回放：settle 后同身份再 reserve 必须 fail-closed，绝不返回 reserved:true
+  r := public.geo_reserve_budget_v1('P2A','c0000000-0000-0000-0000-000000000000','2026-09',0.5);
+  IF (r->>'reserved')::bool IS DISTINCT FROM FALSE OR r->>'reason' <> 'already_settled' THEN
+    RAISE EXCEPTION 'settle 后回放 期望 reserved:false/already_settled, 实得 %', r; END IF;
+  SELECT spent_usd INTO v_spent_after FROM public.geo_client_budgets
+    WHERE client_id='c0000000-0000-0000-0000-000000000000' AND period_key='2026-09';
+  IF v_spent_before <> v_spent_after THEN
+    RAISE EXCEPTION 'settle 后回放不应改动账本, 但 spent 变了: % -> %', v_spent_before, v_spent_after; END IF;
+
+  -- 回收后同身份再 reserve 也拒
+  PERFORM public.geo_reserve_budget_v1('P2B','c0000000-0000-0000-0000-000000000000','2026-09',0.3);
+  PERFORM public.geo_expire_stale_reservations(now() + interval '1 second');
+  r := public.geo_reserve_budget_v1('P2B','c0000000-0000-0000-0000-000000000000','2026-09',0.3);
+  IF (r->>'reserved')::bool IS DISTINCT FROM FALSE OR r->>'reason' <> 'reservation_expired' THEN
+    RAISE EXCEPTION 'expire 后回放 期望 reservation_expired, 实得 %', r; END IF;
+
+  RAISE NOTICE '✅ 已结算/已回收预留不再当授权（防重放 provider 双花）';
+END $$;
 SQL
 
 "${P[@]}" <<'SQL'

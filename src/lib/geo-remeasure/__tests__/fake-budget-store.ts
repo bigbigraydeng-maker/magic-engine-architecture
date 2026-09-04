@@ -30,7 +30,10 @@ export class FakeGeoBudgetStore implements GeoBudgetStore {
       if (existing.clientId !== clientId || existing.periodKey !== periodKey || existing.worstCase !== worstCaseUsd) {
         return { reserved: false, reason: 'reservation_mismatch' }
       }
-      return { reserved: existing.status !== 'expired', idempotent: true }
+      // 🔴 已结算/已回收 → 不再是执行授权（Codex P2：重放会导致 provider 真花两次而账本记一次）。
+      if (existing.status === 'settled') return { reserved: false, reason: 'already_settled' }
+      if (existing.status === 'expired') return { reserved: false, reason: 'reservation_expired' }
+      return { reserved: true, idempotent: true }
     }
     const b = this.budgets.get(`${clientId}::${periodKey}`)
     if (!b) return { reserved: false, reason: 'no_budget_row' } // fail-closed

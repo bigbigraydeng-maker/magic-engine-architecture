@@ -116,6 +116,33 @@ describe('reservation_id 身份核对（Codex P1：跨客户/窗口/金额复用
   })
 })
 
+describe('已结算/已回收的预留不再是授权（Codex P2：防重放导致 provider 花两次）', () => {
+  it('reserve → settle → 同身份 reserve 回放 → 拒（already_settled），不放行下游', async () => {
+    const st = new FakeGeoBudgetStore(); st.setCap(C, P, 5)
+    await resolveClientGeoBudget(st, { reservationId: 'RS', clientId: C, periodKey: P, worstCaseUsd: 0.5 })
+    await st.settle('RS', 0.3)
+    const replay = await resolveClientGeoBudget(st, { reservationId: 'RS', clientId: C, periodKey: P, worstCaseUsd: 0.5 })
+    expect(replay.authorized).toBe(false)
+    if (!replay.authorized) expect(replay.reason).toBe('already_settled')
+  })
+  it('预留被 expire 回收后同身份再 reserve → 拒（reservation_expired）', async () => {
+    const st = new FakeGeoBudgetStore(); st.setCap(C, P, 5)
+    await resolveClientGeoBudget(st, { reservationId: 'RE', clientId: C, periodKey: P, worstCaseUsd: 0.5 })
+    // 手工把状态置为 expired 模拟 geo_expire_stale_reservations 已跑过
+    ;(st as unknown as { reservations: Map<string, { status: string }> }).reservations.get('RE')!.status = 'expired'
+    const replay = await resolveClientGeoBudget(st, { reservationId: 'RE', clientId: C, periodKey: P, worstCaseUsd: 0.5 })
+    expect(replay.authorized).toBe(false)
+    if (!replay.authorized) expect(replay.reason).toBe('reservation_expired')
+  })
+  it('未结算的同身份重复 reserve → 仍幂等成功（保证顺序重试正常）', async () => {
+    const st = new FakeGeoBudgetStore(); st.setCap(C, P, 5)
+    await resolveClientGeoBudget(st, { reservationId: 'RN', clientId: C, periodKey: P, worstCaseUsd: 0.5 })
+    const again = await resolveClientGeoBudget(st, { reservationId: 'RN', clientId: C, periodKey: P, worstCaseUsd: 0.5 })
+    expect(again.authorized).toBe(true)
+    expect(st.snapshot(C, P)!.reserved).toBe(0.5)
+  })
+})
+
 describe('geoBudgetPeriodKey', () => {
   it('给出 UTC 的 YYYY-MM', () => {
     expect(geoBudgetPeriodKey(new Date(Date.UTC(2026, 8, 4)))).toBe('2026-09')
