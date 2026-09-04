@@ -111,6 +111,23 @@ BEGIN
 EXCEPTION WHEN insufficient_privilege THEN RESET role; RAISE NOTICE '✅ anon 被 REVOKE 挡住';
 END $$;
 
+-- reservation_id 身份核对（Codex P1）：换客户/窗口/金额复用同一 id 必须 fail-closed
+DO $$
+DECLARE r jsonb;
+BEGIN
+  PERFORM public.geo_reserve_budget_v1('R-id','c0000000-0000-0000-0000-000000000000','2026-09',0.10);
+  -- 换客户B(无预算行)+换月+换金额，期望 reservation_mismatch，绝不 idempotent 成功
+  r := public.geo_reserve_budget_v1('R-id','b0000000-0000-0000-0000-000000000000','2026-10',100);
+  IF r->>'reason' <> 'reservation_mismatch' THEN
+    RAISE EXCEPTION '跨身份复用 期望 reservation_mismatch, 实得 %', r; END IF;
+  -- 同身份重复 → 仍幂等成功
+  r := public.geo_reserve_budget_v1('R-id','c0000000-0000-0000-0000-000000000000','2026-09',0.10);
+  IF (r->>'idempotent')::bool IS NOT TRUE THEN RAISE EXCEPTION '同身份重复 期望 idempotent, 实得 %', r; END IF;
+  RAISE NOTICE '✅ reservation_id 身份核对生效（跨客户/月/金额拒，同身份幂等）';
+END $$;
+SQL
+
+"${P[@]}" <<'SQL'
 -- settle 的 NaN/Infinity 护栏现在真生效（魏征复验：原本是死代码）
 DO $$
 DECLARE r jsonb;

@@ -94,6 +94,28 @@ describe('结算把预留挪成实际花费', () => {
   })
 })
 
+describe('reservation_id 身份核对（Codex P1：跨客户/窗口/金额复用必须 fail-closed）', () => {
+  it('同一 reservationId 换客户 → 拒（不授权新客户一笔没预留的钱）', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap('a0000000-0000-0000-0000-000000000000', P, 1)
+    await resolveClientGeoBudget(s, { reservationId: 'R', clientId: 'a0000000-0000-0000-0000-000000000000', periodKey: P, worstCaseUsd: 0.1 })
+    const r = await resolveClientGeoBudget(s, { reservationId: 'R', clientId: 'b0000000-0000-0000-0000-000000000000', periodKey: '2026-10', worstCaseUsd: 100 })
+    expect(r.authorized).toBe(false); if (!r.authorized) expect(r.reason).toBe('reservation_mismatch')
+  })
+  it('同一 reservationId 换金额 → 拒', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 100)
+    await resolveClientGeoBudget(s, { reservationId: 'R2', clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    const r = await resolveClientGeoBudget(s, { reservationId: 'R2', clientId: C, periodKey: P, worstCaseUsd: 50 })
+    expect(r.authorized).toBe(false); if (!r.authorized) expect(r.reason).toBe('reservation_mismatch')
+  })
+  it('同一 reservationId 同一身份 → 仍幂等成功', async () => {
+    const s = new FakeGeoBudgetStore(); s.setCap(C, P, 5)
+    await resolveClientGeoBudget(s, { reservationId: 'R3', clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    const r = await resolveClientGeoBudget(s, { reservationId: 'R3', clientId: C, periodKey: P, worstCaseUsd: 1.8 })
+    expect(r.authorized).toBe(true)
+    expect(s.snapshot(C, P)!.reserved).toBe(1.8)
+  })
+})
+
 describe('geoBudgetPeriodKey', () => {
   it('给出 UTC 的 YYYY-MM', () => {
     expect(geoBudgetPeriodKey(new Date(Date.UTC(2026, 8, 4)))).toBe('2026-09')

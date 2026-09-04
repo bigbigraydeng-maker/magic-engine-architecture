@@ -112,6 +112,12 @@ BEGIN
   SELECT * INTO v_res FROM public.geo_budget_reservations
     WHERE reservation_id = p_reservation_id FOR UPDATE;
   IF FOUND THEN
+    -- 🔴 幂等只对**同一身份**成立。同一 reservation_id 换客户/窗口/金额 = 冲突，fail-closed 拒，
+    --    绝不把新请求当成既有预留的幂等回放（否则会授权一笔从没预留过的钱，击穿额度 —— Codex P1）。
+    IF v_res.client_id <> p_client_id OR v_res.period_key <> p_period_key
+       OR v_res.worst_case_usd <> p_worst_case_usd THEN
+      RETURN jsonb_build_object('reserved', false, 'reason', 'reservation_mismatch');
+    END IF;
     RETURN jsonb_build_object('reserved', v_res.status IN ('reserved','settled'),
                               'idempotent', true, 'status', v_res.status);
   END IF;
@@ -136,6 +142,11 @@ BEGIN
   GET DIAGNOSTICS v_inserted = ROW_COUNT;
   IF v_inserted = 0 THEN
     SELECT * INTO v_res FROM public.geo_budget_reservations WHERE reservation_id = p_reservation_id;
+    -- 🔴 同上：并发抢不到的这一支也要核身份，冲突 fail-closed（Codex P1）。
+    IF v_res.client_id <> p_client_id OR v_res.period_key <> p_period_key
+       OR v_res.worst_case_usd <> p_worst_case_usd THEN
+      RETURN jsonb_build_object('reserved', false, 'reason', 'reservation_mismatch');
+    END IF;
     RETURN jsonb_build_object('reserved', v_res.status IN ('reserved','settled'),
                               'idempotent', true, 'status', v_res.status);
   END IF;

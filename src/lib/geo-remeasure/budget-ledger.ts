@@ -12,7 +12,7 @@
  */
 
 export type GeoBudgetReserveReason =
-  | 'no_budget_row' | 'insufficient' | 'invalid_worst_case' | 'invalid_reservation_id'
+  | 'no_budget_row' | 'insufficient' | 'invalid_worst_case' | 'invalid_reservation_id' | 'reservation_mismatch'
 
 export interface GeoBudgetReserveResult {
   readonly reserved: boolean

@@ -25,7 +25,13 @@ export class FakeGeoBudgetStore implements GeoBudgetStore {
     if (!reservationId) return { reserved: false, reason: 'invalid_reservation_id' }
     if (!Number.isFinite(worstCaseUsd) || !(worstCaseUsd > 0)) return { reserved: false, reason: 'invalid_worst_case' }
     const existing = this.reservations.get(reservationId)
-    if (existing) return { reserved: existing.status !== 'expired', idempotent: true } // 幂等：不重复累加
+    if (existing) {
+      // 🔴 幂等只对同一身份成立；换客户/窗口/金额 = 冲突，fail-closed（Codex P1）。
+      if (existing.clientId !== clientId || existing.periodKey !== periodKey || existing.worstCase !== worstCaseUsd) {
+        return { reserved: false, reason: 'reservation_mismatch' }
+      }
+      return { reserved: existing.status !== 'expired', idempotent: true }
+    }
     const b = this.budgets.get(`${clientId}::${periodKey}`)
     if (!b) return { reserved: false, reason: 'no_budget_row' } // fail-closed
     const remaining = b.cap - b.reserved - b.spent
