@@ -130,7 +130,7 @@ export function gscInspectUrl(siteUrl: string, pageUrl: string): string {
   )
 }
 
-import { verifyActionLink } from './action-link'
+import { gscPropertyUrl, verifyActionLink } from './action-link'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { checkCronHealth } from '@/lib/cron/health'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
@@ -222,6 +222,8 @@ export interface NotIndexedRow {
  */
 export function buildNotIndexedItems(
   rows: NotIndexedRow[],
+  /** client_id → GSC site_url。没有 GSC 连接的客户不下发（没有能直达的可执行清单）。 */
+  siteUrlOf: Map<string, string>,
   nameOf: (id: string) => string,
   now: Date,
 ): ManualItem[] {
@@ -254,6 +256,10 @@ export function buildNotIndexedItems(
 
   const items: ManualItem[] = []
   for (const [clientId, agg] of Array.from(byClient.entries())) {
+    // 没有 GSC 连接就没有能直达的未收录清单 —— 与原逐页版一致，这种跳过不下发。
+    const siteUrl = siteUrlOf.get(clientId)
+    if (!siteUrl) continue
+
     const parts = [
       agg.thin > 0 ? `${agg.thin} 个内容太薄` : null,
       agg.declined > 0 ? `${agg.declined} 个谷歌爬过却没收录` : null,
@@ -268,10 +274,11 @@ export function buildNotIndexedItems(
       client_id: clientId,
       client_name: nameOf(clientId),
       what: `${agg.total} 个页面没被谷歌收录（${parts}）${age}，这些页面现在拿不到任何谷歌流量`,
-      how: '打开清单逐个处理：内容太薄的补厚到 300 词以上并配图加内链；谷歌爬过没收录的多半也是内容/内链不够；只有「谷歌还不认识」的那种才去 Search Console 点「请求编入索引」。一次弄不完就先挑最想被搜到的几页',
-      // 落到客户自己的页面清单（登录类站点，链接闸判 unverifiable 会保留），
-      // 不再给会 404 的 GSC 深链；一条 vs 116 条的差别全在这里。
-      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit/pages`,
+      // 落到客户自己的 GSC 属性：进「索引 → 网页」就是这份未收录清单 + 每页原因，
+      // 是唯一能直达「具体哪几页、什么原因」的地方（ME 后台没有收录状态视图）。
+      how: '打开 Search Console，进「索引 → 网页(Pages)」看这份没被收录的清单和每页原因：内容太薄 / 爬过没收录的，去把内容补厚到 300 词以上、加内链；「谷歌还不认识」的，在里面点「请求编入索引」。一次弄不完就先挑最想被搜到的几页',
+      // 属性首页是稳定入口（不是会 404 的深链）；登录类站点，链接闸判 unverifiable 会保留。
+      href: gscPropertyUrl(siteUrl),
     })
   }
   return items
@@ -388,17 +395,40 @@ export async function loadManualItems(
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
   await pushAttributionItems(supabase, items, ids, nameOf, now)
 
+  // GSC property per client —— 汇总后的「未收录页面」待办链到这里。谷歌自己的
+  // 「索引 → 网页」报告才是权威的「哪些页面没被收录、为什么」清单；ME 后台没有
+  // 任何展示收录状态的页面（实测 /site-audit/pages 只有网址/字数，无收录状态）。
+  const { data: connectors } = await supabase
+    .from('client_connectors')
+    .select('client_id, config')
+    .eq('anchor', 'gsc')
+    .eq('status', 'connected')
+    .in('client_id', ids)
+  const siteUrlOf = new Map(
+    ((connectors ?? []) as Array<{ client_id: string; config: { site_url?: string } | null }>)
+      .filter((c) => c.config?.site_url)
+      .map((c) => [c.client_id, c.config!.site_url!]),
+  )
+
   const [prOpen, notIndexed, metaPending, crawlRows] = await Promise.all([
     supabase
       .from('blog_posts')
       .select('client_id, title, topic, pr_url, pr_number')
       .eq('status', 'pr_open')
       .in('client_id', ids),
-    supabase
-      .from('client_site_pages')
-      .select('client_id, url, index_verdict, first_not_indexed_at, word_count')
-      .not('first_not_indexed_at', 'is', null)
-      .in('client_id', ids),
+    // 🔴 未收录页面必须读全（Codex P2）：一页一条时截断只是少报几行，但汇总
+    //    报数时截断会让「N 个页面」谎报、甚至把整客户漏掉。用 fetchAll 分页读全，
+    //    按 (client_id, url) 全序排序保证跨页不重不漏。
+    fetchAll<NotIndexedRow>((from, to) =>
+      supabase
+        .from('client_site_pages')
+        .select('client_id, url, index_verdict, first_not_indexed_at, word_count')
+        .not('first_not_indexed_at', 'is', null)
+        .in('client_id', ids)
+        .order('client_id', { ascending: true })
+        .order('url', { ascending: true })
+        .range(from, to),
+    ),
     supabase
       .from('seo_meta_log')
       .select('client_id, page_slug, created_at')
@@ -433,7 +463,7 @@ export async function loadManualItems(
   }
 
   // 2. Pages Google won't index —— 一个客户汇总成一条，见 buildNotIndexedItems。
-  items.push(...buildNotIndexedItems((notIndexed.data ?? []) as NotIndexedRow[], nameOf, now))
+  items.push(...buildNotIndexedItems(notIndexed, siteUrlOf, nameOf, now))
 
   // 3. Meta changes queued but not applied — the Oztop WP plugin polls this
   //    queue; a long backlog means the plugin stopped.

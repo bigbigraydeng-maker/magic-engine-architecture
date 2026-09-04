@@ -273,6 +273,11 @@ describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏'
 describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别一页一条', () => {
   const NOW = new Date('2026-09-04T00:00:00Z')
   const nameOf = (id: string) => (id === 'oztop' ? 'oztop' : id === 'cts' ? 'CTS Tours NZ' : id)
+  // 有 GSC 连接才有能直达的未收录清单；两个客户都连了。
+  const siteUrls = new Map<string, string>([
+    ['oztop', 'sc-domain:oztop.com.au'],
+    ['cts', 'sc-domain:ctstours.co.nz'],
+  ])
 
   const page = (client_id: string, i: number, over: Partial<NotIndexedRow> = {}): NotIndexedRow => ({
     client_id,
@@ -290,7 +295,7 @@ describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别
       ...Array.from({ length: 55 }, (_, i) => page('oztop', 200 + i)), // 爬过没收录
     ]
     const cts = Array.from({ length: 6 }, (_, i) => page('cts', i))
-    const items = buildNotIndexedItems([...oztop, ...cts], nameOf, NOW)
+    const items = buildNotIndexedItems([...oztop, ...cts], siteUrls, nameOf, NOW)
 
     expect(items).toHaveLength(2)
     const oz = items.find((i) => i.client_name === 'oztop')!
@@ -299,7 +304,9 @@ describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别
     expect(oz.what).toContain('55 个内容太薄')
     expect(oz.what).toContain('6 个谷歌还不认识')
     expect(oz.what).toContain('55 个谷歌爬过却没收录')
-    expect(oz.href).toBe('https://app.magicengine.com.au/dashboard/clients/oztop/site-audit/pages')
+    // 🔴 链接落到能直达「哪几页、什么原因」的地方 —— GSC 属性（站内无收录状态视图）
+    expect(oz.href).toBe('https://search.google.com/search-console?resource_id=sc-domain%3Aoztop.com.au')
+    expect(oz.how).toContain('索引')
   })
 
   it('资产文件（图片/PDF）不算页面，不计进去', () => {
@@ -308,13 +315,18 @@ describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别
       page('oztop', 2, { url: 'https://site/oztop/logo.png' }),
       page('oztop', 3, { url: 'https://site/oztop/spec.pdf' }),
     ]
-    const items = buildNotIndexedItems(rows, nameOf, NOW)
+    const items = buildNotIndexedItems(rows, siteUrls, nameOf, NOW)
     expect(items).toHaveLength(1)
     expect(items[0].what).toContain('1 个页面')
   })
 
+  it('没有 GSC 连接的客户 → 不下发（没有能直达的清单，给了也白跑）', () => {
+    const items = buildNotIndexedItems([page('oztop', 1)], new Map(), nameOf, NOW)
+    expect(items).toEqual([])
+  })
+
   it('空输入 → 一条都不出', () => {
-    expect(buildNotIndexedItems([], nameOf, NOW)).toEqual([])
+    expect(buildNotIndexedItems([], siteUrls, nameOf, NOW)).toEqual([])
   })
 })
 
