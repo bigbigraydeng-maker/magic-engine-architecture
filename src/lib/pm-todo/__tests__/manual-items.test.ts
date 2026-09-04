@@ -13,6 +13,8 @@ import {
   pushPlatformCandidateReviewItems,
   pushDataForSeoCreditsItem,
   pushLinkedinProgressItems,
+  buildNotIndexedItems,
+  type NotIndexedRow,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -265,6 +267,54 @@ describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏'
     expect(failed[0].what).toContain('2 条')
     expect(failed[0].what).toContain('401 授权失效')
     expect(failed[0].what).toContain('429 限流')
+  })
+})
+
+describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别一页一条', () => {
+  const NOW = new Date('2026-09-04T00:00:00Z')
+  const nameOf = (id: string) => (id === 'oztop' ? 'oztop' : id === 'cts' ? 'CTS Tours NZ' : id)
+
+  const page = (client_id: string, i: number, over: Partial<NotIndexedRow> = {}): NotIndexedRow => ({
+    client_id,
+    url: `https://site/${client_id}/p${i}`,
+    index_verdict: 'Crawled - currently not indexed',
+    first_not_indexed_at: '2026-08-01T00:00:00Z',
+    word_count: 800,
+    ...over,
+  })
+
+  it('🔴 116 + 6 个未收录页面 → 只出 2 条（每客户一条），不是 122 条', () => {
+    const oztop: NotIndexedRow[] = [
+      ...Array.from({ length: 55 }, (_, i) => page('oztop', i, { word_count: 120 })), // 内容太薄
+      ...Array.from({ length: 6 }, (_, i) => page('oztop', 100 + i, { index_verdict: 'URL is unknown to Google' })),
+      ...Array.from({ length: 55 }, (_, i) => page('oztop', 200 + i)), // 爬过没收录
+    ]
+    const cts = Array.from({ length: 6 }, (_, i) => page('cts', i))
+    const items = buildNotIndexedItems([...oztop, ...cts], nameOf, NOW)
+
+    expect(items).toHaveLength(2)
+    const oz = items.find((i) => i.client_name === 'oztop')!
+    expect(oz.kind).toBe('not_indexed')
+    expect(oz.what).toContain('116 个页面')
+    expect(oz.what).toContain('55 个内容太薄')
+    expect(oz.what).toContain('6 个谷歌还不认识')
+    expect(oz.what).toContain('55 个谷歌爬过却没收录')
+    expect(oz.href).toBe('https://app.magicengine.com.au/dashboard/clients/oztop/site-audit/pages')
+  })
+
+  it('资产文件（图片/PDF）不算页面，不计进去', () => {
+    const rows: NotIndexedRow[] = [
+      page('oztop', 1),
+      page('oztop', 2, { url: 'https://site/oztop/logo.png' }),
+      page('oztop', 3, { url: 'https://site/oztop/spec.pdf' }),
+    ]
+    const items = buildNotIndexedItems(rows, nameOf, NOW)
+    expect(items).toHaveLength(1)
+    expect(items[0].what).toContain('1 个页面')
+  })
+
+  it('空输入 → 一条都不出', () => {
+    expect(buildNotIndexedItems([], nameOf, NOW)).toEqual([])
   })
 })
 

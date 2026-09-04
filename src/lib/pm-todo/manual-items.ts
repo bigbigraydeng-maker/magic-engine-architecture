@@ -130,7 +130,7 @@ export function gscInspectUrl(siteUrl: string, pageUrl: string): string {
   )
 }
 
-import { gscPropertyUrl, gscInspectSteps, verifyActionLink } from './action-link'
+import { verifyActionLink } from './action-link'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { checkCronHealth } from '@/lib/cron/health'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
@@ -199,6 +199,82 @@ export async function dropBrokenLinks(
     }
   })
   return { kept, dropped }
+}
+
+/** 一行 `client_site_pages`（只声明这条待办用得到的列）。 */
+export interface NotIndexedRow {
+  client_id: string
+  url: string
+  index_verdict: string | null
+  first_not_indexed_at: string | null
+  word_count: number | null
+}
+
+/**
+ * 谷歌没收录的页面 —— **一个客户汇总成一条，不是一页一条**。
+ *
+ * 🔴 实测 oztop 一家就 116 个未收录页面（PM 2026-09-04 fix闭环），一页一条会把
+ * 今日待办正文淹掉 122 行 —— 跟 pushDiagnosticItems / pushLinkedinProgressItems
+ * 早就立下的「别把待办刷屏」是同一条纪律，唯独这条线之前漏了。逐条的网址和单独
+ * 深链没意义（谁也不会点 116 个链接），价值全在「哪个客户、几个、什么原因、去哪
+ * 看全部」。三类页面处理方式不同（内容太薄 / 爬过没收录 / 谷歌还不认识），在 what
+ * 里分别报数、在 how 里一句话说清，别让人以为一律去 GSC 点提交。
+ */
+export function buildNotIndexedItems(
+  rows: NotIndexedRow[],
+  nameOf: (id: string) => string,
+  now: Date,
+): ManualItem[] {
+  const byClient = new Map<
+    string,
+    { total: number; unknown: number; thin: number; declined: number; oldest: string | null }
+  >()
+  for (const row of rows) {
+    // Assets (images/PDFs) are not pages — "not indexed as a page" is normal
+    // for them and flagging it burns the whole list's credibility.
+    if (!isHtmlPageUrl(row.url)) continue
+    const cur = byClient.get(row.client_id) ?? {
+      total: 0,
+      unknown: 0,
+      thin: 0,
+      declined: 0,
+      oldest: null as string | null,
+    }
+    cur.total += 1
+    // 判据顺序与原逐页版一致：先认「谷歌不认识」，其次「内容太薄」，
+    // 剩下的是「爬过、字数够、却仍没收录」。
+    if (row.index_verdict === 'URL is unknown to Google') cur.unknown += 1
+    else if ((row.word_count ?? 0) < 300) cur.thin += 1
+    else cur.declined += 1
+    if (row.first_not_indexed_at && (!cur.oldest || row.first_not_indexed_at < cur.oldest)) {
+      cur.oldest = row.first_not_indexed_at
+    }
+    byClient.set(row.client_id, cur)
+  }
+
+  const items: ManualItem[] = []
+  for (const [clientId, agg] of Array.from(byClient.entries())) {
+    const parts = [
+      agg.thin > 0 ? `${agg.thin} 个内容太薄` : null,
+      agg.declined > 0 ? `${agg.declined} 个谷歌爬过却没收录` : null,
+      agg.unknown > 0 ? `${agg.unknown} 个谷歌还不认识这网址` : null,
+    ]
+      .filter(Boolean)
+      .join('、')
+    const days = daysAgo(agg.oldest, now)
+    const age = days !== null && days > 0 ? `，最久的已 ${days} 天` : ''
+    items.push({
+      kind: 'not_indexed',
+      client_id: clientId,
+      client_name: nameOf(clientId),
+      what: `${agg.total} 个页面没被谷歌收录（${parts}）${age}，这些页面现在拿不到任何谷歌流量`,
+      how: '打开清单逐个处理：内容太薄的补厚到 300 词以上并配图加内链；谷歌爬过没收录的多半也是内容/内链不够；只有「谷歌还不认识」的那种才去 Search Console 点「请求编入索引」。一次弄不完就先挑最想被搜到的几页',
+      // 落到客户自己的页面清单（登录类站点，链接闸判 unverifiable 会保留），
+      // 不再给会 404 的 GSC 深链；一条 vs 116 条的差别全在这里。
+      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit/pages`,
+    })
+  }
+  return items
 }
 
 export async function loadManualItems(
@@ -312,19 +388,6 @@ export async function loadManualItems(
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
   await pushAttributionItems(supabase, items, ids, nameOf, now)
 
-  // GSC property identifiers (needed for the inspect deep link).
-  const { data: connectors } = await supabase
-    .from('client_connectors')
-    .select('client_id, config')
-    .eq('anchor', 'gsc')
-    .eq('status', 'connected')
-    .in('client_id', ids)
-  const siteUrlOf = new Map(
-    ((connectors ?? []) as Array<{ client_id: string; config: { site_url?: string } | null }>)
-      .filter((c) => c.config?.site_url)
-      .map((c) => [c.client_id, c.config!.site_url!]),
-  )
-
   const [prOpen, notIndexed, metaPending, crawlRows] = await Promise.all([
     supabase
       .from('blog_posts')
@@ -369,56 +432,8 @@ export async function loadManualItems(
     })
   }
 
-  // 2. Pages Google won't index. Detection is automatic; the resubmit button
-  //    lives in Google's own console, so this one is genuinely manual.
-  for (const row of (notIndexed.data ?? []) as Array<{
-    client_id: string
-    url: string
-    index_verdict: string | null
-    first_not_indexed_at: string | null
-    word_count: number | null
-  }>) {
-    // Assets (images/PDFs) are not pages — "not indexed as a page" is normal
-    // for them and flagging it burns the whole list's credibility.
-    if (!isHtmlPageUrl(row.url)) continue
-
-    const days = daysAgo(row.first_not_indexed_at, now)
-    const siteUrl = siteUrlOf.get(row.client_id)
-    if (!siteUrl) continue
-
-    // The advice MUST match the verdict. "Crawled - currently not indexed"
-    // means Google already looked and declined — sending someone to press
-    // 「请求编入索引」 there is busywork that changes nothing. Thin content is
-    // the usual cause, so say that instead.
-    const unknown = row.index_verdict === 'URL is unknown to Google'
-    const thin = (row.word_count ?? 0) < 300
-    // Day 0 reads as "（已 0 天）" — noise. Say nothing until it has aged.
-    const age = days !== null && days > 0 ? `（已 ${days} 天）` : ''
-
-    const what = unknown
-      ? `${row.url} 谷歌根本不知道这个网址${age}，它拿不到任何谷歌流量`
-      : `${row.url} 谷歌爬过但决定不收录${age}${thin ? `，正文只有 ${row.word_count ?? 0} 词` : ''}，它拿不到任何谷歌流量`
-
-    // 🔴 链接要指向**动作真正发生的地方**,不是「跟这事有关的地方」。
-    //    内容太薄 → 活儿在网页上,给页面链接;谷歌不认识这网址 → 活儿在 GSC。
-    //    此前一律给 GSC 深链,结果既 404、方向也错(补内容不在 GSC 里做)。
-    const how = unknown
-      ? `打开 Google Search Console，${gscInspectSteps(row.url)}，然后点「请求编入索引」；如果这页本来就不该被搜到，回我一句，我把它从检查名单去掉`
-      : thin
-        ? `这条别去点「请求编入索引」——谷歌已经看过并拒绝了，再点一次也一样。真问题是内容太薄（${row.word_count ?? 0} 词）：打开链接看这一页，要么补厚到 300 词以上并配图加内链，要么合并进相关页面做跳转。拿不准回我一句`
-        : `先打开 Google Search Console，${gscInspectSteps(row.url)}，点一次「请求编入索引」；如果一周后还是不收录，说明谷歌认为内容价值不够，要补内链和内容`
-
-    items.push({
-      kind: 'not_indexed',
-      client_id: row.client_id,
-      client_name: nameOf(row.client_id),
-      what,
-      how,
-      // 补内容的活儿落在网页上,给页面本身(公开网址,能实测);
-      // 要 GSC 操作的给属性首页(稳定入口,不是会 404 的深链)。
-      href: thin && !unknown ? row.url : gscPropertyUrl(siteUrl),
-    })
-  }
+  // 2. Pages Google won't index —— 一个客户汇总成一条，见 buildNotIndexedItems。
+  items.push(...buildNotIndexedItems((notIndexed.data ?? []) as NotIndexedRow[], nameOf, now))
 
   // 3. Meta changes queued but not applied — the Oztop WP plugin polls this
   //    queue; a long backlog means the plugin stopped.
