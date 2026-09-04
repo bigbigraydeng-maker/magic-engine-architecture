@@ -466,7 +466,7 @@ describe('publish bridge — live run records real provider ids', () => {
     })
   })
 
-  it('emits one measurement event per Post with T+24/T+72 and the idempotency key', async () => {
+  it('emits one measurement event per Post with T+4/T+72 and the idempotency key', async () => {
     stubTables()
     armProvider()
 
@@ -483,7 +483,7 @@ describe('publish bridge — live run records real provider ids', () => {
       post_id: `${PAGE_ID}_91`,
       page_id: PAGE_ID,
       measure_at: [
-        { hours: 24, at: expect.any(String) },
+        { hours: 4, at: expect.any(String) },
         { hours: 72, at: expect.any(String) },
       ],
     })
