@@ -419,6 +419,11 @@ export async function loadManualItems(
     // 🔴 未收录页面必须读全（Codex P2）：一页一条时截断只是少报几行，但汇总
     //    报数时截断会让「N 个页面」谎报、甚至把整客户漏掉。用 fetchAll 分页读全，
     //    按 (client_id, url) 全序排序保证跨页不重不漏。
+    // 🔴 fetchAll 会**抛错**（分页失败 / 触 10 万行硬顶），而普通 supabase 查询
+    //    只返回 {error} 不抛。它在这个 Promise.all 里，抛出会让整个 loadManualItems
+    //    失败 → daily-todo.ts 把**所有**人工待办替换成 []（广告红线、串台、LinkedIn
+    //    全从邮件和看板消失，只剩一行日志）。所以这一路必须自己兜住，只丢 not_indexed，
+    //    不拖垮别的通道 —— 跟本文件每条通道的 .catch 隔离纪律一致（Codex P1 #1375）。
     fetchAll<NotIndexedRow>((from, to) =>
       supabase
         .from('client_site_pages')
@@ -428,7 +433,13 @@ export async function loadManualItems(
         .order('client_id', { ascending: true })
         .order('url', { ascending: true })
         .range(from, to),
-    ),
+    ).catch((e: unknown) => {
+      console.warn(
+        '[manual-items] 未收录页面读取失败（不阻塞其他待办）:',
+        e instanceof Error ? e.message : String(e),
+      )
+      return [] as NotIndexedRow[]
+    }),
     supabase
       .from('seo_meta_log')
       .select('client_id, page_slug, created_at')

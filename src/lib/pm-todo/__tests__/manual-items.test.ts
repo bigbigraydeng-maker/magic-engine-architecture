@@ -330,6 +330,47 @@ describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别
   })
 })
 
+describe('loadManualItems — 未收录读失败被隔离，不清空整条人工车道（Codex P1）', () => {
+  it('client_site_pages 分页读失败 → loadManualItems 不抛、not_indexed 缺席但其他不受牵连', async () => {
+    const NOW = new Date('2026-09-04T00:00:00Z')
+    const empty = new Proxy({} as Record<string, unknown>, {
+      get(_t, prop) {
+        if (prop === 'then')
+          return (res: (v: unknown) => unknown) =>
+            Promise.resolve({ data: [], error: null }).then(res)
+        if (prop === 'single' || prop === 'maybeSingle') return async () => ({ data: null, error: null })
+        return () => empty
+      },
+    })
+    const clientsQuery = {
+      select: () => clientsQuery,
+      eq: () => clientsQuery,
+      order: () => clientsQuery,
+      range: async () => ({ data: [{ id: 'c1', name: 'CTS Tours NZ', domain: 'x' }], error: null }),
+    }
+    // client_site_pages 被两处查：crawlRows 走 .limit（正常空），
+    // notIndexed 的 fetchAll 走 .range（让它抛，模拟分页读失败）。
+    const csp: Record<string, unknown> = {}
+    for (const m of ['select', 'not', 'in', 'order']) csp[m] = () => csp
+    csp.limit = async () => ({ data: [], error: null })
+    csp.range = async () => {
+      throw new Error('client_site_pages 分页读挂了')
+    }
+    const stub = {
+      from: (table: string) => {
+        if (table === 'clients') return clientsQuery
+        if (table === 'client_site_pages') return csp
+        return empty
+      },
+    } as unknown as SupabaseClient
+
+    // 关键：没有它自己的 .catch，这里会 reject → daily-todo 把全部人工待办清空。
+    const all = await loadManualItems(stub, NOW)
+    expect(Array.isArray(all)).toBe(true)
+    expect(all.some((i) => i.kind === 'not_indexed')).toBe(false)
+  })
+})
+
 describe('buildTodoEmail — manual lane', () => {
   const EMPTY: TodoCounts = {
     draftsByClient: [],
