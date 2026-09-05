@@ -373,6 +373,8 @@ body.nm-site {
 .nm-form-status[data-state="error"] { color: #9d3d2f; }
 .nm-download-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
 .nm-report .nm-btn-ghost { border-color: rgba(242,223,182,.35); color: var(--nm-gold-soft); }
+.nm-coming-soon { display: inline-flex; align-items: center; color: rgba(255,255,255,.58); font-size: .72rem; font-weight: 600; }
+.nm-full-report .nm-coming-soon { margin: 12px 0 0 12px; }
 .nm-language-tag { color: var(--nm-gold-soft); }
 
 /* Chinese single-page surface */

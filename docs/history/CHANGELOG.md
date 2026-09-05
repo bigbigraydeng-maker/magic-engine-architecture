@@ -9,7 +9,7 @@
 
 **上线内容**：Join the waitlist 从 `mailto:` 升级为英文在线申请表，收集联系人、国家/当前市场、行业、目标市场、Google / Meta / TikTok 等营销平台与月预算区间；Cloudflare Pages Function 做必填项、长度、邮箱、同意条款和 honeypot 校验，再复用现有 Render `/api/contact` + Resend 发信链路，只有既有链路确认接收才向用户显示成功。修复深色与浅色区块内 CTA 文案因 CSS specificity 被覆盖而显示为空白的问题。
 
-**内容与视觉**：`/cn/` 从旧的澳新 AI/SEO 服务目录重做为中文单页，围绕「中国品牌出海、海外华人企业进入主流市场、成熟品牌进入下一个国家」三类客户和「市场判断 → 本地定位 → 增长执行」一条主线；不是英文站逐句翻译。Magic Insight 两份完整 PDF 已公开下载，卡片、详情页和文件名统一标注 `Chinese version`；英文 executive brief 保留在线阅读。
+**内容与视觉**：`/cn/` 从旧的澳新 AI/SEO 服务目录重做为中文单页，围绕「中国品牌出海、海外华人企业进入主流市场、成熟品牌进入下一个国家」三类客户和「市场判断 → 本地定位 → 增长执行」一条主线；不是英文站逐句翻译。Magic Insight 两份完整 PDF 已公开下载，卡片、详情页和文件名统一标注 `Chinese version`，下载区同时说明 `English version coming soon`；英文 executive brief 保留在线阅读。
 
 **验证**：表单 endpoint 正常/缺字段路径测试通过；桌面 waitlist、Insights、中文站和移动端 waitlist 完成浏览器渲染检查；两个下载按钮可见且链接有效；Vol.03 / Vol.04 PDF 分别验证为 12 页 / 15 页；Privacy Policy 已补充 waitlist 收集字段与用途。
 
