@@ -98,4 +98,8 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '行业市场研究报告出品能力（署名 "Magic Insight 数据研究院"，面向高级会员定期出品行业级市场研究）',
     reviewDate: '2026-10-03',
   },
+  {
+    name: '分档 AI 视频配额闸（每档每月 i2v 条数硬顶 · 满额后优雅退化到静图版 · 超额走 Add-on 加购）',
+    reviewDate: '2026-10-04',
+  },
 ]
