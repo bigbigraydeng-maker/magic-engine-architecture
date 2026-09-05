@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { guardAdmin, requireAdmin } from '@/lib/auth/require-admin'
-import { getUserPermissions } from '@/lib/auth/whitelist'
+import { assertClientScope } from '@/lib/conversions/route-guard'
 import { buildIntakeRow, type IntakeInput } from '@/lib/conversions/intake'
 
 export const dynamic = 'force-dynamic'
@@ -48,10 +48,8 @@ export async function POST(request: Request) {
   }
 
   // 受限管理员只能录自己那个客户的
-  const perms = getUserPermissions(actor ?? '')
-  if (perms?.allowedClientId && perms.allowedClientId !== body.clientId) {
-    return NextResponse.json({ error: '无权为该客户录入' }, { status: 403 })
-  }
+  const denied = assertClientScope(actor, body.clientId)
+  if (denied) return denied
 
   // 电话转国际格式要知道客户所在国。查不到就让 intake 层丢掉本地格式电话
   // （宁可少一个匹配键，也不猜错国家 —— 猜错会匹配到别人）。
@@ -152,18 +150,19 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'client_id 必填且必须是 uuid' }, { status: 400 })
   }
 
-  const perms = getUserPermissions(admin.user.email ?? '')
-  if (perms?.allowedClientId && perms.allowedClientId !== clientId) {
-    return NextResponse.json({ error: '无权查看该客户' }, { status: 403 })
-  }
+  const deniedScope = assertClientScope(admin.user.email ?? null, clientId)
+  if (deniedScope) return deniedScope
 
   let query = supabaseAdmin
     .from('me_sale_outcomes')
-    // 🔴 不返回 customer_email / customer_phone 明文。
-    //    列表页展示用打码版，由前端从 masked_* 读；需要看全的走单条详情接口（PR3）。
+    // 🔴 不要在这里加 customer_email / customer_phone。列表页会被截图、投屏。
+    //    需要看全的走单条详情（尚未实现）。
+    //    也不要加已经不存在的列：dispatched_at 随异步队列一起删了，
+    //    留在这里会让整个查询报 42703，页面恒空 —— 2026-09-05 魏征实测抓到。
     .select(
       'id, outcome_kind, order_ref, amount_minor, currency, occurred_at, ' +
-        'review_status, reject_reason, redacted_at, dispatched_at, source_kind, created_at',
+        'review_status, reject_reason, redacted_at, source_kind, created_at, ' +
+        'me_conversion_writebacks(id, status, last_error, next_attempt_at)',
     )
     .eq('client_id', clientId)
     .order('occurred_at', { ascending: false })
@@ -176,5 +175,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: `查询失败: ${error.message}` }, { status: 500 })
   }
 
-  return NextResponse.json({ outcomes: data ?? [], count: data?.length ?? 0 })
+  // 按发送状态筛（页面用来列出"需要你处理"那一组）。
+  // 在应用层筛而不是 SQL：关联表上的条件筛选写法容易把没有发送记录的行一起滤掉。
+  const sendStatus = searchParams.get('send_status')
+  const rows = (data ?? []) as Array<{ me_conversion_writebacks?: Array<{ status: string }> }>
+  const filtered = sendStatus
+    ? rows.filter((r) => (r.me_conversion_writebacks ?? []).some((w) => w.status === sendStatus))
+    : rows
+
+  return NextResponse.json({ outcomes: filtered, count: filtered.length })
 }

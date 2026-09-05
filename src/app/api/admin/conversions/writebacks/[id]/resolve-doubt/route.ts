@@ -11,7 +11,8 @@
 
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { guardAdmin, requireAdmin } from '@/lib/auth/require-admin'
+import { guardAdmin } from '@/lib/auth/require-admin'
+import { guardConversionRoute } from '@/lib/conversions/route-guard'
 import { resolveDoubt } from '@/lib/conversions/writeback-service'
 
 export const dynamic = 'force-dynamic'
@@ -20,9 +21,28 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const guard = await guardAdmin()
   if (guard) return guard
 
-  const admin = await requireAdmin()
-  if (!admin.ok) return NextResponse.json({ error: admin.error }, { status: admin.status })
-  const actor = admin.user.email ?? null
+  // 🔴 这个路由原本漏了客户范围校验（子牙与魏征各自独立发现）——
+  //    受限管理员能裁决任意客户的记录，包括"重新发送"触发一次真发。
+  //    先读出这条属于哪个客户，再校验。
+  const { data: wbData, error: wbErr } = await supabaseAdmin
+    .from('me_conversion_writebacks')
+    .select('id, outcome_id, me_sale_outcomes(client_id)')
+    .eq('id', params.id)
+    .maybeSingle()
+
+  if (wbErr) return NextResponse.json({ error: `读取失败: ${wbErr.message}` }, { status: 500 })
+  if (!wbData) return NextResponse.json({ error: '记录不存在' }, { status: 404 })
+
+  // supabase-js 对 to-one 关联的类型推断给的是数组，运行时是对象 —— 两种都兼容地取。
+  const rel = (wbData as unknown as {
+    me_sale_outcomes?: { client_id?: string } | Array<{ client_id?: string }> | null
+  }).me_sale_outcomes
+  const ownerClientId =
+    (Array.isArray(rel) ? rel[0]?.client_id : rel?.client_id) ?? null
+
+  const g = await guardConversionRoute(request, ownerClientId)
+  if (!g.ok) return g.response
+  const actor = g.ctx.actor
 
   let body: { resolution?: 'confirmed' | 'resend'; note?: string }
   try {
@@ -47,6 +67,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
     writeback_id: params.id,
     action: 'doubt_resolved',
     actor,
+    ip: g.ctx.ip,
+    ua: g.ctx.ua,
+    request_id: g.ctx.requestId,
     detail: { resolution: body.resolution, note: body.note ?? null, applied: result.ok },
   })
 

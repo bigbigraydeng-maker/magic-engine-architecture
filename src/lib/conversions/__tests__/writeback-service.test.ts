@@ -33,7 +33,7 @@ class FakeDb {
       is: (c: string, v: unknown) => typeof q
       in: (c: string, v: unknown[]) => typeof q
       update: (p: Row) => typeof q
-      insert: (r: Row) => Promise<{ data: null; error: { message: string } | null }>
+      insert: (r: Row) => Promise<{ data: null; error: { message: string; code?: string } | null }>
       maybeSingle: () => Promise<{ data: Row | null; error: null }>
       then: (res: (v: { data: Row[]; error: null }) => unknown) => Promise<unknown>
     } = {
@@ -66,7 +66,14 @@ class FakeDb {
           const dup = rows.some(
             (r) => r.destination === row.destination && r.event_id === row.event_id,
           )
-          if (dup) return { data: null, error: { message: 'duplicate key value violates unique constraint' } }
+          // 真库（PostgREST）唯一冲突返回的是**错误码 23505**，文案只是附带。
+          // 代码若认文案不认码，换个 Postgres 版本或语言就会把正常并发当成故障。
+          if (dup) {
+            return {
+              data: null,
+              error: { code: '23505', message: 'duplicate key value violates unique constraint' },
+            }
+          }
         }
         rows.push({ id: `wb-${rows.length + 1}`, attempts: 0, post_started_at: null, ...row })
         return { data: null, error: null }

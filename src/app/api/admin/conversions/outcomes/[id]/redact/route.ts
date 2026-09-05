@@ -12,7 +12,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { guardAdmin, requireAdmin } from '@/lib/auth/require-admin'
-import { getUserPermissions } from '@/lib/auth/whitelist'
+import { assertClientScope } from '@/lib/conversions/route-guard'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,10 +42,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
   const outcome = data as { id: string; client_id: string; redacted_at: string | null }
 
-  const perms = getUserPermissions(actor ?? '')
-  if (perms?.allowedClientId && perms.allowedClientId !== outcome.client_id) {
-    return NextResponse.json({ error: '无权处理该客户的记录' }, { status: 403 })
-  }
+  const denied = assertClientScope(actor, outcome.client_id)
+  if (denied) return denied
 
   if (outcome.redacted_at) {
     return NextResponse.json({ already: true, message: '这条已经删过个人信息了' })

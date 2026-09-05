@@ -45,6 +45,13 @@ export type WritebackStatus =
   | (typeof TERMINAL)[number]
   | 'failed'
 
+/**
+ * 一条 `sending` 卡多久才算"没下文"。
+ * 太短会把正在飞的请求误判成断线（见下方 sending 分支的事故说明）；
+ * 太长会让真断线的条目迟迟不进人工核对。5 分钟远大于一次 CAPI 往返（~1 秒）。
+ */
+const STUCK_SENDING_MS = 5 * 60_000
+
 export type SendOutcomeResult = {
   status: WritebackStatus
   /** 说人话的一句话，直接能显示给 PM。 */
@@ -104,6 +111,8 @@ export async function sendApprovedOutcome(
   outcomeId: string,
   deps: SendDeps,
 ): Promise<SendOutcomeResult> {
+  // 可被重复调用：批准时调一次，之后人在页面上点「再试一次」/「重新发送」还会调。
+  // 幂等由下面四道闸保证，不靠调用方克制。
   const { supabase, writer, fetcher } = deps
   const now = deps.now ?? new Date()
   const destination = writer.kind
@@ -175,13 +184,15 @@ export async function sendApprovedOutcome(
     status: 'queued',
   })
   // 冲突说明已经有人建过了 —— 正常，往下读回它当前的状态。
-  if (insertErr && !/duplicate key|unique/i.test(insertErr.message)) {
+  // 🔴 认错误码 23505（unique_violation），不认错误文案：文案会随版本和语言变，
+  //    认错了会把一次正常的并发当成故障，让这条永久卡在"发送时出错"且无法重试。
+  if (insertErr && (insertErr as { code?: string }).code !== '23505') {
     throw new Error(`创建发送记录失败：${insertErr.message}`)
   }
 
   const { data: wbData, error: wbErr } = await supabase
     .from('me_conversion_writebacks')
-    .select('id, status, receipt, attempts')
+    .select('id, status, receipt, attempts, last_attempt_at')
     .eq('destination', destination)
     .eq('event_id', outcome.id)
     .maybeSingle()
@@ -189,7 +200,13 @@ export async function sendApprovedOutcome(
   if (wbErr) throw new Error(`读取发送记录失败：${wbErr.message}`)
   if (!wbData) throw new Error('发送记录不存在')
 
-  const wb = wbData as { id: string; status: string; receipt: unknown; attempts: number }
+  const wb = wbData as {
+    id: string
+    status: string
+    receipt: unknown
+    attempts: number
+    last_attempt_at: string | null
+  }
 
   // 已经是终态就到此为止 —— 包括 in_doubt（那一档只能由人来解）。
   if ((TERMINAL as readonly string[]).includes(wb.status)) {
@@ -201,11 +218,28 @@ export async function sendApprovedOutcome(
     }
   }
 
-  // 上一次发到一半没了下文：不重发，转成"不确定"交人核对。
+  // 上一次发到一半没了下文：不重发。
+  //
+  // 🔴 但**必须先看它卡了多久**。魏征 2026-09-05 实测出的真双发路径：
+  //    连点两次 → 第二个请求看到第一个刚置的 `sending` → 若立刻判成"断线了"，
+  //    而第一个请求随后成功 → 行被改成 in_doubt、receipt 丢失 →
+  //    人去平台后台核对（平台有 ~20 分钟延迟）看不到 → 点"重新发送" → **永久多记一笔**。
+  //    所以正在发的（未超阈值）如实回"正在发送中"，一个字段都不改。
   if (wb.status === 'sending') {
+    const startedAt = wb.last_attempt_at ? new Date(wb.last_attempt_at).getTime() : null
+    const stuckMs = startedAt == null ? Infinity : now.getTime() - startedAt
+
+    if (stuckMs < STUCK_SENDING_MS) {
+      return {
+        status: 'sending',
+        message: '这条正在发送中，请过几秒再看 —— 不会重复发送',
+        writebackId: wb.id,
+      }
+    }
+
     await casUpdate(supabase, wb.id, ['sending'], {
       status: 'in_doubt',
-      last_error: '上一次发送中途中断，结果未知',
+      last_error: `发送开始后 ${Math.round(stuckMs / 60_000)} 分钟没有结果，状态未知`,
     })
     return {
       status: 'in_doubt',
@@ -311,77 +345,95 @@ export async function sendApprovedOutcome(
   const rawResult = await writer.send(payload, config, { fetcher })
   const verdict = writer.accept(rawResult)
 
+  /**
+   * 落终态。
+   * 🔴 必须看 CAS 有没有真的改到行：抢输了还照样返回"已确认"，
+   *    就是**服务对调用方撒谎** —— 界面显示成功、库里却是别的状态，
+   *    人据此去做下一步判断（比如"重新发送"）就会出事。
+   */
+  async function settle(
+    to: WritebackStatus,
+    patch: Record<string, unknown>,
+    okResult: SendOutcomeResult,
+  ): Promise<SendOutcomeResult> {
+    const applied = await casUpdate(supabase, wb.id, ['sending'], { status: to, ...patch })
+    if (applied) return okResult
+    // 别人先落了终态。如实回它的真状态，不报我们这次的结果。
+    return await currentState(supabase, wb.id)
+  }
+
   switch (verdict.kind) {
     case 'accepted':
-      await casUpdate(supabase, wb.id, ['sending'], {
-        status: 'confirmed',
-        receipt: verdict.receipt,
-        latency_ms: rawResult.latencyMs,
-        last_error: null,
-      })
-      return {
-        status: 'confirmed',
-        message: '已发给广告平台并收到确认',
-        writebackId: wb.id,
-        receipt: verdict.receipt,
-      }
+      return await settle(
+        'confirmed',
+        { receipt: verdict.receipt, latency_ms: rawResult.latencyMs, last_error: null },
+        {
+          status: 'confirmed',
+          message: '已发给广告平台并收到确认',
+          writebackId: wb.id,
+          receipt: verdict.receipt,
+        },
+      )
 
     case 'expired':
-      await casUpdate(supabase, wb.id, ['sending'], {
-        status: 'expired_no_send',
-        last_error: verdict.detail,
-      })
-      return { status: 'expired_no_send', message: '平台说这条太旧了，不收', writebackId: wb.id }
+      return await settle(
+        'expired_no_send',
+        { last_error: verdict.detail },
+        { status: 'expired_no_send', message: '平台说这条太旧了，不收', writebackId: wb.id },
+      )
 
     case 'auth':
-      await casUpdate(supabase, wb.id, ['sending'], {
-        status: 'failed_permanent',
-        last_error: verdict.detail,
-        last_error_code: 'auth',
-      })
-      return {
-        status: 'failed_permanent',
-        message: '连接广告平台的授权失效了 —— 需要重新连接一次才能继续',
-        writebackId: wb.id,
-      }
+      return await settle(
+        'failed_permanent',
+        { last_error: verdict.detail, last_error_code: 'auth' },
+        {
+          status: 'failed_permanent',
+          message: '连接广告平台的授权失效了 —— 需要重新连接一次才能继续',
+          writebackId: wb.id,
+        },
+      )
 
     case 'retry':
-      // 同步模式下不自己等：把下次可以重试的时间记下来，交给人或下一次点击。
-      await casUpdate(supabase, wb.id, ['sending'], {
-        status: 'failed',
-        last_error: verdict.detail,
-        last_error_code: 'retry',
-        next_attempt_at: new Date(
-          now.getTime() + (verdict.retryAfterMs ?? 10 * 60_000),
-        ).toISOString(),
-      })
-      return {
-        status: 'failed',
-        message: `平台暂时忙，稍后可以再试一次（约 ${Math.ceil((verdict.retryAfterMs ?? 600_000) / 60_000)} 分钟后）`,
-        writebackId: wb.id,
-      }
+      // 同步模式下不自己等：记下"多久之后可以再来"，由人在页面上点「再试一次」。
+      return await settle(
+        'failed',
+        {
+          last_error: verdict.detail,
+          last_error_code: 'retry',
+          next_attempt_at: new Date(
+            now.getTime() + (verdict.retryAfterMs ?? 10 * 60_000),
+          ).toISOString(),
+        },
+        {
+          status: 'failed',
+          message: `平台暂时忙，稍后可以在页面上点「再试一次」（约 ${Math.ceil((verdict.retryAfterMs ?? 600_000) / 60_000)} 分钟后）`,
+          writebackId: wb.id,
+        },
+      )
 
     case 'in_doubt':
       // 🔴 这一档是整套设计的要害：不知道对方收没收，就停在这里等人。
-      await casUpdate(supabase, wb.id, ['sending'], {
-        status: 'in_doubt',
-        last_error: verdict.detail,
-        last_error_code: 'in_doubt',
-      })
-      return {
-        status: 'in_doubt',
-        message: '发出去了但没收到明确回应 —— 需要人去平台后台确认收没收，不会自动重发',
-        writebackId: wb.id,
-      }
+      return await settle(
+        'in_doubt',
+        { last_error: verdict.detail, last_error_code: 'in_doubt' },
+        {
+          status: 'in_doubt',
+          message: '发出去了但没收到明确回应 —— 需要人去平台后台确认收没收，不会自动重发',
+          writebackId: wb.id,
+        },
+      )
 
     case 'permanent':
     default:
-      await casUpdate(supabase, wb.id, ['sending'], {
-        status: 'failed_permanent',
-        last_error: verdict.detail,
-        last_error_code: 'permanent',
-      })
-      return { status: 'failed_permanent', message: `平台拒绝了这条：${verdict.detail}`, writebackId: wb.id }
+      return await settle(
+        'failed_permanent',
+        { last_error: verdict.detail, last_error_code: 'permanent' },
+        {
+          status: 'failed_permanent',
+          message: `平台拒绝了这条：${verdict.detail}`,
+          writebackId: wb.id,
+        },
+      )
   }
 }
 

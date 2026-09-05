@@ -16,6 +16,18 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { formatMoney } from '@/lib/conversions/money'
+import { metaCapiWriter } from '@/lib/meta/capi/writer'
+
+/** 平台的时间窗口取自 writer，不在这里再写一个 7 —— 抄多份必然对不上。 */
+const MAX_AGE_DAYS = metaCapiWriter.maxEventAgeDays
+
+type Writeback = {
+  id: string
+  status: string
+  last_error: string | null
+  next_attempt_at: string | null
+}
 
 type Outcome = {
   id: string
@@ -29,6 +41,12 @@ type Outcome = {
   redacted_at: string | null
   source_kind: string
   created_at: string
+  me_conversion_writebacks?: Writeback[]
+}
+
+/** 这条记录当前的发送状态（一个事实目前只发一个平台，取第一条即可）。 */
+function sendState(o: Outcome): Writeback | null {
+  return o.me_conversion_writebacks?.[0] ?? null
 }
 
 const REJECT_REASONS: Array<{ value: string; label: string }> = [
@@ -38,21 +56,23 @@ const REJECT_REASONS: Array<{ value: string; label: string }> = [
   { value: 'other', label: '其它（下面写一句）' },
 ]
 
+/**
+ * 金额一律走 `money.ts` 那一份。
+ * 🔴 这里曾经自己抄过一份带 `?? 2` 兜底的小数位表 —— 正是 money.ts 文件头
+ *    声讨的那个事故的第 4 份复制。而这一页是人按下撤不回按钮前**唯一**核对金额的地方，
+ *    兜底值在这里最不该存在。
+ */
 function money(o: Outcome): string {
-  if (o.amount_minor == null || !o.currency) return '—'
-  const exp = { NZD: 2, AUD: 2, USD: 2 }[o.currency.toUpperCase()] ?? 2
-  return `${o.currency} ${(o.amount_minor / 10 ** exp).toLocaleString('en-NZ', {
-    minimumFractionDigits: exp,
-    maximumFractionDigits: exp,
-  })}`
+  return formatMoney(o.amount_minor, o.currency) ?? '—'
 }
 
 function kindLabel(k: Outcome['outcome_kind']): string {
   return k === 'purchase' ? '收到定金' : k === 'balance' ? '收到尾款' : '有效咨询'
 }
 
+/** 精确天数。判"过没过期"用它，跟服务端同一口径；显示时才取整。 */
 function daysAgo(iso: string): number {
-  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
+  return (Date.now() - new Date(iso).getTime()) / 86_400_000
 }
 
 export default function ConversionsPage() {
@@ -63,6 +83,7 @@ export default function ConversionsPage() {
   const [cursor, setCursor] = useState(0)
   const [busy, setBusy] = useState<string | null>(null)
   const [flash, setFlash] = useState<{ id: string; text: string; ok: boolean } | null>(null)
+  const [stuck, setStuck] = useState<Outcome[]>([])
   const [rejecting, setRejecting] = useState<string | null>(null)
   const [rejectReason, setRejectReason] = useState<string>('')
   const [rejectNote, setRejectNote] = useState('')
@@ -77,13 +98,24 @@ export default function ConversionsPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(
-        `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}&review_status=pending_review`,
-      )
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error ?? '读取失败')
-      setRows(body.outcomes ?? [])
+      const base = `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}`
+      const [pendingRes, approvedRes] = await Promise.all([
+        fetch(`${base}&review_status=pending_review`),
+        fetch(`${base}&review_status=approved`),
+      ])
+      const pending = await pendingRes.json()
+      if (!pendingRes.ok) throw new Error(pending.error ?? '读取失败')
+      setRows(pending.outcomes ?? [])
       setCursor(0)
+
+      // 已批准但没走完的：发出去没下文的、失败可重试的。
+      // 今日待办叫人来点这里的按钮 —— 不列出来就是让人扑空（管道断头）。
+      const approved = await approvedRes.json()
+      const needsHand: Outcome[] = (approved.outcomes ?? []).filter((o: Outcome) => {
+        const st = sendState(o)?.status
+        return st === 'in_doubt' || st === 'failed'
+      })
+      setStuck(needsHand)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -121,8 +153,11 @@ export default function ConversionsPage() {
           ok: res.ok && body.send_status !== 'error',
         })
         if (res.ok) {
-          setRows((rs) => rs.filter((r) => r.id !== o.id))
-          setCursor((c) => Math.max(0, Math.min(c, rows.length - 2)))
+          setRows((rs) => {
+            const next = rs.filter((r) => r.id !== o.id)
+            setCursor((c) => Math.min(c, Math.max(0, next.length - 1)))
+            return next
+          })
         }
       } catch (e) {
         setFlash({ id: o.id, text: e instanceof Error ? e.message : String(e), ok: false })
@@ -130,7 +165,7 @@ export default function ConversionsPage() {
         setBusy(null)
       }
     },
-    [rows.length],
+    [],
   )
 
   const reject = useCallback(async (o: Outcome, reason: string, note: string) => {
@@ -144,7 +179,11 @@ export default function ConversionsPage() {
       const body = await res.json()
       setFlash({ id: o.id, text: body.message ?? (res.ok ? '已记为不发送' : '出错了'), ok: res.ok })
       if (res.ok) {
-        setRows((rs) => rs.filter((r) => r.id !== o.id))
+        setRows((rs) => {
+          const next = rs.filter((r) => r.id !== o.id)
+          setCursor((c) => Math.min(c, Math.max(0, next.length - 1)))
+          return next
+        })
         setRejecting(null)
         setRejectReason('')
         setRejectNote('')
@@ -156,26 +195,102 @@ export default function ConversionsPage() {
     }
   }, [])
 
+  const resolve = useCallback(
+    async (o: Outcome, resolution: 'confirmed' | 'resend') => {
+      const wb = sendState(o)
+      if (!wb) return
+      if (resolution === 'confirmed') {
+        const ok = window.confirm(
+          '你在广告平台后台确认看到这一笔了吗？\n\n' +
+            '看到了才点确定 —— 记成"已收到"之后就不会再发了。',
+        )
+        if (!ok) return
+      } else {
+        const ok = window.confirm(
+          '确认平台**没有**收到，要重新发一次吗？\n\n' +
+            '⚠️ 如果其实已经收到了，这一下会让同一笔算成两笔，而且撤不回。\n' +
+            '请先在平台后台确认真的没有再点。',
+        )
+        if (!ok) return
+      }
+
+      setBusy(o.id)
+      try {
+        const res = await fetch(`/api/admin/conversions/writebacks/${wb.id}/resolve-doubt`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ resolution }),
+        })
+        const body = await res.json()
+        if (res.ok && resolution === 'resend') {
+          // 放回队列还不算发出去 —— 真正再发一次走这个接口。
+          const sendRes = await fetch(`/api/admin/conversions/outcomes/${o.id}/send`, { method: 'POST' })
+          const sendBody = await sendRes.json()
+          setFlash({ id: o.id, text: sendBody.message ?? '已重新发送', ok: sendRes.ok })
+        } else {
+          setFlash({ id: o.id, text: body.message ?? '已处理', ok: res.ok })
+        }
+        if (res.ok) void load()
+      } catch (e) {
+        setFlash({ id: o.id, text: e instanceof Error ? e.message : String(e), ok: false })
+      } finally {
+        setBusy(null)
+      }
+    },
+    [load],
+  )
+
+  const retry = useCallback(
+    async (o: Outcome) => {
+      setBusy(o.id)
+      try {
+        const res = await fetch(`/api/admin/conversions/outcomes/${o.id}/send`, { method: 'POST' })
+        const body = await res.json()
+        setFlash({ id: o.id, text: body.message ?? (res.ok ? '已重试' : '出错了'), ok: res.ok })
+        if (res.ok) void load()
+      } catch (e) {
+        setFlash({ id: o.id, text: e instanceof Error ? e.message : String(e), ok: false })
+      } finally {
+        setBusy(null)
+      }
+    },
+    [load],
+  )
+
   // 键盘：Y 告诉平台 / N 不发送 / ↑↓ 换一条
+  const [keyLock, setKeyLock] = useState(false)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (rejecting || busy || !current) return
+      // 🔴 window.confirm 是阻塞的，期间的第二次按键拿到的还是旧的 busy=null，
+      //    不锁住会连发两个请求。
+      if (rejecting || busy || keyLock || !current) return
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      if (e.key === 'y' || e.key === 'Y') void approve(current)
+      if (e.key === 'y' || e.key === 'Y') {
+        setKeyLock(true)
+        void approve(current).finally(() => setKeyLock(false))
+      }
       if (e.key === 'n' || e.key === 'N') setRejecting(current.id)
       if (e.key === 'ArrowDown') setCursor((c) => Math.min(c + 1, rows.length - 1))
       if (e.key === 'ArrowUp') setCursor((c) => Math.max(c - 1, 0))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [current, rejecting, busy, rows.length, approve])
+  }, [current, rejecting, busy, keyLock, rows.length, approve])
 
   const summary = useMemo(() => {
-    const purchases = rows.filter((r) => r.outcome_kind !== 'lead')
-    const total = purchases.reduce((s, r) => s + (r.amount_minor ?? 0), 0)
-    const cur = purchases[0]?.currency ?? 'NZD'
-    return { count: rows.length, purchases: purchases.length, total, cur }
+    const purchases = rows.filter((r) => r.outcome_kind !== 'lead' && r.amount_minor != null)
+    const currencies = new Set(purchases.map((r) => r.currency))
+    // 🔴 混币种不给合计。把 NZD 和 AUD 加在一起再贴上第一条的币种标签，
+    //    是一个**看起来很正常的错数字** —— 比不显示危险得多。
+    const total =
+      currencies.size === 1
+        ? formatMoney(
+            purchases.reduce((sum, r) => sum + (r.amount_minor ?? 0), 0),
+            purchases[0]?.currency ?? null,
+          )
+        : null
+    return { count: rows.length, purchases: purchases.length, total, mixed: currencies.size > 1 }
   }, [rows])
 
   return (
@@ -201,8 +316,58 @@ export default function ConversionsPage() {
       {error && <div style={box('#fee', '#c00')}>读取出错：{error}</div>}
       {loading && <div style={{ color: '#666' }}>读取中…</div>}
 
-      {!loading && !error && rows.length === 0 && clientId && (
+      {!loading && !error && rows.length === 0 && stuck.length === 0 && clientId && (
         <div style={box('#f4f9f4', '#276')}>没有待核对的记录 —— 都处理完了。</div>
+      )}
+
+      {stuck.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <h2 style={{ fontSize: 16, margin: '0 0 8px' }}>需要你动手（{stuck.length}）</h2>
+          {stuck.map((o) => {
+            const wb = sendState(o)!
+            const doubt = wb.status === 'in_doubt'
+            return (
+              <div
+                key={o.id}
+                style={{
+                  border: '1px solid #f0c36d',
+                  background: '#fffbe6',
+                  borderRadius: 8,
+                  padding: 14,
+                  marginBottom: 10,
+                }}
+              >
+                <div style={{ fontWeight: 600, fontSize: 15 }}>
+                  {kindLabel(o.outcome_kind)}
+                  {o.outcome_kind !== 'lead' && ` · ${money(o)}`}
+                  {o.order_ref && <span style={{ color: '#888', fontWeight: 400 }}> · 单号 {o.order_ref}</span>}
+                </div>
+                <div style={{ fontSize: 13, color: '#7a5c00', margin: '6px 0 10px' }}>
+                  {doubt
+                    ? '这一笔发出去时断线了，不确定平台收到没有。系统不会自己重发 —— 重发一次就是把同一笔算成两笔，撤不回。'
+                    : `上次发送没成功：${wb.last_error ?? '未知原因'}。可以再试一次。`}
+                </div>
+                {doubt ? (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button disabled={busy === o.id} onClick={() => void resolve(o, 'confirmed')} style={btn('#16a34a', '#fff')}>
+                      平台后台看到了 · 记为已收到
+                    </button>
+                    <button disabled={busy === o.id} onClick={() => void resolve(o, 'resend')} style={btn('#b45309', '#fff')}>
+                      确认没收到 · 重新发送
+                    </button>
+                  </div>
+                ) : (
+                  <button disabled={busy === o.id} onClick={() => void retry(o)} style={btn('#374151', '#fff')}>
+                    再试一次
+                  </button>
+                )}
+                {flash?.id === o.id && (
+                  <div style={{ marginTop: 10, fontSize: 13, color: flash.ok ? '#276' : '#c00' }}>{flash.text}</div>
+                )}
+              </div>
+            )
+          })}
+        </div>
       )}
 
       {rows.length > 0 && (
@@ -210,10 +375,14 @@ export default function ConversionsPage() {
           共 <strong>{summary.count}</strong> 条待核对
           {summary.purchases > 0 && (
             <>
-              ，其中 {summary.purchases} 笔成交合计{' '}
-              <strong>
-                {summary.cur} {(summary.total / 100).toLocaleString('en-NZ', { minimumFractionDigits: 2 })}
-              </strong>
+              ，其中 {summary.purchases} 笔成交
+              {summary.total ? (
+                <>
+                  合计 <strong>{summary.total}</strong>
+                </>
+              ) : summary.mixed ? (
+                <span style={{ color: '#888' }}>（多种币种，不显示合计）</span>
+              ) : null}
             </>
           )}
           。快捷键：<kbd>Y</kbd> 告诉平台 · <kbd>N</kbd> 不发送 · <kbd>↑</kbd><kbd>↓</kbd> 换一条
@@ -222,7 +391,7 @@ export default function ConversionsPage() {
 
       {rows.map((o, i) => {
         const age = daysAgo(o.occurred_at)
-        const expired = age > 7
+        const expired = age > MAX_AGE_DAYS
         const focused = i === cursor
         return (
           <div
@@ -245,7 +414,7 @@ export default function ConversionsPage() {
                   {o.order_ref && <span style={{ color: '#888', fontWeight: 400 }}> · 单号 {o.order_ref}</span>}
                 </div>
                 <div style={{ color: '#666', fontSize: 13, marginTop: 4 }}>
-                  {age === 0 ? '今天' : `${age} 天前`}
+                  {age < 1 ? '今天' : `${Math.floor(age)} 天前`}
                   {' · 来源：'}
                   {{
                     manual_seed: '人工录入',
@@ -257,7 +426,7 @@ export default function ConversionsPage() {
                 </div>
                 {expired && (
                   <div style={{ color: '#a15c00', fontSize: 13, marginTop: 6 }}>
-                    ⚠️ 已过去 {age} 天，广告平台只收 7 天内的 —— 现在发也收不进去，选「不发送」即可。
+                    ⚠️ 已过去 {Math.floor(age)} 天，广告平台只收 {MAX_AGE_DAYS} 天内的 —— 现在发也收不进去，选「不发送」即可。
                   </div>
                 )}
               </div>

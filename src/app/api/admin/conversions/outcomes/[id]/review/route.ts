@@ -12,7 +12,7 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { guardAdmin, requireAdmin } from '@/lib/auth/require-admin'
-import { getUserPermissions } from '@/lib/auth/whitelist'
+import { assertClientScope } from '@/lib/conversions/route-guard'
 import { sendApprovedOutcome } from '@/lib/conversions/writeback-service'
 import { metaCapiWriter } from '@/lib/meta/capi/writer'
 
@@ -66,10 +66,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
     redacted_at: string | null
   }
 
-  const perms = getUserPermissions(actor ?? '')
-  if (perms?.allowedClientId && perms.allowedClientId !== outcome.client_id) {
-    return NextResponse.json({ error: '无权处理该客户的记录' }, { status: 403 })
-  }
+  const denied = assertClientScope(actor, outcome.client_id)
+  if (denied) return denied
 
   if (outcome.redacted_at) {
     return NextResponse.json({ error: '这条已按客人要求删除个人信息，不能再处理' }, { status: 409 })
@@ -138,7 +136,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
     )
   }
 
-  const { error: approveErr } = await supabaseAdmin
+  // 🔴 必须 select 出来判行数。Supabase 更新影响 0 行**不报错** ——
+  //    不判的话，连点两次会有两个请求都往下走进发送流程，
+  //    第二个看到第一个刚置的 sending，把状态搅成"不确定"，
+  //    人再据此点"重新发送"就会真的多记一笔（魏征 2026-09-05 实测路径）。
+  const { data: approved, error: approveErr } = await supabaseAdmin
     .from('me_sale_outcomes')
     .update({
       review_status: 'approved',
@@ -151,9 +153,17 @@ export async function POST(request: Request, { params }: { params: { id: string 
     })
     .eq('id', outcome.id)
     .eq('review_status', 'pending_review')
+    .select('id')
 
   if (approveErr) {
     return NextResponse.json({ error: `保存失败: ${approveErr.message}` }, { status: 500 })
+  }
+  if ((approved?.length ?? 0) === 0) {
+    // 有人抢先批过了。别再走一遍发送流程。
+    return NextResponse.json(
+      { already: true, review_status: 'approved', message: '这条刚刚已经被处理过了' },
+      { status: 200 },
+    )
   }
 
   await supabaseAdmin.from('me_conversion_audit').insert({
