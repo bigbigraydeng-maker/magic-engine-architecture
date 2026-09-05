@@ -418,7 +418,9 @@ export default function SiteAuditPagesPage() {
           ) : pages.length === 0 ? (
             <div className="p-12 text-center text-sm text-gray-400">
               {indexFilter === 'not-indexed'
-                ? '没有未被谷歌收录的页面 🎉'
+                ? selectedType === 'all'
+                  ? '没有未被谷歌收录的页面 🎉'
+                  : `没有未被谷歌收录的 ${TYPE_LABELS[selectedType]} 类型页面（其他类型可能仍有未收录页面）`
                 : selectedType === 'all' ? '暂无采集数据' : `暂无 ${TYPE_LABELS[selectedType]} 类型页面`}
             </div>
           ) : (
