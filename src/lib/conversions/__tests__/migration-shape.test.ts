@@ -17,7 +17,7 @@ import { join } from 'path'
 
 const ROOT = process.cwd()
 const MIGRATIONS_DIR = join(ROOT, 'supabase/migrations')
-const MIGRATION_VERSION = '20260905000001'
+const MIGRATION_VERSION = '20260906000001'
 const MIGRATION_FILE = `${MIGRATION_VERSION}_conversion_writeback_v1.sql`
 
 const RAW = readFileSync(join(MIGRATIONS_DIR, MIGRATION_FILE), 'utf8')

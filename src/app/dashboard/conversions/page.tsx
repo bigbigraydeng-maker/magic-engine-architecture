@@ -17,10 +17,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { formatMoney } from '@/lib/conversions/money'
-import { metaCapiWriter } from '@/lib/meta/capi/writer'
 
-/** 平台的时间窗口取自 writer，不在这里再写一个 7 —— 抄多份必然对不上。 */
-const MAX_AGE_DAYS = metaCapiWriter.maxEventAgeDays
+/**
+ * Meta 只收 7 天内的事件（官方硬限制）。
+ * 🔴 这里**不能** import metaCapiWriter 来取这个数 —— 这是 'use client' 组件，
+ *    writer 牵连出 hasher → node 的 crypto，拖进浏览器 bundle 会让整页闪一下就崩
+ *    （2026-09-06 线上实测）。宁可写死这个常数，也不把服务端模块拉进客户端。
+ */
+const MAX_AGE_DAYS = 7
 
 type Writeback = {
   id: string
