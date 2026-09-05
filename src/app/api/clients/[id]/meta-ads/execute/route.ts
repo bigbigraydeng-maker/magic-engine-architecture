@@ -28,6 +28,7 @@ import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import {
   setCampaignStatus,
   setCampaignDailyBudget,
+  getCampaignDetails,
 } from '@/lib/meta/client'
 import { assertCampaignOwnedByClient } from '@/lib/meta/campaign-ownership'
 import { checkBudgetWithinSafeRange } from '@/lib/meta/guardrails'

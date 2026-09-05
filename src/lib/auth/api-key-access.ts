@@ -296,10 +296,12 @@ export function logMcpAccess(params: {
   void supabaseAdmin
     .from('mcp_access_log')
     .insert(row)
-    .then(({ error }) => {
-      if (error) console.error('[api-key-access] logMcpAccess failed:', error)
-    })
-    .catch((e) => console.error('[api-key-access] logMcpAccess rejected:', e))
+    .then(
+      ({ error }) => {
+        if (error) console.error('[api-key-access] logMcpAccess failed:', error)
+      },
+      (e: unknown) => console.error('[api-key-access] logMcpAccess rejected:', e),
+    )
 }
 
 // ── tool-callback context guards (physically separate per kind) ─────────────

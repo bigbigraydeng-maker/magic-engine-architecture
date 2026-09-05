@@ -13,6 +13,10 @@ export default defineConfig({
       '**/node_modules/**',
       '**/.next/**',
       '**/.claude/**',
+      // Playwright specs 由 `npm run test:e2e` 跑，vitest 不该收进来（收进来只会报 test.describe 不许在这里调）
+      'e2e/**',
+      // 内容工厂 worker 是独立包（自带 package.json，测试用 node --test 跑），主仓 vitest 不该收进来
+      'scripts/factory-worker/**',
     ],
     coverage: {
       provider: 'v8',
