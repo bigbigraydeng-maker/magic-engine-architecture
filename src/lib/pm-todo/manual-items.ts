@@ -21,6 +21,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
+import { pushConversionReviewItems } from './conversion-review-items'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
@@ -77,6 +78,10 @@ export type ManualItemKind =
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
+  /** 有成交/咨询等着人核对要不要告诉广告平台 —— 撤不回，所以必须人点 */
+  | 'conversion_needs_review'
+  /** 发给广告平台时断线了，不知道对方收没收 —— 程序绝不自己重发，等人核对 */
+  | 'conversion_send_in_doubt'
   | AttributionItemKind
   | ClientRosterItemKind
   | 'linkedin_progress_needs_review'
@@ -305,6 +310,10 @@ export async function loadManualItems(
   await pushCronHealthItems(supabase, items, now)
   // 平台候选到了复查日期 —— 不落库、不查表，纯本地日期判断
   pushPlatformCandidateReviewItems(items, now)
+  // 成交/咨询等着人核对要不要告诉广告平台 —— 撤不回的动作，只能人点（#1397）
+  await pushConversionReviewItems(supabase, items, clients, now).catch((e) =>
+    console.warn('[manual-items] 成交待核对读取失败（不阻塞其他待办）:', e),
+  )
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
