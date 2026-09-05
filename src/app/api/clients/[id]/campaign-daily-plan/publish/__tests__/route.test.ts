@@ -215,6 +215,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.clearAllMocks()
   vi.restoreAllMocks()
 })
@@ -430,6 +431,37 @@ describe('publish bridge — token source', () => {
 })
 
 describe('publish bridge — live run records real provider ids', () => {
+  it.each([
+    { label: 'future post', now: '2026-09-02T00:00:00.000Z', offset: 0,
+      scheduled: '2026-09-02T20:00:00.000Z', early: '2026-09-03T00:00:00.000Z', late: '2026-09-05T20:00:00.000Z' },
+    { label: 'offset future post', now: '2026-09-03T00:00:00.000Z', offset: 1,
+      scheduled: '2026-09-03T20:00:00.000Z', early: '2026-09-04T00:00:00.000Z', late: '2026-09-06T20:00:00.000Z' },
+    { label: 'immediate post', now: '2026-09-03T00:00:00.000Z', offset: 0,
+      scheduled: undefined, early: '2026-09-03T04:00:00.000Z', late: '2026-09-06T00:00:00.000Z' },
+  ])('anchors measurement to delivery, not submission: $label', async ({ now, offset, scheduled, early, late }) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(now))
+    stubTables()
+    armProvider()
+
+    const response = await POST(request({ no_publish: false, dates: [DATES[0]], date_offset_days: offset }), params)
+    const json = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(mockPublish).toHaveBeenCalledTimes(1)
+    expect(mockPublish.mock.calls[0][0].scheduledPublishTime?.toISOString()).toBe(scheduled)
+    expect(json.receipt.published[0].scheduled_publish_time).toBe(scheduled)
+    expect(json.receipt.published[0].published_at).toBe(now)
+    expect(mockSendInngestEvent).toHaveBeenCalledTimes(1)
+    const event = mockSendInngestEvent.mock.calls[0][0]
+    expect(event.id).toBe(keyFor(DATES[0]))
+    expect(event.name).toBe('daily_plan.post.published')
+    expect(event.data.published_at).toBe(now)
+    expect(event.data.measure_at).toEqual([{ hours: 4, at: early }, { hours: 72, at: late }])
+    if (scheduled) expect(event.data.scheduled_publish_time).toBe(scheduled)
+    else expect(event.data).not.toHaveProperty('scheduled_publish_time')
+  })
+
   it('publishes each reviewed Post once and stores the real ids', async () => {
     stubTables()
     armProvider()

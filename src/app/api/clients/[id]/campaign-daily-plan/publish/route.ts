@@ -344,8 +344,10 @@ async function publishPending(
           post_id: record.post_id,
           page_id: record.page_id,
           published_at: publishedAt,
+          ...(record.scheduled_publish_time ? { scheduled_publish_time: record.scheduled_publish_time } : {}),
           permalink: record.permalink,
-          measure_at: measurementSchedule(publishedAt),
+          // A scheduled receipt confirms submission, not public visibility.
+          measure_at: measurementSchedule(record.scheduled_publish_time ?? record.published_at),
         },
       })
       eventIds.push(...sent.event_ids)
