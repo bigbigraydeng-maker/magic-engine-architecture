@@ -297,6 +297,15 @@ export default function SiteAuditPagesPage() {
   const handleIndexFilterChange = (f: IndexFilter) => {
     setIndexFilter(f)
     setOffset(0)
+    // Keep the URL in sync so refresh/copy-link/tab-restore doesn't silently
+    // re-apply a filter the user just switched away from (see mount effect above).
+    const url = new URL(window.location.href)
+    if (f === 'not-indexed') {
+      url.searchParams.set('filter', 'not-indexed')
+    } else {
+      url.searchParams.delete('filter')
+    }
+    window.history.replaceState(null, '', url)
   }
 
   const totalPages = Math.ceil(total / LIMIT)
