@@ -5,6 +5,14 @@
 
 ---
 
+### 2026-09-05（今日待办邮件去刷屏：未收录页面按客户汇总 + LinkedIn 待办去重，PR [#1375](https://github.com/bigbigraydeng-maker/magic-engine/pull/1375)）
+
+**上线内容**：PM/FDE 的今日待办邮件（及后台「今日待办」页，二者共用 `loadTodoCounts`）正文被两类「一条一行」的待办淹没，真正要动手的被埋掉。① 谷歌未收录页面（not_indexed）从「一页一条」改为「一个客户汇总一条」——报总数 + 三类分别计数（内容太薄 / 爬过没收录 / 谷歌还不认识），链接落到该客户 GSC 属性（生产实测 oztop 116 + CTS 6，122 行塌成 2 行）；② LinkedIn 进度贴待办从「一草稿一条、内容逐字重复」改为「按类归堆、一类一条、多于一条带条数」，单条红线话术（已发布勿重发）逐字保留。两条读取均改用平台既有 `fetchAll` 分页读全 + 全序排序，条数永远准、任何一类不因截断被漏掉；未收录读取失败自兜住（`.catch` 隔离），不再拖垮整条人工车道。
+
+**验证**：`npx vitest run src/lib/pm-todo/` 全绿（新增 LinkedIn 三条只出一条 / not_indexed 116+6→2 / 失败隔离 / 分页全序 等回归）；`tsc --noEmit` 改动文件零错误；`npm run build` 通过；直连生产库核对了刷屏来源。子牙+魏征独立复审通过，Codex 六轮复审全部收口。
+
+**Reuse Statement**：复用既有 `pm-todo` 人工车道、其「一客户/一类只出一条」去重纪律与分页读全设施 `fetchAll`；未新增能力线 / 表 / endpoint / 依赖 / 客户专属 runtime。遗留 follow-up：未收录清单做成带本地分类（thin/declined/unknown）的站内可操作视图（需前端改动，已单独登记为任务）。
+
 ### 2026-09-05（Articles 首页编辑式视觉重做，PR [#1389](https://github.com/bigbigraydeng-maker/magic-engine/pull/1389)）
 
 **上线内容**：将 `/blog/` 从大面积留白加两张同权重白卡片，重做为 Magic Engine 黑金米白的编辑式入口：首页使用 Field Notes 刊头和真实文章数量版面，明确区分 Articles 实操指南与 Magic Insight 研究简报；两篇现有文章改为一篇主打流程视觉、一篇横向最新指南，形成清楚的阅读层级。未改文章正文、URL、canonical、结构化数据、分析脚本或转化路径。
