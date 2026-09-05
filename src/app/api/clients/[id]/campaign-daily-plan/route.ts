@@ -36,6 +36,7 @@ import {
   type CampaignDailyPlanData,
   type CampaignDailyPostReviewMeta,
 } from '@/lib/campaign/daily-plan'
+import { CampaignDailyPublishMetaSchema } from '@/lib/campaign/daily-plan-publish'
 
 interface ActiveMasterBriefRef {
   id: string
@@ -111,6 +112,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         review_revision: null,
         review_summary: { passed: 0, needs_revision: 0, total: 0 },
         publish_queue_receipt: null,
+        publish_receipt: null,
+        facebook_page_id: null,
       })
     }
 
@@ -162,6 +165,28 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       }
       publishQueueMeta = parsedPublishQueue.data
     }
+    // Provider publish receipt. A receipt from an older snapshot is reported
+    // as absent rather than thrown on: the plan has since been re-edited, so
+    // those post ids no longer describe the content on screen.
+    let publishMeta = null
+    if (planData?.publish_meta !== undefined) {
+      const parsedPublish = CampaignDailyPublishMetaSchema.safeParse(planData.publish_meta)
+      if (
+        parsedPublish.success &&
+        parsedPublish.data.plan_revision === planRevision &&
+        parsedPublish.data.review_revision === reviewMeta?.revision
+      ) {
+        publishMeta = parsedPublish.data
+      }
+    }
+
+    // The Page this client is registered against — the publish route refuses
+    // any other Page id, so the UI shows it instead of asking anyone to type one.
+    const { data: clientRow } = await supabaseAdmin
+      .from('clients')
+      .select('facebook_page_id')
+      .eq('id', clientId)
+      .maybeSingle()
 
     // Grounding must reflect what the SAVED plan was actually grounded in,
     // not "does an active brief happen to exist right now" — otherwise a plan
@@ -317,6 +342,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       review_revision: reviewMeta?.revision ?? null,
       review_summary: reviewSummary,
       publish_queue_receipt: publishQueueMeta,
+      publish_receipt: publishMeta,
+      facebook_page_id: (clientRow as { facebook_page_id?: string | null } | null)?.facebook_page_id ?? null,
     })
   } catch (err: unknown) {
     return NextResponse.json({ success: false, error: errorMessage(err) }, { status: 500 })

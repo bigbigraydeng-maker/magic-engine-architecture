@@ -36,6 +36,11 @@ const LOGIN_REQUIRED_HOSTS = [
   'adsmanager.facebook.com',
   'business.facebook.com',
   'facebook.com',
+  // Mailchimp 后台同一个坑：未登录访问 admin.mailchimp.com 会 302 跳
+  // login.mailchimp.com 再返回 200 —— 今天 curl 出来是「好链接」，哪天 Mailchimp
+  // 对 Render 的出口 IP 返 403，整条「待确认付款」人工车道会被 dropBrokenLinks
+  // 静默丢掉，只剩一行 console.warn。那正是铁律 3 下半禁止的断头。
+  'mailchimp.com',
 ]
 
 export function isLoginRequiredHost(href: string): boolean {

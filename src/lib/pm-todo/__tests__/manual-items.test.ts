@@ -12,6 +12,9 @@ import {
   loadManualItems,
   pushPlatformCandidateReviewItems,
   pushDataForSeoCreditsItem,
+  pushLinkedinProgressItems,
+  buildNotIndexedItems,
+  type NotIndexedRow,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -70,6 +73,301 @@ describe('pushDataForSeoCreditsItem', () => {
     await pushDataForSeoCreditsItem(query.supabase, items, new Date('2026-09-01T00:00:00Z'))
 
     expect(items).toEqual([])
+  })
+})
+
+describe('pushLinkedinProgressItems — 同一类卡点只出一条，别刷屏', () => {
+  const NOW = new Date('2026-09-03T09:00:00Z')
+
+  /**
+   * 假 content_posts 查询：生产用 `fetchAll` 分页，终点是 `.range(from, to)`。
+   * 按 range 真的切片建模 —— 这样 fetchAll 的分页契约（满页续拉、不满页收尾）
+   * 才被如实模拟，不会因为每页都返回全量而重复计数或死循环。
+   */
+  function fakePostsQuery(rows: unknown[]): SupabaseClient {
+    // 记录 .order() 的列 —— 用来断言分页带了唯一 tie-breaker（见 tie-breaker 用例）。
+    const orderedCols: string[] = []
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      in: () => chain,
+      order: (col: string) => {
+        orderedCols.push(col)
+        return chain
+      },
+      range: async (from: number, to: number) => ({
+        data: (rows as unknown[]).slice(from, to + 1),
+        error: null,
+      }),
+    }
+    return { from: () => chain, __orderedCols: orderedCols } as unknown as SupabaseClient
+  }
+
+  const draft = (reason: string) => ({
+    id: `p-${reason}-${Math.random()}`,
+    status: 'draft',
+    updated_at: '2026-09-01T00:00:00Z',
+    generation_context_snapshot: { reason },
+  })
+
+  it('🔴 三条待审草稿 → 只出一条、带「3 条」，不是三行一模一样的重复', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        draft('sensitive_content_flagged'),
+        draft('sensitive_content_flagged'),
+        draft('sensitive_content_flagged'),
+      ]),
+      items,
+      NOW,
+    )
+
+    const review = items.filter((i) => i.kind === 'linkedin_progress_needs_review')
+    expect(review).toHaveLength(1)
+    expect(review[0].what).toContain('3 条')
+    expect(review[0].client_name).toBe('ME 产品动态（LinkedIn）')
+  })
+
+  it('一条待审草稿 → 保留原来的单数文案（多轮 review 磨过的话术不回退）', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([draft('sensitive_content_flagged')]),
+      items,
+      NOW,
+    )
+
+    expect(items).toHaveLength(1)
+    expect(items[0].kind).toBe('linkedin_progress_needs_review')
+    expect(items[0].what).toBe(
+      '这周的 LinkedIn 进度贴草稿里可能带了客户敏感信息，系统没敢自动发，等你看一眼',
+    )
+    // 单数不该出现条数噪音
+    expect(items[0].what).not.toContain('条')
+  })
+
+  it('账号未连的多条草稿 → 只出一条 needs_setup（账号连一次就都能发）', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        draft('linkedin_account_not_configured'),
+        draft('linkedin_account_not_configured'),
+      ]),
+      items,
+      NOW,
+    )
+
+    const setup = items.filter((i) => i.kind === 'linkedin_progress_needs_setup')
+    expect(setup).toHaveLength(1)
+    expect(setup[0].what).toContain('2 条')
+  })
+
+  it('已发布但回写失败 → 合并成一条，且保住「千万别重发」红线话术', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        {
+          id: 'a',
+          status: 'approved',
+          updated_at: '2026-09-01T00:00:00Z',
+          generation_context_snapshot: { reason: 'published_but_db_sync_failed' },
+        },
+        {
+          id: 'b',
+          status: 'approved',
+          updated_at: '2026-09-01T00:00:00Z',
+          generation_context_snapshot: { reason: 'published_but_db_sync_failed' },
+        },
+      ]),
+      items,
+      NOW,
+    )
+
+    expect(items).toHaveLength(1)
+    expect(items[0].kind).toBe('linkedin_progress_needs_review')
+    expect(items[0].what).toContain('2 条')
+    expect(items[0].what).toContain('千万别')
+    // 绝不能引导去"重试/重新批准"——那会发出重复的公开帖子
+    expect(items[0].how).toContain('手动把这几条记录的状态改成')
+  })
+
+  it('approved 但还没卡过 2 小时阈值 → 不下发（系统还没试着发）', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        {
+          id: 'fresh',
+          status: 'approved',
+          updated_at: new Date(NOW.getTime() - 30 * 60 * 1000).toISOString(),
+          generation_context_snapshot: { reason: 'published' },
+        },
+      ]),
+      items,
+      NOW,
+    )
+    expect(items).toEqual([])
+  })
+
+  it('🔴 积压很多且更旧的是另一类 → fetchAll 读全，不漏数也不整类漏掉（Codex P2 ×2）', async () => {
+    const items: ManualItem[] = []
+    // 600 条敏感草稿在前，1 条「已发布但回写失败」排在最后（更旧）。
+    // 旧版 .limit(500) 会把这条红线告警整类砍掉；fetchAll 读全后两类都在。
+    const rows = [
+      ...Array.from({ length: 600 }, () => draft('sensitive_content_flagged')),
+      {
+        id: 'oldest-dbsync',
+        status: 'approved',
+        updated_at: '2026-09-01T00:00:00Z',
+        generation_context_snapshot: { reason: 'published_but_db_sync_failed' },
+      },
+    ]
+    await pushLinkedinProgressItems(fakePostsQuery(rows), items, NOW)
+
+    const review = items.filter((i) => i.kind === 'linkedin_progress_needs_review')
+    // 敏感一条（含精确 600，不被 500 截断）+ 已发布回写失败一条（没被整类漏掉）
+    const sensitive = review.find((i) => i.what.includes('敏感信息'))
+    const dbSync = review.find((i) => i.what.includes('千万别'))
+    expect(sensitive?.what).toContain('600')
+    expect(dbSync).toBeTruthy()
+  })
+
+  it('🔴 分页排序带唯一 tie-breaker(id) → 跨页相同 updated_at 也不会重复/漏行', async () => {
+    const items: ManualItem[] = []
+    const client = fakePostsQuery([draft('sensitive_content_flagged')])
+    await pushLinkedinProgressItems(client, items, NOW)
+
+    // 单靠 updated_at 不是全序：并列值跨 1000 行页边界会顺序不稳。必须补 id。
+    const orderedCols = (client as unknown as { __orderedCols: string[] }).__orderedCols
+    expect(orderedCols).toContain('updated_at')
+    expect(orderedCols).toContain('id')
+  })
+
+  it('发布失败多条、报错各不相同 → 一条汇总，条数 + 去重后的原因都带上', async () => {
+    const items: ManualItem[] = []
+    await pushLinkedinProgressItems(
+      fakePostsQuery([
+        {
+          id: 'x',
+          status: 'approved',
+          updated_at: '2026-09-01T00:00:00Z',
+          generation_context_snapshot: { publish_error: '401 授权失效' },
+        },
+        {
+          id: 'y',
+          status: 'approved',
+          updated_at: '2026-09-01T00:00:00Z',
+          generation_context_snapshot: { publish_error: '429 限流' },
+        },
+      ]),
+      items,
+      NOW,
+    )
+
+    const failed = items.filter((i) => i.kind === 'linkedin_progress_failed')
+    expect(failed).toHaveLength(1)
+    expect(failed[0].what).toContain('2 条')
+    expect(failed[0].what).toContain('401 授权失效')
+    expect(failed[0].what).toContain('429 限流')
+  })
+})
+
+describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别一页一条', () => {
+  const NOW = new Date('2026-09-04T00:00:00Z')
+  const nameOf = (id: string) => (id === 'oztop' ? 'oztop' : id === 'cts' ? 'CTS Tours NZ' : id)
+  // 有 GSC 连接才有能直达的未收录清单；两个客户都连了。
+  const siteUrls = new Map<string, string>([
+    ['oztop', 'sc-domain:oztop.com.au'],
+    ['cts', 'sc-domain:ctstours.co.nz'],
+  ])
+
+  const page = (client_id: string, i: number, over: Partial<NotIndexedRow> = {}): NotIndexedRow => ({
+    client_id,
+    url: `https://site/${client_id}/p${i}`,
+    index_verdict: 'Crawled - currently not indexed',
+    first_not_indexed_at: '2026-08-01T00:00:00Z',
+    word_count: 800,
+    ...over,
+  })
+
+  it('🔴 116 + 6 个未收录页面 → 只出 2 条（每客户一条），不是 122 条', () => {
+    const oztop: NotIndexedRow[] = [
+      ...Array.from({ length: 55 }, (_, i) => page('oztop', i, { word_count: 120 })), // 内容太薄
+      ...Array.from({ length: 6 }, (_, i) => page('oztop', 100 + i, { index_verdict: 'URL is unknown to Google' })),
+      ...Array.from({ length: 55 }, (_, i) => page('oztop', 200 + i)), // 爬过没收录
+    ]
+    const cts = Array.from({ length: 6 }, (_, i) => page('cts', i))
+    const items = buildNotIndexedItems([...oztop, ...cts], siteUrls, nameOf, NOW)
+
+    expect(items).toHaveLength(2)
+    const oz = items.find((i) => i.client_name === 'oztop')!
+    expect(oz.kind).toBe('not_indexed')
+    expect(oz.what).toContain('116 个页面')
+    expect(oz.what).toContain('55 个内容太薄')
+    expect(oz.what).toContain('6 个谷歌还不认识')
+    expect(oz.what).toContain('55 个谷歌爬过却没收录')
+    // 🔴 链接落到能直达「哪几页、什么原因」的地方 —— GSC 属性（站内无收录状态视图）
+    expect(oz.href).toBe('https://search.google.com/search-console?resource_id=sc-domain%3Aoztop.com.au')
+    expect(oz.how).toContain('索引')
+  })
+
+  it('资产文件（图片/PDF）不算页面，不计进去', () => {
+    const rows: NotIndexedRow[] = [
+      page('oztop', 1),
+      page('oztop', 2, { url: 'https://site/oztop/logo.png' }),
+      page('oztop', 3, { url: 'https://site/oztop/spec.pdf' }),
+    ]
+    const items = buildNotIndexedItems(rows, siteUrls, nameOf, NOW)
+    expect(items).toHaveLength(1)
+    expect(items[0].what).toContain('1 个页面')
+  })
+
+  it('没有 GSC 连接的客户 → 不下发（没有能直达的清单，给了也白跑）', () => {
+    const items = buildNotIndexedItems([page('oztop', 1)], new Map(), nameOf, NOW)
+    expect(items).toEqual([])
+  })
+
+  it('空输入 → 一条都不出', () => {
+    expect(buildNotIndexedItems([], siteUrls, nameOf, NOW)).toEqual([])
+  })
+})
+
+describe('loadManualItems — 未收录读失败被隔离，不清空整条人工车道（Codex P1）', () => {
+  it('client_site_pages 分页读失败 → loadManualItems 不抛、not_indexed 缺席但其他不受牵连', async () => {
+    const NOW = new Date('2026-09-04T00:00:00Z')
+    const empty = new Proxy({} as Record<string, unknown>, {
+      get(_t, prop) {
+        if (prop === 'then')
+          return (res: (v: unknown) => unknown) =>
+            Promise.resolve({ data: [], error: null }).then(res)
+        if (prop === 'single' || prop === 'maybeSingle') return async () => ({ data: null, error: null })
+        return () => empty
+      },
+    })
+    const clientsQuery = {
+      select: () => clientsQuery,
+      eq: () => clientsQuery,
+      order: () => clientsQuery,
+      range: async () => ({ data: [{ id: 'c1', name: 'CTS Tours NZ', domain: 'x' }], error: null }),
+    }
+    // client_site_pages 被两处查：crawlRows 走 .limit（正常空），
+    // notIndexed 的 fetchAll 走 .range（让它抛，模拟分页读失败）。
+    const csp: Record<string, unknown> = {}
+    for (const m of ['select', 'not', 'in', 'order']) csp[m] = () => csp
+    csp.limit = async () => ({ data: [], error: null })
+    csp.range = async () => {
+      throw new Error('client_site_pages 分页读挂了')
+    }
+    const stub = {
+      from: (table: string) => {
+        if (table === 'clients') return clientsQuery
+        if (table === 'client_site_pages') return csp
+        return empty
+      },
+    } as unknown as SupabaseClient
+
+    // 关键：没有它自己的 .catch，这里会 reject → daily-todo 把全部人工待办清空。
+    const all = await loadManualItems(stub, NOW)
+    expect(Array.isArray(all)).toBe(true)
+    expect(all.some((i) => i.kind === 'not_indexed')).toBe(false)
   })
 })
 

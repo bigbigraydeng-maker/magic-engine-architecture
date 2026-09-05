@@ -91,6 +91,9 @@ function dueItem() {
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.CRON_SECRET = 'test-secret'
+  // 发信总闸默认关（2026-09-03 起）。下面这批测试钉的是「闸开着时的行为」，
+  // 所以显式打开；「闸关着」本身另有一组测试，见文件末尾。
+  process.env.EMAIL_REPLY_DIGEST_ENABLED = 'true'
   h.cronRows.length = 0
   mockClients.mockResolvedValue({
     clients: new Map([[CLIENT, { id: CLIENT, name: 'CTS Tours NZ', domain: 'ctstours.co.nz' }]]),
@@ -207,5 +210,52 @@ describe('🔴 压掉的条数跟着信一起出去', () => {
 
     await GET(req())
     expect(mockSend.mock.calls[0][2]).toMatchObject({ dropped: 4 })
+  })
+})
+
+/**
+ * 发信总闸（2026-09-03 PM 拍板暂停后加的）。
+ *
+ * 钉的是**失败方向**：这条通道漏配环境变量时必须沉默，不能开着发。
+ * 名单里噪音占七成的那个问题修好之前，任何一条路径都不许把信发出去 ——
+ * 包括有人拿着正确密钥手动 curl 的情况。
+ */
+describe('🔴 发信总闸默认关', () => {
+  it('没配这个变量 → 一封不发，连运行记录都不插', async () => {
+    delete process.env.EMAIL_REPLY_DIGEST_ENABLED
+
+    const res = await GET(req())
+
+    expect(res.status).toBe(200)
+    expect(mockSend).not.toHaveBeenCalled()
+    // 在 startCronRun 之前就返回了 —— 停用期间不该每天多攒一行运行记录
+    expect(h.finish).not.toHaveBeenCalled()
+  })
+
+  it('配成 false → 一封不发', async () => {
+    process.env.EMAIL_REPLY_DIGEST_ENABLED = 'false'
+
+    await GET(req())
+
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('配成 true 以外的任何值都不发 —— 拼错了也要安全', async () => {
+    for (const v of ['TRUE', '1', 'yes', 'ture', '']) {
+      vi.clearAllMocks()
+      process.env.EMAIL_REPLY_DIGEST_ENABLED = v
+
+      await GET(req())
+
+      expect(mockSend, `值 "${v}" 不该放行`).not.toHaveBeenCalled()
+    }
+  })
+
+  it('闸关着也不放过没鉴权的请求 —— 401 优先于 200 skipped', async () => {
+    delete process.env.EMAIL_REPLY_DIGEST_ENABLED
+
+    const res = await GET(req('Bearer wrong'))
+
+    expect(res.status).toBe(401)
   })
 })
