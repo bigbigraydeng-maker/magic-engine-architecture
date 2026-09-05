@@ -26,6 +26,8 @@
  * 「取不到线索的客户数」，见 route.ts），否则就是过度告警。
  */
 
+import { isOutletGap, outletGapLabel } from '@/lib/mailchimp/outlet-tally'
+
 /** 只取这个摘要用得上的几个字段，故意不绑死 MetaLeadsSyncResult 全貌。 */
 export interface LeadsSyncOutcome {
   clientName: string | null
@@ -54,52 +56,6 @@ export function summariseFailures(results: readonly LeadsSyncOutcome[]): string 
 
   const byReason = groupByReason(failures.map((f) => ({ name: f.clientName, reason: f.error ?? '' })))
   return `${failures.length}/${results.length} 个客户取不到线索 — ${byReason.join(' ‖ ')}`
-}
-
-/**
- * 「本来就不该进名单」的跳过理由 —— 白名单，这几种一律不报。
- *
- * 为什么是白名单不是黑名单：默认必须是**说出来**。这个文件修的两次事故都是
- * 「新出现的一种失败没人认得，于是被默默咽掉」。新加的 reason 落到这里之外
- * 会自动进日报（最多吵一次，加一行就能压掉），反过来则是又一次静默断供。
- */
-const EXPECTED_SKIP_REASONS = new Set([
-  'no_email', // 表单没留邮箱，本来就进不去名单
-  'invalid_email', // 邮箱不成形，provider 侧也收不了
-  'explicit_opt_out', // 人在表单里明确勾了不要
-  'contact_dnc', // 这个人已被标记免打扰
-  'no_audience_config', // 这个客户没开邮件出口（查得到，就是没配）
-  'no_audience_id', // 同上，provider 层的说法
-])
-
-/** 出口结果 tally 的 key → 给 PM 看的人话。key 的构成见 `LeadsSyncOutcome.mailchimp`。 */
-const OUTLET_GAP_LABELS: Record<string, string> = {
-  'skipped:client_config_read_failed': '读不出这个客户的邮件名单配置',
-  'skipped:no_api_key': '名单配好了，但系统没有 Mailchimp 密钥',
-  'skipped:bad_api_key_format': 'Mailchimp 密钥格式不对',
-  'skipped:dnc_check_failed': '查不到这个人是否免打扰，保险起见没加',
-  'skipped:evidence_persist_failed': '同步记录写不进库，保险起见没加',
-  'failed:auth': 'Mailchimp 不认这个密钥',
-  'failed:audience_not_found': 'Mailchimp 里找不到这个名单',
-  'failed:rate_limited': 'Mailchimp 限流，这批没加进去',
-  'failed:provider_5xx': 'Mailchimp 自己出错了',
-  'failed:timeout': '连 Mailchimp 超时',
-  'failed:network_error': '连不上 Mailchimp',
-  'failed:invalid_email': 'Mailchimp 说这个邮箱不合法',
-  'failed:unexpected_status': 'Mailchimp 返回了没见过的响应',
-  'failed:unexpected_exception': '同步这个人时程序自己炸了',
-}
-
-/** 这个 tally key 算不算「本该进名单却没进」。 */
-function isOutletGap(key: string): boolean {
-  if (key.startsWith('failed:')) return true
-  if (!key.startsWith('skipped:')) return false // subscribed / already_member 是好结果
-  return !EXPECTED_SKIP_REASONS.has(key.slice('skipped:'.length))
-}
-
-/** 认识的 key 说人话；不认识的**照原样带出来**，绝不咽掉。 */
-function outletGapLabel(key: string): string {
-  return OUTLET_GAP_LABELS[key] ?? `邮件名单出口异常（${key}）`
 }
 
 /**
