@@ -163,6 +163,24 @@ export async function GET(request: Request) {
     })
   }
 
+  // 🔴 谁导出了这份 PII，必须留痕（狄仁杰红线：对外交客户联系方式却无审计=硬伤）。
+  //    这是结构化日志（Render 日志可搜 [audience-export]），总能生效、不依赖任何未上线的表。
+  //    日志里**只记数量与操作者，不记一个客户字节** —— 审计不能自己变成第二个 PII 泄露面。
+  const fwd = request.headers.get('x-forwarded-for') ?? ''
+  console.log(
+    '[audience-export]',
+    JSON.stringify({
+      action: 'download_csv',
+      list: 'A',
+      client_id: clientId,
+      actor: admin.user.email ?? null,
+      ip: fwd.split(',')[0]?.trim() || null,
+      ua: request.headers.get('user-agent') || null,
+      kept: result.stats.kept,
+      at: new Date().toISOString(),
+    }),
+  )
+
   // 真下载：明文 CSV，直接进浏览器，不落地服务器。
   const csv = audienceToCsv(result.rows)
   const today = new Date().toISOString().slice(0, 10)
