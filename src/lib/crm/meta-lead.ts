@@ -20,6 +20,7 @@ import { buildIdentities, resolveContact } from '@/lib/crm/identity'
 import { attributionColumns, attributionFromMetaLeadRow } from '@/lib/crm/attribution'
 import { lookupCreativeRefByAdId } from '@/lib/ads/creative-link'
 import { subscribeMember, type SubscribeMemberResult } from '@/lib/mailchimp/client'
+import { isUndefinedColumn, readAudienceId } from '@/lib/mailchimp/audience-config'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import type { MetaLead, MetaLeadAnswer } from '@/lib/meta/lead-forms'
 
@@ -438,9 +439,16 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
         .update({ mailchimp_synced_at: new Date().toISOString() })
         .eq('id', contactId)
       if (syncErr) {
-        // 观测列没写上不影响主管道；如实 warn，不 throw。
+        // 观测列没写上不影响主管道；如实 warn，不 throw。会员关系的权威回执是
+        // 上面刚写成功的触点 metadata.mailchimp_result，不靠这一列。
+        //
+        // 生产上这里目前**必然**失败：`contacts.mailchimp_synced_at` 跟
+        // `clients.mailchimp_audience_id` 是同一条没 apply 的 migration
+        // (20260826010000) 加的。分开措辞，免得下一个人把结构性缺列当成偶发抖动。
         console.warn(
-          `[meta-lead] contact ${contactId} mailchimp_synced_at 更新失败: ${sanitizeErr(syncErr.message)}`,
+          isUndefinedColumn(syncErr)
+            ? `[meta-lead] contact ${contactId} mailchimp_synced_at 这一列在库里不存在（migration 20260826010000 未 apply）；回执已落触点 metadata，不影响同步`
+            : `[meta-lead] contact ${contactId} mailchimp_synced_at 更新失败: ${sanitizeErr(syncErr.message)}`,
         )
       }
     }
@@ -493,7 +501,10 @@ interface SyncMailchimpInput {
  * 把一个 lead → Mailchimp audience。**永远返回结果对象**，绝不 throw。
  *
  * gate 顺序（Issue #1188 硬约束 + PM override 5425996255）：
- *   1. 客户是否配置了 audience id —— 没配 → skipped: no_audience_config
+ *   1. 客户是否配置了 audience id（走 `mailchimp/audience-config` 的容错读法：
+ *      专列优先、42703 降级到 `leads_config`）—— 读不到 → skipped:
+ *      client_config_read_failed **并 console.error**；查得到但没配 → skipped:
+ *      no_audience_config
  *   2. 是否有邮箱 —— 没有 → skipped: no_email
  *   3. 是否拿到 API key —— 没有 → skipped: no_api_key
  *   4. 表单里是否明确 opt-out —— 是 → skipped: explicit_opt_out
@@ -510,20 +521,21 @@ interface SyncMailchimpInput {
  *    任何 dnc_cleared 触点（那是「人明确纠正」的强信号，跟表单勾选是两回事）。
  */
 async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMemberResult> {
-  // 1. 客户配置。**只 select 出口需要的那一列**，别顺手拉全表。
-  const { data: clientRow, error: clientErr } = await supabaseAdmin
-    .from('clients')
-    .select('mailchimp_audience_id')
-    .eq('id', input.clientId)
-    .maybeSingle()
-  if (clientErr) {
-    // 查配置失败 = 不该猜「有」也不该猜「没有」，如实 skipped：cron 日志能看见。
+  // 1. 客户配置。走共享读法 —— **绝不直接 select('mailchimp_audience_id')**：
+  //    那一列的 migration 至今没 apply 到生产，直接选它整条查询 42703 报错，
+  //    这里就每小时静默走 client_config_read_failed。见 audience-config.ts 的
+  //    注释和 2026-09-03 的生产实测。
+  const configRead = await readAudienceId(input.clientId)
+  if (!configRead.ok) {
+    // 查配置失败 = 不该猜「有」也不该猜「没有」。**必须吼出来** —— 这条分支
+    // 以前只有一个 return，没有一行日志、没有一个计数，于是「从来没同步过」
+    // 这件事在生产上藏了一整个月没人看得见。拿不到数据 ≠ 真没有。
+    console.error(
+      `[meta-lead] client ${input.clientId} Mailchimp 出口读配置失败，本条没进邮件名单: ${sanitizeErr(configRead.message)}`,
+    )
     return { status: 'skipped', reason: 'client_config_read_failed' }
   }
-  const audienceId =
-    typeof clientRow?.mailchimp_audience_id === 'string'
-      ? clientRow.mailchimp_audience_id.trim()
-      : ''
+  const audienceId = configRead.audienceId
   if (!audienceId) {
     return { status: 'skipped', reason: 'no_audience_config' }
   }
