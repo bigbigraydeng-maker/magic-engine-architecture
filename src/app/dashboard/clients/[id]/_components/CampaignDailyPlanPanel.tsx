@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 
+import { CampaignDailyPublishPanel, type PublishReceipt } from './CampaignDailyPublishPanel'
+
 interface Props {
   clientId: string
   campaignId: string
@@ -73,6 +75,8 @@ interface DailyPlanResponse {
     created_at: string
     posts: Array<{ date: string; image_asset_id: string; cta_url: string; review_verdict: 'PASS' }>
   } | null
+  publish_receipt: PublishReceipt | null
+  facebook_page_id: string | null
 }
 
 type PublishQueueStatus = 'READY' | 'NEEDS_REVISION' | 'PENDING_REVIEW'
@@ -646,6 +650,18 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
             {publishQueueError && <p className="mt-2 text-[11px] text-[#C2453A]">{publishQueueError}</p>}
           </div>
         </div>
+
+        <CampaignDailyPublishPanel
+          clientId={clientId}
+          campaignId={campaignId}
+          planId={data.plan_id}
+          planRevision={data.plan_revision}
+          reviewRevision={data.review_revision}
+          facebookPageId={data.facebook_page_id ?? null}
+          queueReceiptReady={Boolean(publishQueueReceipt)}
+          publishReceipt={data.publish_receipt ?? null}
+          onPublished={load}
+        />
 
         {/* Publishing + Ad preview */}
         <div className="border-t border-black/[.06] pt-3">

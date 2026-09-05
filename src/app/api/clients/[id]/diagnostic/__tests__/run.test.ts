@@ -49,7 +49,7 @@ const mockAccess = vi.mocked(requirePaidClientAccess)
 const CLIENT_ID = 'client-abc'
 
 function allowAccess() {
-  mockAccess.mockResolvedValue({ ok: true, user: { email: 'test@test.com' } as never, role: 'admin', allowedClientId: null })
+  mockAccess.mockResolvedValue({ ok: true, user: { email: 'test@test.com' } as never, role: 'admin', tier: 'admin', allowedClientId: null })
 }
 
 function denyAccess() {

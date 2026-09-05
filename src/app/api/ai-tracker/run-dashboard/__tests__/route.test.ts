@@ -60,7 +60,7 @@ describe('POST /api/ai-tracker/run-dashboard', () => {
     expect(mockRunTracker).not.toHaveBeenCalled()
   })
 
-  it('runs the tracker for an authorized dashboard session', async () => {
+  it('starts the tracker in the background for an authorized dashboard session', async () => {
     mockRequireDashboardClientAccess.mockResolvedValue({
       ok: true,
       user: { id: 'user-1', email: 'pm@magiclab.com' },
@@ -82,9 +82,10 @@ describe('POST /api/ai-tracker/run-dashboard', () => {
     const res = await POST(request({ client_id: CLIENT_ID, engines: ['openai'] }))
     const body = await res.json()
 
+    // Fire-and-forget: the response is an instant acknowledgement, not the
+    // tracker result (Render keeps the promise running after the response).
     expect(res.status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.runs_succeeded).toBe(2)
+    expect(body).toEqual({ success: true, status: 'started' })
     expect(mockRequireDashboardClientAccess).toHaveBeenCalledWith(CLIENT_ID)
     expect(mockRunTracker).toHaveBeenCalledWith({
       client_id: CLIENT_ID,

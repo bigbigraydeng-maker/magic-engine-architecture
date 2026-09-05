@@ -293,13 +293,17 @@ export function logMcpAccess(params: {
   if (kind === 'admin') row.admin_key_id = params.keyId
   else row.client_key_id = params.keyId
 
-  void supabaseAdmin
-    .from('mcp_access_log')
-    .insert(row)
+  // 审计日志即发即弃，但**任何一环都不许炸成未处理的 rejection**。
+  // Supabase 的 builder 类型是 PromiseLike（没有 .catch），所以先用
+  // Promise.resolve() 包一层拿到真 Promise，再 .then().catch() ——
+  // 这样连 then 回调自己抛错也一并兜住。写成 .then(f, g) 是兜不住 f 的。
+  void Promise.resolve(
+    supabaseAdmin.from('mcp_access_log').insert(row),
+  )
     .then(({ error }) => {
       if (error) console.error('[api-key-access] logMcpAccess failed:', error)
     })
-    .catch((e) => console.error('[api-key-access] logMcpAccess rejected:', e))
+    .catch((e: unknown) => console.error('[api-key-access] logMcpAccess rejected:', e))
 }
 
 // ── tool-callback context guards (physically separate per kind) ─────────────

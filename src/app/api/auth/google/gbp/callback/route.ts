@@ -23,7 +23,7 @@ import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { encryptToken } from '@/lib/platform-oauth/vocabulary'
 import { resolveGbpLocation } from '@/lib/gbp/location'
-import { GBP_STATE_COOKIE } from '../start/route'
+import { GBP_STATE_COOKIE } from '@/lib/gbp/oauth'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

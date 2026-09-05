@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { CrawlButton, type JobStatus } from '../_components/CrawlButton'
 
@@ -10,6 +10,10 @@ import { CrawlButton, type JobStatus } from '../_components/CrawlButton'
 
 type PageType = 'blog' | 'product' | 'service' | 'landing' | 'about' | 'contact' | 'other'
 type FilterType = PageType | 'all'
+/** Orthogonal to page type: filter by whether Google has indexed the page. */
+type IndexFilter = 'all' | 'not-indexed'
+/** Local reason a not-indexed page isn't indexed (derived server-side). */
+type IndexClass = 'unknown' | 'thin' | 'declined'
 
 interface ClientSitePage {
   id: string
@@ -20,6 +24,10 @@ interface ClientSitePage {
   has_geo_block: boolean
   status_code: number | null
   crawled_at: string | null
+  index_verdict: string | null
+  first_not_indexed_at: string | null
+  not_indexed: boolean
+  index_class: IndexClass | null
 }
 
 interface PagesResponse {
@@ -63,6 +71,24 @@ const TYPE_COLORS: Record<PageType, string> = {
   other:   'bg-slate-100 text-slate-600',
 }
 
+// Per-class label / action hint / color for the 收录状态 column.
+// Labels mirror the 今日待办 not_indexed 汇总项 so FDE sees the same wording.
+const INDEX_CLASS_LABEL: Record<IndexClass, string> = {
+  thin:     '内容太薄',
+  declined: '爬过没收录',
+  unknown:  '谷歌不认识',
+}
+const INDEX_CLASS_ACTION: Record<IndexClass, string> = {
+  thin:     '补内容 · 加内链',
+  declined: '去 GSC 请求编入索引',
+  unknown:  '去 GSC 请求编入索引',
+}
+const INDEX_CLASS_COLORS: Record<IndexClass, string> = {
+  thin:     'bg-amber-100 text-amber-700',
+  declined: 'bg-red-100 text-red-700',
+  unknown:  'bg-orange-100 text-orange-700',
+}
+
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -91,6 +117,35 @@ function GeoIcon({ hasGeo }: { hasGeo: boolean }) {
     : <span className="text-gray-300 text-xs">—</span>
 }
 
+/**
+ * 收录状态列：未收录页面显示本地分类 + 该做的动作；已收录 / 未检查各一态。
+ * 三态判据与后端一致：not_indexed（first_not_indexed_at 非空）优先，其次看
+ * index_verdict 有没有验过。
+ */
+function IndexStatusCell({ page }: { page: ClientSitePage }) {
+  if (page.not_indexed && page.index_class) {
+    const cls = page.index_class
+    return (
+      <div className="flex flex-col items-start gap-0.5">
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${INDEX_CLASS_COLORS[cls]}`}
+          title={page.index_verdict ?? undefined}
+        >
+          {INDEX_CLASS_LABEL[cls]}
+        </span>
+        <span className="text-xs text-gray-400">{INDEX_CLASS_ACTION[cls]}</span>
+      </div>
+    )
+  }
+  // 「已收录」只凭 index_verdict 有值 —— 依赖后端不变量：not_indexed 权威看
+  // first_not_indexed_at，index_verdict 仅作「验过了」的标记。轮检(index-check.ts)
+  // 保证两者同批写入，故走到这里必是真·已收录。
+  if (page.index_verdict) {
+    return <span className="inline-flex items-center gap-1 text-green-600 text-xs font-medium">✓ 已收录</span>
+  }
+  return <span className="text-gray-300 text-xs" title="还没做过收录检查">未检查</span>
+}
+
 function TableSkeleton() {
   return (
     <div className="animate-pulse space-y-2 mt-4">
@@ -111,15 +166,31 @@ export default function SiteAuditPagesPage() {
   const router = useRouter()
 
   const [selectedType, setSelectedType] = useState<FilterType>('all')
+  const [indexFilter, setIndexFilter] = useState<IndexFilter>('all')
   const [offset, setOffset] = useState(0)
   const [pages, setPages] = useState<ClientSitePage[]>([])
   const [total, setTotal] = useState(0)
   const [stats, setStats] = useState<PageStats | null>(null)
+  const [notIndexedCount, setNotIndexedCount] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
   const [currentJobStatus, setCurrentJobStatus] = useState<JobStatus | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  // Guards against out-of-order fetchPages responses (see fetchPages below):
+  // when the deep-link effect flips indexFilter right after mount, the
+  // 'all' request from the initial render can resolve after the
+  // 'not-indexed' request and must not clobber it.
+  const latestRequestId = useRef(0)
+
+  // Deep-link from 今日待办 not_indexed 汇总项: ?filter=not-indexed opens straight
+  // to the未收录 view. Read after mount (not in useState init) to avoid a
+  // hydration mismatch — the effect runs client-only, post-hydration.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('filter') === 'not-indexed') {
+      setIndexFilter('not-indexed')
+    }
+  }, [])
 
   // Fetch latest job status on mount
   useEffect(() => {
@@ -133,6 +204,17 @@ export default function SiteAuditPagesPage() {
       })
       .catch(() => {})
   }, [clientId])
+
+  // How many pages Google hasn't indexed — powers the「未收录」pill count,
+  // independent of the current view. Cheap: limit=1, we only read `total`.
+  const fetchNotIndexedCount = useCallback(() => {
+    fetch(`/api/clients/${clientId}/site-audit/pages?indexStatus=not-indexed&limit=1`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: PagesResponse | null) => { if (d) setNotIndexedCount(d.total ?? 0) })
+      .catch(() => {})
+  }, [clientId])
+
+  useEffect(() => { fetchNotIndexedCount() }, [fetchNotIndexedCount])
 
   // Poll job status while active
   useEffect(() => {
@@ -151,6 +233,7 @@ export default function SiteAuditPagesPage() {
             .then(r => r.ok ? r.json() : null)
             .then(s => { if (s) setStats(s) })
             .catch(() => {})
+          fetchNotIndexedCount()
           setOffset(0)
           setRefreshKey(k => k + 1)
         }
@@ -159,7 +242,7 @@ export default function SiteAuditPagesPage() {
 
     const timer = setInterval(poll, 3000)
     return () => clearInterval(timer)
-  }, [clientId, currentJobId, currentJobStatus])
+  }, [clientId, currentJobId, currentJobStatus, fetchNotIndexedCount])
 
   // Fetch aggregated stats once on mount
   useEffect(() => {
@@ -171,34 +254,58 @@ export default function SiteAuditPagesPage() {
 
   // Fetch pages whenever filter or page changes
   const fetchPages = useCallback(async () => {
+    const requestId = ++latestRequestId.current
     setLoading(true)
     setError(null)
     try {
+      const notIndexed = indexFilter === 'not-indexed'
       const qs = new URLSearchParams({
         limit: String(LIMIT),
         offset: String(offset),
-        sort: 'crawled_at',
-        order: 'desc',
+        // In未收录 view, oldest-not-indexed first = most urgent to fix.
+        sort: notIndexed ? 'first_not_indexed_at' : 'crawled_at',
+        order: notIndexed ? 'asc' : 'desc',
       })
       if (selectedType !== 'all') qs.set('pageType', selectedType)
+      if (notIndexed) qs.set('indexStatus', 'not-indexed')
 
       const res = await fetch(`/api/clients/${clientId}/site-audit/pages?${qs}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: PagesResponse = await res.json()
+      // A newer request may have started (and finished) while this one was
+      // in flight — e.g. the deep-link effect flips indexFilter right after
+      // the initial 'all' fetch starts. Drop stale responses so they can't
+      // clobber a more recent, still-relevant result.
+      if (requestId !== latestRequestId.current) return
       setPages(data.pages ?? [])
       setTotal(data.total ?? 0)
     } catch (e) {
+      if (requestId !== latestRequestId.current) return
       setError(e instanceof Error ? e.message : '加载失败')
     } finally {
-      setLoading(false)
+      if (requestId === latestRequestId.current) setLoading(false)
     }
-  }, [clientId, selectedType, offset, refreshKey])
+  }, [clientId, selectedType, indexFilter, offset, refreshKey])
 
   useEffect(() => { fetchPages() }, [fetchPages])
 
   const handleTypeChange = (type: FilterType) => {
     setSelectedType(type)
     setOffset(0)
+  }
+
+  const handleIndexFilterChange = (f: IndexFilter) => {
+    setIndexFilter(f)
+    setOffset(0)
+    // Keep the URL in sync so refresh/copy-link/tab-restore doesn't silently
+    // re-apply a filter the user just switched away from (see mount effect above).
+    const url = new URL(window.location.href)
+    if (f === 'not-indexed') {
+      url.searchParams.set('filter', 'not-indexed')
+    } else {
+      url.searchParams.delete('filter')
+    }
+    window.history.replaceState(null, '', url)
   }
 
   const totalPages = Math.ceil(total / LIMIT)
@@ -251,16 +358,44 @@ export default function SiteAuditPagesPage() {
             />
             <StatCard label="平均字数" value={Math.round(stats.avgWordCount)} />
             <StatCard
-              label="Blog 页"
-              value={stats.byType.blog ?? 0}
-              sub={`Product: ${stats.byType.product ?? 0}`}
+              label="未被谷歌收录"
+              value={notIndexedCount ?? '—'}
+              sub={notIndexedCount ? '点下方「未收录」查看' : '暂无'}
             />
           </div>
         )}
 
-        {/* Type filter tabs */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex flex-wrap gap-2 mb-0">
+        {/* Filters */}
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          {/* Index-status filter (收录状态) */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-gray-400 mr-1">收录状态</span>
+            {([
+              { key: 'all' as const,        label: '全部' },
+              { key: 'not-indexed' as const, label: '未收录' },
+            ]).map(({ key, label }) => {
+              const count = key === 'not-indexed' ? notIndexedCount ?? undefined : undefined
+              const active = indexFilter === key
+              return (
+                <button
+                  key={key}
+                  onClick={() => handleIndexFilterChange(key)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                    active
+                      ? 'bg-rose-600 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {label}
+                  {count !== undefined && <span className="ml-1 opacity-75">({count})</span>}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Type filter tabs */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-gray-400 mr-1">类型</span>
             {(Object.keys(TYPE_LABELS) as FilterType[]).map(type => {
               const count = typeTabCounts[type]
               return (
@@ -291,7 +426,11 @@ export default function SiteAuditPagesPage() {
             <div className="p-6"><TableSkeleton /></div>
           ) : pages.length === 0 ? (
             <div className="p-12 text-center text-sm text-gray-400">
-              {selectedType === 'all' ? '暂无采集数据' : `暂无 ${TYPE_LABELS[selectedType]} 类型页面`}
+              {indexFilter === 'not-indexed'
+                ? selectedType === 'all'
+                  ? '没有未被谷歌收录的页面 🎉'
+                  : `没有未被谷歌收录的 ${TYPE_LABELS[selectedType]} 类型页面（其他类型可能仍有未收录页面）`
+                : selectedType === 'all' ? '暂无采集数据' : `暂无 ${TYPE_LABELS[selectedType]} 类型页面`}
             </div>
           ) : (
             <table className="w-full text-sm">
@@ -300,6 +439,7 @@ export default function SiteAuditPagesPage() {
                   <th className="text-left px-4 py-3 font-medium">URL / 标题</th>
                   <th className="text-left px-4 py-3 font-medium w-28">类型</th>
                   <th className="text-right px-4 py-3 font-medium w-20">字数</th>
+                  <th className="text-left px-4 py-3 font-medium w-40">收录状态</th>
                   <th className="text-center px-4 py-3 font-medium w-24">GEO Block</th>
                 </tr>
               </thead>
@@ -327,6 +467,9 @@ export default function SiteAuditPagesPage() {
                     </td>
                     <td className="px-4 py-3 text-right text-gray-600">
                       {page.word_count != null ? page.word_count.toLocaleString() : '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      <IndexStatusCell page={page} />
                     </td>
                     <td className="px-4 py-3 text-center">
                       <GeoIcon hasGeo={page.has_geo_block} />

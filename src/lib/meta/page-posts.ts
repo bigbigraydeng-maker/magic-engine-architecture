@@ -215,3 +215,120 @@ export async function getPageAccessToken(
   const body = (await res.json()) as { data?: Array<{ id: string; access_token: string }> }
   return body.data?.find((p) => p.id === pageId)?.access_token ?? null
 }
+
+export interface PublishedPagePost {
+  /** The feed post id — this is what Insights and permalinks key off. */
+  postId: string
+  /** Which Graph field the id came from. `/photos` returns both `id` (the
+   *  photo object) and `post_id` (the feed story); they are not the same
+   *  object and only the latter is a Page post. We prefer `post_id` and record
+   *  when we had to fall back, rather than silently passing off a photo id as
+   *  a post id. */
+  postIdSource: 'post_id' | 'id'
+  permalink: string
+  /** Raw response, kept verbatim so a receipt can be audited later. */
+  raw: Record<string, unknown>
+}
+
+/**
+ * Publish a photo Post to a Facebook Page.
+ *
+ * Uses the Page's own `/photos` edge with a remote image `url`, so ME never
+ * has to stage the bytes itself. Requires a *Page* access token — a User token
+ * is rejected by Graph for this edge.
+ *
+ * `scheduledPublishTime`: when set, Facebook holds the post and publishes it
+ * itself at that time. Preferred over ME holding the post: Facebook's own
+ * scheduler survives our restarts, appears in Business Suite where the client
+ * can see and edit it, and needs zero infrastructure on our side. Constraints:
+ * Graph requires the timestamp to be at least 10 minutes and at most ~6 months
+ * in the future; the caller decides "publish now vs schedule" before this
+ * function, so we can pass unchanged what we're told.
+ *
+ * Throws on any non-2xx or Graph-level error; the caller decides whether that
+ * is fatal for the batch. It never retries: a retry here could double-post,
+ * and duplicate suppression belongs to the caller's idempotency key.
+ */
+export async function publishPagePhotoPost(input: {
+  pageId: string
+  pageAccessToken: string
+  message: string
+  imageUrl: string
+  scheduledPublishTime?: Date
+  fetcher?: typeof fetch
+}): Promise<PublishedPagePost> {
+  const doFetch = input.fetcher ?? fetch
+
+  const requestBody: Record<string, unknown> = {
+    url: input.imageUrl,
+    caption: input.message,
+    access_token: input.pageAccessToken,
+  }
+  if (input.scheduledPublishTime) {
+    // Facebook's contract for scheduled posts. `published:false` alone would
+    // create a hidden draft; the pair is what tells Facebook to auto-publish.
+    requestBody.published = false
+    requestBody.scheduled_publish_time = Math.floor(input.scheduledPublishTime.getTime() / 1000)
+  } else {
+    requestBody.published = true
+  }
+
+  const res = await doFetch(`${GRAPH_BASE}/${input.pageId}/photos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  })
+
+  const body = (await res.json().catch(() => null)) as
+    | { id?: string; post_id?: string; error?: { message?: string } }
+    | null
+
+  if (!res.ok || body?.error) {
+    const detail = body?.error?.message ?? `HTTP ${res.status}`
+    throw new Error(`publishPagePhotoPost ${input.pageId}: ${detail}`)
+  }
+
+  const postId = body?.post_id ?? body?.id
+  if (!postId) throw new Error(`publishPagePhotoPost ${input.pageId}: provider returned no post id`)
+
+  return {
+    postId,
+    postIdSource: body?.post_id ? 'post_id' : 'id',
+    permalink: `https://www.facebook.com/${postId}`,
+    raw: (body ?? {}) as Record<string, unknown>,
+  }
+}
+
+/**
+ * Delete a Page post — used by the recall flow to undo an unwanted publish.
+ *
+ * Idempotent in effect: a fresh delete returns `{success:true}`; a post that
+ * was already deleted (or never existed under this id) comes back as Graph
+ * code 100 "object does not exist", which we fold into a normal success so a
+ * retry of the same recall does not surface as a failure. Any other error is
+ * thrown so the batch can decide whether to keep going.
+ *
+ * Requires a Page access token with `pages_manage_posts`, same as publish.
+ */
+export async function deletePagePost(input: {
+  postId: string
+  pageAccessToken: string
+  fetcher?: typeof fetch
+}): Promise<{ alreadyGone: boolean; raw: Record<string, unknown> }> {
+  const doFetch = input.fetcher ?? fetch
+  const url = `${GRAPH_BASE}/${encodeURIComponent(input.postId)}?access_token=${encodeURIComponent(input.pageAccessToken)}`
+  const res = await doFetch(url, { method: 'DELETE' })
+  const body = (await res.json().catch(() => null)) as
+    | { success?: boolean; error?: { message?: string; code?: number } }
+    | null
+
+  if (res.ok && body?.success) {
+    return { alreadyGone: false, raw: (body ?? {}) as Record<string, unknown> }
+  }
+  if (body?.error?.code === 100) {
+    return { alreadyGone: true, raw: (body ?? {}) as Record<string, unknown> }
+  }
+
+  const detail = body?.error?.message ?? `HTTP ${res.status}`
+  throw new Error(`deletePagePost ${input.postId}: ${detail}`)
+}
