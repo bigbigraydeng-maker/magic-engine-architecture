@@ -16,7 +16,14 @@ export { minorUnitsFor, SUPPORTED_CURRENCIES, toMinorUnits }
 /** Meta 事件语义在 L3 adapter 里映射；这一层只认业务事实。 */
 export type OutcomeKind = 'purchase' | 'balance' | 'lead'
 
-export type SourceKind = 'manual_seed' | 'inbox_extract' | 'web_form' | 'meta_lead_form' | 'api'
+export type SourceKind =
+  | 'manual_seed'
+  | 'inbox_extract'
+  | 'web_form'
+  | 'meta_lead_form'
+  | 'api'
+  /** 外部 CRM 同步（PM 2026-09-05：一个月内上 HubSpot）。source_ref 存对方的交易编号。 */
+  | 'crm_hubspot'
 
 export const OUTCOME_KINDS: readonly OutcomeKind[] = ['purchase', 'balance', 'lead']
 export const SOURCE_KINDS: readonly SourceKind[] = [
@@ -25,6 +32,7 @@ export const SOURCE_KINDS: readonly SourceKind[] = [
   'web_form',
   'meta_lead_form',
   'api',
+  'crm_hubspot',
 ]
 
 export type IntakeInput = {

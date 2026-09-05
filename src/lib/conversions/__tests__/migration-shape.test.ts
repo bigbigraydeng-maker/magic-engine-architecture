@@ -197,6 +197,20 @@ describe('#1397 migration · 防重复发送的硬闸', () => {
     )
   })
 
+  it('🔴 同一笔外部记录只能进来一次（挡另一个方向的重复）', () => {
+    // 发送侧三道闸防的是「同一行被发两次」。挡不住外部同步跑两遍建出
+    // 两行不同 id 指向同一笔交易 —— 那是两个身份，三道闸一道都不认识，
+    // 广告平台照样记两笔，而且撤不回。PM 2026-09-05 定了一个月内上 HubSpot，
+    // 这条从"以后可能有用"变成"马上就要用"。
+    expect(SQL).toMatch(
+      /CREATE UNIQUE INDEX IF NOT EXISTS uq_me_sale_outcomes_source[\s\S]*?\(client_id, source_kind, source_ref\)[\s\S]*?WHERE source_ref IS NOT NULL/,
+    )
+  })
+
+  it('外部 CRM 是一种合法来源（HubSpot 同步的落点）', () => {
+    expect(SQL).toContain("'crm_hubspot'")
+  })
+
   it('幂等键不是由可变字段哈希出来的', () => {
     // 用 SHA256(client||order_ref||event_time) 当幂等键的话，
     // 改一次付款时间哈希就变，同一笔会被 Meta 记两次。

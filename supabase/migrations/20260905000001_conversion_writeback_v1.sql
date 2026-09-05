@@ -96,9 +96,12 @@ CREATE TABLE IF NOT EXISTS public.me_sale_outcomes (
   redacted_at      timestamptz,
   redaction_reason text,
 
+  -- 这条事实是怎么进来的。crm_hubspot 预留给外部 CRM 同步（PM 2026-09-05：一个月内上 HubSpot）。
   source_kind      text        NOT NULL CHECK (source_kind IN
-                                ('manual_seed','inbox_extract','web_form','meta_lead_form','api')),
-  source_ref       text,                   -- 如 'artifact:bd773505' 或 M365 messageId
+                                ('manual_seed','inbox_extract','web_form','meta_lead_form','api','crm_hubspot')),
+  -- 来源系统里的原始编号：HubSpot 的交易 id、M365 的邮件 id、'artifact:bd773505' 等。
+  -- 🔴 它跟下面那条唯一索引一起，构成「同一笔外部交易只能进来一次」的保证。
+  source_ref       text,
 
   created_at       timestamptz NOT NULL DEFAULT now(),
   created_by       text,
@@ -140,6 +143,18 @@ CREATE INDEX IF NOT EXISTS idx_me_sale_outcomes_pending
 -- 审核卡片上的"同单号已有 N 条"提示（幂等键改用行 id 后，重复录入只能靠这个提醒人）
 CREATE INDEX IF NOT EXISTS idx_me_sale_outcomes_order_ref
   ON public.me_sale_outcomes (client_id, order_ref) WHERE order_ref IS NOT NULL;
+
+-- 🔴 同一笔外部记录只能进来一次。
+--
+--    发送侧那三道闸防的是「**同一行**被发两次」。它们挡不住另一个方向：
+--    外部同步跑两遍，建出**两行不同 id** 指向同一笔交易 —— 那是两个不同身份，
+--    三道闸一道都不认识，结果照样是广告平台记两笔成交，而且撤不回。
+--
+--    这条索引把「同一个来源的同一个编号只许有一行」变成数据库保证，
+--    同步端就算写得再糙也灌不进重复。手工录入（source_ref 为空）不受影响。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_me_sale_outcomes_source
+  ON public.me_sale_outcomes (client_id, source_kind, source_ref)
+  WHERE source_ref IS NOT NULL;
 
 ALTER TABLE public.me_sale_outcomes ENABLE ROW LEVEL SECURITY;
 DO $$ BEGIN
