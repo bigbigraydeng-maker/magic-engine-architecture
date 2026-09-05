@@ -5,6 +5,16 @@
 
 ---
 
+### 2026-09-05（Magic Engine 英文官网重新定位与 Magic Insight 公共研究站上线，PR [#1381](https://github.com/bigbigraydeng-maker/magic-engine/pull/1381)）
+
+**上线内容**：英文首页从按行业罗列服务，改为「帮助成熟企业进入下一个国家市场」的跨市场增长定位，覆盖 China to Global、Diaspora to Mainstream 与 Market to Market 三类客户路径；公开 Pricing 暂停展示并改为分阶段邀请的 Join the waitlist；Magic Insight 上线独立研究入口与两份英文 executive brief；首页补充经署名的跨境货运、国际出行与城市市场图库素材。视觉统一为 Magic Engine 黑、金、米白系统，并完成桌面与移动端检查。
+
+**发布验证**：生产构建、Type-check、Application build、`ai-orchestrator-tests` 与 Cloudflare Pages 检查通过；主域名首页、Magic Insight、waitlist、旧 Pricing 跳转及外部图片均已在线核验。Render 主应用部署成功。Claude Review workflow 两次均在模型执行前以 `is_error:true` 退出，零 review turn、零 finding，属于审查服务故障；合并沿用实施期两名独立 reviewer 的 APPROVE 结论。
+
+**Reuse Statement**：复用现有 `website/` 静态部署、分析脚本、邮箱转化路径和 Client Portal 链接；本次仅新增共享品牌/GTM 展示内容，没有新增平台 capability、API、数据库、Connector 或客户专属 runtime。跨市场客户分组属于市场表达，Magic Insight 仍是研究发布品牌，不是新的产品支柱。
+
+---
+
 ### 2026-09-03（Magic Insight 信源健康度提醒修复：meta_ads/tiktok_ads 零命中 + Search Engine Land 反爬停用，PR [#1376](https://github.com/bigbigraydeng-maker/magic-engine/pull/1376)）
 
 **发生了什么**：Magic Insight（market-intel）发来「⚠ 3 项需要检查」健康度提醒——Search Engine Land 连续 16 天 403、分类 `meta_ads` 与 `tiktok_ads` 各连续 5 天候选池零命中。直连生产库（`glbdnayojixmexgofbsd`）逐条核查真实数据，而非按邮件字面猜测。
@@ -2297,4 +2307,3 @@ P33.9（PR #301/#302 — Goal filter 状态 chips 数字跟随）/ P33.10（未�
 
 
 ---
-
