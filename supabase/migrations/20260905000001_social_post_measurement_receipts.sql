@@ -126,8 +126,28 @@ DECLARE
   v_existing_status TEXT;
   v_existing_hash   TEXT;
   v_key             TEXT;
+  v_lock_key        BIGINT;
 BEGIN
-  -- 锁行以避免 T+4 与 T+72 或事件重放并发时的 lost update。
+  -- 🔴 P3 修补：首次并发写入的竞态。
+  --
+  -- 两个并发首调（都还没写过任一行）时，`SELECT ... FOR UPDATE` 锁不到任何行 ——
+  -- 两个 session 都会通过 hash mismatch 检查（都读到 NULL），随后 A INSERT 一份
+  -- 完整快照（hash_A），B 撞 receipt 唯一约束 → `ON CONFLICT DO UPDATE` 把 receipt
+  -- 覆盖成 hash_B；B 的指标撞既有唯一索引被跳过。结果：receipt=hash_B，
+  -- metrics=hash_A —— 两套数字。
+  --
+  -- 解法：在读之前对 (action_id, window_hours) 拿一把事务级 advisory lock，把同
+  -- (action, window) 的所有 RPC 调用串行化。用 int8 版本的 pg_advisory_xact_lock，
+  -- 把两个 uuid 各折成 int8：uuid 的前 8 字节。事务结束自动释放。
+  --
+  -- 事故复现的双连接并发测试见本 migration 附带的 db-verify 脚本（P3-concurrent）。
+  -- 把 (action_id, window_hours) 折成一个 int8：md5(拼接) 的前 16 hex → bit(64) → bigint
+  v_lock_key := ('x' || substr(md5(p_action_id::text || ':' || p_window_hours::text), 1, 16))
+                ::bit(64)::bigint;
+  PERFORM pg_advisory_xact_lock(v_lock_key);
+
+  -- 拿到 advisory 锁后再读 —— 此刻并发的另一个 session 要么已完成整段事务并提交
+  -- （我们会读到它的 receipt），要么还没进来（我们成为首调者）。
   SELECT r.id, r.status, r.missing ->> '__snapshot_hash'
     INTO v_receipt_id, v_existing_status, v_existing_hash
     FROM public.social_post_measurement_receipts r
@@ -215,10 +235,14 @@ BEGIN
 END;
 $fn$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- 🔴 db-invariants 不变量 4：SECURITY DEFINER 以定义者身份执行完全绕过 RLS，
+--    仅 REVOKE FROM PUBLIC 在 Supabase 上收不干净 —— anon/authenticated 由
+--    ALTER DEFAULT PRIVILEGES 独立授权。必须显式 FROM PUBLIC, anon, authenticated。
+--    2026-09-03 事故：20260815000001 就是漏了这一条，被库层 CI 抓住。
 REVOKE ALL ON FUNCTION public.record_post_measurement_snapshot(
   UUID, UUID, TEXT, TEXT, TEXT, INTEGER, TIMESTAMPTZ, TIMESTAMPTZ,
   TEXT, JSONB, JSONB, TEXT, TEXT, INTEGER, INTEGER
-) FROM PUBLIC;
+) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.record_post_measurement_snapshot(
   UUID, UUID, TEXT, TEXT, TEXT, INTEGER, TIMESTAMPTZ, TIMESTAMPTZ,
   TEXT, JSONB, JSONB, TEXT, TEXT, INTEGER, INTEGER

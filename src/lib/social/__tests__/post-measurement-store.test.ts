@@ -355,3 +355,61 @@ describe('P3: recordSnapshot —— 转发到 RPC 并解析 outcome', () => {
     ).rejects.toThrow(/connection refused/)
   })
 })
+
+// ─── P1 事故回归：Codex 二审 ──────────────────────────────────────────────
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const MIGRATION = resolve(
+  process.cwd(),
+  'supabase/migrations/20260905000001_social_post_measurement_receipts.sql',
+)
+
+describe('P1a: SECURITY DEFINER 权限收干净 —— REVOKE 必须覆盖 anon/authenticated', () => {
+  const sql = readFileSync(MIGRATION, 'utf-8')
+
+  it('🔴 REVOKE FROM 必须含 PUBLIC, anon, authenticated —— db-invariants 不变量 4', () => {
+    // Supabase 用 ALTER DEFAULT PRIVILEGES 独立给 anon/authenticated 授权，
+    // 只 REVOKE FROM PUBLIC 收不干净（2026-09-03 20260815000001 事故）。
+    const revokeMatch = sql.match(/REVOKE\s+ALL\s+ON\s+FUNCTION[\s\S]+?FROM\s+([^;]+);/i)
+    expect(revokeMatch, 'migration must contain a REVOKE ALL ON FUNCTION statement').toBeTruthy()
+    const targets = revokeMatch![1].toLowerCase()
+    expect(targets).toContain('public')
+    expect(targets).toContain('anon')
+    expect(targets).toContain('authenticated')
+  })
+
+  it('只把 EXECUTE 授给 service_role，不给 anon/authenticated', () => {
+    const grantSection = sql.match(/GRANT\s+EXECUTE\s+ON\s+FUNCTION[\s\S]+?TO\s+([^;]+);/i)
+    expect(grantSection).toBeTruthy()
+    const grantees = grantSection![1].toLowerCase()
+    expect(grantees).toContain('service_role')
+    expect(grantees).not.toContain('anon')
+    expect(grantees).not.toContain('authenticated')
+    expect(grantees).not.toContain('public')
+  })
+})
+
+describe('P1b: 首次并发写入靠 advisory lock 串行化', () => {
+  const sql = readFileSync(MIGRATION, 'utf-8')
+
+  it('🔴 RPC 必须先拿事务级 advisory lock 再 SELECT FOR UPDATE', () => {
+    // 两个并发首调时 FOR UPDATE 锁不到不存在的行 —— 必须靠 advisory lock 强行
+    // 串行化同 (action_id, window_hours) 的调用，否则 receipt 与 metrics 会各写
+    // 不同快照。真事故复现见迁移 verify 脚本 P3-concurrent。
+    expect(sql).toMatch(/pg_advisory_xact_lock\s*\(/)
+    // 顺序断言：advisory lock 必须在 SELECT ... FOR UPDATE 之前。
+    const lockIdx = sql.search(/pg_advisory_xact_lock\s*\(/)
+    const forUpdateIdx = sql.search(/FROM\s+public\.social_post_measurement_receipts[\s\S]+?FOR\s+UPDATE/i)
+    expect(lockIdx).toBeGreaterThan(0)
+    expect(forUpdateIdx).toBeGreaterThan(lockIdx)
+  })
+
+  it('advisory lock 键必须由 (action_id, window_hours) 派生', () => {
+    // 别的键（例如全局常量、只用 action_id）会让不同窗口互相阻塞或让同窗口并发漏。
+    const lockBlock = sql.match(/v_lock_key\s*:=[\s\S]+?pg_advisory_xact_lock/i)
+    expect(lockBlock).toBeTruthy()
+    expect(lockBlock![0]).toContain('p_action_id')
+    expect(lockBlock![0]).toContain('p_window_hours')
+  })
+})
