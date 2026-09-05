@@ -57,6 +57,7 @@ async function run(): Promise<NextResponse> {
         newContacts: 0,
         skippedNoIdentity: 0,
         failed: 0,
+        mailchimp: {},
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -69,11 +70,19 @@ async function run(): Promise<NextResponse> {
   // 单独成句（`summariseSyncProblems`），日报里两类病分得开。
   const failed = results.filter((r) => r.error).length
 
+  // Mailchimp 出口的全局分布。摊平成一层是为了在 summary 顶层一眼看见
+  // 「这一轮有多少条压根没进邮件名单、卡在哪个 reason 上」—— 逐客户的明细
+  // 仍在 results 里。此前这层结果被整个丢掉，出口连着几周 100% skip 也无人知晓。
+  const mailchimp: Record<string, number> = {}
+  for (const r of results) {
+    for (const [k, n] of Object.entries(r.mailchimp ?? {})) mailchimp[k] = (mailchimp[k] ?? 0) + n
+  }
+
   await cronRun.finish({
     processed: results.length,
     completed: results.length - failed,
     failed,
-    summary: { newContacts, leadsIngested, results },
+    summary: { newContacts, leadsIngested, mailchimp, results },
     // 有客户取不到数就必须把原话带进 error_message —— 日报邮件的「错误原因」列
     // 读的就是这个字段。2026-08-21~08-30 这里一直是 null,于是日报每天照发
     // 「meta-leads-sync 4 failed —」,一屏破折号没有一个字说明是什么事,
@@ -92,6 +101,7 @@ async function run(): Promise<NextResponse> {
     clients: results.length,
     newContacts,
     leadsIngested,
+    mailchimp,
     results,
   })
 }

@@ -185,3 +185,70 @@ describe('syncClientMetaLeads', () => {
     expect(res.skipped).toBe('no_page_id')
   })
 })
+
+/**
+ * Mailchimp 出口的结果必须被记账。
+ *
+ * 在此之前这一层把 `ingestMetaLead` 返回的 `mailchimp` **整个丢掉** —— 不计数、
+ * 不上报。所以 2026-08~09 生产上「每一条 lead 的邮件出口都因为读不到配置被 skip」
+ * 这件事，在 cron 日志里一个字都看不到：`leadsIngested` 照常涨，看起来一切正常。
+ * 拿不到数据 ≠ 真没有 —— 跳过了就必须留下痕迹。
+ */
+describe('Mailchimp 出口结果记账（防第二层静默）', () => {
+  beforeEach(() => {
+    mock(fetchPageLeadForms).mockResolvedValue({ rows: [{ formId: 'f1', name: 'F1' }], error: null })
+    mock(fetchFormLeads).mockResolvedValue({ rows: [lead('l1'), lead('l2'), lead('l3')], error: null })
+  })
+
+  it('每条 lead 的出口结果按 status:reason 计数，进 cron summary', async () => {
+    mock(ingestMetaLead)
+      .mockResolvedValueOnce({
+        contactId: 'c1',
+        createdContact: true,
+        skipped: null,
+        mailchimp: { status: 'subscribed' },
+      })
+      .mockResolvedValueOnce({
+        contactId: 'c2',
+        createdContact: false,
+        skipped: null,
+        mailchimp: { status: 'skipped', reason: 'client_config_read_failed' },
+      })
+      .mockResolvedValueOnce({
+        contactId: 'c3',
+        createdContact: false,
+        skipped: null,
+        mailchimp: { status: 'skipped', reason: 'client_config_read_failed' },
+      })
+
+    const res = await syncClientMetaLeads(CLIENT)
+
+    expect(res.leadsIngested).toBe(3)
+    // 关键：3 条都「进了 CRM」，但其中 2 条根本没进邮件名单 —— 这件事必须看得见
+    expect(res.mailchimp).toEqual({
+      subscribed: 1,
+      'skipped:client_config_read_failed': 2,
+    })
+  })
+
+  it('failed 也按 reason 分开计，不跟 skipped 混成一个数', async () => {
+    mock(ingestMetaLead).mockResolvedValue({
+      contactId: 'c1',
+      createdContact: false,
+      skipped: null,
+      mailchimp: { status: 'failed', reason: 'provider_5xx' },
+    })
+
+    const res = await syncClientMetaLeads(CLIENT)
+
+    expect(res.mailchimp).toEqual({ 'failed:provider_5xx': 3 })
+  })
+
+  it('没有 lead 走到出口时是空对象，不是缺字段', async () => {
+    mock(fetchFormLeads).mockResolvedValue({ rows: [], error: null })
+
+    const res = await syncClientMetaLeads(CLIENT)
+
+    expect(res.mailchimp).toEqual({})
+  })
+})

@@ -15,6 +15,7 @@ import {
   pushLinkedinProgressItems,
   buildNotIndexedItems,
   type NotIndexedRow,
+  pushMailchimpExportItems,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -368,6 +369,138 @@ describe('loadManualItems — 未收录读失败被隔离，不清空整条人�
     const all = await loadManualItems(stub, NOW)
     expect(Array.isArray(all)).toBe(true)
     expect(all.some((i) => i.kind === 'not_indexed')).toBe(false)
+describe('pushMailchimpExportItems', () => {
+  const NOW = new Date('2026-09-03T09:00:00Z')
+
+  function fakeLastRun(row: { finished_at: string; summary: unknown } | null) {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      not: () => chain,
+      in: () => chain,
+      order: () => chain,
+      limit: async () => ({ data: row ? [row] : [], error: null }),
+    }
+    return { from: () => chain } as unknown as SupabaseClient
+  }
+
+  it('非预期失败（配置读不出来 / API key 失效）逐客户下发，正常的「没配 Mailchimp」不下发', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T08:00:00Z',
+      summary: {
+        results: [
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'skipped:client_config_read_failed': 3, 'failed:auth': 2 },
+          },
+          {
+            clientId: 'c-not-configured',
+            clientName: 'Oztop',
+            mailchimp: { 'skipped:no_audience_config': 5, 'skipped:no_email': 1 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken', client_name: 'CTS Tours NZ' })
+    expect(items[0].what).toContain('5 条')
+    expect(items[0].href).toBe('https://app.magicengine.com.au/dashboard/clients/c-broken/settings')
+  })
+
+  it('最近一次运行早就过期（超过 6 小时）→ 不再报旧问题', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T00:00:00Z',
+      summary: { results: [{ clientId: 'c-broken', clientName: 'CTS', mailchimp: { 'failed:auth': 1 } }] },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toEqual([])
+  })
+
+  it('压根没有运行记录 → 不报', async () => {
+    const items: ManualItem[] = []
+    await pushMailchimpExportItems(fakeLastRun(null), items, NOW)
+
+    expect(items).toEqual([])
+  })
+
+  it('只挑跑完的运行记录 —— 卡在 running（finished_at 永远 NULL）的记录不该挡住后续告警', async () => {
+    const notCalls: Array<[string, unknown]> = []
+    const inCalls: Array<[string, unknown]> = []
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      not: (col: string, op: string, val: unknown) => {
+        notCalls.push([col, val])
+        return chain
+      },
+      in: (col: string, vals: unknown) => {
+        inCalls.push([col, vals])
+        return chain
+      },
+      order: () => chain,
+      limit: async () => ({
+        data: [
+          {
+            finished_at: '2026-09-03T08:30:00Z',
+            summary: { results: [{ clientId: 'c-broken', clientName: 'CTS', mailchimp: { 'failed:auth': 1 } }] },
+          },
+        ],
+        error: null,
+      }),
+    }
+    const supabase = { from: () => chain } as unknown as SupabaseClient
+
+    const items: ManualItem[] = []
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(notCalls).toContainEqual(['finished_at', null])
+    expect(inCalls).toContainEqual(['status', ['completed', 'failed']])
+    expect(items).toHaveLength(1)
+  })
+
+  it('那一轮因为别的客户 Meta 取数报错被 run-logger 标成 failed，本客户真实的 Mailchimp 出口故障依然要下发', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T08:30:00Z',
+      summary: {
+        results: [
+          { clientId: 'c-meta-broken', clientName: '另一个客户', error: 'Meta token expired' },
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'failed:auth': 2 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken' })
+  })
+
+  it('查运行记录本身报错 → 必须抛出，不能当成「没有记录」静默吞掉', async () => {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      not: () => chain,
+      in: () => chain,
+      order: () => chain,
+      limit: async () => ({ data: null, error: { message: 'permission denied' } }),
+    }
+    const supabase = { from: () => chain } as unknown as SupabaseClient
+
+    const items: ManualItem[] = []
+    await expect(pushMailchimpExportItems(supabase, items, NOW)).rejects.toThrow('permission denied')
   })
 })
 
