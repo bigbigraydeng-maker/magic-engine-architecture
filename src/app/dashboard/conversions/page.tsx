@@ -258,6 +258,8 @@ export default function ConversionsPage() {
   )
 
   // 键盘：Y 告诉平台 / N 不发送 / ↑↓ 换一条
+  const [audienceStats, setAudienceStats] = useState<Record<string, number | string> | null>(null)
+  const [audienceLoading, setAudienceLoading] = useState(false)
   const [keyLock, setKeyLock] = useState(false)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -277,6 +279,22 @@ export default function ConversionsPage() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [current, rejecting, busy, keyLock, rows.length, approve])
+
+  const checkAudience = useCallback(async () => {
+    if (!clientId) return
+    setAudienceLoading(true)
+    try {
+      const res = await fetch(
+        `/api/admin/conversions/audience-export?client_id=${encodeURIComponent(clientId)}&format=stats`,
+      )
+      const body = await res.json()
+      setAudienceStats(res.ok ? body : { error: 1, note: body.error })
+    } catch (e) {
+      setAudienceStats({ error: 1, note: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setAudienceLoading(false)
+    }
+  }, [clientId])
 
   const summary = useMemo(() => {
     const purchases = rows.filter((r) => r.outcome_kind !== 'lead' && r.amount_minor != null)
@@ -311,6 +329,49 @@ export default function ConversionsPage() {
         <button onClick={() => void load()} style={btn()}>
           刷新
         </button>
+      </div>
+
+      <div style={{ border: '1px solid #d4c4a6', background: '#faf6ec', borderRadius: 8, padding: 14, marginBottom: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 15 }}>Meta 客户名单 A（做 lookalike 用）</div>
+        <div style={{ fontSize: 13, color: '#6a5f4a', margin: '4px 0 10px' }}>
+          只含从 Meta 广告来、有同意、没拒联的<strong>终端客户</strong>（旅行社同行和员工自动排除）。
+          先看人数够不够，再下载。
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button onClick={() => void checkAudience()} disabled={!clientId || audienceLoading} style={btn()}>
+            {audienceLoading ? '统计中…' : '① 先看人数'}
+          </button>
+          {audienceStats && !audienceStats.error && (
+            <a
+              href={`/api/admin/conversions/audience-export?client_id=${encodeURIComponent(clientId)}&format=csv`}
+              style={{ ...btn('#16a34a', '#fff'), textDecoration: 'none' }}
+            >
+              ② 下载 CSV（{audienceStats.kept} 人）
+            </a>
+          )}
+        </div>
+        {audienceStats && (
+          <div style={{ fontSize: 13, marginTop: 10, color: audienceStats.error ? '#c00' : '#333' }}>
+            {audienceStats.error ? (
+              `出错：${audienceStats.note}`
+            ) : (
+              <>
+                <div>
+                  可上传 <strong>{audienceStats.kept}</strong> 人（有邮箱 {audienceStats.with_email} · 有电话{' '}
+                  {audienceStats.with_phone}）。{audienceStats.note}
+                </div>
+                <div style={{ color: '#8a7d64', marginTop: 4 }}>
+                  从 {audienceStats.total} 人里排除：同行/员工 {audienceStats.excluded_not_retail} · 没同意{' '}
+                  {audienceStats.excluded_no_consent} · 拒联 {audienceStats.excluded_dnc} · 无邮箱电话{' '}
+                  {audienceStats.excluded_no_key}
+                </div>
+                <div style={{ color: '#a15c00', marginTop: 6 }}>
+                  下载后到 Meta 后台建 Customer List 上传（Meta 会自己加密），传完请删掉这份文件。
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {error && <div style={box('#fee', '#c00')}>读取出错：{error}</div>}
