@@ -30,7 +30,7 @@
     <div class="nm-shell nm-nav-inner">
       <a class="nm-brand" href="/" aria-label="Magic Engine home"><img src="/assets/favicon.svg" alt=""><span>Magic Engine</span></a>
       <nav class="nm-desktop-nav" aria-label="Primary navigation"><ul class="nm-links"><li><a href="/#paths">Who we help</a></li><li><a href="/#system">How it works</a></li><li><a href="/insights/">Magic Insight</a></li><li><a href="/waitlist/" aria-current="page">Join the waitlist</a></li><li><a href="/#founder">Founder</a></li></ul></nav>
-      <div class="nm-nav-actions"><a class="nm-nav-portal" href="https://app.magicengine.com.au/portal/login">Client portal</a><a class="nm-btn nm-btn-primary nm-btn-small" href="mailto:hello@magicengine.cloud?subject=Magic%20Engine%20Early%20Access%20Waitlist">Join the waitlist</a></div>
+      <div class="nm-nav-actions"><a class="nm-nav-portal" href="https://app.magicengine.com.au/portal/login">Client portal</a><a class="nm-btn nm-btn-primary nm-btn-small" href="#apply">Apply now</a></div>
       <details class="nm-mobile"><summary aria-label="Open navigation">Menu</summary><nav class="nm-mobile-panel" aria-label="Mobile navigation"><a href="/">Home</a><a href="/insights/">Magic Insight</a><a href="/waitlist/">Join the waitlist</a><a href="/cn/">中文站</a><a href="https://app.magicengine.com.au/portal/login">Client portal</a></nav></details>
     </div>
   </header>
@@ -42,9 +42,46 @@
           <span class="nm-eyebrow">Magic Engine · Early access</span>
           <h1>Be among the first to build your next market with Magic Engine.</h1>
           <p class="nm-lead">Magic Engine is opening access in stages to established businesses moving across borders. Join the waitlist if you have a real market-entry question and want a clearer path from evidence to execution.</p>
-          <div class="nm-actions"><a class="nm-btn nm-btn-primary" href="mailto:hello@magicengine.cloud?subject=Magic%20Engine%20Early%20Access%20Waitlist&amp;body=Business%3A%0ACurrent%20market%3A%0ANext%20market%3A%0AWhat%20are%20you%20trying%20to%20achieve%3F%3A">Join the waitlist →</a><a class="nm-btn nm-btn-ghost" href="/#system">See how the system works</a></div>
+          <div class="nm-actions"><a class="nm-btn nm-btn-primary" href="#apply">Complete the form →</a><a class="nm-btn nm-btn-ghost" href="/#system">See how the system works</a></div>
           <div class="nm-waitlist-proof"><span>No payment</span><span>No commitment</span><span>Founder-reviewed invitations</span></div>
         </div>
+      </div>
+    </section>
+
+    <section class="nm-section nm-form-section nm-divider" id="apply">
+      <div class="nm-shell nm-form-layout">
+        <div class="nm-form-intro">
+          <span class="nm-eyebrow">Early-access application</span>
+          <h2>Tell us where you are—and where you want to go.</h2>
+          <p>Five minutes is enough. We use these details to understand your market-entry question and whether the current Magic Engine workflows are a strong fit.</p>
+          <p class="nm-note">Required fields are marked with an asterisk. No payment or subscription is created.</p>
+        </div>
+        <form class="nm-form-card" data-waitlist-form novalidate>
+          <div class="nm-form-grid">
+            <div class="nm-field"><label for="waitlist-name">Your name <span class="nm-required">*</span></label><input id="waitlist-name" name="name" type="text" autocomplete="name" required maxlength="120"></div>
+            <div class="nm-field"><label for="waitlist-email">Work email <span class="nm-required">*</span></label><input id="waitlist-email" name="email" type="email" autocomplete="email" required maxlength="200"></div>
+            <div class="nm-field"><label for="waitlist-company">Company / brand <span class="nm-required">*</span></label><input id="waitlist-company" name="company" type="text" autocomplete="organization" required maxlength="180"></div>
+            <div class="nm-field"><label for="waitlist-website">Website <span class="nm-note">optional</span></label><input id="waitlist-website" name="website" type="url" inputmode="url" autocomplete="url" placeholder="https://" maxlength="300"></div>
+            <div class="nm-field"><label for="waitlist-country">Current country / market <span class="nm-required">*</span></label><input id="waitlist-country" name="country" type="text" autocomplete="country-name" placeholder="e.g. New Zealand" required maxlength="120"></div>
+            <div class="nm-field"><label for="waitlist-industry">Industry <span class="nm-required">*</span></label><input id="waitlist-industry" name="industry" type="text" placeholder="e.g. FMCG, logistics, tourism" required maxlength="160"></div>
+            <div class="nm-field nm-field-wide"><label for="waitlist-target">Next target market <span class="nm-required">*</span></label><input id="waitlist-target" name="targetMarket" type="text" placeholder="e.g. Singapore, the United States, wider Australia" required maxlength="160"></div>
+            <fieldset class="nm-group">
+              <legend>Marketing platforms you use or plan to use <span class="nm-required">*</span></legend>
+              <div class="nm-check-grid">
+                <label class="nm-check"><input type="checkbox" name="platforms" value="Google"> Google</label>
+                <label class="nm-check"><input type="checkbox" name="platforms" value="Meta (Facebook / Instagram)"> Meta</label>
+                <label class="nm-check"><input type="checkbox" name="platforms" value="TikTok"> TikTok</label>
+                <label class="nm-check"><input type="checkbox" name="platforms" value="LinkedIn"> LinkedIn</label>
+                <label class="nm-check"><input type="checkbox" name="platforms" value="Other / not decided"> Other / not decided</label>
+              </div>
+            </fieldset>
+            <div class="nm-field nm-field-wide"><label for="waitlist-budget">Approximate monthly marketing budget <span class="nm-required">*</span></label><select id="waitlist-budget" name="budget" required><option value="">Select a range</option><option>Under NZ$2,000</option><option>NZ$2,000–5,000</option><option>NZ$5,000–15,000</option><option>NZ$15,000–50,000</option><option>NZ$50,000+</option><option>Not decided yet</option></select></div>
+            <div class="nm-field nm-field-wide"><label for="waitlist-goal">What would success in the next market look like? <span class="nm-note">optional</span></label><textarea id="waitlist-goal" name="goal" maxlength="1200" placeholder="A short description of the product, customer and decision you need to make."></textarea></div>
+            <div class="nm-honeypot" aria-hidden="true"><label for="waitlist-company-website">Leave this field empty</label><input id="waitlist-company-website" name="companyWebsite" type="text" tabindex="-1" autocomplete="off"></div>
+            <label class="nm-consent nm-field-wide"><input type="checkbox" name="consent" value="yes" required><span>I agree that Magic Engine may use these details to assess my application and contact me about early access or a relevant managed partnership. See the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>. <span class="nm-required">*</span></span></label>
+          </div>
+          <div class="nm-form-footer"><button class="nm-btn nm-btn-primary" type="submit">Submit application →</button><p class="nm-form-status" data-form-status role="status" aria-live="polite"></p></div>
+        </form>
       </div>
     </section>
 
@@ -73,12 +110,12 @@
           <details><summary>Is joining the waitlist free?</summary><p>Yes. Joining does not charge you, create a subscription or commit you to a future purchase.</p></details>
           <details><summary>Does everyone receive access immediately?</summary><p>No. Invitations will be staged around market fit, workflow readiness and the quality of evidence available for the decision.</p></details>
           <details><summary>Which markets are the strongest fit today?</summary><p>Our strongest operating context currently connects China, Australia and New Zealand. Other markets are considered case by case.</p></details>
-          <details><summary>Can I discuss a managed market-expansion project now?</summary><p>Yes. Use the same waitlist email and describe the market, category and timing. We will separate immediate partnership conversations from platform early access.</p></details>
+          <details><summary>Can I discuss a managed market-expansion project now?</summary><p>Yes. Use the application form and describe the market, category and timing. We will separate immediate partnership conversations from platform early access.</p></details>
         </div>
       </div>
     </section>
 
-    <section class="nm-cta"><div class="nm-shell nm-cta-inner"><div><h2>Where are you proven—and where do you want to go next?</h2><p>Email the four-line brief. We will take it from there.</p></div><a class="nm-btn nm-btn-primary" href="mailto:hello@magicengine.cloud?subject=Magic%20Engine%20Early%20Access%20Waitlist&amp;body=Business%3A%0ACurrent%20market%3A%0ANext%20market%3A%0AWhat%20are%20you%20trying%20to%20achieve%3F%3A">Join the waitlist →</a></div></section>
+    <section class="nm-cta"><div class="nm-shell nm-cta-inner"><div><h2>Where are you proven—and where do you want to go next?</h2><p>Share the essentials. We will review every application directly.</p></div><a class="nm-btn nm-btn-primary" href="#apply">Complete the form →</a></div></section>
   </main>
 
   <footer class="nm-footer"><div class="nm-shell"><div class="nm-footer-grid"><div><a class="nm-brand" href="/"><img src="/assets/favicon.svg" alt=""><span>Magic Engine</span></a><p>Digital Marketing Growth Intelligence for businesses entering their next market.</p></div><nav class="nm-footer-links" aria-label="Footer navigation"><a href="/insights/">Magic Insight</a><a href="/waitlist/">Join the waitlist</a><a href="/blog/">Articles</a><a href="/cn/">中文站</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://app.magicengine.com.au/portal/login">Client portal</a><a href="mailto:hello@magicengine.cloud">hello@magicengine.cloud</a></nav></div><div class="nm-footer-legal"><span>© 2026 Magic Engine</span><span>Early access opens in stages</span></div></div></footer>
