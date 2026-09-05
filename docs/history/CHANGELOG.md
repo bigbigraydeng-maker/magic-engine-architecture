@@ -5,6 +5,16 @@
 
 ---
 
+### 2026-09-05（官网 Technical SEO v1 与 Articles 导航统一，PR [#1387](https://github.com/bigbigraydeng-maker/magic-engine/pull/1387)）
+
+**上线内容**：把 `Articles` 加入当前英文首页、waitlist、Magic Insight、两份报告详情页和中文单页的桌面与移动导航；`/blog/` 及两篇文章从旧版 AU/NZ AI 服务菜单迁移到当前 Magic Engine 黑金米白视觉与「进入下一个市场」定位，页尾和转化入口同步统一。
+
+**SEO 修复**：文章 canonical、Open Graph、JSON-LD、站内链接和 sitemap 全部统一为生产实际使用的无 `.html` URL；补齐 Article、BreadcrumbList 与 FAQPage 结构化数据；移除两篇文章中的隐藏 AI 指令文本；sitemap 从混杂旧服务定位的 42 个 URL 收敛为 11 个当前战略页面、研究、文章和法律页面，并更新过时的 Terms meta description。本轮是 GSC 技术准备，不在没有认证 GSC 数据的情况下声称排名或收录结果。
+
+**验证**：9 个当前战略页面均通过单一 title / description / canonical / H1 检查，JSON-LD 全部可解析，sitemap URL 唯一且无 `.html`；Articles 首页和文章正文完成 1440×900 桌面与 390×844 手机浏览器渲染，无横向溢出或页面脚本错误。
+
+**Reuse Statement**：复用现有静态官网、`next-market.css` 视觉系统、分析脚本与两篇既有文章内容；未新增平台 capability、数据库、Connector、客户专属 runtime 或产品支柱。
+
 ### 2026-09-05（官网申请表、中文单页与 Magic Insight 中文报告下载上线，PR [#1384](https://github.com/bigbigraydeng-maker/magic-engine/pull/1384)）
 
 **上线内容**：Join the waitlist 从 `mailto:` 升级为英文在线申请表，收集联系人、国家/当前市场、行业、目标市场、Google / Meta / TikTok 等营销平台与月预算区间；Cloudflare Pages Function 做必填项、长度、邮箱、同意条款和 honeypot 校验，再复用现有 Render `/api/contact` + Resend 发信链路，只有既有链路确认接收才向用户显示成功。修复深色与浅色区块内 CTA 文案因 CSS specificity 被覆盖而显示为空白的问题。
