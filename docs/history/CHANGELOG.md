@@ -5,6 +5,18 @@
 
 ---
 
+### 2026-09-05（官网申请表、中文单页与 Magic Insight 中文报告下载上线，PR [#1384](https://github.com/bigbigraydeng-maker/magic-engine/pull/1384)）
+
+**上线内容**：Join the waitlist 从 `mailto:` 升级为英文在线申请表，收集联系人、国家/当前市场、行业、目标市场、Google / Meta / TikTok 等营销平台与月预算区间；Cloudflare Pages Function 做必填项、长度、邮箱、同意条款和 honeypot 校验，再复用现有 Render `/api/contact` + Resend 发信链路，只有既有链路确认接收才向用户显示成功。修复深色与浅色区块内 CTA 文案因 CSS specificity 被覆盖而显示为空白的问题。
+
+**内容与视觉**：`/cn/` 从旧的澳新 AI/SEO 服务目录重做为中文单页，围绕「中国品牌出海、海外华人企业进入主流市场、成熟品牌进入下一个国家」三类客户和「市场判断 → 本地定位 → 增长执行」一条主线；不是英文站逐句翻译。Magic Insight 两份完整 PDF 已公开下载，卡片、详情页和文件名统一标注 `Chinese version`；英文 executive brief 保留在线阅读。
+
+**验证**：表单 endpoint 正常/缺字段路径测试通过；桌面 waitlist、Insights、中文站和移动端 waitlist 完成浏览器渲染检查；两个下载按钮可见且链接有效；Vol.03 / Vol.04 PDF 分别验证为 12 页 / 15 页；Privacy Policy 已补充 waitlist 收集字段与用途。
+
+**Reuse Statement**：复用现有 `website/`、Cloudflare Pages Functions、Render contact/Resend 发信链路、分析脚本、隐私政策和已过数据闸的 Magic Insight PDF；未新增邮件供应商、数据库表、产品支柱或客户专属 runtime。`magicengine.co.nz` 域名绑定属于独立生产配置，因正确 Cloudflare 账号凭证不在当前 CLI 会话而未伪装成已完成。
+
+---
+
 ### 2026-09-05（Magic Engine 英文官网重新定位与 Magic Insight 公共研究站上线，PR [#1381](https://github.com/bigbigraydeng-maker/magic-engine/pull/1381)）
 
 **上线内容**：英文首页从按行业罗列服务，改为「帮助成熟企业进入下一个国家市场」的跨市场增长定位，覆盖 China to Global、Diaspora to Mainstream 与 Market to Market 三类客户路径；公开 Pricing 暂停展示并改为分阶段邀请的 Join the waitlist；Magic Insight 上线独立研究入口与两份英文 executive brief；首页补充经署名的跨境货运、国际出行与城市市场图库素材。视觉统一为 Magic Engine 黑、金、米白系统，并完成桌面与移动端检查。
