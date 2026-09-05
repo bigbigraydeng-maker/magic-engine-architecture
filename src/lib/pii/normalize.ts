@@ -72,26 +72,3 @@ export function normalizeName(raw: string | null | undefined): string | null {
   const v = raw.trim().toLowerCase()
   return v.length > 0 ? v : null
 }
-
-/**
- * 给人看的打码版 —— dry-run 预览与审核卡片用。
- *
- * 🔴 PM 看一堆 sha256 什么都验证不了（魏征 v3 复审）。审核要能一眼认出
- *    "这是不是那位客人"，所以给的是打码而非哈希。
- */
-export function maskEmail(email: string | null): string | null {
-  if (!email) return null
-  const at = email.indexOf('@')
-  if (at <= 0) return '***'
-  const name = email.slice(0, at)
-  const domain = email.slice(at)
-  const head = name.slice(0, Math.min(3, name.length))
-  return `${head}***${domain}`
-}
-
-/** 电话打码：只留末 2 位。 */
-export function maskPhone(phone: string | null): string | null {
-  if (!phone) return null
-  if (phone.length <= 2) return '***'
-  return `${'*'.repeat(Math.max(3, phone.length - 2))}${phone.slice(-2)}`
-}

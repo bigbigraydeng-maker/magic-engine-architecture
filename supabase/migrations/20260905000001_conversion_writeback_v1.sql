@@ -17,7 +17,7 @@
 -- 今天只有 'meta_capi' 一种，但契约现在就立好，第二个目的地进来不用改数据模型。
 --
 -- ────────────────────────────────────────────────────────────────────────────
--- 状态机（魏征三轮复审的核心产物）
+-- 状态机（魏征三轮复审的核心产物；异步队列砍掉后保留的部分）
 -- ────────────────────────────────────────────────────────────────────────────
 --
 --   queued → sending → confirmed | expired_no_send | failed_permanent | in_doubt
@@ -27,7 +27,7 @@
 -- 🔴 **终态**：confirmed · failed_permanent · expired_no_send · redacted · dry_run · in_doubt
 --    任何自动路径的 UPDATE 都必须写 `AND status = ANY(<期望的起始状态>)`（CAS）。
 --    只有 rowCount=1 才算迁移成功；=0 表示别人已经改过，本次放弃并读回真值。
---    这是 Inngest 重放场景下唯一可靠的并发控制 —— 应用层"先读再写"必然有窗口。
+--    应用层"先读再写"必然有窗口，只有数据库的条件更新才拦得住并发。
 --
 -- 🔴 **in_doubt = "不知道 Meta 收没收"**。自动路径永不重发。
 --    Meta 的 Conversions API **服务端事件之间没有去重**（官方原文：
@@ -37,9 +37,19 @@
 --    所以宁可停下来让人去 Events Manager 核对，也不赌。
 --
 -- 🔴 **post_started_at**：发 HTTP 之前先把它从 NULL 抢成 now()，抢不到就不发。
---    为什么必须在同一个 Inngest step 内、且 DB 写在 HTTP 之前：Inngest 重跑函数时
---    **已完成的 step 只回放记忆值、不重新执行**，所以放在前置 step 里的守卫在重跑时
---    根本不会跑（魏征 v3.1 实测指出，这是本方案第三次修同一个双发漏洞）。
+--    挡的是"同一条被发两次"：按钮连点、请求重试、进程崩了重来，都靠这一列拦住。
+--    DB 写必须在 HTTP 之前 —— 反过来就等于先发了再记账，中间那一瞬崩掉就会重发。
+--
+-- ────────────────────────────────────────────────────────────────────────────
+-- 刻意**没有**的东西（PM 2026-09-05 审"有没有过度开发"后砍掉）
+-- ────────────────────────────────────────────────────────────────────────────
+--
+-- · 熔断表：同步发送下，令牌坏了就是那一次操作报个错，不会有队列反复重试刷屏。
+-- · 独立的 opt-out 名单表：`contacts.do_not_contact` 已经是同一件事，够用。
+-- · 异步队列：CTS 平均一天不到 6 条（每周 1-2 笔成交 + 10-40 个咨询），
+--   一个请求同步发完即可。队列的重放语义反而是双发 bug 的主要来源。
+--
+-- 需要时再加。表结构留在这里的只有"以后拆代价大 10 倍"的那部分（见上面两张表的拆分理由）。
 -- ============================================================================
 
 
@@ -86,11 +96,6 @@ CREATE TABLE IF NOT EXISTS public.me_sale_outcomes (
   redacted_at      timestamptz,
   redaction_reason text,
 
-  -- outbox：approved 事件已成功交给 Inngest 的时刻。
-  -- sendInngestEvent 是纯 HTTP 外呼，**进不了数据库事务**（子牙 v2 复审实测），
-  -- 所以只能"先落库、再发事件、成功回写这一列"，留 NULL 的由补发 cron 拾回。
-  dispatched_at    timestamptz,
-
   source_kind      text        NOT NULL CHECK (source_kind IN
                                 ('manual_seed','inbox_extract','web_form','meta_lead_form','api')),
   source_ref       text,                   -- 如 'artifact:bd773505' 或 M365 messageId
@@ -135,10 +140,6 @@ CREATE INDEX IF NOT EXISTS idx_me_sale_outcomes_pending
 -- 审核卡片上的"同单号已有 N 条"提示（幂等键改用行 id 后，重复录入只能靠这个提醒人）
 CREATE INDEX IF NOT EXISTS idx_me_sale_outcomes_order_ref
   ON public.me_sale_outcomes (client_id, order_ref) WHERE order_ref IS NOT NULL;
--- 补发 cron 扫孤儿：已批准但事件没发出去的
-CREATE INDEX IF NOT EXISTS idx_me_sale_outcomes_undispatched
-  ON public.me_sale_outcomes (reviewed_at)
-  WHERE review_status = 'approved' AND dispatched_at IS NULL;
 
 ALTER TABLE public.me_sale_outcomes ENABLE ROW LEVEL SECURITY;
 DO $$ BEGIN
@@ -161,10 +162,10 @@ CREATE TABLE IF NOT EXISTS public.me_conversion_writebacks (
 
   status           text        NOT NULL DEFAULT 'queued' CHECK (status IN
                      ('queued','sending','in_doubt','dry_run','confirmed',
-                      'failed','failed_permanent','expired_no_send','skipped_breaker','redacted')),
+                      'failed','failed_permanent','expired_no_send','redacted')),
   attempts         int         NOT NULL DEFAULT 0,
-  -- 🔴 由 mark 步的 CAS 写入。它是 sweepStuckSending 的**唯一**判据 ——
-  --    不写这一列，清道夫永不触发，行会永远卡在 sending，连 redact 都做不了。
+  -- 发送前由同一条 CAS 写入。卡在 sending 的行靠它判断"卡了多久"，
+  --    据此转 in_doubt 交人工核对 —— 不写这一列，卡住的行没人认得出来。
   last_attempt_at  timestamptz,
   last_error       text,
   last_error_code  text,
@@ -189,7 +190,7 @@ CREATE TABLE IF NOT EXISTS public.me_conversion_writebacks (
 
 CREATE INDEX IF NOT EXISTS idx_me_conversion_writebacks_outcome
   ON public.me_conversion_writebacks (outcome_id);
--- 清道夫扫卡住的发送
+-- 找卡在发送中的行（请求中途断了，需要人工核对 Meta 到底收没收）
 CREATE INDEX IF NOT EXISTS idx_me_conversion_writebacks_sending
   ON public.me_conversion_writebacks (last_attempt_at) WHERE status = 'sending';
 
@@ -245,43 +246,6 @@ DROP TRIGGER IF EXISTS me_conversion_audit_no_truncate ON public.me_conversion_a
 CREATE TRIGGER me_conversion_audit_no_truncate
   BEFORE TRUNCATE ON public.me_conversion_audit
   FOR EACH STATEMENT EXECUTE FUNCTION public.me_conversion_audit_append_only();
-
-
--- ── 熔断（令牌死了别刷 18 条一样的待办）─────────────────────────────────────
-CREATE TABLE IF NOT EXISTS public.me_conversion_breakers (
-  client_id    uuid        NOT NULL REFERENCES public.clients(id),
-  destination  text        NOT NULL,
-  tripped_at   timestamptz NOT NULL DEFAULT now(),
-  reason       text        NOT NULL,
-  cleared_at   timestamptz,
-  cleared_by   text,       -- 'auto:debug_token' 或人工
-  CONSTRAINT me_conversion_breakers_pk PRIMARY KEY (client_id, destination)
-);
-
-ALTER TABLE public.me_conversion_breakers ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN
-  CREATE POLICY "service_role_full" ON public.me_conversion_breakers
-    FOR ALL TO service_role USING (true) WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-
--- ── opt-out 黑名单（客户内，不跨客户）───────────────────────────────────────
--- 🔴 PK 带 client_id：跨客户共享哈希邮箱名单 = 客户数据横向流动，平台化原则禁止。
---    kind 分 em / ph：只留了电话没留邮箱的客人同样要能 opt out（魏征 v3 复审 C）。
-CREATE TABLE IF NOT EXISTS public.me_pii_suppression (
-  client_id  uuid        NOT NULL REFERENCES public.clients(id),
-  kind       text        NOT NULL CHECK (kind IN ('em','ph')),
-  hash       text        NOT NULL,     -- sha256(规范化后的邮箱 / E.164 电话)
-  added_at   timestamptz NOT NULL DEFAULT now(),
-  reason     text,
-  CONSTRAINT me_pii_suppression_pk PRIMARY KEY (client_id, kind, hash)
-);
-
-ALTER TABLE public.me_pii_suppression ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN
-  CREATE POLICY "service_role_full" ON public.me_pii_suppression
-    FOR ALL TO service_role USING (true) WITH CHECK (true);
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 
 -- ── 客户级配置（L4）─────────────────────────────────────────────────────────

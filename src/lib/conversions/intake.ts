@@ -72,36 +72,35 @@ export type IntakeResult =
   | { ok: false; errors: string[] }
 
 /**
- * 各币种的小数位。绝大多数是 2，但不是全部 ——
- * 日元没有小数位，科威特第纳尔是 3。写死 2 会让金额差 100 倍。
+ * 各币种的小数位。**只列真实在用的**，未知币种直接拒收。
+ *
+ * 为什么不给个默认值 2：绝大多数币种是 2 位，但不是全部（日元 0 位、
+ * 科威特第纳尔 3 位）。默认 2 的话，哪天真收了一笔日元，金额会**静默**差 100 倍 ——
+ * 而金额错了发给 Meta 是撤不回的。宁可当场报错让人来加一行。
  */
 const MINOR_UNITS: Record<string, number> = {
-  JPY: 0,
-  KRW: 0,
-  VND: 0,
-  CLP: 0,
-  ISK: 0,
-  KWD: 3,
-  BHD: 3,
-  OMR: 3,
-  JOD: 3,
-  TND: 3,
+  NZD: 2,
+  AUD: 2,
+  USD: 2,
 }
 
-export function minorUnitsFor(currency: string): number {
-  return MINOR_UNITS[currency.toUpperCase()] ?? 2
+export function minorUnitsFor(currency: string): number | null {
+  return MINOR_UNITS[currency.toUpperCase()] ?? null
 }
+
+export const SUPPORTED_CURRENCIES = Object.keys(MINOR_UNITS)
 
 /**
- * 主单位金额 → 最小单位整数。
+ * 主单位金额 → 最小单位整数。未知币种返回 null。
  *
  * 🔴 不用 `Math.round(amount * 100)`：浮点乘法会把 `19.99 * 100` 算成 1998.9999…，
  *    四舍五入后看似没事，但换个数字（如 `1.005`）就会少一分。金额必须走十进制字符串。
  */
 export function toMinorUnits(amount: number | string, currency: string): number | null {
   const exp = minorUnitsFor(currency)
-  const raw = typeof amount === 'number' ? amount.toString() : amount.trim()
+  if (exp == null) return null
 
+  const raw = typeof amount === 'number' ? amount.toString() : amount.trim()
   if (!/^-?\d+(\.\d+)?$/.test(raw)) return null
 
   const negative = raw.startsWith('-')
@@ -168,6 +167,11 @@ export function buildIntakeRow(input: IntakeInput, ctx: IntakeContext): IntakeRe
   const currency = input.currency ? input.currency.trim().toUpperCase() : null
   if (currency != null && !/^[A-Z]{3}$/.test(currency)) {
     errors.push('currency 必须是三字母 ISO 4217，如 NZD')
+  } else if (currency != null && minorUnitsFor(currency) == null) {
+    errors.push(
+      `暂不支持币种 ${currency}（现支持 ${SUPPORTED_CURRENCIES.join(' / ')}）—— ` +
+        '要用新币种请先在 MINOR_UNITS 里补上它的小数位，别让系统去猜',
+    )
   }
 
   let amountMinor: number | null = null
@@ -185,7 +189,9 @@ export function buildIntakeRow(input: IntakeInput, ctx: IntakeContext): IntakeRe
     if (hasAmount && currency) {
       const minor = toMinorUnits(input.amount as number | string, currency)
       if (minor == null) {
-        errors.push('amount 不是合法金额，或小数位超出该币种精度')
+        if (minorUnitsFor(currency) != null) {
+          errors.push('amount 不是合法金额，或小数位超出该币种精度')
+        }
       } else if (minor <= 0) {
         errors.push('amount 必须大于 0（退款不走这张表）')
       } else {

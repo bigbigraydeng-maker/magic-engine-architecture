@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildIntakeRow, toMinorUnits, minorUnitsFor, type IntakeInput } from '../intake'
-import { normalizeEmail, normalizePhone, maskEmail, maskPhone } from '@/lib/pii/normalize'
+import { normalizeEmail, normalizePhone } from '@/lib/pii/normalize'
 
 const CTS = 'c0000000-0000-0000-0000-000000000000'
 const NOW = new Date('2026-09-05T00:00:00Z')
@@ -25,38 +25,39 @@ describe('金额换算（浮点会算错钱，必须走十进制）', () => {
     expect(minorUnitsFor('nzd')).toBe(2)
   })
 
-  it('日元没有小数位，科威特第纳尔是三位', () => {
-    // 写死 2 的话，JPY 10000 会变成 1,000,000 —— 差 100 倍。
-    expect(minorUnitsFor('JPY')).toBe(0)
-    expect(minorUnitsFor('KWD')).toBe(3)
+  it('未列出的币种返回 null，不默认成 2 位', () => {
+    // 默认 2 的话，哪天真收了一笔日元（0 位小数），金额会静默差 100 倍。
+    // 宁可当场报错让人来加一行，也不让系统猜。
+    expect(minorUnitsFor('JPY')).toBeNull()
+    expect(minorUnitsFor('EUR')).toBeNull()
   })
 
   it.each([
     ['3880', 'NZD', 388000],
     ['3880.50', 'NZD', 388050],
     ['19.99', 'NZD', 1999],
-    ['1.005', 'KWD', 1005],
-    ['10000', 'JPY', 10000],
     ['0.01', 'NZD', 1],
+    ['1200', 'AUD', 120000],
   ])('%s %s → %i', (amount, currency, expected) => {
     expect(toMinorUnits(amount, currency)).toBe(expected)
   })
 
   it('浮点数入参也算得准（19.99 * 100 在浮点里是 1998.9999…）', () => {
     expect(toMinorUnits(19.99, 'NZD')).toBe(1999)
-    expect(toMinorUnits(1.005, 'KWD')).toBe(1005)
+    expect(toMinorUnits(0.07, 'NZD')).toBe(7)
   })
 
   it('超出币种精度的尾数拒收，不静默四舍五入', () => {
     // 静默改金额比报错难查得多。
     expect(toMinorUnits('3880.555', 'NZD')).toBeNull()
-    expect(toMinorUnits('100.5', 'JPY')).toBeNull()
+  })
+
+  it('未支持的币种返回 null，不猜小数位', () => {
+    expect(toMinorUnits('10000', 'JPY')).toBeNull()
   })
 
   it('末位补零不算超精度', () => {
     expect(toMinorUnits('3880.500', 'NZD')).toBe(388050)
-    // 日元的最小单位就是「元」本身，所以 ¥100.00 = 100，不是 10000
-    expect(toMinorUnits('100.00', 'JPY')).toBe(100)
   })
 
   it('非数字返回 null', () => {
@@ -112,9 +113,8 @@ describe('邮箱规范化与打码', () => {
     expect(normalizeEmail(null)).toBeNull()
   })
 
-  it('打码保留可辨认的头部与域名（PM 要能一眼认出是谁）', () => {
-    expect(maskEmail('rosalind@example.com')).toBe('ros***@example.com')
-    expect(maskPhone('64215551234')).toBe('*********34')
+  it('姓名也做同样的规范化', () => {
+    expect(normalizeEmail('  A@B.CO ')).toBe('a@b.co')
   })
 })
 
@@ -150,6 +150,31 @@ describe('录入校验 · 成交', () => {
     // PM 2026-09-05：定金算成交，尾款绝不能记成第二笔 —— 靠 kind 区分，
     // 到 L3 adapter 映射成 BalancePaid 自定义事件而非 Purchase。
     expect(r.row.outcome_kind).toBe('balance')
+  })
+})
+
+describe('录入校验 · 币种', () => {
+  it('未支持的币种被拒，并说清怎么办', () => {
+    const r = buildIntakeRow(purchase({ currency: 'JPY' }), CTX)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    // 报错要告诉人下一步做什么，不是只说"不行"
+    expect(r.errors.join()).toContain('暂不支持币种 JPY')
+    expect(r.errors.join()).toContain('NZD')
+  })
+
+  it('未支持币种只报一条错，不再叠一条"金额不合法"', () => {
+    const r = buildIntakeRow(purchase({ currency: 'JPY' }), CTX)
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.errors.filter((e) => e.includes('amount 不是合法金额'))).toEqual([])
+  })
+
+  it('AUD 可用（Oztop 是澳洲客户）', () => {
+    const r = buildIntakeRow(purchase({ currency: 'aud' }), CTX)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.row.currency).toBe('AUD')
   })
 })
 

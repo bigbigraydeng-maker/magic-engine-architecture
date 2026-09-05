@@ -46,13 +46,7 @@ function region(startMarker: string, endMarker?: string): string {
   return SQL.slice(start, end)
 }
 
-const TABLES = [
-  'me_sale_outcomes',
-  'me_conversion_writebacks',
-  'me_conversion_audit',
-  'me_conversion_breakers',
-  'me_pii_suppression',
-] as const
+const TABLES = ['me_sale_outcomes', 'me_conversion_writebacks', 'me_conversion_audit'] as const
 
 describe('#1397 migration · 版本号与边界', () => {
   it('版本号在整个 migrations 目录里唯一', () => {
@@ -65,7 +59,7 @@ describe('#1397 migration · 版本号与边界', () => {
     ).toEqual([MIGRATION_FILE])
   })
 
-  it('五张表都建了', () => {
+  it('三张表都建了', () => {
     for (const t of TABLES) {
       expect(SQL).toContain(`CREATE TABLE IF NOT EXISTS public.${t}`)
     }
@@ -80,6 +74,10 @@ describe('#1397 migration · 版本号与边界', () => {
       'me_emq_snapshots',
       'me_lead_rules',
       'flywheel_outcomes',
+      // 2026-09-05 PM 审"有没有过度开发"后砍掉：同步发送用不上熔断，
+      // opt-out 用既有的 contacts.do_not_contact。真需要时再加，别提前建。
+      'me_conversion_breakers',
+      'me_pii_suppression',
     ]
     const built = forbidden.filter((n) => new RegExp(`CREATE TABLE[^;]*\\b${n}\\b`).test(SQL))
     expect(built, `不属于 PR1 的表：\n${built.join('\n')}`).toEqual([])
@@ -93,7 +91,7 @@ describe('#1397 migration · RLS 与授权面', () => {
 
   it('每一条策略都写了 TO service_role（漏掉 = 对匿名访客敞开读写）', () => {
     const policies = Array.from(SQL.matchAll(/CREATE POLICY[\s\S]*?;/g)).map((m) => m[0])
-    expect(policies.length, '五张表各一条策略').toBe(5)
+    expect(policies.length, '三张表各一条策略').toBe(3)
     const missing = policies.filter((p) => !/FOR ALL TO service_role/.test(p))
     expect(
       missing,
@@ -185,14 +183,14 @@ describe('#1397 migration · 防重复发送的硬闸', () => {
     )
     expect(
       block,
-      'Inngest 重跑时已完成的 step 只回放不重执行，所以"是不是已经发过"的判断\n' +
-        '必须靠这一列在发送那一步内部做 CAS —— 放在前置 step 里的守卫重跑时根本不跑。',
+      '挡"同一条被发两次"：按钮连点、请求重试、进程崩了重来。\n' +
+        'DB 写必须在 HTTP 之前 —— 反过来就是先发了再记账，中间崩掉会重发。',
     ).toContain('post_started_at')
   })
 
-  it('有 last_attempt_at 列，且清道夫索引落在它上面', () => {
-    // 它是 sweepStuckSending 的唯一判据：不写这列，卡住的行永远没人清，
-    // 连客人要求删除都做不了（redact 遇 sending 返 409）。
+  it('有 last_attempt_at 列，且索引落在它上面', () => {
+    // 卡在 sending 的行靠它判断"卡了多久"，据此转 in_doubt 交人工核对。
+    // 不写这列，卡住的行没人认得出来，连客人要求删除都做不了。
     expect(SQL).toContain('last_attempt_at')
     expect(SQL).toMatch(
       /idx_me_conversion_writebacks_sending[\s\S]*?\(last_attempt_at\)[\s\S]*?WHERE status = 'sending'/,
@@ -265,12 +263,11 @@ describe('#1397 migration · 事实表的约束（每条都对应一个真实的
     expect(block).toContain("outcome_kind IN ('purchase','balance','lead')")
   })
 
-  it('有 dispatched_at（outbox 补发的落点）', () => {
-    expect(
-      block,
-      'sendInngestEvent 是纯 HTTP 外呼进不了事务，只能"先落库、再发事件、成功回写这一列"，\n' +
-        '留 NULL 的由补发 cron 拾回 —— 没有这一列，发事件失败的行就是永久孤儿。',
-    ).toContain('dispatched_at')
+  it('没有为异步队列预留的字段（同步发送用不上）', () => {
+    // dispatched_at 是给"先落库再发事件"的 outbox 用的。改同步发送后它永远为空，
+    // 留着只会让下一个人以为还有一条异步路径。
+    expect(SQL.includes('dispatched_at'), 'dispatched_at 属于已砍掉的异步队列').toBe(false)
+    expect(SQL.includes('skipped_breaker'), 'skipped_breaker 属于已砍掉的熔断').toBe(false)
   })
 
   it('client_id 外键不写 ON DELETE CASCADE', () => {
@@ -280,19 +277,6 @@ describe('#1397 migration · 事实表的约束（每条都对应一个真实的
       '这张表是成交事实与审计凭据。删客户时静默级联删掉，等于把已发给 Meta 的记录\n' +
         '在我们这边抹掉，之后再也对不上账。',
     ).toBe(false)
-  })
-})
-
-describe('#1397 migration · opt-out 名单不跨客户', () => {
-  it('主键带 client_id', () => {
-    expect(SQL).toContain('CONSTRAINT me_pii_suppression_pk PRIMARY KEY (client_id, kind, hash)')
-  })
-
-  it('kind 支持 em 与 ph 两种', () => {
-    expect(
-      SQL,
-      '只认邮箱的话，只留了电话没留邮箱的客人无法要求停止使用其数据。',
-    ).toContain("kind IN ('em','ph')")
   })
 })
 
