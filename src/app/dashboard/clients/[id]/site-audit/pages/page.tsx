@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { CrawlButton, type JobStatus } from '../_components/CrawlButton'
 
@@ -177,6 +177,11 @@ export default function SiteAuditPagesPage() {
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
   const [currentJobStatus, setCurrentJobStatus] = useState<JobStatus | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  // Guards against out-of-order fetchPages responses (see fetchPages below):
+  // when the deep-link effect flips indexFilter right after mount, the
+  // 'all' request from the initial render can resolve after the
+  // 'not-indexed' request and must not clobber it.
+  const latestRequestId = useRef(0)
 
   // Deep-link from 今日待办 not_indexed 汇总项: ?filter=not-indexed opens straight
   // to the未收录 view. Read after mount (not in useState init) to avoid a
@@ -249,6 +254,7 @@ export default function SiteAuditPagesPage() {
 
   // Fetch pages whenever filter or page changes
   const fetchPages = useCallback(async () => {
+    const requestId = ++latestRequestId.current
     setLoading(true)
     setError(null)
     try {
@@ -266,12 +272,18 @@ export default function SiteAuditPagesPage() {
       const res = await fetch(`/api/clients/${clientId}/site-audit/pages?${qs}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: PagesResponse = await res.json()
+      // A newer request may have started (and finished) while this one was
+      // in flight — e.g. the deep-link effect flips indexFilter right after
+      // the initial 'all' fetch starts. Drop stale responses so they can't
+      // clobber a more recent, still-relevant result.
+      if (requestId !== latestRequestId.current) return
       setPages(data.pages ?? [])
       setTotal(data.total ?? 0)
     } catch (e) {
+      if (requestId !== latestRequestId.current) return
       setError(e instanceof Error ? e.message : '加载失败')
     } finally {
-      setLoading(false)
+      if (requestId === latestRequestId.current) setLoading(false)
     }
   }, [clientId, selectedType, indexFilter, offset, refreshKey])
 

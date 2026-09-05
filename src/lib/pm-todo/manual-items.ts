@@ -278,7 +278,7 @@ export function buildNotIndexedItems(
       // 落到 ME 后台的站点页面清单（已带 ?filter=not-indexed 直达未收录）：每页都标了
       // 本地分类和该做什么。这解决 GSC「网页(Pages)」报告的两个盲区 —— 它不显示我们本地
       // 推导的「内容太薄」，「谷歌还不认识」的页面也可能压根不在它清单里（Codex #1375）。
-      how: `打开这份站内清单（已只筛未收录），每页都标了原因和该做的动作：「内容太薄 / 爬过没收录」的，去把正文补到 ${THIN_WORD_COUNT_THRESHOLD} 词以上、加内链；「谷歌还不认识」的，去 Search Console 在最上方搜索框粘上这个网址、点「请求编入索引」。一次弄不完就先挑最想被搜到的几页`,
+      how: `打开这份站内清单（已只筛未收录），每页都标了原因和该做的动作：「内容太薄」的，去把正文补到 ${THIN_WORD_COUNT_THRESHOLD} 词以上、加内链；「爬过没收录 / 谷歌还不认识」的，去 Search Console 在最上方搜索框粘上这个网址、点「请求编入索引」。一次弄不完就先挑最想被搜到的几页`,
       // app.magicengine.com.au 是登录类站点，链接闸判 unverifiable 会保留（见 action-link）。
       href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit/pages?filter=not-indexed`,
     })
