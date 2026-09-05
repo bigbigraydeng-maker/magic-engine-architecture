@@ -163,3 +163,47 @@ describe('读取结果 → 回执', () => {
     expect(s.status).toBe('partial')
   })
 })
+
+// ─── P1 回归（Codex #1399）─────────────────────────────────────────────────
+import { readRegisteredPageId, readGraphOnce } from '../daily-plan-post-measurement'
+
+/** 只对 clients 表建模；其他一律炸。 */
+function clientsDb(opts: { data?: unknown; error?: unknown }) {
+  return {
+    from(table: string) {
+      if (table !== 'clients') throw new Error(`unexpected table ${table}`)
+      const chain: Record<string, unknown> = {}
+      chain.select = () => chain
+      chain.eq = () => chain
+      chain.maybeSingle = () => Promise.resolve({ data: opts.data ?? null, error: opts.error ?? null })
+      return chain
+    },
+  } as never
+}
+
+describe('P1: readRegisteredPageId —— DB 错误不能塌成 client_page_unknown', () => {
+  it('🔴 Supabase 返回 error → 抛出，让 Inngest 有界重试', async () => {
+    await expect(
+      readRegisteredPageId(clientsDb({ error: { message: 'connection timeout' } }), CLIENT),
+    ).rejects.toThrow(/db error.*connection timeout/)
+  })
+
+  it('查询成功、客户不存在 → null（可以合法结案）', async () => {
+    expect(await readRegisteredPageId(clientsDb({ data: null }), CLIENT)).toBeNull()
+  })
+
+  it('查询成功、字段真的空 → null', async () => {
+    expect(await readRegisteredPageId(clientsDb({ data: { facebook_page_id: null } }), CLIENT)).toBeNull()
+  })
+
+  it('查询成功、字段有值 → 返回该值', async () => {
+    expect(await readRegisteredPageId(clientsDb({ data: { facebook_page_id: PAGE } }), CLIENT)).toBe(PAGE)
+  })
+})
+
+// ─── P3 事故回归：Graph 数字在重试之间变化，快照不能被覆盖 ───────────────────
+//
+// 消费者层测 readGraphOnce 拆成独立 step（成功后被 Inngest 记忆化，重放同 run 不
+// 再问 Graph）；快照 hash 不匹配的拒绝语义在 store 层的 recordSnapshot 里测
+// （`hash_mismatch` 分支），并在真 PostgreSQL 里用 RPC 直接实测（migration
+// 验证脚本 P3-3：hash_v1 写入后 hash_v2 会话被 RPC 抛 check_violation 拒）。

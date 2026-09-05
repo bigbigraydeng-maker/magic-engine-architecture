@@ -1,4 +1,4 @@
--- Facebook 帖子 T+N 表现回收：测量回执表 + 三处业务身份唯一约束
+-- Facebook 帖子 T+N 表现回收：测量回执表 + 业务身份唯一约束 + 客户归属组合外键
 --
 -- 为什么要新表：现有三张 flywheel 表都表达不了「读不到」。
 --   · flywheel_metrics.metric_value 是 NOT NULL —— 无法测量没法写行；
@@ -8,13 +8,29 @@
 --
 -- 所以只加这一张最小表，只装完成 Act→Check 所需字段。不存 token、不存完整响应。
 --
--- 可重复执行：全部 IF NOT EXISTS / EXCEPTION WHEN duplicate_object。
+-- 可重复执行：全部 IF NOT EXISTS / EXCEPTION WHEN duplicate_object / DO $$。
+
+-- ── flywheel_actions：补 (id, client_id) 唯一键，为回执的组合外键铺路 ─────────
+--
+-- P4：光有两个独立外键（receipts.client_id → clients，receipts.action_id →
+-- flywheel_actions）挡不住「B 客户的回执挂到 A 客户的 action」—— 消费者用
+-- service role，RLS 不会替我们补隔离。要把「回执必须与其 action 属于同一客户」
+-- 提升成数据库层的硬约束，只能靠组合外键指向一个能唯一确定这条 action 的键。
+-- 因此先在 flywheel_actions 上加 (id, client_id) 的 UNIQUE。id 已是主键，加这个
+-- UNIQUE 只多存一个索引条目，不改语义、对既有数据零影响。
+DO $$ BEGIN
+  ALTER TABLE public.flywheel_actions
+    ADD CONSTRAINT flywheel_actions_id_client_uniq UNIQUE (id, client_id);
+EXCEPTION WHEN duplicate_object THEN NULL;
+         WHEN duplicate_table  THEN NULL; END $$;
+
+-- ── social_post_measurement_receipts ─────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS public.social_post_measurement_receipts (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id       UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  client_id       UUID NOT NULL,
   -- 发布动作行。回执与它一一对应，单帖查询从这里进。
-  action_id       UUID NOT NULL REFERENCES public.flywheel_actions(id) ON DELETE CASCADE,
+  action_id       UUID NOT NULL,
   idempotency_key TEXT NOT NULL,
   post_id         TEXT NOT NULL,
   page_id         TEXT NOT NULL,
@@ -32,7 +48,14 @@ CREATE TABLE IF NOT EXISTS public.social_post_measurement_receipts (
   graph_code      INTEGER,
   graph_subcode   INTEGER,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- 🔴 P4：组合外键。回执的 client_id 必须与其 action 所属客户一致，否则数据库
+  -- 直接拒绝写入。不需要触发器，也不需要应用代码自觉。
+  CONSTRAINT social_post_measurement_receipts_action_client_fk
+    FOREIGN KEY (action_id, client_id)
+    REFERENCES public.flywheel_actions(id, client_id) ON DELETE CASCADE,
+  CONSTRAINT social_post_measurement_receipts_client_fk
+    FOREIGN KEY (client_id) REFERENCES public.clients(id) ON DELETE CASCADE
 );
 
 -- 业务身份：一个动作的一个窗口只有一条回执。重跑同窗口更新同一行，不新增第二行。
@@ -70,3 +93,133 @@ CREATE UNIQUE INDEX IF NOT EXISTS flywheel_metrics_post_measurement_identity
   )
   WHERE source_ref ->> 'idempotency_key' IS NOT NULL
     AND source_ref ->> 'window_hours' IS NOT NULL;
+
+-- ── P3：原子快照 RPC ──────────────────────────────────────────────────────────
+--
+-- 一次测量 = 一个不可分割的快照。之前的实现「先写回执、再逐条写指标」在中途失败
+-- 重跑时会用变化后的 Graph 数字覆盖回执，产生 receipt.likes=12 / metric.likes=10
+-- 这样的自相矛盾。改用 RPC，回执与全部指标在同一事务里一次提交，要么全成、要么
+-- 全不生效。
+--
+-- 幂等：`snapshot_hash` 由消费者按 (window_hours, values 序列化) 算出；同一
+-- action_id + window_hours 已存在时，只有 hash 相同才更新，不同则拒绝——绝不让
+-- 变化后的数字覆盖既有快照，也绝不让 ok/partial 被后续 unmeasurable 覆盖。
+CREATE OR REPLACE FUNCTION public.record_post_measurement_snapshot(
+  p_client_id       UUID,
+  p_action_id       UUID,
+  p_idempotency_key TEXT,
+  p_post_id         TEXT,
+  p_page_id         TEXT,
+  p_window_hours    INTEGER,
+  p_target_at       TIMESTAMPTZ,
+  p_measured_at     TIMESTAMPTZ,
+  p_status          TEXT,
+  p_values          JSONB,
+  p_missing         JSONB,
+  p_snapshot_hash   TEXT,
+  p_reason          TEXT DEFAULT NULL,
+  p_graph_code      INTEGER DEFAULT NULL,
+  p_graph_subcode   INTEGER DEFAULT NULL
+) RETURNS TABLE (receipt_id UUID, outcome TEXT) AS $fn$
+DECLARE
+  v_receipt_id      UUID;
+  v_existing_status TEXT;
+  v_existing_hash   TEXT;
+  v_key             TEXT;
+BEGIN
+  -- 锁行以避免 T+4 与 T+72 或事件重放并发时的 lost update。
+  SELECT r.id, r.status, r.missing ->> '__snapshot_hash'
+    INTO v_receipt_id, v_existing_status, v_existing_hash
+    FROM public.social_post_measurement_receipts r
+   WHERE r.action_id = p_action_id AND r.window_hours = p_window_hours
+   FOR UPDATE;
+
+  IF v_receipt_id IS NOT NULL THEN
+    -- 🔴 P3 铁律 1：ok/partial 不能被 unmeasurable 覆盖降级。原样返回旧回执，
+    --    不 UPDATE、不写指标。
+    IF v_existing_status IN ('ok', 'partial') AND p_status = 'unmeasurable' THEN
+      receipt_id := v_receipt_id;
+      outcome    := 'kept_success';
+      RETURN NEXT;
+      RETURN;
+    END IF;
+
+    -- 🔴 P3 铁律 2：ok/partial 快照 hash 不同的写入一律拒 —— 变化的 Graph 数字
+    --    绝不能污染原快照。同 hash 的重放走下面的 upsert 分支（自然幂等）。
+    IF v_existing_status IN ('ok', 'partial') AND p_status IN ('ok', 'partial')
+       AND v_existing_hash IS NOT NULL AND v_existing_hash <> p_snapshot_hash THEN
+      RAISE EXCEPTION 'snapshot_hash_mismatch existing=% incoming=%',
+        v_existing_hash, p_snapshot_hash
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  -- upsert 回执：snapshot_hash 藏进 missing 里，无需加列 —— 少一次 migration。
+  INSERT INTO public.social_post_measurement_receipts (
+    client_id, action_id, idempotency_key, post_id, page_id,
+    window_hours, target_at, measured_at, status, values, missing,
+    reason, graph_code, graph_subcode
+  ) VALUES (
+    p_client_id, p_action_id, p_idempotency_key, p_post_id, p_page_id,
+    p_window_hours, p_target_at, p_measured_at, p_status, p_values,
+    p_missing || jsonb_build_object('__snapshot_hash', p_snapshot_hash),
+    p_reason, p_graph_code, p_graph_subcode
+  )
+  ON CONFLICT (action_id, window_hours) DO UPDATE SET
+    measured_at   = EXCLUDED.measured_at,
+    status        = EXCLUDED.status,
+    values        = EXCLUDED.values,
+    missing       = EXCLUDED.missing,
+    reason        = EXCLUDED.reason,
+    graph_code    = EXCLUDED.graph_code,
+    graph_subcode = EXCLUDED.graph_subcode,
+    updated_at    = now()
+  RETURNING id INTO v_receipt_id;
+
+  -- 只有 ok / partial 才写数字。用「先查再插」而不是 ON CONFLICT —— 部分唯一索引
+  -- 带 WHERE，ON CONFLICT 无法匹配它；同一事务里的先查后插仍是原子的（同一 RPC
+  -- 里一次提交，外部看不到中间态）。
+  IF p_status IN ('ok', 'partial') THEN
+    FOR v_key IN SELECT jsonb_object_keys(p_values) LOOP
+      IF NOT EXISTS (
+        SELECT 1 FROM public.flywheel_metrics m
+         WHERE m.client_id = p_client_id
+           AND m.metric_key = 'social.post.' || v_key
+           AND m.source_ref ->> 'idempotency_key' = p_idempotency_key
+           AND m.source_ref ->> 'window_hours'    = p_window_hours::TEXT
+      ) THEN
+        INSERT INTO public.flywheel_metrics (
+          client_id, flywheel, metric_key, metric_value, source, source_ref, measured_at
+        ) VALUES (
+          p_client_id, 'social', 'social.post.' || v_key,
+          (p_values ->> v_key)::NUMERIC, 'meta_graph',
+          jsonb_build_object(
+            'action_id',       p_action_id,
+            'idempotency_key', p_idempotency_key,
+            'post_id',         p_post_id,
+            'page_id',         p_page_id,
+            'window_hours',    p_window_hours,
+            'target_at',       p_target_at,
+            'receipt_id',      v_receipt_id,
+            'snapshot_hash',   p_snapshot_hash
+          ),
+          p_measured_at
+        );
+      END IF;
+    END LOOP;
+  END IF;
+
+  receipt_id := v_receipt_id;
+  outcome    := 'written';
+  RETURN NEXT;
+END;
+$fn$ LANGUAGE plpgsql SECURITY DEFINER;
+
+REVOKE ALL ON FUNCTION public.record_post_measurement_snapshot(
+  UUID, UUID, TEXT, TEXT, TEXT, INTEGER, TIMESTAMPTZ, TIMESTAMPTZ,
+  TEXT, JSONB, JSONB, TEXT, TEXT, INTEGER, INTEGER
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.record_post_measurement_snapshot(
+  UUID, UUID, TEXT, TEXT, TEXT, INTEGER, TIMESTAMPTZ, TIMESTAMPTZ,
+  TEXT, JSONB, JSONB, TEXT, TEXT, INTEGER, INTEGER
+) TO service_role;

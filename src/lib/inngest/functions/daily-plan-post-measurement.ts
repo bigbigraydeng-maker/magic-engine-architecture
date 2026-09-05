@@ -5,14 +5,24 @@
  *
  *   fan-out   收发布事件 → 校验 → 隔离检查 → 记发布动作 → 每个测量窗口各发一条内部
  *             事件（稳定 id `<idempotency_key>:measurement:<hours>`）
- *   measure   每条内部事件一个独立 run → 睡到该窗口 → 重新取令牌 → 读一次 → 落库
+ *   measure   每条内部事件一个独立 run → 睡到该窗口 → 从库读 action 核对身份 →
+ *             独立 step 读 Graph → RPC 事务性提交回执 + 全部指标
  *
- * 🔴 **必须拆开**：若一个 run 顺序睡 4 小时再睡 72 小时，T+4 失败会连累 T+72 永远跑
- *    不到，T+72 重试又会重放已成功的 T+4。拆开后：T+4 失败不挡 T+72、T+72 失败不删
+ * 🔴 **必须拆开**：若一个 run 顺序睡 4h 再睡 72h，T+4 失败会连累 T+72 永远跑不到，
+ *    T+72 重试又会重放已成功的 T+4。拆开后：T+4 失败不挡 T+72、T+72 失败不删
  *    T+4、一条帖子不影响别的帖子、重放靠事件 id + 数据库唯一约束双层挡住。
  *
  * measure 不知道 4 和 72 是什么 —— 只读事件带来的 `window_hours` / `target_at`。
  * 本期不做 Tune：动作行 `expected_metric` 为 NULL，通用归因不加载它。
+ *
+ * ## Codex #1399 复审修正
+ *
+ * - P1：Supabase 查询失败不能塌成 `client_page_unknown`。DB 错误抛出让 Inngest 重试。
+ * - P2：`recordPublishAction` 幂等冲突必须核对全身份，不同则 fail-closed。
+ * - P3：Graph 读拆成独立 step；回执与所有指标走 RPC 事务性一次提交；
+ *   ok/partial 不能被 unmeasurable 覆盖；同 hash 幂等，不同 hash 拒绝。
+ * - P4：数据库组合外键锁 receipts.client_id ↔ action.client_id；消费者
+ *   访问 Meta 前必须从 DB 读 action 核对 client/post/page/idempotency。
  */
 
 import { z } from 'zod'
@@ -27,13 +37,12 @@ import {
   type DailyPlanPostPublishedEvent,
 } from '@/lib/campaign/daily-plan-publish'
 import { getStoredPageToken } from '@/lib/meta/token-manager'
-import { fetchPostEngagement, type FieldRead } from '@/lib/meta/post-engagement'
+import { fetchPostEngagement, type EngagementRead, type FieldRead, type GraphFailure } from '@/lib/meta/post-engagement'
 import {
   recordPublishAction,
-  upsertMeasurementReceipt,
-  writePostMetric,
-  POST_METRIC_KEYS,
-  type PostMetricField,
+  recordSnapshot,
+  verifyActionIdentity,
+  PublishActionIdentityMismatchError,
   type ReceiptStatus,
 } from '@/lib/social/post-measurement-store'
 
@@ -71,6 +80,31 @@ export function checkIsolation(
   return { ok: true }
 }
 
+/**
+ * P1：读客户档案里登记的 Facebook 主页 ID。
+ *
+ * DB 错误（网络、权限、超时）**必须抛出**让 Inngest 重试 —— 静默返回 null 会被
+ * `checkIsolation` 塌成 `client_page_unknown` 永久结案，帖子既没 action、也没测量。
+ * 只有查询成功且字段真的为空/客户不存在，才返回 null。
+ */
+export async function readRegisteredPageId(
+  supabase: SupabaseClient,
+  clientId: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('clients')
+    .select('facebook_page_id')
+    .eq('id', clientId)
+    .maybeSingle()
+
+  if (error) {
+    // 抛出让 Inngest 重试；不塌成「主页未登记」这种永久结论。
+    throw new Error(`readRegisteredPageId: db error — ${error.message}`)
+  }
+  if (!data) return null
+  return (data as { facebook_page_id?: string | null }).facebook_page_id ?? null
+}
+
 export function createFanOutFunction(deps: { supabase: SupabaseClient }) {
   return inngest.createFunction(
     {
@@ -88,17 +122,14 @@ export function createFanOutFunction(deps: { supabase: SupabaseClient }) {
       const d = parsed.data
 
       const isolation = await step.run('isolation-check', async () => {
-        const { data } = await deps.supabase
-          .from('clients')
-          .select('facebook_page_id')
-          .eq('id', d.client_id)
-          .maybeSingle()
-        const registered = (data as { facebook_page_id?: string | null } | null)?.facebook_page_id ?? null
+        const registered = await readRegisteredPageId(deps.supabase, d.client_id)
         return checkIsolation(registered, d)
       })
       if (!isolation.ok) return { ok: false, reason: isolation.reason }
 
       // 帖子已经在 Facebook 上了 —— 先记下这个既成事实，不看令牌。
+      // P2：recordPublishAction 内部核对身份；不同则抛 PublishActionIdentityMismatchError，
+      // 由 Inngest 重试上限兜底记 failure。
       const actionId = await step.run('record-publish-action', () =>
         recordPublishAction(deps.supabase, {
           clientId: d.client_id,
@@ -144,18 +175,14 @@ export function createFanOutFunction(deps: { supabase: SupabaseClient }) {
 // ─── measurement ─────────────────────────────────────────────────────────────
 
 /** 一次读取 → 回执长什么样。纯函数，直测。 */
-export function summariseRead(read: {
-  reactions: FieldRead
-  comments: FieldRead
-  shares: FieldRead
-}): {
+export function summariseRead(read: EngagementRead): {
   status: Extract<ReceiptStatus, 'ok' | 'partial'>
   values: Record<string, number>
   missing: Record<string, string>
 } {
   const values: Record<string, number> = {}
   const missing: Record<string, string> = {}
-  const fields: [PostMetricField, FieldRead][] = [
+  const fields: [string, FieldRead][] = [
     ['likes', read.reactions],
     ['comments', read.comments],
     ['shares', read.shares],
@@ -167,6 +194,28 @@ export function summariseRead(read: {
   return { status: Object.keys(missing).length === 0 ? 'ok' : 'partial', values, missing }
 }
 
+/** Graph 读一次 → 结构化结果。抽出来给独立 step 用，也便于直测。 */
+export type GraphReadResult =
+  | { kind: 'read'; read: EngagementRead }
+  | { kind: 'no_token' }
+  | { kind: 'permanent'; failure: GraphFailure }
+  | { kind: 'transient'; failure: GraphFailure }
+
+export async function readGraphOnce(
+  clientId: string,
+  pageId: string,
+  postId: string,
+  fetcher: typeof fetch,
+): Promise<GraphReadResult> {
+  const token = await getStoredPageToken(clientId, pageId)
+  if (!token) return { kind: 'no_token' }
+  const result = await fetchPostEngagement(postId, token, fetcher)
+  if (result.ok) return { kind: 'read', read: result.read }
+  return result.failure.kind === 'transient'
+    ? { kind: 'transient', failure: result.failure }
+    : { kind: 'permanent', failure: result.failure }
+}
+
 export function createMeasureFunction(deps: {
   supabase: SupabaseClient
   fetcher?: typeof fetch
@@ -174,47 +223,33 @@ export function createMeasureFunction(deps: {
 }) {
   const now = deps.now ?? (() => new Date())
 
-  const writeReceipt = (
-    d: MeasureDueData,
-    status: ReceiptStatus,
-    extra: Partial<{
-      measuredAt: string | null
-      values: Record<string, number>
-      missing: Record<string, string>
-      reason: string
-      graphCode: number | null
-      graphSubcode: number | null
-    }> = {},
-  ) =>
-    upsertMeasurementReceipt(deps.supabase, {
-      clientId: d.client_id,
-      actionId: d.action_id,
-      idempotencyKey: d.idempotency_key,
-      postId: d.post_id,
-      pageId: d.page_id,
-      windowHours: d.window_hours,
-      targetAt: d.target_at,
-      measuredAt: extra.measuredAt ?? null,
-      status,
-      values: extra.values ?? {},
-      missing: extra.missing ?? {},
-      reason: extra.reason ?? null,
-      graphCode: extra.graphCode ?? null,
-      graphSubcode: extra.graphSubcode ?? null,
-    })
-
   return inngest.createFunction(
     {
       id: `${CLOUD_FN_PREFIX}daily-plan-post-measure`,
       name: 'Daily Plan Post: measure one window',
       concurrency: { limit: 4, key: 'event.data.page_id' },
       retries: 3,
-      // 重试耗尽也要留痕 —— 静默失败正是本功能要消灭的东西。
+      // 重试耗尽也要留痕 —— 但 P3：不能把已成功的回执降级成 unmeasurable。
+      // RPC 内部铁律 1 保证 ok/partial 不会被 unmeasurable 覆盖，所以这里放心记账。
       onFailure: async ({ event: failureEvent }) => {
         const original = (failureEvent.data as { event?: { data?: unknown } })?.event?.data
         const parsed = MeasureDueSchema.safeParse(original)
         if (!parsed.success) return
-        await writeReceipt(parsed.data, 'unmeasurable', { reason: 'retries_exhausted' })
+        const d = parsed.data
+        await recordSnapshot(deps.supabase, {
+          clientId: d.client_id,
+          actionId: d.action_id,
+          idempotencyKey: d.idempotency_key,
+          postId: d.post_id,
+          pageId: d.page_id,
+          windowHours: d.window_hours,
+          targetAt: d.target_at,
+          measuredAt: null,
+          status: 'unmeasurable',
+          values: {},
+          missing: {},
+          reason: 'retries_exhausted',
+        })
       },
     },
     { event: DAILY_PLAN_POST_MEASURE_EVENT },
@@ -226,57 +261,105 @@ export function createMeasureFunction(deps: {
       // 到点再干活。已过的时刻立即返回 —— 迟测仍测，回执上看得出迟了。
       await step.sleepUntil(`wait-${d.window_hours}h`, new Date(d.target_at))
 
-      return await step.run(`measure-${d.window_hours}h`, async () => {
-        // 到执行时才重新取令牌 —— 发布时能用不代表 72 小时后还能用。
-        const token = await getStoredPageToken(d.client_id, d.page_id)
-        if (!token) {
-          await writeReceipt(d, 'unmeasurable', { reason: 'token_unavailable' })
-          return { ok: false, reason: 'token_unavailable' }
-        }
+      // 🔴 P4：访问 Meta 前必须从 DB 读 action 核对身份。事件里带的 client/post/page
+      // 全部只是"声称"，DB 里那条 action 才是权威。任何不一致 → 拒，不读、不写。
+      const identity = await step.run('verify-action-identity', () =>
+        verifyActionIdentity(deps.supabase, d.action_id, {
+          clientId: d.client_id,
+          idempotencyKey: d.idempotency_key,
+          postId: d.post_id,
+          pageId: d.page_id,
+        }),
+      )
+      if (!identity.ok) return { ok: false, reason: identity.reason }
 
-        const result = await fetchPostEngagement(d.post_id, token, deps.fetcher ?? fetch)
-        if (!result.ok) {
-          const f = result.failure
-          // 临时错抛出去让 Inngest 有界重试；耗尽后 onFailure 写 retries_exhausted。
-          if (f.kind === 'transient') throw new Error(`transient:${f.reason}`)
-          await writeReceipt(d, 'unmeasurable', {
-            reason: f.reason,
-            graphCode: f.code,
-            graphSubcode: f.subcode,
-          })
-          return { ok: false, reason: f.reason }
-        }
+      // 🔴 P3：把 Graph 读取做成独立的持久 step —— 成功后被 Inngest 记忆化，
+      // 后续同一 run 的重试都复用同一份数字，不再重新问 Graph、不再产生 hash 漂移。
+      const read = await step.run(`read-graph-${d.window_hours}h`, () =>
+        readGraphOnce(d.client_id, d.page_id, d.post_id, deps.fetcher ?? fetch),
+      )
 
-        const measuredAt = now().toISOString()
-        const summary = summariseRead(result.read)
-        const receiptId = await writeReceipt(d, summary.status, {
-          measuredAt,
-          values: summary.values,
-          missing: summary.missing,
-        })
-
-        // 只写明确读到的数字。缺的字段一行都不写 —— 0 只能来自 Meta 真的返回 0。
-        for (const [field, value] of Object.entries(summary.values)) {
-          await writePostMetric(deps.supabase, {
+      // 到执行时才重新取令牌 —— 发布时能用不代表 72 小时后还能用。
+      if (read.kind === 'no_token') {
+        await step.run('write-unmeasurable-no-token', () =>
+          recordSnapshot(deps.supabase, {
             clientId: d.client_id,
-            metricKey: POST_METRIC_KEYS[field as PostMetricField],
-            value,
             actionId: d.action_id,
             idempotencyKey: d.idempotency_key,
             postId: d.post_id,
             pageId: d.page_id,
             windowHours: d.window_hours,
             targetAt: d.target_at,
-            receiptId,
-            measuredAt,
-          })
-        }
+            measuredAt: null,
+            status: 'unmeasurable',
+            values: {},
+            missing: {},
+            reason: 'token_unavailable',
+          }),
+        )
+        return { ok: false, reason: 'token_unavailable' }
+      }
 
-        return { ok: true, status: summary.status, values: summary.values, missing: summary.missing }
-      })
+      if (read.kind === 'transient') {
+        // 抛出去让 Inngest 有界重试；耗尽后 onFailure 写 retries_exhausted 回执。
+        throw new Error(`transient:${read.failure.reason}`)
+      }
+
+      if (read.kind === 'permanent') {
+        await step.run(`write-unmeasurable-${read.failure.reason}`, () =>
+          recordSnapshot(deps.supabase, {
+            clientId: d.client_id,
+            actionId: d.action_id,
+            idempotencyKey: d.idempotency_key,
+            postId: d.post_id,
+            pageId: d.page_id,
+            windowHours: d.window_hours,
+            targetAt: d.target_at,
+            measuredAt: null,
+            status: 'unmeasurable',
+            values: {},
+            missing: {},
+            reason: read.failure.reason,
+            graphCode: read.failure.code,
+            graphSubcode: read.failure.subcode,
+          }),
+        )
+        return { ok: false, reason: read.failure.reason }
+      }
+
+      const measuredAt = now().toISOString()
+      const summary = summariseRead(read.read)
+
+      // 🔴 P3：回执 + 全部指标一次事务提交（RPC 内部保证原子性）。
+      const outcome = await step.run(`write-snapshot-${d.window_hours}h`, () =>
+        recordSnapshot(deps.supabase, {
+          clientId: d.client_id,
+          actionId: d.action_id,
+          idempotencyKey: d.idempotency_key,
+          postId: d.post_id,
+          pageId: d.page_id,
+          windowHours: d.window_hours,
+          targetAt: d.target_at,
+          measuredAt,
+          status: summary.status,
+          values: summary.values,
+          missing: summary.missing,
+        }),
+      )
+
+      return {
+        ok: true,
+        outcome,
+        status: summary.status,
+        values: summary.values,
+        missing: summary.missing,
+      }
     },
   )
 }
 
 export const dailyPlanPostFanOut = createFanOutFunction({ supabase: supabaseAdmin })
 export const dailyPlanPostMeasure = createMeasureFunction({ supabase: supabaseAdmin })
+
+// P2 类型导出，测试用。
+export { PublishActionIdentityMismatchError } from '@/lib/social/post-measurement-store'
