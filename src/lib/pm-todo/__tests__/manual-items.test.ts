@@ -304,8 +304,9 @@ describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别
     expect(oz.what).toContain('55 个内容太薄')
     expect(oz.what).toContain('6 个谷歌还不认识')
     expect(oz.what).toContain('55 个谷歌爬过却没收录')
-    // 🔴 链接落到能直达「哪几页、什么原因」的地方 —— GSC 属性（站内无收录状态视图）
-    expect(oz.href).toBe('https://search.google.com/search-console?resource_id=sc-domain%3Aoztop.com.au')
+    // 🔴 链接落到 ME 站内页面清单（已带 ?filter=not-indexed 直达未收录）——
+    //    GSC 网页报告不显示本地「内容太薄」分类、「谷歌还不认识」的页面也可能不在其清单里（Codex #1375）
+    expect(oz.href).toBe('https://app.magicengine.com.au/dashboard/clients/oztop/site-audit/pages?filter=not-indexed')
     expect(oz.how).toContain('索引')
   })
 

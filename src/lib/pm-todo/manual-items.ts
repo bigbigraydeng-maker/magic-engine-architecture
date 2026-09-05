@@ -22,6 +22,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
+import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
 import { pushEmailReplyItems, type EmailReplyItemKind } from './email-reply-items'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
@@ -130,7 +131,7 @@ export function gscInspectUrl(siteUrl: string, pageUrl: string): string {
   )
 }
 
-import { gscPropertyUrl, verifyActionLink } from './action-link'
+import { verifyActionLink } from './action-link'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { checkCronHealth } from '@/lib/cron/health'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
@@ -243,11 +244,9 @@ export function buildNotIndexedItems(
       oldest: null as string | null,
     }
     cur.total += 1
-    // 判据顺序与原逐页版一致：先认「谷歌不认识」，其次「内容太薄」，
-    // 剩下的是「爬过、字数够、却仍没收录」。
-    if (row.index_verdict === 'URL is unknown to Google') cur.unknown += 1
-    else if ((row.word_count ?? 0) < 300) cur.thin += 1
-    else cur.declined += 1
+    // 判据顺序与站点清单页共用同一份 classifyNotIndexed（seo/index-status）——
+    // 「300 词」和 unknown 文案只此一处定义，两边永远同口径。
+    cur[classifyNotIndexed(row)] += 1
     if (row.first_not_indexed_at && (!cur.oldest || row.first_not_indexed_at < cur.oldest)) {
       cur.oldest = row.first_not_indexed_at
     }
@@ -256,9 +255,11 @@ export function buildNotIndexedItems(
 
   const items: ManualItem[] = []
   for (const [clientId, agg] of Array.from(byClient.entries())) {
-    // 没有 GSC 连接就没有能直达的未收录清单 —— 与原逐页版一致，这种跳过不下发。
-    const siteUrl = siteUrlOf.get(clientId)
-    if (!siteUrl) continue
+    // 未收录数据（first_not_indexed_at）只由每日收录轮检写入，而轮检只跑连了
+    // GSC 的客户 —— 所以没连 GSC 的客户本就不会有未收录行。这道闸是双保险：
+    // 而且「谷歌爬过没收录 / 还不认识」两类的处理动作仍要去 GSC 点「请求编入索引」，
+    // 没连 GSC 这动作做不了，下发也白搭（与原逐页版一致，跳过不下发）。
+    if (!siteUrlOf.get(clientId)) continue
 
     const parts = [
       agg.thin > 0 ? `${agg.thin} 个内容太薄` : null,
@@ -274,11 +275,12 @@ export function buildNotIndexedItems(
       client_id: clientId,
       client_name: nameOf(clientId),
       what: `${agg.total} 个页面没被谷歌收录（${parts}）${age}，这些页面现在拿不到任何谷歌流量`,
-      // 落到客户自己的 GSC 属性：进「索引 → 网页」就是这份未收录清单 + 每页原因，
-      // 是唯一能直达「具体哪几页、什么原因」的地方（ME 后台没有收录状态视图）。
-      how: '打开 Search Console，进「索引 → 网页(Pages)」看这份没被收录的清单和每页原因：内容太薄 / 爬过没收录的，去把内容补厚到 300 词以上、加内链；「谷歌还不认识」的，在里面点「请求编入索引」。一次弄不完就先挑最想被搜到的几页',
-      // 属性首页是稳定入口（不是会 404 的深链）；登录类站点，链接闸判 unverifiable 会保留。
-      href: gscPropertyUrl(siteUrl),
+      // 落到 ME 后台的站点页面清单（已带 ?filter=not-indexed 直达未收录）：每页都标了
+      // 本地分类和该做什么。这解决 GSC「网页(Pages)」报告的两个盲区 —— 它不显示我们本地
+      // 推导的「内容太薄」，「谷歌还不认识」的页面也可能压根不在它清单里（Codex #1375）。
+      how: `打开这份站内清单（已只筛未收录），每页都标了原因和该做的动作：「内容太薄 / 爬过没收录」的，去把正文补到 ${THIN_WORD_COUNT_THRESHOLD} 词以上、加内链；「谷歌还不认识」的，去 Search Console 在最上方搜索框粘上这个网址、点「请求编入索引」。一次弄不完就先挑最想被搜到的几页`,
+      // app.magicengine.com.au 是登录类站点，链接闸判 unverifiable 会保留（见 action-link）。
+      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit/pages?filter=not-indexed`,
     })
   }
   return items
