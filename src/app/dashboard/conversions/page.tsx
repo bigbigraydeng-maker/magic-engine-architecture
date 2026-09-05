@@ -80,6 +80,7 @@ export default function ConversionsPage() {
   const [rows, setRows] = useState<Outcome[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [writebackDisabled, setWritebackDisabled] = useState(false)
   const [cursor, setCursor] = useState(0)
   const [busy, setBusy] = useState<string | null>(null)
   const [flash, setFlash] = useState<{ id: string; text: string; ok: boolean } | null>(null)
@@ -97,6 +98,7 @@ export default function ConversionsPage() {
     if (!clientId) return
     setLoading(true)
     setError(null)
+    setWritebackDisabled(false)
     try {
       const base = `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}`
       const [pendingRes, approvedRes] = await Promise.all([
@@ -104,7 +106,18 @@ export default function ConversionsPage() {
         fetch(`${base}&review_status=approved`),
       ])
       const pending = await pendingRes.json()
-      if (!pendingRes.ok) throw new Error(pending.error ?? '读取失败')
+      if (!pendingRes.ok) {
+        // 成交回写那张表还没建（migration 未 apply）时，查询会报"表不存在"。
+        // 这不是坏了，是那部分还没启用 —— 平静地说明，别弹红。名单下载不受影响。
+        const msg = String(pending.error ?? '')
+        if (/does not exist|relation|42P01|PGRST205|could not find the table/i.test(msg)) {
+          setWritebackDisabled(true)
+          setRows([])
+          setStuck([])
+          return
+        }
+        throw new Error(pending.error ?? '读取失败')
+      }
       setRows(pending.outcomes ?? [])
       setCursor(0)
 
@@ -374,10 +387,15 @@ export default function ConversionsPage() {
         )}
       </div>
 
+      {writebackDisabled && (
+        <div style={box('#f5efe4', '#6a5f4a')}>
+          成交回写功能尚未启用（需先建数据表并重新连接 Meta）。上面的「客户名单下载」不受影响，可以正常使用。
+        </div>
+      )}
       {error && <div style={box('#fee', '#c00')}>读取出错：{error}</div>}
       {loading && <div style={{ color: '#666' }}>读取中…</div>}
 
-      {!loading && !error && rows.length === 0 && stuck.length === 0 && clientId && (
+      {!loading && !error && !writebackDisabled && rows.length === 0 && stuck.length === 0 && clientId && (
         <div style={box('#f4f9f4', '#276')}>没有待核对的记录 —— 都处理完了。</div>
       )}
 

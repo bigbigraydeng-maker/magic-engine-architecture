@@ -147,6 +147,29 @@ describe('🔴 页面不留客户明文（会被截图、会投屏）', () => {
   })
 })
 
+describe('回写表还没建时优雅降级（不弹红）', () => {
+  it('接口报"表不存在"→显示"尚未启用"而不是报错', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('review_status')) {
+        return Promise.resolve({
+          ok: false,
+          json: async () => ({ error: 'relation "me_sale_outcomes" does not exist' }),
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ outcomes: [] }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.pushState({}, '', `/dashboard/conversions?client=${CLIENT}`)
+    render(<ConversionsPage />)
+
+    expect(await screen.findByText(/尚未启用/)).toBeTruthy()
+    // 不该出现"读取出错"的红色报错
+    expect(screen.queryByText(/读取出错/)).toBeNull()
+    // 名单下载那块照常在（不受影响）
+    expect(screen.getAllByText(/先看人数/).length).toBeGreaterThanOrEqual(1)
+  })
+})
+
 describe('看得懂', () => {
   it('金额显示成人能读的形式，不是最小单位', async () => {
     // 卡片里一处、顶部汇总一处，两处都该是人能读的写法（不是 2350000）
