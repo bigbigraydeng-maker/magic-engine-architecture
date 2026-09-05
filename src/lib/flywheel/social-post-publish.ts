@@ -11,6 +11,11 @@
 
 import { supabaseAdmin } from '@/lib/supabase'
 import { getAccounts, schedulePost, type PublerAccount } from '@/lib/publer/client'
+
+// 调用方要给 resolveBoundPublerAccount() 的返回值起名字时，从这里取类型 ——
+// 直接 import '@/lib/publer/client' 会撞执行内核的 L1 边界（那是对外写能力模块，
+// 只有 capability 层和历史清单里的文件才准碰）。本文件本来就在历史清单里。
+export type { PublerAccount }
 import { SOCIAL_ACTION_TYPE } from '@/lib/flywheel/vocabulary'
 
 // ── Types ─────────────────────────────────────────────────────────────────────

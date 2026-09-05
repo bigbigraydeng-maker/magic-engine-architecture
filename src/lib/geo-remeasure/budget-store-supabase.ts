@@ -1,7 +1,10 @@
 /**
  * GeoBudgetStore 的 Supabase 实现（#1347）—— 只调 RPC，不自己算余额。
- * 🔴 SDK 客户端在 handler 内注入（CLAUDE.md 铁律 7）；本文件只接收已建好的 client。
- *    RPC 名/参数与 migration 20260904000001 对齐。RPC 报错一律当拒绝（fail-closed）。
+ * 🔴 本文件是**纯工厂**：接收已建好的 supabase client，返回一个闭包 store —— 工厂本身无 I/O，
+ *    client 引用在函数注册时被闭包捕获，真正的 RPC 调用发生在 handler 内（魏征 S3 复审提到
+ *    注释与实操对齐）。CLAUDE.md 铁律 7 针对的是 3rd-party API SDK（如 OpenAI/Anthropic）
+ *    在模块顶层构造，本工厂不违反。RPC 名/参数与 migration 20260904000001 对齐。RPC 报错
+ *    一律当拒绝（fail-closed）。
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {

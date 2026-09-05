@@ -330,3 +330,74 @@ export function resolvePublishStatus(
   if (failedCount === 0) return 'PUBLISHED'
   return publishedCount === 0 ? 'FAILED' : 'PARTIAL'
 }
+
+// ─── Published-event contract (shared by publisher + measurement consumer) ────
+
+/**
+ * `daily_plan.post.published` payload —— ONE event per published Post.
+ *
+ * 发布端与消费端共用：一方建，另一方拒绝任何不匹配的东西。存在的理由是消费者
+ * 以前只能猜形状，而猜错是静默的（读 `published[0]` → 所有真事件被拒；从
+ * `published_at` 重算 → 排期帖在公开前被测）。
+ *
+ * 🔴 `measure_at` 是权威。它在发布时按 `scheduled_publish_time ?? published_at`
+ *    算好（#1380），已指向帖子真正可见的时刻。消费者绝不可从 `published_at` 重算：
+ *    排期帖两者能差几天。在途事件保留发出时的偏移，改常量不会 retarget 已排的活。
+ */
+const measureWindowSchema = z.object({
+  hours: z.number().int().positive().max(24 * 30),
+  at: z.string().datetime(),
+})
+
+/** Upper bound on how far ahead a measurement may be scheduled. */
+const MEASURE_AT_MAX_LEAD_MS = 200 * 24 * 3_600_000
+
+export const DailyPlanPostPublishedEventSchema = z
+  .object({
+    client_id: uuidLike,
+    campaign_id: uuidLike,
+    plan_id: uuidLike,
+    plan_revision: z.string().datetime(),
+    review_revision: uuidLike,
+    date: dateStringSchema,
+    idempotency_key: z.string().min(1).max(512),
+    post_id: z.string().regex(/^\d{5,25}_\d{5,25}$/, 'post_id must be <page_id>_<post>'),
+    page_id: pageIdSchema,
+    published_at: z.string().datetime(),
+    scheduled_publish_time: z.string().datetime().optional(),
+    permalink: z.string().url(),
+    // Bounded on purpose: an unbounded array would fan out unbounded runs.
+    measure_at: z.array(measureWindowSchema).min(1).max(4),
+  })
+  .superRefine((value, ctx) => {
+    const seen = new Set<number>()
+    for (const w of value.measure_at) {
+      if (seen.has(w.hours)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['measure_at'],
+          message: `duplicate measurement window: ${w.hours}h`,
+        })
+      }
+      seen.add(w.hours)
+
+      // A wildly distant target would park a durable run for months. Anchor the
+      // sanity check on the Post's own publish time, not on "now" — replays and
+      // late deliveries are legitimate and must still validate.
+      const lead = Date.parse(w.at) - Date.parse(value.published_at)
+      if (lead > MEASURE_AT_MAX_LEAD_MS) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['measure_at'],
+          message: `measurement window ${w.hours}h is implausibly far from published_at`,
+        })
+      }
+    }
+  })
+
+export type DailyPlanPostPublishedEvent = z.infer<typeof DailyPlanPostPublishedEventSchema>
+
+/** Stable id for the internal per-window measurement event. */
+export function measurementEventId(idempotencyKey: string, hours: number): string {
+  return `${idempotencyKey}:measurement:${hours}`
+}

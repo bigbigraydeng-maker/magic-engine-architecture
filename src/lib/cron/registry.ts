@@ -83,6 +83,9 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   // 里跑。留在清单里会天天误报「没跑」——正是这套告警最怕的东西。
   { service: 'mailchimp-activity-daily', jobName: 'mailchimp-activity-sync', schedule: '40 4 * * *', logsRuns: true },
   { service: 'mailchimp-paid-tagging-daily', jobName: 'mailchimp-paid-tagging', schedule: '10 5 * * *', logsRuns: true, addedAt: '2026-09-02' },
+  // 补登记（2026-09-05 对账测试抓出）：Magic Insight 每日资讯管道，2026-08-20 就进了 render.yaml，
+  // 清单里一直没有。老任务不补 addedAt（理由同上面 ad-readback-sweep-daily 那条）。
+  { service: 'market-intel-daily', jobName: 'market-intel-daily', schedule: '0 18 * * *', logsRuns: true },
   { service: 'messenger-hourly', jobName: 'messenger-sync-hourly', schedule: '10 * * * *', logsRuns: true },
   { service: 'meta-leads-hourly', jobName: 'meta-leads-sync', schedule: '25 * * * *', logsRuns: true },
   { service: 'oztop-seo-optimizer', jobName: 'oztop-seo-optimizer', schedule: '0 5 * * 1', logsRuns: true },
@@ -101,6 +104,9 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   { service: 'site-audit-weekly', jobName: 'site-audit-weekly', schedule: '0 1 * * 0', logsRuns: true },
   { service: 'social-comment-autoreply', jobName: 'social-comment-autoreply', schedule: '*/30 * * * *', logsRuns: true },
   { service: 'social-engagement-pullback', jobName: 'social-engagement-pullback', schedule: '0 4 * * *', logsRuns: true },
+  // 补登记（2026-09-05 对账测试抓出）：Tailor-made 导入/提取改成异步后加的扫尾任务，
+  // 2026-08-28 进 render.yaml，清单里一直没有。老任务不补 addedAt（理由同上）。
+  { service: 'tailor-made-jobs-sweeper', jobName: 'tailor-made-jobs-sweeper', schedule: '*/30 * * * *', logsRuns: true },
   { service: 'team-memory-sweeper', jobName: 'team-memory-sweeper', schedule: '*/30 * * * *', logsRuns: true },
   { service: 'viral-analyzer-worker', jobName: 'viral-analyzer-worker', schedule: '*/10 * * * *', logsRuns: true },
   { service: 'viral-discovery-weekly', jobName: 'viral-discovery-weekly', schedule: '0 0 * * *', logsRuns: true },

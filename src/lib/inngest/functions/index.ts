@@ -1,8 +1,10 @@
 /** 本应用注册到 Inngest 的全部云端函数登记处（#1346）。新增函数在此追加。 */
 import { CLOUD_FN_PREFIX } from '../client'
 import { probePing } from './probe'
+import { geoRemeasureOne } from './geo-remeasure'
+import { dailyPlanPostFanOut, dailyPlanPostMeasure } from './daily-plan-post-measurement'
 
-export const cloudFunctions = [probePing]
+export const cloudFunctions = [probePing, geoRemeasureOne, dailyPlanPostFanOut, dailyPlanPostMeasure]
 
 /** 命名空间自检：所有注册函数 id 必须以 cloud- 开头（契约测试 + 运行期双保险）。 */
 for (const fn of cloudFunctions) {

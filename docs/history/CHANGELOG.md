@@ -5,6 +5,33 @@
 
 ---
 
+### 2026-09-05（清掉自动测试与类型检查的红色基线，顺带挖出并修掉 3 个真 bug，PR [#1405](https://github.com/bigbigraydeng-maker/magic-engine/pull/1405)）
+
+**上线内容**：全仓两条质量基线长期是红的，回归藏在里面没人看得见 —— `npx vitest run` 37 个文件红 / 117 条失败，`npx tsc --noEmit` 226 个错。本次清到 **10 条失败 / 7 个类型错误**，且剩余项全部各有归属（7 条等 PR [#1328](https://github.com/bigbigraydeng-maker/magic-engine/pull/1328) 补 `logistics_3pl` 行业分类；3 条是内核文件行数超限，已登记 [#1402](https://github.com/bigbigraydeng-maker/magic-engine/issues/1402)；7 个类型错误分属 PR [#1231](https://github.com/bigbigraydeng-maker/magic-engine/pull/1231) / [#1211](https://github.com/bigbigraydeng-maker/magic-engine/pull/1211) 正在改的文件，为避冲突未动）。
+
+**挖出并修掉的 3 个真 bug**：
+① `meta-ads/execute` 调 `getCampaignDetails` 但从未 import（自 2026-07-24 `f2516fc9` 起）。Meta 改预算会强制暂停广告，这段代码正是用来回读状态把广告救回 ACTIVE 的 —— 崩在这一步等于**「调整预算」静默变成「停掉广告」**，且预算已经改到 Meta 之后才炸，审计记录也不会写。
+② `pages/[pageId]/upgrade/page.tsx` 的 `handleGithubPublish` / `handleExecute` 被写在子组件 `DiffSection` 作用域里，而 `onClick` 在主组件 —— 是**渲染期 ReferenceError**（组件一渲染就炸），不只是按钮失灵。
+③ `CompetitorSnapshotAdapter` 往 `flywheel_metrics.flywheel` 写 `'competitor'`，但该列枚举只有 `seo/geo/ads/social`，每次插入必被数据库整行拒绝。改为 `'seo'`，与 `execution-target.ts` 的 `dimensionToFlywheel('competitor')` 同一口径（竞品靠 `metric_key` 区分）。该 adapter 无调用方，未造成客户可见损失。
+
+**根因**：CI 的 PR 检查只跑 2 个写死的测试文件，type-check 是「跟 base 比不新增就算过」的基线容忍模式 —— 所以 117 条失败能一路累积而 CI 全绿。已登记 [#1401](https://github.com/bigbigraydeng-maker/magic-engine/issues/1401)，待基线全绿后加全量测试 job 并把 type-check 改严格。
+
+**配置与结构性修复**：`tsconfig` 加 `"target": "ES2017"`（原来没设，tsc 按 ES5 判，Set/Map 迭代等到处撞 TS2802/TS1252；Next 用 SWC 按 browserslist 编译，只影响 tsc 判定不改产物）、exclude 加 `scripts/archive`（22 个脚本零调用方）；`vitest` 排除 Playwright spec 与 3 个 `node:test` 文件（**只排这三个** —— 首版误排整个 worker 目录、删掉 142 条正在通过的测试，被子牙复审拦下并修正）；Google 商家档案 / Microsoft 邮箱的 OAuth 常量从 `route.ts` 移入 `src/lib/gbp/oauth.ts` 与 `mail-oauth.ts`（route.ts 只准导出 HTTP 方法，且原 callback 直接 `import from '../start/route'` 把 route 当库用）；`content-factory` 路由改从执行内核豁免清单内的 `flywheel/social-post-publish` 取 `PublerAccount` 类型，L1 边界守卫恢复绿（**未往豁免清单加任何路径**）；补登记 2 个从 8 月上线起就脱离监控的定时任务（`market-intel-daily`、`tailor-made-jobs-sweeper`）；7 份 `stripComments()` 副本同步成解析器版（2 份还是正则版，会把字符串里形似注释的内容整段挖空，放行真实违规）。
+
+**验证**：`npm run build` 通过（186/186 静态页）· `npx vitest run` 13604 通过 / 10 失败 · `npx tsc --noEmit` 7 个错，全部在已归属清单内。新增行 **0 个** `any` / `@ts-ignore` / `@ts-expect-error` / `.skip`，另去掉 12 处旧的 `as any`；删 76 条 `expect` / 增 165 条，断言净增强（删除主要来自月报页测试的整体重写 —— 页面 2 月前已重构，旧断言无一能对上）。
+
+**风险级 A**（自报 B，由仓库自己的 `tools/ops-review-loop/src/risk.mjs` 纠正为 A：触碰 `auth-isolation` / `control-plane` / `kernel-execution` / `production-schedule`）。三审齐全：**子牙**（架构，CONDITIONAL PASS，抓出「vitest 排除误删 142 条测试」这个 blocker，已修）· **狄仁杰**（安全攻击验证，PASS 无 P0，其 P2「`.then(f,g)` 兜不住 f 自己」已改回 catch-all）· **魏征**（挑刺，CONDITIONAL PASS，放行条件即狄仁杰过关，合并前已满足；两条基线数字与三组归属均由其独立复跑核实）。
+
+**Reuse Statement**：复用既有平台契约（`ClientAccessResult`、`WordpressPublishResult`、`FlywheelName` 枚举、`ADS_ACTION_TYPE` 词表、`CRON_REGISTRY`、执行内核 `boundaries.ts` 既有豁免清单），未新造抽象。platform-shared：`src/lib/gbp/oauth.ts`（新增，纯常量，与既有 `microsoft/mail-oauth.ts` 同构）· `cron/registry.ts` 两条登记 · `social-post-publish` 的类型再导出 · 3 个 bug 修复。industry-specific / client-specific：无。未把客户名、客户 ID 或行业判断写进 shared runtime。遗留 follow-up 已全部登记：[#1401](https://github.com/bigbigraydeng-maker/magic-engine/issues/1401)（CI 质量闸）· [#1402](https://github.com/bigbigraydeng-maker/magic-engine/issues/1402)（内核三处超行数，A 级）· [#1403](https://github.com/bigbigraydeng-maker/magic-engine/issues/1403)（GBP 抓评分丢了品牌名核对，可能把隔壁商家评分算到客户头上）· [#1404](https://github.com/bigbigraydeng-maker/magic-engine/issues/1404)（竞品快照写库失败仍假装成功）· [#1406](https://github.com/bigbigraydeng-maker/magic-engine/issues/1406)（改广告状态/预算那条路由零测试覆盖）。
+
+### 2026-09-05（今日待办邮件去刷屏：未收录页面按客户汇总 + LinkedIn 待办去重，PR [#1375](https://github.com/bigbigraydeng-maker/magic-engine/pull/1375)）
+
+**上线内容**：PM/FDE 的今日待办邮件（及后台「今日待办」页，二者共用 `loadTodoCounts`）正文被两类「一条一行」的待办淹没，真正要动手的被埋掉。① 谷歌未收录页面（not_indexed）从「一页一条」改为「一个客户汇总一条」——报总数 + 三类分别计数（内容太薄 / 爬过没收录 / 谷歌还不认识），链接落到该客户 GSC 属性（生产实测 oztop 116 + CTS 6，122 行塌成 2 行）；② LinkedIn 进度贴待办从「一草稿一条、内容逐字重复」改为「按类归堆、一类一条、多于一条带条数」，单条红线话术（已发布勿重发）逐字保留。两条读取均改用平台既有 `fetchAll` 分页读全 + 全序排序，条数永远准、任何一类不因截断被漏掉；未收录读取失败自兜住（`.catch` 隔离），不再拖垮整条人工车道。
+
+**验证**：`npx vitest run src/lib/pm-todo/` 全绿（新增 LinkedIn 三条只出一条 / not_indexed 116+6→2 / 失败隔离 / 分页全序 等回归）；`tsc --noEmit` 改动文件零错误；`npm run build` 通过；直连生产库核对了刷屏来源。子牙+魏征独立复审通过，Codex 六轮复审全部收口。
+
+**Reuse Statement**：复用既有 `pm-todo` 人工车道、其「一客户/一类只出一条」去重纪律与分页读全设施 `fetchAll`；未新增能力线 / 表 / endpoint / 依赖 / 客户专属 runtime。遗留 follow-up：未收录清单做成带本地分类（thin/declined/unknown）的站内可操作视图（需前端改动，已单独登记为任务）。
+
 ### 2026-09-05（Articles 首页编辑式视觉重做，PR [#1389](https://github.com/bigbigraydeng-maker/magic-engine/pull/1389)）
 
 **上线内容**：将 `/blog/` 从大面积留白加两张同权重白卡片，重做为 Magic Engine 黑金米白的编辑式入口：首页使用 Field Notes 刊头和真实文章数量版面，明确区分 Articles 实操指南与 Magic Insight 研究简报；两篇现有文章改为一篇主打流程视觉、一篇横向最新指南，形成清楚的阅读层级。未改文章正文、URL、canonical、结构化数据、分析脚本或转化路径。
