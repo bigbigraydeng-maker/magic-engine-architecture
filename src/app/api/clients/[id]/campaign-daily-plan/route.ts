@@ -24,14 +24,19 @@ import { getCampaignById } from '@/lib/content/campaign-injector'
 import {
   CAMPAIGN_DAILY_PLAN_KIND,
   CampaignDailyCommandSchema,
+  CampaignDailyPostReviewMetaSchema,
+  CampaignDailyPublishQueueMetaSchema,
   computeGrounding,
   computeReadiness,
   buildPublishingPlan,
   buildAdCandidate,
   buildEmptyDays,
+  isReviewablePostDate,
   todayIso,
   type CampaignDailyPlanData,
+  type CampaignDailyPostReviewMeta,
 } from '@/lib/campaign/daily-plan'
+import { CampaignDailyPublishMetaSchema } from '@/lib/campaign/daily-plan-publish'
 
 interface ActiveMasterBriefRef {
   id: string
@@ -60,6 +65,15 @@ function errorMessage(err: unknown): string {
     : typeof err === 'object' && err !== null && 'message' in err
       ? String((err as { message: unknown }).message)
       : JSON.stringify(err)
+}
+
+function isHttpsUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 // ─── GET ──────────────────────────────────────────────────────────────────────
@@ -94,10 +108,16 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         publishing_plan: buildPublishingPlan(null),
         ad_candidate: null,
         plan_id: null,
+        plan_revision: null,
+        review_revision: null,
+        review_summary: { passed: 0, needs_revision: 0, total: 0 },
+        publish_queue_receipt: null,
+        publish_receipt: null,
+        facebook_page_id: null,
       })
     }
 
-    const { data: rows } = await supabaseAdmin
+    const { data: rows, error: planReadError } = await supabaseAdmin
       .from('social_plans')
       .select('id, plan_data, created_at')
       .eq('client_id', clientId)
@@ -105,6 +125,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .contains('plan_data', { plan_kind: CAMPAIGN_DAILY_PLAN_KIND })
       .order('created_at', { ascending: false })
       .limit(1)
+
+    if (planReadError) throw planReadError
 
     const planRow = rows?.[0] ?? null
     const planData = (planRow?.plan_data ?? null) as CampaignDailyPlanData | null
@@ -116,6 +138,55 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       ?.current_bundle
     const bundles = planData?.bundles ?? (legacyBundle ? [legacyBundle] : [])
     const days = planData?.days ?? buildEmptyDays(todayIso())
+    const planRevision = planData?.command_meta?.received_at ?? null
+    let reviewMeta: CampaignDailyPostReviewMeta | null = null
+    if (planData?.review_meta !== undefined) {
+      const parsedReview = CampaignDailyPostReviewMetaSchema.safeParse(planData.review_meta)
+      if (
+        !parsedReview.success ||
+        parsedReview.data.plan_revision !== planRevision ||
+        planData.plan_kind !== CAMPAIGN_DAILY_PLAN_KIND ||
+        planData.campaign_id !== campaignId ||
+        Object.keys(parsedReview.data.posts).some(date => !isReviewablePostDate(planData, date))
+      ) {
+        throw new Error('INVALID_POST_REVIEW_STATE')
+      }
+      reviewMeta = parsedReview.data
+    }
+    let publishQueueMeta = null
+    if (planData?.publish_queue_meta !== undefined) {
+      const parsedPublishQueue = CampaignDailyPublishQueueMetaSchema.safeParse(planData.publish_queue_meta)
+      if (
+        !parsedPublishQueue.success ||
+        parsedPublishQueue.data.plan_revision !== planRevision ||
+        parsedPublishQueue.data.review_revision !== reviewMeta?.revision
+      ) {
+        throw new Error('INVALID_PUBLISH_QUEUE_STATE')
+      }
+      publishQueueMeta = parsedPublishQueue.data
+    }
+    // Provider publish receipt. A receipt from an older snapshot is reported
+    // as absent rather than thrown on: the plan has since been re-edited, so
+    // those post ids no longer describe the content on screen.
+    let publishMeta = null
+    if (planData?.publish_meta !== undefined) {
+      const parsedPublish = CampaignDailyPublishMetaSchema.safeParse(planData.publish_meta)
+      if (
+        parsedPublish.success &&
+        parsedPublish.data.plan_revision === planRevision &&
+        parsedPublish.data.review_revision === reviewMeta?.revision
+      ) {
+        publishMeta = parsedPublish.data
+      }
+    }
+
+    // The Page this client is registered against — the publish route refuses
+    // any other Page id, so the UI shows it instead of asking anyone to type one.
+    const { data: clientRow } = await supabaseAdmin
+      .from('clients')
+      .select('facebook_page_id')
+      .eq('id', clientId)
+      .maybeSingle()
 
     // Grounding must reflect what the SAVED plan was actually grounded in,
     // not "does an active brief happen to exist right now" — otherwise a plan
@@ -155,15 +226,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       // A row whose status/mime_type/archived_at changed AFTER save must
       // NOT read back as truthful provenance — filter it out here so it
       // never enters resolvedAssetIds or assetById.
-      const { data: assets } = await supabaseAdmin
+      const { data: assets, error: assetReadError } = await supabaseAdmin
         .from('client_assets')
         .select('id, storage_url, original_filename, source, ownership, status, archived_at, mime_type')
         .eq('client_id', clientId)
         .in('id', referencedAssetIds)
+      if (assetReadError) throw assetReadError
       resolvedAssets = (assets ?? [])
         .filter(a =>
           a.archived_at == null &&
           a.status === 'analyzed' &&
+          typeof a.storage_url === 'string' &&
+          a.storage_url.trim().length > 0 &&
           typeof a.mime_type === 'string' &&
           a.mime_type.startsWith('image/'))
         .map(a => ({
@@ -212,13 +286,44 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       const provenance = Array.from(new Set(referencedIdsForDay))
         .map(id => assetById.get(id))
         .filter((a): a is NonNullable<typeof a> => !!a)
+      const storedReview = reviewMeta?.posts[bundle.date] ?? null
+      const passStillCurrent = Boolean(
+        postField?.image_asset_id &&
+        postField.cta_url &&
+        isHttpsUrl(postField.cta_url) &&
+        bundle.post?.hook?.trim() &&
+        bundle.post?.body?.trim() &&
+        bundle.post?.cta?.trim() &&
+        postImage
+      )
+      const postReview = storedReview
+        ? {
+            verdict: storedReview.verdict,
+            reason: storedReview.reason,
+            reviewed_at: storedReview.reviewed_at,
+            is_current: storedReview.verdict !== 'PASS' || passStillCurrent,
+          }
+        : null
       return {
         ...bundle,
         post_image: postImage,
         readiness: computeReadiness({ grounding, bundle, resolvedAssetIds }),
         provenance,
+        post_review: postReview,
       }
     })
+
+    const reviewSummary = bundlesWithReadiness.reduce(
+      (summary, bundle) => {
+        if (!bundle.post) return summary
+        summary.total += 1
+        const review = bundle.post_review
+        if (review?.verdict === 'PASS' && review.is_current) summary.passed += 1
+        if (review?.verdict === 'NEEDS_REVISION') summary.needs_revision += 1
+        return summary
+      },
+      { passed: 0, needs_revision: 0, total: 0 }
+    )
 
     // Ad candidate stays scoped to the earliest day that actually has a
     // Reel — WP1 previews at most one candidate, never one per day.
@@ -233,6 +338,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       publishing_plan: buildPublishingPlan(campaign),
       ad_candidate: buildAdCandidate(firstReelBundle),
       plan_id: planRow?.id ?? null,
+      plan_revision: planRevision,
+      review_revision: reviewMeta?.revision ?? null,
+      review_summary: reviewSummary,
+      publish_queue_receipt: publishQueueMeta,
+      publish_receipt: publishMeta,
+      facebook_page_id: (clientRow as { facebook_page_id?: string | null } | null)?.facebook_page_id ?? null,
     })
   } catch (err: unknown) {
     return NextResponse.json({ success: false, error: errorMessage(err) }, { status: 500 })

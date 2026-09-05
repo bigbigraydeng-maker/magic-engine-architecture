@@ -31,6 +31,26 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     reviewDate: '2026-09-27',
   },
   {
+    name: '品牌 VI 强制执行（brand tokens 中央注入所有客户交付物 · logo / 色 / 字体 / 风格）',
+    reviewDate: '2026-09-28',
+  },
+  {
+    name: '客户官网结构化素材抓取（sitemap → 产品页 → 图片 → 品牌片段）',
+    reviewDate: '2026-09-28',
+  },
+  {
+    name: 'HTML → PDF 多页排版渲染（A4/A3 print / 品牌一致的多章节 brochure）',
+    reviewDate: '2026-09-28',
+  },
+  {
+    name: 'ME 旅游版 Catalogue Chapter Playbook（旅游行业 catalogue 的 chapter 结构 / 素材抓取通道 / 版式规则）',
+    reviewDate: '2026-09-28',
+  },
+  {
+    name: 'Lead 温度打分（多因子：邮件打开频次+最近打开衰减+注册新旧+备注文字里的时间意向 → Hot/Warm/Cold）',
+    reviewDate: '2026-09-09',
+  },
+  {
     name: 'Current-Sponsored Competitor Discovery（当前活跃广告主实时发现 + diff 竞品清单）',
     reviewDate: '2026-09-28',
   },
@@ -63,5 +83,19 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     // 与 docs/registry/platform-candidates.md 候选名逐字一致
     name: 'AI 单页站生成器（事实采集 → AI 文案 → 模板渲染 → 静态发布）',
     reviewDate: '2026-09-30',
+  },
+  {
+    name: 'AU/NZ 本地商业目录批量登记 SOP（NAP 文案模板 + 目录清单，供未来客户 onboarding 复用）',
+    reviewDate: '2026-10-02',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'Governed Lead-Reply Agent（结构化事实驱动的广告留资对话生成 + 发送前防幻觉/禁用清单校验引擎，接管 Messenger/WhatsApp 等渠道的黑箱平台自带 AI 客服）',
+    reviewDate: '2026-09-15',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '行业市场研究报告出品能力（署名 "Magic Insight 数据研究院"，面向高级会员定期出品行业级市场研究）',
+    reviewDate: '2026-10-03',
   },
 ]

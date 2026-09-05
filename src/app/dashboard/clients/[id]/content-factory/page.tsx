@@ -160,8 +160,11 @@ export default function ContentFactoryBoardPage() {
           // 不能走下面视频那套"正在做片"的话术，那是假消息。
           setNotice('已确认 · 已经发布，不需要做片')
         } else {
+          // data.render.error 现在是常态(旧拼片管线已退役)，不是偶发失败——不能再提示
+          // "再点一次确认重试"：这张卡片的状态已经改成 approved，进了「备料」列，选题段的
+          // 确认按钮不会再出现，重试没有入口。真正能做的是去「备料」列手动传成片/粘视频链接。
           setNotice(data.render?.error
-            ? `已确认，但建做片任务失败：${data.render.error}（可再点一次确认重试）`
+            ? '已确认 · 已进「备料」列，旧自动做片管线已退役，请在「备料」列打开这张卡片手动传成片或粘视频链接'
             : '已确认 · 正在做片，约 15-30 分钟后会出现在「出片」列')
         }
       } else if (action === 'schedule') {

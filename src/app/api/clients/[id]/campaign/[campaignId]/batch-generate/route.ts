@@ -10,6 +10,9 @@ import { getCampaignById, formatCampaignForPrompt } from '@/lib/content/campaign
 import { auditSocialPost } from '@/lib/content/social-quality-audit'
 import type { SocialAuditMetadata } from '@/lib/content/social-quality-audit'
 import { getOpenAIClient } from '@/lib/ai/openai-client'
+import { detectKind, docxToText, plainToText } from '@/lib/tailor-made/read-source'
+
+const MAX_CAMPAIGN_FILE_CHARS = 50_000
 
 interface BatchGenerateRequest {
   platforms: string[]          // ['facebook', 'tiktok']
@@ -85,29 +88,31 @@ export async function POST(
     }
     let campaignText = formatCampaignForPrompt(campaign)
 
-    // 2b. Append plain-text campaign files (TXT only — GPT-4o-mini has no PDF doc API)
-    // PDF/DOCX files are noted by count so the model knows richer context exists
+    // 2b. Append text extracted from TXT/DOCX campaign files. This path has no
+    // PDF document input, so unread PDFs stay explicitly ungrounded.
     const filePaths = (campaign.source_file_urls ?? []).filter(Boolean).slice(0, 3)
     if (filePaths.length > 0) {
       const textSnippets: string[] = []
-      let binaryCount = 0
+      let unreadCount = 0
       for (const storagePath of filePaths) {
-        const isTxt = storagePath.toLowerCase().endsWith('.txt')
-        if (!isTxt) { binaryCount++; continue }
         try {
           const { data, error } = await supabaseAdmin.storage
             .from('campaign-uploads')
             .download(storagePath)
-          if (!data || error) continue
-          const text = Buffer.from(await data.arrayBuffer()).toString('utf-8').slice(0, 1500)
-          textSnippets.push(text)
-        } catch { /* non-fatal */ }
+          if (!data || error) { unreadCount++; continue }
+          const filename = storagePath.split('/').pop() ?? storagePath
+          const kind = detectKind(filename, data.type)
+          if (kind === 'pdf' || kind === null) { unreadCount++; continue }
+          const source = await data.arrayBuffer()
+          const text = kind === 'docx' ? await docxToText(source) : await plainToText(source)
+          textSnippets.push(text.slice(0, MAX_CAMPAIGN_FILE_CHARS))
+        } catch { unreadCount++ }
       }
       if (textSnippets.length > 0) {
         campaignText += `\n\n- 活动资料文件内容：\n${textSnippets.join('\n---\n')}`
       }
-      if (binaryCount > 0) {
-        campaignText += `\n- 注：另有 ${binaryCount} 个 PDF/DOCX 格式的活动资料，详细内容见 Marketing Plan。`
+      if (unreadCount > 0) {
+        campaignText += `\n- 注意：另有 ${unreadCount} 个活动资料未被本生成路径读取；不得引用或推断其中事实。`
       }
     }
 

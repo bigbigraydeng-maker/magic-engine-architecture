@@ -2,9 +2,22 @@
  * Unit tests for the pure rollup in page-metrics-sync.ts (社媒数据监控复活).
  */
 
-import { describe, it, expect } from 'vitest'
-import { computeSocialRollup } from '../page-metrics-sync'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ supabaseAdmin: {} }))
+vi.mock('@/lib/meta/token-manager', () => ({
+  getStoredPageToken: vi.fn(),
+  getMetaTokenForClient: vi.fn(),
+}))
+vi.mock('@/lib/meta/page-posts', () => ({
+  getPageAccessToken: vi.fn(),
+  fetchPagePosts: vi.fn(),
+}))
+
+import { computeSocialRollup, syncPageMetrics } from '../page-metrics-sync'
 import type { PagePost } from '@/lib/meta/page-posts'
+import { getStoredPageToken, getMetaTokenForClient } from '@/lib/meta/token-manager'
+import { getPageAccessToken, fetchPagePosts } from '@/lib/meta/page-posts'
 
 const NOW = new Date('2026-08-01T12:00:00Z')
 
@@ -71,5 +84,36 @@ describe('computeSocialRollup', () => {
     const rollup = computeSocialRollup([post({ createdAt: 'garbage', reactions: 7 })], NOW)
     expect(rollup.posts_7d).toBe(0)
     expect(rollup.days_since_last_post).toBeNull()
+  })
+})
+
+describe('syncPageMetrics token resolution', () => {
+  it('uses stored Page token and does not require the legacy user-token env path', async () => {
+    vi.mocked(getStoredPageToken).mockResolvedValue('stored-page-token')
+    vi.mocked(getMetaTokenForClient).mockResolvedValue(null)
+    vi.mocked(fetchPagePosts).mockResolvedValue([post({ createdAt: '2026-09-02T00:00:00Z', reactions: 3 })])
+
+    const inserts: unknown[] = []
+    const db = {
+      from(table: string) {
+        if (table === 'clients') {
+          return {
+            select: () => ({ eq: async () => ({ data: [{ id: 'client-1', factory_config: null }], error: null }) }),
+          }
+        }
+        if (table === 'social_comment_config') {
+          return { select: async () => ({ data: [{ client_id: 'client-1', fb_page_id: 'page-1' }], error: null }) }
+        }
+        return { insert: async (rows: unknown) => { inserts.push(rows); return { error: null } } }
+      },
+    }
+
+    const result = await syncPageMetrics(db as never)
+
+    expect(result.results).toEqual([{ client_id: 'client-1', page_id: 'page-1', outcome: 'synced', posts_seen: 1 }])
+    expect(getStoredPageToken).toHaveBeenCalledWith('client-1', 'page-1')
+    expect(getMetaTokenForClient).not.toHaveBeenCalled()
+    expect(getPageAccessToken).not.toHaveBeenCalled()
+    expect(inserts).toHaveLength(1)
   })
 })

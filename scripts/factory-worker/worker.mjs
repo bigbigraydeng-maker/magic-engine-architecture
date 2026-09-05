@@ -9,12 +9,39 @@
 // 运行:  node scripts/factory-worker/worker.mjs           # 单次领一单跑完退出
 //        node scripts/factory-worker/worker.mjs --loop    # 持续轮询(默认 30s)
 
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+
+// P21.J.M2 recipe(合同 5469105522):配了 creative_recipe 的工单走强约束 fail-closed 路径。
+import { createHash } from 'node:crypto'
+import {
+  assertClientRecipeIntentMatchesBrief,
+  assertPerCallBudget,
+  assertRecipeBriefComplete,
+  assertRecipeBudget,
+  assertRecipeCtaFacts,
+  assertRecipePlanShape,
+  assertRecipeProfileConstraints,
+  assertRecipeReceipt,
+  assertRecipeReplanAcknowledged,
+  assertRendererApproved,
+  assertReopenedRecipeReplan,
+  buildExecutedReceipt,
+  buildExecutedSrt,
+  buildRecipeAssembleConfig,
+  makePromoPreflight,
+  normalizeCreativeProfile,
+  parseLufsFromEbur128,
+  resolveRecipeBgm,
+  validateRecipeCopy,
+  validateMulticutCopy,
+  verifyFinalMedia,
+  winnerRecipeFromBrief,
+} from './creative-recipe.mjs'
 
 // ── 配置 ──────────────────────────────────────────────────────────────────────
 
@@ -24,7 +51,12 @@ function loadEnv() {
   if (existsSync(envPath)) {
     for (const line of readFileSync(envPath, 'utf8').split('\n')) {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/)
-      if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+      if (m) {
+        const value = m[2].replace(/^["']|["']$/g, '')
+        // An empty worktree placeholder must not erase a secret injected by
+        // launchd / --env-file from the canonical local secret source.
+        if (value !== '' || env[m[1]] === undefined) env[m[1]] = value
+      }
     }
   }
   return env
@@ -81,6 +113,21 @@ function brandkitFor(clientId) {
 }
 const MUAPI_SLUG = ENV.MUAPI_KLING_SLUG || 'kling-v2.1-standard-i2v'
 const CLIP_UNIT_COST = Number(ENV.FACTORY_CLIP_UNIT_COST_USD || '0.225')
+// Homebrew lives at /usr/local on Intel Macs and /opt/homebrew on Apple Silicon;
+// Render images normally expose ffmpeg through /usr/bin. Let execFile resolve PATH
+// by default, while keeping an explicit override for restricted launchd environments.
+const FFPROBE_BIN = ENV.FACTORY_FFPROBE_PATH || 'ffprobe'
+const FFMPEG_BIN = ENV.FACTORY_FFMPEG_PATH || 'ffmpeg'
+const PYTHON_BIN = ENV.FACTORY_PYTHON_PATH || 'python3'
+// Inngest one-candidate workflow can impose a stricter per-run ceiling than the
+// work-order budget.  Missing means legacy/manual worker behaviour is unchanged.
+const ORCHESTRATOR_MAX_PROVIDER_USD = ENV.FACTORY_ORCHESTRATOR_MAX_PROVIDER_USD === undefined
+  ? null
+  : Number(ENV.FACTORY_ORCHESTRATOR_MAX_PROVIDER_USD)
+const ORCHESTRATOR_REQUIRED_RECIPE_ID = ENV.FACTORY_ORCHESTRATOR_REQUIRED_RECIPE_ID || null
+const ORCHESTRATOR_REQUIRED_RECIPE_VERSION = ENV.FACTORY_ORCHESTRATOR_REQUIRED_RECIPE_VERSION === undefined
+  ? null
+  : Number(ENV.FACTORY_ORCHESTRATOR_REQUIRED_RECIPE_VERSION)
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
@@ -119,13 +166,42 @@ export function claimMatchesTarget(claim, targetClientId) {
     && claim.client_id.toLowerCase() === targetClientId.toLowerCase()
 }
 
-async function heartbeat(woId, costSoFar) {
-  const r = await api(`/api/factory/worker/${woId}/heartbeat`, 'POST', {
-    worker_id: WORKER_ID,
-    cost_so_far_usd: costSoFar,
-  })
-  if (r.json?.abort) log(`⚠️ heartbeat abort 信号(超预算),woId=${woId}`)
-  return r.json
+/**
+ * blocker 2:heartbeat 必须是 hard gate。任何非 2xx / 请求异常 / 返回体无法确认 abort 状态
+ * → 直接抛，禁止 recipe 分支继续调用 provider。之前 return r.json 会把 { error: '...' } 或
+ * undefined 当成"没 abort"放行，导致服务端已经喊停仍继续烧钱。
+ * 服务端成功合同固定为 { ok:true, abort:boolean, ... }；任一字段缺失都不能证明安全。
+ */
+export async function heartbeat(woId, costSoFar, fetchFn = fetch) {
+  let res
+  try {
+    res = await fetchFn(`${API_BASE}/api/factory/worker/${woId}/heartbeat`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${WORKER_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worker_id: WORKER_ID, cost_so_far_usd: costSoFar }),
+    })
+  } catch (e) {
+    throw new Error(`WINNER_RECIPE_HEARTBEAT_FAILED: heartbeat fetch failed: ${e?.message ?? e}`)
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`WINNER_RECIPE_HEARTBEAT_FAILED: non-2xx status ${res.status}: ${text.slice(0, 200)}`)
+  }
+  const text = await res.text()
+  let json
+  try { json = text ? JSON.parse(text) : {} } catch {
+    throw new Error(`WINNER_RECIPE_HEARTBEAT_FAILED: malformed JSON response: ${text.slice(0, 200)}`)
+  }
+  if (json == null || typeof json !== 'object' || Array.isArray(json)) {
+    throw new Error(`WINNER_RECIPE_HEARTBEAT_FAILED: unexpected response shape ${typeof json}`)
+  }
+  if (json.ok !== true || typeof json.abort !== 'boolean') {
+    throw new Error(
+      `WINNER_RECIPE_HEARTBEAT_FAILED: response must confirm {ok:true, abort:boolean}, got ok=${String(json.ok)} abort=${String(json.abort)}`,
+    )
+  }
+  if (json.abort === true) log(`⚠️ heartbeat abort 信号(超预算),woId=${woId}`)
+  return json
 }
 
 async function failOrder(woId, error, retryable) {
@@ -145,7 +221,7 @@ async function uploadSigned(signedUrl, buf, contentType) {
 
 // ── muapi Kling I2V 生成(spike §4)────────────────────────────────────────────
 
-async function muapiGenerate(planItem, sourceImageUrl) {
+async function muapiGenerate(planItem, sourceImageUrl, durationSeconds = 5) {
   if (!MUAPI_KEY) throw new Error('MUAPI_API_KEY 未配置,无法生成缺失 clip')
   const submit = await fetch(`https://api.muapi.ai/api/v1/${MUAPI_SLUG}`, {
     method: 'POST',
@@ -153,7 +229,9 @@ async function muapiGenerate(planItem, sourceImageUrl) {
     body: JSON.stringify({
       image_url: sourceImageUrl,
       prompt: planItem.prompt_hint,
-      duration: 5,
+      // 硬编 5 是 legacy 兼容;recipe 路径按 recipe.segments[i].duration_hint_s 传真值
+      // (合同 5469105522 §5:defect#2 — muapi 只拿 prompt_hint + 固定 5s 会让 recipe 时长失控)。
+      duration: durationSeconds,
       aspect_ratio: '9:16',
     }),
   })
@@ -268,7 +346,8 @@ async function resolveClips(wo, tmp, onCost) {
         : (ENV.MUAPI_SOURCE_IMAGE_URL || `${ENV.NEXT_PUBLIC_SUPABASE_URL || ''}/storage/v1/object/public/content-factory/seed/cts_source.jpg`)
     if (plan.source_image_url) log(`  源图来自素材库: ${String(plan.source_image_url).slice(-40)}`)
     log(`  生成 clip ${seg.role}:${i} via muapi…`)
-    const gen = await muapiGenerate(plan, srcImg)
+    // recipe 路径:duration 严格按 recipe.segments[i].duration_hint_s(通过 seg 透传);legacy 保持旧行为(5s)。
+    const gen = await muapiGenerate(plan, srcImg, seg.duration_hint_s || 5)
     writeFileSync(dst, gen.buf)
     localPaths.push(dst)
     await uploadSigned(up.signed_url, gen.buf, 'video/mp4')
@@ -344,7 +423,7 @@ function resolveBgm(profile, brandKit) {
 function probeClipDuration(p) {
   try {
     const out = execFileSync(
-      '/usr/local/bin/ffprobe',
+      FFPROBE_BIN,
       ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', p],
     ).toString().trim()
     const d = parseFloat(out)
@@ -382,7 +461,7 @@ function assemble(wo, localPaths, copy, tmp) {
   }
   const cfgPath = join(tmp, 'promo.json')
   writeFileSync(cfgPath, JSON.stringify(cfg, null, 2))
-  execFileSync('python3', [MAKE_PROMO, cfgPath], { stdio: 'inherit' })
+  execFileSync(PYTHON_BIN, [MAKE_PROMO, cfgPath], { stdio: 'inherit' })
   if (!existsSync(out)) throw new Error('make_promo 未产出 final.mp4')
   return out
 }
@@ -395,6 +474,28 @@ async function processOrder(wo) {
   const tmp = mkdtempSync(join(tmpdir(), 'factory_'))
   try {
     await heartbeat(woId, 0)
+    // 客户 factory_config.creative_recipe 无法被服务端安全解析 → 一律在任何 provider 之前
+    // fail-closed(recipe 与 legacy 分支都不能走)。claim route 会把解析原因放进
+    // recipe_intent_invalid_reason;非空即拒。
+    assertNoRecipeIntentInvalidReason(wo.recipe_intent_invalid_reason)
+    // R3/R4:reopened 单只有**显式** recipe_replan_required marker 才 fail-closed;legacy 无
+    // recipe review 重试不受影响。marker+缺 recipe → 抛 WINNER_RECIPE_REPLAN_REQUIRED,
+    // 全走 outer catch 落到 fail(retryable=false)。
+    assertReopenedRecipeReplan(wo.brief)
+    // R3 硬绑定:即便 marker 已清、recipe 已写回,若 brief.review_feedback_digest 与
+    // creative_recipe.acknowledged_review_feedback_digest 不匹配,视为「静默换 recipe 但没吃
+    // 反馈」路径 → fail-closed。legacy(无 digest)完全绕开该 gate。
+    assertRecipeReplanAcknowledged(wo.brief)
+    // R3 补:客户当前 factory_config.creative_recipe 意图必须与 queued brief 匹配。
+    // claim response 携带 recipe_intent(claim route 拿 clients.factory_config 计算),不匹配
+    // 视作 stale queued 单 → fail-closed。
+    assertClientRecipeIntentMatchesBrief(wo.brief, wo.recipe_intent ?? null)
+
+    const recipe = winnerRecipeFromBrief(wo.brief)
+    if (recipe) {
+      return await processRecipeOrder(wo, tmp, recipe)
+    }
+    // ── legacy 分支(未配 recipe 的客户走原路径,合同 §4:legacy 行为不变)──
     const copy = resolveCopy(wo)
     const { localPaths, newClips, cost } = await resolveClips(wo, tmp, (c) => heartbeat(woId, c))
     log(`  素材就绪(${newClips.length} 条生成,成本 $${cost.toFixed(3)}),装配中…`)
@@ -424,10 +525,403 @@ async function processOrder(wo) {
     return true
   } catch (e) {
     log(`❌ 工单 ${woId} 失败: ${e.message}`)
-    const retryable = !/预扣硬顶|max_new_clips|无上传通道|既无库存/.test(e.message)
+    const retryable = !/预扣硬顶|max_new_clips|无上传通道|既无库存|WINNER_RECIPE_/.test(e.message)
     await failOrder(woId, e.message.slice(0, 500), retryable)
     return false
   }
+}
+
+// ── recipe 分支(合同 5469105522):强约束 fail-closed,不回退 legacy ──────────────
+//
+// runRecipeSequence 把顺序 + 所有 IO 拧成一个可注入依赖的函数,worker.test.mjs 用它
+// 逐步验证 gate 顺序而不需真 IO。processRecipeOrder 只是 wire prod-deps 的薄壳。
+//
+// 顺序(任何一步失败都在 provider 调用 / 上传 / complete 之前炸):
+//   0. recipe intent match(claim 传的客户当前 recipe 与 brief 对齐,R3)
+//   1. plan shape(R8)
+//   2. profile 归一 + 强约束(vo/caption/kenburns · R9 相关 hint)
+//   3. renderer SHA 白名单 gate(R11 · 主批准闸)
+//   4. make_promo capability preflight(次要 · semantic tokens)
+//   5. BGM 解析(profile.music_pool / library)+ 输入 loudness > threshold(R10)
+//   6. 结构化 hook + CTA(brief.copy · 若缺 → COPY_INVALID)
+//   7. 建单前 budget gate(R7:max_new_clips ≥ recipe.segments.length,projected ≤ cap)
+//   8. 每段 provider 调用之前 heartbeat abort 检查 + 累计 budget 检查
+//   9. assemble + final duration/loudness probe(R12)
+//  10. TS 侧 assertRecipeReceipt(生产 receipt validator,R12)
+//  11. upload + complete
+export async function runRecipeSequence({ wo, recipe, tmp, deps }) {
+  const {
+    log: logFn,
+    heartbeatFn,
+    uploadSignedFn,
+    providerFn,
+    readFileFn,
+    writeFileFn,
+    existsFn,
+    joinFn,
+    tmpJoin,
+    probeDurationFn,
+    probeLoudnessFn,
+    hashFileFn,
+    execAssembleFn,
+    completeFn,
+    receiptValidator,
+    brandKit,
+    approvedRendererShas,
+    rendererPath,
+    sharedMusicDir,
+    musicLibrary,
+    workerId,
+    clipUnitCostUsd,
+    // blocker 7:BGM 输入门槛(严格 `>`)与 final silence 门槛分开
+    minBgmInputLoudnessLufs,
+    minLoudnessLufs,
+  } = deps
+
+  const woId = wo.work_order_id
+  const budgetCapUsd = Number(wo.budget_cap_usd)
+  logFn?.(`🎬 recipe 分支: ${recipe.id} v${recipe.version}`)
+
+  // 0. R5 defense-in-depth:即便 evaluate 侧的 pre-insert check 被绕过,worker 侧再验一遍
+  // brief claim-critical 完备性(recipe/copy/profile/plan/idempotency 非占位符)。plan shape 由
+  // 内部 assertRecipePlanShape 承担,这里主要防「壳单被抢跑」竞态。
+  assertRecipeBriefComplete(wo.brief, recipe)
+
+  // 1. plan shape(冗余 · 只为让顺序显式;assertRecipeBriefComplete 已包含)
+  assertRecipePlanShape(wo.brief, recipe)
+
+  // 2. profile 归一 + 强约束
+  const rawProfile = { ...(wo.brief.creative_profile || {}) }
+  const profile = normalizeCreativeProfile(rawProfile)
+  assertRecipeProfileConstraints(profile, recipe)
+
+  // 3. renderer SHA 白名单(主批准闸;env 未配 = fail-closed)
+  assertRendererApproved({ path: rendererPath, approvedShas: approvedRendererShas, hashFn: hashFileFn })
+
+  // 4. semantic tokens preflight(次要)
+  makePromoPreflight({ path: rendererPath, readFn: readFileFn })
+
+  // 5. BGM(音乐库 + music_pool + 响度)—— blocker 7:BGM 输入门槛用 minBgmInputLoudnessLufs
+  const music = resolveRecipeBgm({
+    profile,
+    sharedMusicDir,
+    musicLibrary,
+    existsFn,
+    probeLoudnessLufsFn: probeLoudnessFn,
+    joinFn,
+    minLoudnessLufs: minBgmInputLoudnessLufs,
+  })
+  logFn?.(`  BGM: ${music.portableId} (${music.source}, ${music.loudnessLufs.toFixed(1)} LUFS)`)
+
+  // 6. 结构化文案(禁 angle 兜底 · R9)。multicut(text_overlay_roles 含 'middle')走
+  // hook+middle 校验并构建 captionsByRole;legacy 保持 hookText/ctaText 原路径不变。
+  const usesMulticutCopy = Array.isArray(recipe.text_overlay_roles) && recipe.text_overlay_roles.includes('middle')
+  let hookText
+  let ctaText
+  let captionsByRole
+  if (usesMulticutCopy) {
+    const { hook, middle } = validateMulticutCopy(wo.brief.copy, recipe)
+    hookText = hook
+    captionsByRole = { hook, middle }
+  } else {
+    const { hook, cta } = validateRecipeCopy(wo.brief.copy, recipe)
+    hookText = hook
+    ctaText = cta
+  }
+
+  // 6b. CTA 事实(client-scoped verified facts)—— 必须在任何 provider 调用之前 fail-closed。
+  // assertRecipeBriefComplete(步骤 0)已对 recipe.cta_facts_required 非空的 recipe 校验过一遍
+  // brief.cta_facts;这里复用同一断言函数(单一真源,不重复写第二套逻辑)取回已验证的 facts
+  // 供 assemble/receipt 使用。
+  const ctaFacts = Array.isArray(recipe.cta_facts_required) && recipe.cta_facts_required.length > 0
+    ? assertRecipeCtaFacts(wo.brief.cta_facts, recipe)
+    : null
+
+  // 7. budget gate(R7 pre-provider)
+  assertRecipeBudget({
+    budgetCapUsd,
+    maxNewClips: Number(wo.brief.max_new_clips),
+    clipUnitCostUsd,
+    recipe,
+  })
+
+  // 8. 每段 provider(先 heartbeat / abort 检查 → per-call budget → 调用)
+  const uploadByKey = new Map((wo.clip_uploads || []).map((u) => [u.idempotency_key, u]))
+  const localPaths = []
+  const newClips = []
+  const executed = []
+  let cost = 0
+  for (let i = 0; i < recipe.segments.length; i++) {
+    // 每次 provider 之前先心跳,收到 abort 直接停(hard stop · R7)
+    const hb = await heartbeatFn(woId, cost)
+    if (hb?.abort) {
+      throw new Error(`WINNER_RECIPE_HEARTBEAT_ABORT: heartbeat requested abort before seg[${i}] provider call`)
+    }
+    // 累计 budget 检查(下一次调用会不会跨顶)
+    assertPerCallBudget({
+      nextCallCostUsd: clipUnitCostUsd,
+      alreadySpentUsd: cost,
+      budgetCapUsd,
+    })
+
+    const plan = wo.brief.clip_generation_plan[i]
+    const spec = recipe.segments[i]
+    const up = uploadByKey.get(plan.idempotency_key)
+    if (!up) {
+      throw new Error(
+        `WINNER_RECIPE_UPLOAD_MISSING: 生成 clip 无上传通道(key=${plan.idempotency_key})`,
+      )
+    }
+    // gen_duration_s = provider 应生成的真实时长;legacy recipe 没这字段则退回展示时长(v1 两者相等)。
+    const genDurationS = spec.gen_duration_s ?? spec.duration_hint_s
+    logFn?.(`  生成 seg[${i}] ${plan.motion_type} via provider (${genDurationS}s)…`)
+    const gen = await providerFn({
+      plan,
+      sourceImageUrl: plan.source_image_url,
+      durationSeconds: genDurationS,
+      recipe,
+    })
+    const dst = tmpJoin(tmp, `seg_${i}.mp4`)
+    writeFileFn(dst, gen.buf)
+    const clipDur = probeDurationFn(dst)
+    if (!Number.isFinite(clipDur) || clipDur < genDurationS - 0.5) {
+      throw new Error(
+        `WINNER_RECIPE_I2V_UNDERRUN: seg[${i}] 时长不足 (${clipDur ?? '未探测'}s < ${genDurationS}s)`,
+      )
+    }
+    localPaths.push(dst)
+    await uploadSignedFn(up.signed_url, gen.buf, 'video/mp4')
+    // blocker 5:provider-reported cost 必须 finite + 非负,否则拒（防 NaN/Infinity/负数进台账）
+    if (typeof gen.cost !== 'number' || !Number.isFinite(gen.cost) || gen.cost < 0) {
+      throw new Error(
+        `WINNER_RECIPE_BUDGET_INSUFFICIENT: provider returned non-finite/negative cost for seg[${i}]: ${String(gen.cost)}`,
+      )
+    }
+    cost += gen.cost
+    executed.push({
+      actual_duration_s: clipDur,
+      provider: gen.provider ?? 'muapi',
+      request_id: gen.request_id ?? '',
+    })
+    newClips.push({
+      storage_url: up.path,
+      track: 'b_generated',
+      scene_tag: plan.scene_tag,
+      duration_seconds: spec.duration_hint_s,
+      idempotency_key: plan.idempotency_key,
+      motion_type: plan.motion_type,
+      generation_cost_usd: gen.cost,
+      source_meta: { provider: gen.provider ?? 'muapi', request_id: gen.request_id, recipe: recipe.id },
+    })
+  }
+  // 生成完再 heartbeat 一次;abort → 不组装、不 complete
+  const postGenHb = await heartbeatFn(woId, cost)
+  if (postGenHb?.abort) {
+    throw new Error('WINNER_RECIPE_HEARTBEAT_ABORT: heartbeat abort after provider calls, refusing to assemble')
+  }
+
+  // 9. assemble + final probe
+  const outputPath = tmpJoin(tmp, 'final.mp4')
+  const cfg = buildRecipeAssembleConfig({
+    recipe,
+    localPaths,
+    hookText,
+    ctaText,
+    captionsByRole,
+    ctaFacts,
+    bgmAbsPath: music.absPath,
+    brandKit,
+    outputPath,
+    profile,
+  })
+  const cfgPath = tmpJoin(tmp, 'promo.json')
+  writeFileFn(cfgPath, JSON.stringify(cfg, null, 2))
+  await execAssembleFn({ cfgPath, outputPath })
+  if (!existsFn(outputPath)) throw new Error('WINNER_RECIPE_ASSEMBLE_FAILED: renderer 未产出 final.mp4')
+  const finalProbed = verifyFinalMedia({
+    path: outputPath,
+    recipe,
+    ffprobeFn: (p) => ({ duration: probeDurationFn(p), loudnessLufs: probeLoudnessFn(p) }),
+  })
+
+  // 10. 生产 receipt validator(R12)
+  const sourceImageUrls = wo.brief.clip_generation_plan.map((p) => p.source_image_url)
+  const sourceImageUrl = sourceImageUrls[0]
+  const receipt = buildExecutedReceipt({
+    recipe,
+    hookText,
+    ctaText,
+    captionsByRole,
+    ctaFacts,
+    sourceImageUrl,
+    sourceImageUrls,
+    executed,
+    music,
+    final: finalProbed,
+  })
+  receiptValidator(receipt, recipe)
+
+  // 11. upload + complete
+  const videoBuf = readFileFn(outputPath, true /* binary */)
+  await uploadSignedFn(wo.uploads.video.signed_url, videoBuf, 'video/mp4')
+  await uploadSignedFn(
+    wo.uploads.segments_json.signed_url,
+    Buffer.from(JSON.stringify(receipt, null, 2)),
+    'application/json',
+  )
+  await uploadSignedFn(
+    wo.uploads.srt.signed_url,
+    Buffer.from(buildExecutedSrt({ recipe, hookText, captionsByRole })),
+    'text/plain',
+  )
+
+  const caption = [hookText, ctaText].filter(Boolean).join(' · ')
+  // blocker 1:recipe 单必须把 executed receipt 明文附在 complete body,server 会用共享
+  // assertRecipeReceipt 再校一遍并强制 new_clips 计数 / recipe id-version / source metadata 一致。
+  // 老 worker 不带 recipe_receipt → server 一律拒(recipe brief 单不许进 in_review)。
+  const r = await completeFn({
+    worker_id: workerId,
+    video_url: wo.uploads.video.path,
+    segments_json_url: wo.uploads.segments_json.path,
+    srt_url: wo.uploads.srt.path,
+    caption,
+    actual_cost_usd: cost,
+    new_clips: newClips,
+    recipe_receipt: receipt,
+  })
+  if (!r.ok) throw new Error(`complete ${r.status}: ${JSON.stringify(r.json)}`)
+  logFn?.(`✅ 工单 ${woId} recipe 完成 → ${r.json?.status ?? 'in_review'}`)
+  return { ok: true, cost, receipt }
+}
+
+// prod wrapper — 用真实 IO wire 依赖
+async function processRecipeOrder(wo, tmp, recipe) {
+  return runRecipeSequence({
+    wo,
+    recipe,
+    tmp,
+    deps: {
+      log,
+      heartbeatFn: (id, c) => heartbeat(id, c),
+      uploadSignedFn: uploadSigned,
+      providerFn: async ({ plan, sourceImageUrl, durationSeconds }) =>
+        await muapiGenerate(plan, sourceImageUrl, durationSeconds),
+      readFileFn: (p, binary = false) => (binary ? readFileSync(p) : readFileSync(p, 'utf8')),
+      writeFileFn: (p, buf) => writeFileSync(p, buf),
+      existsFn: existsSync,
+      joinFn: join,
+      tmpJoin: (t, name) => join(t, name),
+      probeDurationFn: probeClipDuration,
+      probeLoudnessFn: probeLoudnessLufs,
+      hashFileFn: sha256File,
+      execAssembleFn: ({ cfgPath, outputPath }) => {
+        execFileSync(PYTHON_BIN, [MAKE_PROMO, cfgPath], { stdio: 'inherit' })
+        // 30fps muxing can leave one trailing frame (12.033s for a 12.000s
+        // recipe). Normalize only that tiny quantization overflow; larger
+        // overruns still reach verifyFinalMedia and fail closed.
+        const assembledDuration = probeClipDuration(outputPath)
+        if (assembledDuration > recipe.max_final_dur
+            && assembledDuration <= recipe.max_final_dur + 0.05) {
+          const normalized = `${outputPath}.duration-normalized.mp4`
+          execFileSync(FFMPEG_BIN, [
+            '-y', '-v', 'error', '-i', outputPath,
+            '-t', String(recipe.max_final_dur - (1 / 30)),
+            '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+            '-c:a', 'aac', '-b:a', '192k', normalized,
+          ])
+          renameSync(normalized, outputPath)
+        }
+      },
+      completeFn: async (payload) => await api(`/api/factory/worker/${wo.work_order_id}/complete`, 'POST', payload),
+      // TS 侧 assertRecipeReceipt 的字段等价实现从 creative-recipe.mjs 直出;
+      // 不再动态 import 未打包 TS 源码 → 也不再有静默弱回退掩盖 receipt 违规。
+      receiptValidator: assertRecipeReceipt,
+      brandKit: brandkitFor(wo.client_id),
+      approvedRendererShas: (ENV.FACTORY_RECIPE_APPROVED_MAKE_PROMO_SHA256 || '')
+        .split(',').map((s) => s.trim()).filter(Boolean),
+      rendererPath: MAKE_PROMO,
+      sharedMusicDir: SHARED_MUSIC,
+      musicLibrary: loadMusicLibrary(),
+      workerId: WORKER_ID,
+      clipUnitCostUsd: CLIP_UNIT_COST,
+      // blocker 7:BGM 输入门槛 vs final silence 门槛分开
+      minBgmInputLoudnessLufs: recipe.min_bgm_input_loudness_lufs,
+      minLoudnessLufs: recipe.min_loudness_lufs,
+    },
+  })
+}
+
+/**
+ * claim response 带 recipe_intent_invalid_reason(clients.factory_config.creative_recipe
+ * 解析失败,例如未知 id / 缺 version / 版本对不上)→ worker 一律拒,不进 recipe 也不进 legacy。
+ * 与 legacy 分支保持互斥:合法解析出 null intent 时不设 reason,legacy 继续按老路径走。
+ */
+export function assertNoRecipeIntentInvalidReason(reason) {
+  if (typeof reason === 'string' && reason.trim().length > 0) {
+    throw new Error(
+      `WINNER_RECIPE_CONFIG_INVALID: client factory_config.creative_recipe is not parseable: ${reason.trim()}`,
+    )
+  }
+}
+
+// ── ffprobe / crypto helpers ──────────────────────────────────────────────────
+
+/** ffprobe 探测:文件是否含 audio 流(sanity;真实 loudness 由 probeLoudnessLufs 承担)。 */
+export function probeHasAudio(path) {
+  try {
+    const out = execFileSync(
+      FFPROBE_BIN,
+      ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', path],
+    ).toString().trim()
+    return out.split('\n').some((line) => line.trim() === 'audio')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * ffmpeg ebur128 integrated loudness (LUFS) —— recipe BGM/final 强约束。
+ *
+ * ffmpeg `-af ebur128 -f null -` 是 nominal success(exit 0),但 Integrated loudness 摘要
+ * 只写在 stderr。之前用 execFileSync 只捕 stdout,summary 全部丢失,任何真实音频都被
+ * 解析成 null → 走 -70 兜底 → BGM/final loudness gate 一律 reject(合法音频当静音)。
+ *
+ * 改用 spawnSync 显式抓 stderr;真解析失败(空输出 / ffmpeg 未装)才落 -70 兜底(供
+ * gate 视作静音拒收,不再让静默降级放行任何一条真静音)。runner 可注入便于测试。
+ */
+export function probeLoudnessLufs(path, runner = defaultFfmpegLoudnessRunner) {
+  let res
+  try {
+    res = runner(path)
+  } catch (e) {
+    res = { stderr: e?.stderr, stdout: e?.stdout }
+  }
+  const parsed = parseLufsFromEbur128(res?.stderr) ?? parseLufsFromEbur128(res?.stdout)
+  return parsed != null ? parsed : -70
+}
+
+function defaultFfmpegLoudnessRunner(path) {
+  const r = spawnSync(
+    FFMPEG_BIN,
+    ['-hide_banner', '-nostats', '-i', path, '-af', 'ebur128=peak=true', '-f', 'null', '-'],
+    { encoding: 'utf8' },
+  )
+  return { stderr: r.stderr, stdout: r.stdout, status: r.status, error: r.error }
+}
+
+/** sha256 hex —— renderer SHA gate 主批准闸(R11)。 */
+export function sha256File(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+/**
+ * music_library.json:studio 侧维护的 mood → allowlist 映射。
+ * 找不到 = null,resolveRecipeBgm 会走 pool 或抛 BGM_MISSING(不再兜底 canonical 文件名)。
+ */
+function loadMusicLibrary() {
+  const p = ENV.FACTORY_MUSIC_LIBRARY_PATH || join(SHARED_MUSIC, 'music_library.json')
+  if (!existsSync(p)) return null
+  try { return JSON.parse(readFileSync(p, 'utf8')) } catch { return null }
 }
 
 // ── 主循环 ──────────────────────────────────────────────────────────────────────
@@ -438,19 +932,88 @@ async function main() {
     process.exit(1)
   }
   const loop = process.argv.includes('--loop')
+  const jsonResult = process.argv.includes('--json-result')
   const intervalMs = Number(ENV.FACTORY_POLL_INTERVAL_MS || '30000')
   log(`worker 启动 id=${WORKER_ID} api=${API_BASE} loop=${loop}`)
   do {
     try {
-      const wo = await claimOne()
-      if (wo) await processOrder(wo)
-      else if (loop) log('无 queued 工单,等待…')
-      else { log('无 queued 工单,退出'); break }
+      const result = await runOneOrder()
+      if (jsonResult) console.log(`FACTORY_WORKER_RESULT ${JSON.stringify(result)}`)
+      if (!result.claimed && loop) log('无 queued 工单,等待…')
+      else if (!result.claimed) { log('无 queued 工单,退出'); break }
     } catch (e) {
       log('循环异常:', e.message)
+      if (jsonResult) {
+        console.log(`FACTORY_WORKER_RESULT ${JSON.stringify({ claimed: false, ok: false, error: e.message })}`)
+      }
     }
     if (loop) await new Promise((r) => setTimeout(r, intervalMs))
   } while (loop)
+}
+
+/**
+ * One deterministic claim/process unit for the Inngest Connect wrapper.
+ * It deliberately does not retry: content_work_orders already owns retry and
+ * dead-letter semantics, while Inngest owns the outer durable run.
+ */
+export async function runOneOrder({
+  claimFn = claimOne,
+  processFn = processOrder,
+  failFn = failOrder,
+  orchestratorMaxProviderUsd = ORCHESTRATOR_MAX_PROVIDER_USD,
+  requiredRecipeId = ORCHESTRATOR_REQUIRED_RECIPE_ID,
+  requiredRecipeVersion = ORCHESTRATOR_REQUIRED_RECIPE_VERSION,
+} = {}) {
+  const wo = await claimFn()
+  if (!wo) return { claimed: false, ok: true }
+  const workOrderBudget = Number(wo.budget_cap_usd)
+  if (requiredRecipeId !== null) {
+    const actualRecipe = wo.brief?.creative_recipe
+    const versionMatches = requiredRecipeVersion === null
+      || (Number.isFinite(requiredRecipeVersion) && Number(actualRecipe?.version) === requiredRecipeVersion)
+    if (actualRecipe?.id !== requiredRecipeId || !versionMatches) {
+      await failFn(
+        wo.work_order_id,
+        `INNGEST_RECIPE_SCOPE_GATE: expected ${requiredRecipeId} v${String(requiredRecipeVersion)}, got ${String(actualRecipe?.id)} v${String(actualRecipe?.version)}`,
+        false,
+      )
+      return {
+        claimed: true,
+        ok: false,
+        work_order_id: wo.work_order_id,
+        client_id: wo.client_id,
+        error: 'recipe_scope_gate',
+      }
+    }
+  }
+  if (orchestratorMaxProviderUsd !== null) {
+    if (!Number.isFinite(orchestratorMaxProviderUsd) || orchestratorMaxProviderUsd <= 0) {
+      throw new Error('FACTORY_ORCHESTRATOR_MAX_PROVIDER_USD must be a finite positive number')
+    }
+    if (!Number.isFinite(workOrderBudget) || workOrderBudget > orchestratorMaxProviderUsd) {
+      await failFn(
+        wo.work_order_id,
+        `INNGEST_PROVIDER_BUDGET_GATE: work order $${String(wo.budget_cap_usd)} exceeds run cap $${orchestratorMaxProviderUsd}`,
+        false,
+      )
+      return {
+        claimed: true,
+        ok: false,
+        work_order_id: wo.work_order_id,
+        client_id: wo.client_id,
+        error: 'provider_budget_gate',
+      }
+    }
+  }
+  const processed = await processFn(wo)
+  return {
+    claimed: true,
+    ok: processed === true || processed?.ok === true,
+    work_order_id: wo.work_order_id,
+    client_id: wo.client_id,
+    actual_cost_usd: Number(processed?.cost ?? 0),
+    status: processed === true || processed?.ok === true ? 'in_review' : 'failed',
+  }
 }
 
 // #1218:守住入口 —— 只在直接执行本文件时跑主循环。测试要 import resolveCopy/buildSrt

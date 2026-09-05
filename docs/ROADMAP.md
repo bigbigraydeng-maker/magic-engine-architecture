@@ -90,12 +90,25 @@
 
 **运维泳道（也不并入本链，等 PM 拍板）**：
 - [ ] [#911](https://github.com/bigbigraydeng-maker/magic-engine/issues/911) / PR [#912](https://github.com/bigbigraydeng-maker/magic-engine/pull/912) OPS03 事件驱动 Issue 中继试点 —— ⚠️ 它写死的唯一标的 #910 **已关闭**，试点要么改标的要么归档
-- [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 前置未成立：唯一能给出「复审干净」信号的 `handle-review` 流水线**现在是坏的**（[#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939)：`.github/workflows/ops-codex-to-claude-fix.yml` 没传 `allowed_bots`，Codex 机器人一提意见就必挂，#935 / #936 均实测复现）。
+- [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 前置已就绪，**卡点在 PR 自己身上**：原引用的 [#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939) 已于 2026-08-16 关闭修复，不再是阻塞点。曾经存在的另一个真实缺口——`tools/ops-review-loop/src/fix-scope.mjs` 的 `GUARDED_BRANCH_PREFIXES` 把「Codex 复审→Claude 自动修复」循环的生效分支焊死在 `claude/me2-` 前缀，团队实际工作分支（`claude/<issue号>-<slug>`）从不匹配——已由 PR [#1175](https://github.com/bigbigraydeng-maker/magic-engine/pull/1175) 于 2026-08-24 11:45 UTC 合并修复，`GUARDED_BRANCH_PREFIXES` 现已扩到 `claude/`，覆盖日常工作分支（2026-08-24 在 PR [#1174](https://github.com/bigbigraydeng-maker/magic-engine/pull/1174) 上实测过循环本身能跑通：Codex 打 P2 标签 → 自动触发修复 → Claude 推送修复 commit）。急停开关 `OPS_AUTO_MERGE_ENABLED` 也已经是 `true`（2026-08-12 设置）。**现在真正卡住的是 #931 这个 PR 自己**：其分支 `claude/me2-ops-auto-merge` 自 2026-08-12 起未再更新，与当前 `main`（已并入 #941/#942/#943/#947/#1175 等后续改动）产生冲突（`mergeStateStatus: CONFLICTING`），需要先 merge origin/main 解决冲突（禁止 rebase，见 CLAUDE.md §6），才能重新走复审流程。
       ✅ **兜底闸门这一条不是问题**：2026-08-12 实查，`main` 上有 **active 的 ruleset「Protect main」** —— 禁删、禁 force push、只许 merge commit、**所有复审线程必须解决**、`ai-orchestrator-tests` 必须过。（旧说法「GitHub Free 私有仓库开不了分支保护」已作废，ruleset 已对私有仓库开放。）
 
 ---
 
-## 近期待办（跨 Phase 汇总）
+## 官网「免费体检」漏斗断流（2026-09-02 发现）
+
+**症状**：`magicengine.com.au/discover` 的免费体检——两步漏斗（`/api/scout` 存 lead → `/api/report` 补 email 发报告）——自上线起从未真正存过一条 lead，也从未真正发出过一封报告邮件。生产 Supabase `discovery_leads` 表核实为 0 行。
+
+**已确认根因（2026-09-02 直接调用 `/api/scout` 验证 `leadId` 前缀 = `demo-...`）**：`website/`（Cloudflare Pages 独立静态站，独立于本仓 Render 部署，独立 Cloudflare 账号）的生产环境**没有配置 `SUPABASE_URL` / `SUPABASE_SERVICE_KEY`**，导致 `website/functions/api/scout.js` 的 `storeLead()` 从未真正连接过 Supabase，一律返回假 `demo-` id；`website/functions/api/report.js` 据此拒绝发送报告邮件（"P0-A fix" 防御生效，符合设计但暴露了上游问题）。
+
+**已一并修复但非本次症状根因**（子牙+魏征 2 审通过，2026-09-02 已 apply）：`discovery_leads.email` 列建表起就是 `NOT NULL`，但 `scout.js` 插入时从不传 email（设计上是两步收集）——只要 Cloudflare 侧接上 Supabase，这条 NOT NULL 约束会立刻撞库产生新的 `fallback-` 失败。migration `20260902000001_discovery_leads_email_nullable.sql` 已放开该约束。
+
+- [ ] 🔴 **需 PM 在 Cloudflare 后台（独立账号，本仓无法访问）给 magicengine.com.au 的 Pages 项目补 `SUPABASE_URL`=`https://glbdnayojixmexgofbsd.supabase.co`、`SUPABASE_SERVICE_KEY`=（从 Render `magic-engine` 服务的 `SUPABASE_SERVICE_ROLE_KEY` 复制同一个值）→ Settings → Environment variables → Production，保存后触发一次重新部署
+- [ ] 补上后必须端到端验证：重新跑一次 `/discover` 全流程，确认 `leadId` 是真实 UUID、Supabase `discovery_leads` 真的新增一行、**且真的收到报告邮件**（不能只看页面显示"发送成功"——`report.js` 的 `sendEmail()` 在 `RESEND_API_KEY` 未配置时会静默跳过发送但仍返回 `{ok:true}`，需顺手确认这个 key 也配了）
+- [ ] 次要（魏征复审发现，非阻塞）：`discovery_leads` 表建表起没有任何 migration 显式 `enable row level security`/加 policy，虽然 service-role 调用不受 RLS 影响、暂无实际泄露，但应补一条独立 RLS migration 让它符合"新表必须 service-role 模板"的红线并消除账本漂移
+- [ ] 次要：`website/_headers` 对 `/api/*` 声明 `Access-Control-Allow-Origin: https://magicengine.com.au`，而各 Function 自己又各设 `Access-Control-Allow-Origin: *`——未验证 Cloudflare Pages 对两者如何合并，换一个 origin（如 `www` 子域名/`*.pages.dev` 预览域）访问不排除请求直接被 CORS 拦掉
+
+
 
 ### ME 产品动态自动发 LinkedIn（2026-08-20 建成，默认关闭）
 
@@ -745,6 +758,23 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 
 ---
 
+## Platform Partner Outreach（ME 自己的上游渠道伙伴 BD，非客户能力）📋 2026-09-02 登记
+
+> 背景：PM 提供 spec，要找 AU/NZ 已获 Meta/Google/TikTok 官方 partner 资质的公司，建立 ME 自己的上游渠道合作（不是找客户）。经 me-platform-tier-gate 判定为 L4 内部运营工具，不占用平台能力线；复用了 `src/lib/prospecting/`（Phase 35）的状态机/打分/AI草稿/人工审批架构模式，但因业务语义不同（客户漏斗 vs 上游伙伴漏斗）新建独立表，不与 `outbound_prospects` 混用。子牙 + 魏征双审已过，四条缺口（RLS checklist、认证状态防幻觉硬约束、独立合规页脚、domain 去重约束）已在代码里落实。
+
+- [x] Migration `supabase/migrations/20260902010000_platform_partner_outreach.sql`（RLS 从一开始就写对 `TO service_role`）
+- [x] `src/lib/partner-outreach/`（types.ts / score.ts / outreach.ts，24 条测试全绿，不 import `src/lib/email/sender.ts` —— 这一轮零发送路径）
+- [x] 研究 25 家 AU/NZ 候选（Meta 8 / Google 10 / TikTok 7，去重 1 家跨平台重复），全部诚实标注 verified/unverified，无编造
+- [x] Wave 1 选出 10 家、生成完整邮件草稿（人工撰写个性化句，未接 AI 调用路径，因为本次会话没有确认 `ANTHROPIC_API_KEY` 可用性）
+- [x] migration 已跑到生产 Supabase（`glbdnayojixmexgofbsd` / CrazyContent，2026-09-02 PM 手动执行）；匿名 key 探针验证 RLS 正确锁定 service_role(对照 `outbound_prospects` 已知修复表，响应 signature 一致)
+- [x] 24 条候选（10 drafted + 14 discovered）已写入生产表，同样探针复验 RLS 未松动
+- [ ] **待办 1**：实际发送 —— 严格等 PM 逐家或批量明确说"发"，不自动发送
+- [ ] **待办 2**：`generatePersonalizationLines()`（AI 调用路径）尚未在生产环境验证可用，目前 wave-1 草稿的两句个性化文案是人工按同一套规则手写的，不是 AI 生成的——下一批候选建议先确认 API key 可用再接上自动生成
+- [ ] **待办 3**：回复分类 + follow-up 调度 + admin 审批 UI（spec §16-17）尚未实现，这一轮范围只到"草稿就绪待审"
+- [ ] **待办 4**：Meta 官方 Partner Directory 需要登录态才能核验，公开调研工具查不到——8 家 Meta 候选全部卡在 unverified；如果 PM 有 Meta Business 账号登录态,可以人工核一遍这批公司
+
+---
+
 ## 平台治理层 · me-platform-tier-gate 后续跟进 📋 2026-08-27 登记
 
 > 背景：2026-08-27 因 HBay KOL 事故设立 [`me-platform-tier-gate`](../.claude/skills/me-platform-tier-gate/SKILL.md) skill，约束 agent 在提议新增 ME 能力线时的思考边界。经魏征（对抗挑刺）+ 子牙（架构）两轮复审，v1 落仓时已修必改项 owner 责任链（问题 1）与候选清单载体（问题 2，见 [`docs/registry/platform-candidates.md`](./registry/platform-candidates.md)）。以下 4 条子牙终审时提出、v1 未修、进本 ROADMAP 分批跟进。
@@ -754,3 +784,26 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **P.G.3** 澄清 skill 在五道 Build Gate 中的位置为 Gate 0 / Pre-Gate —— 子牙终审问题 5。SKILL.md 现在"红线 6"与"与既有治理机制的关系"表两处对 skill 从属关系的表述矛盾（一说是 Gate 4 前置子步骤，一说强化 Gate 2）。改成"Gate 0 / Pre-Gate，不替代任何后续 Gate，分歧走 owner 仲裁"。
 - [ ] **P.G.4** 抽 `docs/registry/pillars.md` 作为 6 支柱唯一名单来源 —— 子牙终审问题 6。当前 SKILL.md、CLAUDE.md 两处硬编码"SEO / 社媒 / 广告 / 口碑 / AI 可见度 / 竞品"，跟 skill 自己声明的"支柱数量是 PM 拍板项"直接冲突。建仓后 skill、CLAUDE.md、其他引用点全部改成引用 registry 文件。同类还有五道 Build Gate 顺序 / 客户名单，可一并统一到 `docs/registry/` 下。
 - [ ] **P.G.5** 平台候选复查治理界面 —— Codex 复审 P2 遗留意见。当前 `platform_candidate_review_due` 待办的 href 指向 GitHub `blob` 只读页面，PM/FDE 收到待办后要同时改 `docs/registry/platform-candidates.md` 表 + `src/lib/pm-todo/platform-candidate-reviews.ts` 数组，非技术收件人做不了。要么建一个真正的治理界面（可以直接更新证据 + 推下次复查日），要么把 `platform-candidate-reviews.ts` 里的日期改为从 markdown 表自动派生。当前 workaround：接到待办后回一句 "把 X 候选复查日推到 YYYY-MM-DD"，由 agent 帮改两处并提 PR。
+
+---
+
+## ME 会员制度五档 · 免费 / $39 / $199 / $499 / 定制 📋 2026-08-31 PM 拍板，四张合同票均为 SPEC DRAFT
+
+> 分档尺子是**「谁在干活」**（PM 原话，从旧三档沿用）：免费=系统搭好你自己用 · $39=系统把你摆出去 · $199=AI 替你干活 · $499=AI 替你花钱干活 · 定制=真人接管。
+> **旧的 NZ$500 起步版 / NZ$2,500 高级企业版固定报价已于 2026-08-31 全部作废**（PR [#1279](https://github.com/bigbigraydeng-maker/magic-engine/pull/1279) 把 `docs/registry/pricing-playbook-enterprise-fde.md` 标为 RETIRED）。**定制 / Enterprise 档 case by case 逐单报价，代码与对外材料一律不挂数字。** 已签客户不受影响。
+> 落地顺序是「先给客户一个网站和一个邮箱」，依赖 [#1269](https://github.com/bigbigraydeng-maker/magic-engine/issues/1269)（OpenSRS 域名 + 邮箱，Phase 0 未动）。
+
+**四张票全部是 SPEC DRAFT —— 没有 `BUILD CONTROL — GO BUILD` 之前任何窗口不许动手。**
+
+- [ ] **[#1273](https://github.com/bigbigraydeng-maker/magic-engine/issues/1273)** [风险 B] AI 单页站生成器 —— 免费档与 $39 档的第一块砖。
+      🔴 **技术路线已冻结：AI 只出结构化 JSON，绝不出 HTML。** 版面由模板决定。AI 吐 HTML 则每次结构不同 → 没法断言 noindex / 角标 / 无编造事实 → 扫街跑几百个会坏掉几十个而无从定位。多样性靠「模板 × 配色 × 首屏版式」的**可枚举组合**，不靠 AI 即兴。
+      🔴 **别重造**：`src/lib/tailor-made/` 已经是同形状流水线（AI 抽结构化数据 → 归一化 → 注入 HTML 模板 → 出成品，生产在跑行程单与画册），换的是对象不是形状。配套复用 `diagnostic/report-generator.ts` · `images/unsplash.ts` · `factory/stock-pipeline.ts` · `brief/jina.ts`。
+      ⚠️ **最大短板是配图**：没有商家真实照片只能用图库，同一条街几家同业配到同一张图会直接毁掉扫街杀伤力，必须按行业 + 氛围选并去重。
+      平台候选「AI 单页站生成器」已登记 `docs/registry/platform-candidates.md`（PR #1278 已合并）。
+- [ ] **[#1274](https://github.com/bigbigraydeng-maker/magic-engine/issues/1274)** [风险 A] 免费档 —— 认领、隔离与永不删除的生命周期。免费站边界：永久能用能发链接，但 **noindex 不收录 + 带 ME 角标 + 无邮箱 + 无自有域名** —— 这四条正是 $39 档的卖点。
+- [ ] **[#1275](https://github.com/bigbigraydeng-maker/magic-engine/issues/1275)** [风险 A] $39 订阅与四项解锁 —— **用 Stripe Billing，禁止自建订阅状态机**（承接 [#1122](https://github.com/bigbigraydeng-maker/magic-engine/issues/1122) 的 Build Control 决议）。$39 含自有域名 + **公司邮箱 1 个，第 2 个起 $9/月/箱**。`src/types/magic-engine.ts:7` 的 `ClientPlan` 需对齐五档，且 `custom` 档不许在代码里挂任何价格数字。
+- [ ] **[#1276](https://github.com/bigbigraydeng-maker/magic-engine/issues/1276)** [风险 A] 扫街预建站管道 —— 先把网站做好再去谈。口径：**不公开 · 一商家一链接 · 只用公开事实 · 不用商家照片和 logo**。
+
+**🔴 唯一卡住的数字**：CTS + Oztop 过去 30 天真实外部 API 消耗（美元）仍未到手（v0.4 就要求过）。**在它到位之前 $199 / $499 的具体额度不许写进代码**；任一档毛利 < 40% 就得调额度或加价。免费档与 $39 档不受此约束，可以先跑。
+
+**⚠️ 对外仍挂着已作废的旧价**：公开收费页 `magic-engine-pricing.pages.dev` 还显示 NZ$500 / NZ$2,500 三档。源码不在当前主力 Mac 上（线上是 37KB 自包含 HTML，可 curl 抓下来当基线重建）。改页面前先解决 Cloudflare 账号权限：该项目在 `hello@magicengine.cloud` 名下，本机 wrangler 登录身份看不到它。

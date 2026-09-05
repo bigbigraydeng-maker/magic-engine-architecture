@@ -7,7 +7,30 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { validateDiscoveryReport } from '../validators'
+import { normalizeDiscoveryWarnings, validateDiscoveryReport } from '../validators'
+
+describe('normalizeDiscoveryWarnings', () => {
+  it('keeps valid structured warnings and their provider error code', () => {
+    expect(normalizeDiscoveryWarnings([{
+      stage: 'seed_enrichment',
+      error_code: 40210,
+      message: ' Keyword data is temporarily unavailable. ',
+    }])).toEqual([{
+      stage: 'seed_enrichment',
+      error_code: 40210,
+      message: 'Keyword data is temporarily unavailable.',
+    }])
+  })
+
+  it('drops malformed entries without rejecting the report', () => {
+    expect(normalizeDiscoveryWarnings([
+      null,
+      { stage: 'unknown', message: 'bad stage' },
+      { stage: 'seed_enrichment', error_code: '40210', message: 'bad code' },
+      { stage: 'domain_metrics', message: 'Still usable' },
+    ])).toEqual([{ stage: 'domain_metrics', message: 'Still usable' }])
+  })
+})
 
 // ---------------------------------------------------------------------------
 // Helper: 构造一份最小合规报告，social_profiles 由参数注入

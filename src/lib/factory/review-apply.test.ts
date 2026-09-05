@@ -87,6 +87,95 @@ describe('applyQualityReject — 打回重开', () => {
     const reopened = inserts[0] as { brief: { review_feedback: string } }
     expect(reopened.brief.review_feedback).toBe('画面太慢')
   })
+
+  it('🔴 R4 legacy 客户(无 recipe)打回 → 新单不带 recipe_replan_required / digest,legacy 路径继续', async () => {
+    const legacyWo = { ...IN_REVIEW_WO, brief: { segments: [{ role: 'hook' }, { role: 'cta' }] } }
+    const { db, inserts } = mockSupabase([
+      { data: legacyWo, error: null },
+      { data: [{ id: 'wo-1' }], error: null },
+      { data: { id: 'wo-2' }, error: null },
+    ])
+    const r = await applyQualityReject(db, 'wo-1', '画面太慢', 'me@x.com')
+    expect(r.ok).toBe(true)
+    expect(r.data?.recipe_replan_required).toBe(false)
+    expect(r.data?.reopened_status).toBe('queued')
+    expect(r.data?.parked_pending_replan).toBe(false)
+    expect(r.data?.review_feedback_digest).toBeNull()
+    const reopened = inserts[0] as {
+      brief: {
+        review_feedback: string
+        recipe_replan_required?: boolean
+        review_feedback_digest?: string
+      }
+    }
+    expect(reopened.brief.review_feedback).toBe('画面太慢')
+    // legacy 单里根本不应出现 recipe_replan_required / review_feedback_digest
+    expect('recipe_replan_required' in reopened.brief).toBe(false)
+    expect('review_feedback_digest' in reopened.brief).toBe(false)
+  })
+
+  it('🔴 R3/R4 recipe 客户打回 → 新单带 marker + digest,creative_recipe / segments / plan 全删', async () => {
+    const recipeWo = {
+      ...IN_REVIEW_WO,
+      brief: {
+        creative_recipe: { id: 'single_image_i2v_pullback_12s', version: 1 },
+        segments: [{ role: 'hook' }, { role: 'cta' }],
+        clip_generation_plan: [{ segment_role: 'hook', position: 0 }],
+        max_new_clips: 2,
+      },
+    }
+    const { db, inserts } = mockSupabase([
+      { data: recipeWo, error: null },
+      { data: [{ id: 'wo-1' }], error: null },
+      { data: { id: 'wo-2' }, error: null },
+    ])
+    const r = await applyQualityReject(db, 'wo-1', '画面太慢', 'me@x.com')
+    expect(r.ok).toBe(true)
+    expect(r.data?.recipe_replan_required).toBe(true)
+    expect(r.data?.reopened_status).toBe('dead_letter')
+    expect(r.data?.parked_pending_replan).toBe(true)
+    expect(typeof r.data?.review_feedback_digest).toBe('string')
+    expect((r.data?.review_feedback_digest as string)).toMatch(/^[0-9a-f]{64}$/)
+    const reopened = inserts[0] as {
+      brief: {
+        recipe_replan_required?: boolean
+        review_feedback_digest?: string
+        creative_recipe?: unknown
+        previous_creative_recipe?: unknown
+        clip_generation_plan?: unknown
+        segments?: unknown
+        max_new_clips?: unknown
+      }
+    }
+    expect(reopened.brief.recipe_replan_required).toBe(true)
+    expect(reopened.brief.review_feedback_digest).toMatch(/^[0-9a-f]{64}$/)
+    // 旧 recipe 存审计快照,但 top-level 已抹掉
+    expect('creative_recipe' in reopened.brief).toBe(false)
+    expect(reopened.brief.previous_creative_recipe).toEqual({ id: 'single_image_i2v_pullback_12s', version: 1 })
+    // stale plan / segments / max_new_clips 一并删,防 assertRecipePlanShape 拿旧 plan 走通
+    expect('clip_generation_plan' in reopened.brief).toBe(false)
+    expect('segments' in reopened.brief).toBe(false)
+    expect('max_new_clips' in reopened.brief).toBe(false)
+    expect((inserts[0] as { status: string }).status).toBe('dead_letter')
+  })
+
+  it('R3 恰好非法 creative_recipe 的老单也当 recipe 单处理(强制 replan)', async () => {
+    const badRecipeWo = {
+      ...IN_REVIEW_WO,
+      brief: { creative_recipe: { id: 'made_up', version: 42 } },
+    }
+    const { db, inserts } = mockSupabase([
+      { data: badRecipeWo, error: null },
+      { data: [{ id: 'wo-1' }], error: null },
+      { data: { id: 'wo-2' }, error: null },
+    ])
+    const r = await applyQualityReject(db, 'wo-1', '重来', 'me@x.com')
+    expect(r.ok).toBe(true)
+    expect(r.data?.recipe_replan_required).toBe(true)
+    const reopened = inserts[0] as { brief: { recipe_replan_required?: boolean; review_feedback_digest?: string } }
+    expect(reopened.brief.recipe_replan_required).toBe(true)
+    expect(reopened.brief.review_feedback_digest).toMatch(/^[0-9a-f]{64}$/)
+  })
 })
 
 describe('applyBudgetUpdate — 只改预算不重生产', () => {

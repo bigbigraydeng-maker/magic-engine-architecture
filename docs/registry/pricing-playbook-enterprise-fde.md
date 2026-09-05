@@ -29,7 +29,7 @@
 
 ### 一次性 Setup Fee
 - **NZD 3,000（含 GST 前）· 一次性**
-- **含**：官网 CMS 授权与接入 · 5 类基线首次建立（AI 可见度 14 问跨引擎 · SEO 现状 · 渠道在架 · 媒体提及 · 竞品）· 品牌 style guide 落地到 ME 内容生产管线 · **全部 3 个广告平台（Meta / Google / ChatGPT）账号接管与首次投放** · 品牌 VI 视觉手册基础生成 · Foodstuffs / 目标渠道在架追踪初始化 · B2B 名单初始池搭建（100 条本土 + 100 条出口）· 一次现场或视频 kickoff（含 3 小时深度访谈）
+- **含**：官网 CMS 授权与接入 · 5 类基线首次建立（AI 可见度 14 问跨引擎 · SEO 现状 · 渠道在架 · 媒体提及 · 竞品）· 品牌 style guide 落地到 ME 内容生产管线 · **广告平台账号接管与首次投放（Meta / Google 现役；ChatGPT 待 Connector 完成上线门槛后生效，见下方"广告管理费"段说明，Setup 阶段暂不承诺 ChatGPT 首投）** · 品牌 VI 视觉手册基础生成 · Foodstuffs / 目标渠道在架追踪初始化 · B2B 名单初始池搭建（100 条本土 + 100 条出口）· 一次现场或视频 kickoff（含 3 小时深度访谈）
 - **不含**：客户内部经营数据 IT 系统对接（需时另议）
 
 ### Base 月费
@@ -46,7 +46,7 @@
 - **说明**：加费覆盖多平台内容适配（同素材不同格式）· 平台 native optimization · 每平台社群互动 · 每平台报表
 
 ### 广告管理费
-- **可选平台**：Meta · Google · ChatGPT（三选任意组合）
+- **可选平台**：Meta · Google 现役可签；**ChatGPT 暂不可签**——仓库里没有 ChatGPT Ads Connector，连暂停/改预算这种基础管理动作都做不到，客户买了也没法履约（见 [`docs/specs/2026-09-01-me-membership-tiers-v2-design-log.md`](../specs/2026-09-01-me-membership-tiers-v2-design-log.md) 广告主仓库现状核查）。**ChatGPT 要等 Connector 从零建完、通过首投上线门槛后才能重新加回可选平台列表**
 - **合并按边际阶梯计算**（不按平台单独算）：
   - `$0 - 5,000` spend 部分：**12%**
   - `$5,000 - 20,000` spend 部分：**10%**
@@ -82,7 +82,7 @@
 | 官网 / 网站 | ✅ 全包 | — |
 | SEO | ✅ 全包 | — |
 | GEO / AI 可见度 | ✅ 全包 | — |
-| 广告投放 | ✅ 全包（Meta · Google · ChatGPT）| ❌ Spend 客户直付 |
+| 广告投放 | ✅ 全包（Meta · Google；**ChatGPT 待 Connector 完成上线门槛后生效，暂不可签**）| ❌ Spend 客户直付 |
 | 社媒运营 | ✅ 全包（FB · IG · TikTok 可选）| — |
 | **视频拍摄** | ✅ **品牌调性把关 + 制作方沟通协调** | ❌ 拍摄 / 剪辑 / 后期 → NZ 本地专业视频团队 |
 | 社媒短视频（Reels 类） | ✅ ME 视频工厂可出 · 或走外包 | — |
@@ -142,3 +142,4 @@
 
 - 2026-08-27 · v1 建仓 · HBay 首次落地走通全链路
 - 2026-08-31 · **PM 拍板作废固定报价结构**（NZD 2,500 base + 平台加费）。Enterprise / 定制档改 case by case，对外不挂数字。服务边界表与 HBay 落地记录保留作参考。已签客户不受影响。同期 ME 会员制度改五档（免费 / 39 / 199 / 499 / 定制）。
+- 2026-09-02 · Setup Fee / 广告管理费 / 服务边界表三处移除 ChatGPT 首投与管理承诺——仓库里没有 ChatGPT Ads Connector，连暂停/改预算都做不到，销售不得继续按旧版承诺签约；ChatGPT 要等 Connector 补齐并通过首投上线门槛后才重新加回，见 [`docs/specs/2026-09-01-me-membership-tiers-v2-design-log.md`](../specs/2026-09-01-me-membership-tiers-v2-design-log.md)

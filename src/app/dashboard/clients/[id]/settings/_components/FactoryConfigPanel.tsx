@@ -25,10 +25,25 @@ interface Config {
     /** 客户**真的提供**的服务承诺。空 = 文案里一条「免费 xx」都不许出现。 */
     verified_services?: string[]
   } | null
+  verified_cta: {
+    phone: string
+    url: string
+    departure: string
+    price?: string
+  } | null
   allow_b_track_landmark_ads: boolean
   auto_order_enabled: boolean
   creative_profile: Style
+  /** 版本化 winner recipe(合同 5469105522 §1)。null = 走 legacy 分镜路径。 */
+  creative_recipe: { id: string; version: number } | null
 }
+
+/** 目前已注册的 recipe。新增 recipe = 平台层升级,必先走 me-platform-tier-gate。 */
+const RECIPE_OPTIONS: ReadonlyArray<{ value: string; label: string; version: number }> = [
+  { value: 'single_image_i2v_pullback_12s', label: '单图 · 推近 + 拉远 12 秒 (v1)', version: 1 },
+  { value: 'single_image_i2v_multicut_9s', label: '单图 · 三镜头速切 9 秒 (v1)', version: 1 },
+  { value: 'multi_image_i2v_multicut_9s', label: '多图 · 三镜头速切 9 秒 (v1)', version: 1 },
+]
 
 /** 字段名跟装配脚本真正读的键一致(worker.mjs assemble)。改名前先看那边。 */
 interface Style {
@@ -68,6 +83,10 @@ interface Draft {
   offerExpiry: string
   /** 一行一条,客户真的提供的免费服务。空 = 文案里不许出现任何「免费 xx」。 */
   verifiedServices: string
+  ctaPhone: string
+  ctaUrl: string
+  ctaDeparture: string
+  ctaPrice: string
   allowLandmark: boolean
   autoOrder: boolean
   music: string
@@ -76,6 +95,8 @@ interface Draft {
   captionMode: string
   xfade: string
   endcardPanel: 'default' | 'on' | 'off'
+  /** '' = 未配 recipe(legacy 路径);否则 = 已注册 recipe id */
+  recipeId: string
 }
 
 const toDraft = (c: Config): Draft => ({
@@ -84,6 +105,10 @@ const toDraft = (c: Config): Draft => ({
   priceFrom: c.verified_offer?.price_from ?? '',
   offerExpiry: c.verified_offer?.offer_expiry ?? '',
   verifiedServices: (c.verified_offer?.verified_services ?? []).join('\n'),
+  ctaPhone: c.verified_cta?.phone ?? '',
+  ctaUrl: c.verified_cta?.url ?? '',
+  ctaDeparture: c.verified_cta?.departure ?? '',
+  ctaPrice: c.verified_cta?.price ?? '',
   allowLandmark: c.allow_b_track_landmark_ads,
   autoOrder: c.auto_order_enabled,
   music: c.creative_profile?.music ?? '',
@@ -92,21 +117,25 @@ const toDraft = (c: Config): Draft => ({
   captionMode: c.creative_profile?.caption_mode ?? '',
   xfade: c.creative_profile?.xfade != null ? String(c.creative_profile.xfade) : '',
   endcardPanel: c.creative_profile?.endcard_panel == null ? 'default' : (c.creative_profile.endcard_panel ? 'on' : 'off'),
+  recipeId: c.creative_recipe?.id ?? '',
 })
 
 const eqDraft = (a: Draft, b: Draft) =>
   a.pageId === b.pageId && a.goalId === b.goalId && a.priceFrom === b.priceFrom &&
   a.offerExpiry === b.offerExpiry && a.verifiedServices === b.verifiedServices &&
+  a.ctaPhone === b.ctaPhone && a.ctaUrl === b.ctaUrl &&
+  a.ctaDeparture === b.ctaDeparture && a.ctaPrice === b.ctaPrice &&
   a.allowLandmark === b.allowLandmark &&
   a.autoOrder === b.autoOrder && a.music === b.music && a.musicMood === b.musicMood &&
   a.look === b.look && a.captionMode === b.captionMode && a.xfade === b.xfade &&
-  a.endcardPanel === b.endcardPanel
+  a.endcardPanel === b.endcardPanel && a.recipeId === b.recipeId
 
 export function FactoryConfigPanel({ clientId }: Props) {
   const [state, setState] = useState<PanelState>({ phase: 'loading' })
   const [draft, setDraft] = useState<Draft>(toDraft({
-    publish_target: null, factory_goal_id: null, verified_offer: null,
+    publish_target: null, factory_goal_id: null, verified_offer: null, verified_cta: null,
     allow_b_track_landmark_ads: false, auto_order_enabled: false, creative_profile: EMPTY_STYLE,
+    creative_recipe: null,
   }))
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<string | null>(null)
@@ -146,6 +175,15 @@ export function FactoryConfigPanel({ clientId }: Props) {
                   .split('\n').map((x) => x.trim()).filter(Boolean),
               }
             : null,
+          verified_cta: (draft.ctaPhone.trim() || draft.ctaUrl.trim()
+            || draft.ctaDeparture.trim() || draft.ctaPrice.trim())
+            ? {
+                phone: draft.ctaPhone.trim(),
+                url: draft.ctaUrl.trim(),
+                departure: draft.ctaDeparture.trim(),
+                price: draft.ctaPrice.trim(),
+              }
+            : null,
           allow_b_track_landmark_ads: draft.allowLandmark,
           auto_order_enabled: draft.autoOrder,
           creative_profile: {
@@ -156,6 +194,12 @@ export function FactoryConfigPanel({ clientId }: Props) {
             xfade: draft.xfade.trim() === '' ? null : Number(draft.xfade),
             endcard_panel: draft.endcardPanel === 'default' ? null : draft.endcardPanel === 'on',
           },
+          creative_recipe: draft.recipeId
+            ? {
+                id: draft.recipeId,
+                version: RECIPE_OPTIONS.find((r) => r.value === draft.recipeId)?.version ?? 1,
+              }
+            : null,
         }),
       })
       const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
@@ -302,6 +346,40 @@ export function FactoryConfigPanel({ clientId }: Props) {
           </p>
         </div>
 
+        {/* 已验证端卡信息 —— recipe 只从这里取联系方式，不从模型自由生成。 */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">视频端卡信息</p>
+          <p className="mt-0.5 text-xs text-slate-400">
+            三镜头 9 秒配方会把这些信息放在结尾。电话、网址和出发时间必须全部填写；价格可以留空。
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input
+              type="text" value={draft.ctaPhone} disabled={saving}
+              onChange={(e) => setDraft((d) => ({ ...d, ctaPhone: e.target.value }))}
+              placeholder="联系电话"
+              className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            />
+            <input
+              type="text" value={draft.ctaUrl} disabled={saving}
+              onChange={(e) => setDraft((d) => ({ ...d, ctaUrl: e.target.value }))}
+              placeholder="官网网址"
+              className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            />
+            <input
+              type="text" value={draft.ctaDeparture} disabled={saving}
+              onChange={(e) => setDraft((d) => ({ ...d, ctaDeparture: e.target.value }))}
+              placeholder="出发时间 / 日期"
+              className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            />
+            <input
+              type="text" value={draft.ctaPrice} disabled={saving}
+              onChange={(e) => setDraft((d) => ({ ...d, ctaPrice: e.target.value }))}
+              placeholder="价格(可留空)"
+              className="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            />
+          </div>
+        </div>
+
         {/* 出片风格 —— 此前只能手改 Dropbox 里的 JSON,ME 完全不知道它存在 */}
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">出片风格</p>
@@ -373,6 +451,28 @@ export function FactoryConfigPanel({ clientId }: Props) {
             音乐文件要放在制作机的共享音乐目录里;找不到时会按上面的情绪自动挑一首。
             白字 logo(如 Oztop)结尾卡要选<span className="font-medium text-slate-600">「不套」</span>,否则字会看不见。
           </p>
+        </div>
+
+        {/* 出片配方 —— 版本化 winner recipe(合同 5469105522 §1)。选了 recipe = 走强约束路径:
+            单张源图 + 推近 / 拉远 两段 5s I2V + ~2.8s 结尾卡 + 转场 0.35 → 成片 10–12s。 */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">出片配方(可选)</p>
+          <p className="mt-0.5 text-xs text-slate-400">
+            默认<span className="font-medium text-slate-600">「不选」</span> = 走通用分镜路径(多段库存 + 生成拼)。
+            选了配方后系统会严格按所选时长、镜头和字幕规则出片；任何不符
+            (缺源图 / 端卡事实 / 时长 / 字幕格式)一律 fail-closed,不冒充成品发出去。
+          </p>
+          <select
+            value={draft.recipeId}
+            onChange={(e) => setDraft((d) => ({ ...d, recipeId: e.target.value }))}
+            disabled={saving}
+            className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+          >
+            <option value="">不选(默认 · 通用分镜)</option>
+            {RECIPE_OPTIONS.map((r) => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </select>
         </div>
 
         {/* 自动排产 —— 这是唯一会自动花钱的开关,放在最显眼处并写清楚代价 */}

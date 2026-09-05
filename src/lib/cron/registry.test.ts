@@ -216,9 +216,7 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     // 🔴 这是「解析器真读到了『配在哪』那一格」的探针，所以**必须**是精确值比对，
     //    不能松成 toContain —— 松了就分不出「读对了整格」和「读到了半格」。
     //    ENV.md 里这一行改了，这里就要跟着改（本次由反向核对补标 worker 而改）。
-    expect(envDocLocation('NEXT_PUBLIC_SUPABASE_ANON_KEY')).toBe(
-      'Render-web + worker `content-factory-render-worker`',
-    )
+    expect(envDocLocation('NEXT_PUBLIC_SUPABASE_ANON_KEY')).toBe('Render-web')
     expect(envDocLocation('THIS_ENV_DOES_NOT_EXIST')).toBeNull()
   })
 

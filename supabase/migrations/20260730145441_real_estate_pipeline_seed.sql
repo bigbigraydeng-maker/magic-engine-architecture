@@ -66,4 +66,8 @@ INSERT INTO client_pipeline_stages
 SELECT t.client_id, s.stage_key, s.label, s.sort_order, s.marketing_action, s.is_terminal
 FROM targets t
 CROSS JOIN stages s
+-- 只给库里真的存在的客户建阶段。生产上这三家都在，所以行为不变；
+-- 但从零重建的空库（Dev / CI）里它们不存在，没有这一行会撞外键直接挂。
+-- 2026-09-03 本机重放实测到这个问题（PostgreSQL 17.11 空库）。
+WHERE EXISTS (SELECT 1 FROM clients c WHERE c.id = t.client_id)
 ON CONFLICT (client_id, stage_key) DO NOTHING;
