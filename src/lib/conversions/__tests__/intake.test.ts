@@ -42,9 +42,18 @@ describe('金额换算（浮点会算错钱，必须走十进制）', () => {
     expect(toMinorUnits(amount, currency)).toBe(expected)
   })
 
-  it('浮点数入参也算得准（19.99 * 100 在浮点里是 1998.9999…）', () => {
-    expect(toMinorUnits(19.99, 'NZD')).toBe(1999)
+  it('数字入参与字符串入参结果一致', () => {
+    expect(toMinorUnits(19.99, 'NZD')).toBe(toMinorUnits('19.99', 'NZD'))
     expect(toMinorUnits(0.07, 'NZD')).toBe(7)
+  })
+
+  it('真正的护栏是「超出精度就拒收」，不是换算方式', () => {
+    // 2026-09-05 变异测试查实：把十进制换算改成 Math.round(x * 100)，
+    // 在本函数允许的输入范围内结果完全一样 —— 浮点的经典反例 1.005
+    // 早被下面这道闸挡掉了。所以真正保证金额不出错的是这一条。
+    expect(toMinorUnits('1.005', 'NZD')).toBeNull()
+    expect(toMinorUnits('3880.001', 'NZD')).toBeNull()
+    expect(toMinorUnits('3880.99', 'NZD')).toBe(388099)
   })
 
   it('超出币种精度的尾数拒收，不静默四舍五入', () => {

@@ -24,7 +24,6 @@ const writer = new MetaCapiWriter()
 
 const CONFIG: ClientSendConfig = {
   clientId: 'c0000000-0000-0000-0000-000000000000',
-  countryCode: 'NZ',
   defaultPhoneCountry: '64',
 }
 
@@ -113,7 +112,6 @@ describe('build · 身份哈希', () => {
     const nz = writer.build(outcome({ customerPhone: '021 555 1234' }), CONFIG)
     const au = writer.build(outcome({ customerPhone: '021 555 1234' }), {
       ...CONFIG,
-      countryCode: 'AU',
       defaultPhoneCountry: '61',
     })
     expect(nz.data[0].user_data.ph).not.toEqual(au.data[0].user_data.ph)
@@ -134,6 +132,13 @@ describe('build · 金额与时间', () => {
   it('时间是秒级时间戳', () => {
     const p = writer.build(outcome({ occurredAt: '2026-09-03T10:00:00Z' }), CONFIG)
     expect(p.data[0].event_time).toBe(Math.floor(Date.parse('2026-09-03T10:00:00Z') / 1000))
+  })
+
+  it('🔴 不认识的币种直接抛错，绝不按 2 位小数猜', () => {
+    // 2026-09-05 实测：这张表原本被抄了 3 份，录入层拒收未知币种，
+    // 而发送引擎静默按 2 位算 —— 绕过录入的路径（补数据脚本、手工改库）
+    // 会让一笔日元差 100 倍发给 Meta，而那撤不回。现在全仓只有一份。
+    expect(() => writer.build(outcome({ currency: 'JPY' }), CONFIG)).toThrow('不支持的币种')
   })
 
   it('幂等键就是事实行的 id', () => {
@@ -317,10 +322,6 @@ describe('parseRetryAfterMs', () => {
       }),
     })
     expect(ms).toBe(30 * 60_000)
-  })
-
-  it('优先用标准的 retry-after 头（单位秒）', () => {
-    expect(parseRetryAfterMs({ 'retry-after': '120' })).toBe(120_000)
   })
 
   it('头格式坏了不抛异常，返回 undefined 让调用方用默认退避', () => {

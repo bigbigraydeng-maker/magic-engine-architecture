@@ -13,6 +13,7 @@
 
 import type { ClientSendConfig, OutcomeForSend } from '@/lib/conversions/destination-writer'
 import { normalizeEmail, normalizePhone } from '@/lib/pii/normalize'
+import { formatMoney } from '@/lib/conversions/money'
 
 function maskEmail(email: string | null): string | null {
   if (!email) return null
@@ -34,15 +35,6 @@ function maskName(name: string | null): string | null {
   return trimmed.length === 0 ? null : `${trimmed[0].toUpperCase()}***`
 }
 
-const MINOR_UNITS: Record<string, number> = { NZD: 2, AUD: 2, USD: 2 }
-
-function formatAmount(amountMinor: number | null, currency: string | null): string | null {
-  if (amountMinor == null || !currency) return null
-  const exp = MINOR_UNITS[currency.toUpperCase()] ?? 2
-  const major = amountMinor / 10 ** exp
-  return `${currency} ${major.toLocaleString('en-NZ', { minimumFractionDigits: exp, maximumFractionDigits: exp })}`
-}
-
 export function maskForPreview(
   outcome: OutcomeForSend,
   config: ClientSendConfig,
@@ -59,8 +51,6 @@ export function maskForPreview(
   note('电话', phone != null)
   note('名', outcome.customerFirst != null)
   note('姓', outcome.customerLast != null)
-  note('国家', config.countryCode != null)
-  note('内部编号', outcome.contactId != null)
 
   const ageDays = (Date.now() - new Date(outcome.occurredAt).getTime()) / 86_400_000
   const tooOld = ageDays > meta.maxEventAgeDays
@@ -74,7 +64,7 @@ export function maskForPreview(
         .filter(Boolean)
         .join(' ') || null,
     },
-    金额: formatAmount(outcome.amountMinor, outcome.currency),
+    金额: formatMoney(outcome.amountMinor, outcome.currency),
     单号: outcome.orderRef,
     发生时间: outcome.occurredAt,
     距今天数: Math.floor(ageDays * 10) / 10,

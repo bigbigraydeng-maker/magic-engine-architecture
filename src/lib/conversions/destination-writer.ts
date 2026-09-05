@@ -12,7 +12,8 @@
  *    Meta 的转化 API 没有去重也没有删除端点，盲目重发一次就是永久多记一笔。
  */
 
-export type DestinationKind = 'meta_capi' | 'meta_custom_audience'
+// 目前只有一个。Phase B 的客户名单上线时再加，别提前占位。
+export type DestinationKind = 'meta_capi'
 
 /** 发送结果的分类。状态机据此决定下一步。 */
 export type SendVerdict =
@@ -56,9 +57,7 @@ export type OutcomeForSend = {
 /** 客户侧配置。谁去读库是调用方的事，这一层只拿现成的值。 */
 export type ClientSendConfig = {
   clientId: string
-  /** 'NZ' / 'AU'，用于国家哈希。 */
-  countryCode: string | null
-  /** '64' / '61'，用于电话转国际格式。 */
+  /** '64' / '61'，用于电话转国际格式。来自 clients.default_phone_country。 */
   defaultPhoneCountry: string | null
 }
 

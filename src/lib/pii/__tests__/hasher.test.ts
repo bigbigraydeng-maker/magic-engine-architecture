@@ -1,13 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'crypto'
-import {
-  hashCountry,
-  hashEmail,
-  hashExternalId,
-  hashName,
-  hashNormalized,
-  hashPhone,
-} from '../hasher'
+import { hashEmail, hashName, hashPhone } from '../hasher'
 
 const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex')
 
@@ -31,14 +24,14 @@ describe('空值不产生哈希', () => {
   it.each([null, undefined, ''])('%s → null', (v) => {
     // 🔴 哈希空串会得到一个人人相同的值 —— 那是个假身份，
     //    发给平台不但匹配不上，还会拉低整体匹配质量。
-    expect(hashNormalized(v)).toBeNull()
     expect(hashEmail(v)).toBeNull()
     expect(hashName(v)).toBeNull()
+    expect(hashPhone(v, '64')).toBeNull()
   })
 
-  it('空串的哈希绝不会被当成有效值返回', () => {
+  it('只有空白的输入也不产生哈希', () => {
     expect(hashEmail('   ')).toBeNull()
-    expect(hashNormalized('')).toBeNull()
+    expect(hashName('   ')).toBeNull()
     expect(hashEmail('   ')).not.toBe(sha(''))
   })
 })
@@ -51,30 +44,6 @@ describe('电话：拿不到国家码就不猜', () => {
 
   it('换个国家，同一串本地号码哈希不同', () => {
     expect(hashPhone('021 555 1234', '64')).not.toBe(hashPhone('021 555 1234', '61'))
-  })
-})
-
-describe('国家码', () => {
-  it('两字母，转小写后哈希', () => {
-    expect(hashCountry('NZ')).toBe(sha('nz'))
-    expect(hashCountry('nz')).toBe(hashCountry('NZ'))
-  })
-
-  it('不是两字母就当没有（别把「新西兰」这种哈希进去）', () => {
-    expect(hashCountry('新西兰')).toBeNull()
-    expect(hashCountry('NZL')).toBeNull()
-    expect(hashCountry('')).toBeNull()
-  })
-})
-
-describe('内部编号', () => {
-  it('原样哈希（不转小写 —— uuid 大小写敏感与否由来源决定）', () => {
-    expect(hashExternalId('abc-123')).toBe(sha('abc-123'))
-  })
-
-  it('空值 → null', () => {
-    expect(hashExternalId(null)).toBeNull()
-    expect(hashExternalId('  ')).toBeNull()
   })
 })
 

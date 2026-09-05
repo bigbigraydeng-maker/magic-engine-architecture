@@ -9,6 +9,9 @@
  */
 
 import { normalizeEmail, normalizeName, normalizePhone } from '@/lib/pii/normalize'
+import { minorUnitsFor, SUPPORTED_CURRENCIES, toMinorUnits } from './money'
+
+export { minorUnitsFor, SUPPORTED_CURRENCIES, toMinorUnits }
 
 /** Meta 事件语义在 L3 adapter 里映射；这一层只认业务事实。 */
 export type OutcomeKind = 'purchase' | 'balance' | 'lead'
@@ -71,54 +74,6 @@ export type IntakeResult =
   | { ok: true; row: IntakeRow; warnings: string[] }
   | { ok: false; errors: string[] }
 
-/**
- * 各币种的小数位。**只列真实在用的**，未知币种直接拒收。
- *
- * 为什么不给个默认值 2：绝大多数币种是 2 位，但不是全部（日元 0 位、
- * 科威特第纳尔 3 位）。默认 2 的话，哪天真收了一笔日元，金额会**静默**差 100 倍 ——
- * 而金额错了发给 Meta 是撤不回的。宁可当场报错让人来加一行。
- */
-const MINOR_UNITS: Record<string, number> = {
-  NZD: 2,
-  AUD: 2,
-  USD: 2,
-}
-
-export function minorUnitsFor(currency: string): number | null {
-  return MINOR_UNITS[currency.toUpperCase()] ?? null
-}
-
-export const SUPPORTED_CURRENCIES = Object.keys(MINOR_UNITS)
-
-/**
- * 主单位金额 → 最小单位整数。未知币种返回 null。
- *
- * 🔴 不用 `Math.round(amount * 100)`：浮点乘法会把 `19.99 * 100` 算成 1998.9999…，
- *    四舍五入后看似没事，但换个数字（如 `1.005`）就会少一分。金额必须走十进制字符串。
- */
-export function toMinorUnits(amount: number | string, currency: string): number | null {
-  const exp = minorUnitsFor(currency)
-  if (exp == null) return null
-
-  const raw = typeof amount === 'number' ? amount.toString() : amount.trim()
-  if (!/^-?\d+(\.\d+)?$/.test(raw)) return null
-
-  const negative = raw.startsWith('-')
-  const unsigned = negative ? raw.slice(1) : raw
-  const [intPart, fracPart = ''] = unsigned.split('.')
-
-  // 超出该币种精度的尾数（如 NZD 的第三位小数）拒收，不静默四舍五入 ——
-  // 静默改金额比报错难查得多。
-  if (fracPart.length > exp && /[^0]/.test(fracPart.slice(exp))) return null
-
-  const padded = (fracPart + '0'.repeat(exp)).slice(0, exp)
-  const combined = `${intPart}${padded}`.replace(/^0+(?=\d)/, '')
-  const value = Number(combined)
-
-  if (!Number.isSafeInteger(value)) return null
-  return negative ? -value : value
-}
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** 未来多久之内的时间算合理。系统时钟偏差留一点余量，别把正常录入拦下来。 */
@@ -170,7 +125,7 @@ export function buildIntakeRow(input: IntakeInput, ctx: IntakeContext): IntakeRe
   } else if (currency != null && minorUnitsFor(currency) == null) {
     errors.push(
       `暂不支持币种 ${currency}（现支持 ${SUPPORTED_CURRENCIES.join(' / ')}）—— ` +
-        '要用新币种请先在 MINOR_UNITS 里补上它的小数位，别让系统去猜',
+        '要用新币种请先在 src/lib/conversions/money.ts 里补上它的小数位，别让系统去猜',
     )
   }
 

@@ -13,7 +13,6 @@ import type { ClientSendConfig, OutcomeForSend } from '@/lib/conversions/destina
 
 const CONFIG: ClientSendConfig = {
   clientId: 'c0000000-0000-0000-0000-000000000000',
-  countryCode: 'NZ',
   defaultPhoneCountry: '64',
 }
 
@@ -78,23 +77,23 @@ describe('但要认得出是谁', () => {
 
 describe('把该判断的判断替人做了', () => {
   it('列出有哪些匹配键、缺哪些', () => {
-    const p = maskForPreview(outcome({ contactId: null }), CONFIG, META)
+    const p = maskForPreview(outcome({ customerLast: null }), CONFIG, META)
     expect(p.匹配键_有).toContain('邮箱')
     expect(p.匹配键_有).toContain('电话')
-    expect(p.匹配键_无).toContain('内部编号')
+    expect(p.匹配键_无).toContain('姓')
   })
 
   it('匹配键少时直说"大概率匹配不上"，不让人自己数', () => {
     const p = maskForPreview(
       outcome({ customerPhone: null, customerFirst: null, customerLast: null }),
-      { ...CONFIG, countryCode: null },
+      CONFIG,
       META,
     )
     expect(p.匹配质量提示).toContain('只有一个匹配键')
   })
 
   it('匹配键齐全时给正面判断', () => {
-    const p = maskForPreview(outcome({ contactId: 'abc' }), CONFIG, META)
+    const p = maskForPreview(outcome(), CONFIG, META)
     expect(p.匹配质量提示).toBe('匹配键较全')
   })
 
@@ -127,7 +126,7 @@ describe('边界', () => {
         currency: null,
         orderRef: null,
       }),
-      { ...CONFIG, countryCode: null },
+      CONFIG,
       META,
     )
     expect(JSON.stringify(p)).not.toContain('undefined')

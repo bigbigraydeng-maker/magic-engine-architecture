@@ -34,9 +34,10 @@ import type {
   RawSendResult,
   SendVerdict,
 } from '@/lib/conversions/destination-writer'
-import { hashCountry, hashEmail, hashExternalId, hashName, hashPhone } from '@/lib/pii/hasher'
+import { hashEmail, hashName, hashPhone } from '@/lib/pii/hasher'
 import { maskForPreview } from './preview'
 import { resolveCapiConfig, type CapiCredentials } from './config'
+import { toMajorUnits } from '@/lib/conversions/money'
 
 const GRAPH_VERSION = process.env.META_CAPI_VERSION ?? 'v19.0'
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`
@@ -64,16 +65,8 @@ export type MetaCapiPayload = {
   }>
 }
 
-/** 币种小数位。与录入层同一张表（`conversions/intake`），此处只做反向换算。 */
-const MINOR_UNITS: Record<string, number> = { NZD: 2, AUD: 2, USD: 2 }
-
-function majorUnits(amountMinor: number, currency: string): number {
-  const exp = MINOR_UNITS[currency.toUpperCase()] ?? 2
-  return amountMinor / 10 ** exp
-}
-
 /** 请求头里挑出诊断用的几个，其余丢掉（别把整包头存进库）。 */
-const KEEP_HEADERS = ['x-business-use-case-usage', 'x-app-usage', 'retry-after', 'x-fb-trace-id']
+const KEEP_HEADERS = ['x-business-use-case-usage', 'x-fb-trace-id']
 
 function pickHeaders(h: Headers): Record<string, string> {
   const out: Record<string, string> = {}
@@ -92,12 +85,6 @@ function pickHeaders(h: Headers): Record<string, string> {
  * 所以这里被限流，很可能是别的地方在跑量。老老实实按它说的等。
  */
 export function parseRetryAfterMs(headers: Record<string, string>): number | undefined {
-  const retryAfter = headers['retry-after']
-  if (retryAfter) {
-    const seconds = Number(retryAfter)
-    if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000
-  }
-
   const buc = headers['x-business-use-case-usage']
   if (!buc) return undefined
   try {
@@ -116,8 +103,12 @@ export function parseRetryAfterMs(headers: Record<string, string>): number | und
   }
 }
 
-/** 授权类错误码：这些重试多少次都一样，要人去重新授权。 */
-const AUTH_CODES = new Set([190, 102, 200, 10, 803])
+/**
+ * 授权类错误码：重试多少次都一样，要人去重新授权。
+ * 只列官方文档写明的三个 —— 190 令牌失效 / 102 会话过期 / 200 权限不足。
+ * 猜的码不进这张表：猜错会把一条本可重试的判成永久失败。
+ */
+const AUTH_CODES = new Set([190, 102, 200])
 /** 限流：8000x 一族。官方没写死转化 API 归哪个桶，所以按前缀认。 */
 function isThrottleCode(code: number | undefined): boolean {
   return typeof code === 'number' && code >= 80000 && code < 90000
@@ -136,8 +127,6 @@ export class MetaCapiWriter implements DestinationWriter<MetaCapiPayload> {
     const ph = hashPhone(outcome.customerPhone, config.defaultPhoneCountry)
     const fn = hashName(outcome.customerFirst)
     const ln = hashName(outcome.customerLast)
-    const country = hashCountry(config.countryCode)
-    const externalId = hashExternalId(outcome.contactId)
 
     // 匹配键越全，Meta 越容易认出这是谁。但只放真有的，
     // 不塞空字符串的哈希 —— 那会是一个"人人相同"的假身份，反而降低匹配质量。
@@ -145,8 +134,6 @@ export class MetaCapiWriter implements DestinationWriter<MetaCapiPayload> {
     if (ph) userData.ph = [ph]
     if (fn) userData.fn = [fn]
     if (ln) userData.ln = [ln]
-    if (country) userData.country = [country]
-    if (externalId) userData.external_id = [externalId]
 
     const event: MetaCapiPayload['data'][number] = {
       event_name: EVENT_NAME[outcome.outcomeKind],
@@ -161,9 +148,17 @@ export class MetaCapiWriter implements DestinationWriter<MetaCapiPayload> {
     }
 
     if (outcome.outcomeKind !== 'lead' && outcome.amountMinor != null && outcome.currency) {
+      const value = toMajorUnits(outcome.amountMinor, outcome.currency)
+      // 🔴 不认识的币种：宁可不带金额，也不按 2 位小数猜 —— 猜错就是差 100 倍，
+      //    而金额发错给 Meta 撤不回。录入层本就拒收未知币种，这里是第二道闸。
+      if (value == null) {
+        throw new Error(
+          `不支持的币种 ${outcome.currency} —— 请先在 src/lib/conversions/money.ts 里补上它的小数位`,
+        )
+      }
       event.custom_data = {
         currency: outcome.currency,
-        value: majorUnits(outcome.amountMinor, outcome.currency),
+        value,
         ...(outcome.orderRef ? { order_id: outcome.orderRef } : {}),
       }
     }
