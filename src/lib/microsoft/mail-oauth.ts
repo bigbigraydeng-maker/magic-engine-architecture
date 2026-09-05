@@ -96,6 +96,9 @@ export const MICROSOFT_ADMIN_CONSENT_URL =
 /** 防 CSRF 的一次性随机数存在这个 cookie 里，回调时必须对得上。 */
 export const MICROSOFT_STATE_COOKIE = 'ms_mail_oauth_state'
 
+/** state cookie 的有效期（秒）。10 分钟。 */
+export const MICROSOFT_STATE_TTL_SECS = 600
+
 export const MICROSOFT_MAIL_PROVIDER = PLATFORM_PROVIDERS.MICROSOFT_MAIL
 
 /** 授权完跳回哪里。放这里是为了 start 和 callback 两边永远同一个值 —— 两边写得不一样，Microsoft 会拒掉。 */

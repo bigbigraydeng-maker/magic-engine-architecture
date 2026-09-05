@@ -142,7 +142,8 @@ export async function runOneLecturePublish(params: {
     const stored = (client?.factory_config as { publish_target?: PublishTarget } | null)?.publish_target
     if (!stored?.page_id) throw new Error('没配 publish_target.page_id')
     // client_id 不存在配置里,发的时候补上——adapter 靠它去取「连接 Meta」存下的页 token
-    const target: PublishTarget = { ...stored, client_id: clientId }
+    // page_id 显式带上:上面的 throw 已保证它是 string,靠 satisfies 保留收窄后的类型
+    const target = { ...stored, page_id: stored.page_id, client_id: clientId } satisfies PublishTarget
 
     // 第二道闸:问平台侧「这条片我是不是已经发过了」。本地回执万一没写成(写库失败、
     // 被旧快照覆盖),就靠这一问兜住,绝不重复上传一遍。查不动不算「没发过」——
