@@ -80,7 +80,7 @@ const INDEX_CLASS_LABEL: Record<IndexClass, string> = {
 }
 const INDEX_CLASS_ACTION: Record<IndexClass, string> = {
   thin:     '补内容 · 加内链',
-  declined: '去 GSC 请求编入索引',
+  declined: '加内链 · 请求编入索引',
   unknown:  '去 GSC 请求编入索引',
 }
 const INDEX_CLASS_COLORS: Record<IndexClass, string> = {
@@ -177,14 +177,20 @@ export default function SiteAuditPagesPage() {
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
   const [currentJobStatus, setCurrentJobStatus] = useState<JobStatus | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  // Gates the first pages fetch until the deep-link filter has been read, so a
+  // ?filter=not-indexed entry fetches the未收录 view directly instead of
+  // fetching 'all' first and then re-fetching.
+  const [initialized, setInitialized] = useState(false)
 
   // Deep-link from 今日待办 not_indexed 汇总项: ?filter=not-indexed opens straight
   // to the未收录 view. Read after mount (not in useState init) to avoid a
-  // hydration mismatch — the effect runs client-only, post-hydration.
+  // hydration mismatch — the effect runs client-only, post-hydration — then
+  // release the initial fetch.
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('filter') === 'not-indexed') {
       setIndexFilter('not-indexed')
     }
+    setInitialized(true)
   }, [])
 
   // Fetch latest job status on mount
@@ -275,7 +281,7 @@ export default function SiteAuditPagesPage() {
     }
   }, [clientId, selectedType, indexFilter, offset, refreshKey])
 
-  useEffect(() => { fetchPages() }, [fetchPages])
+  useEffect(() => { if (initialized) fetchPages() }, [fetchPages, initialized])
 
   const handleTypeChange = (type: FilterType) => {
     setSelectedType(type)
@@ -285,6 +291,12 @@ export default function SiteAuditPagesPage() {
   const handleIndexFilterChange = (f: IndexFilter) => {
     setIndexFilter(f)
     setOffset(0)
+    // Keep the URL's ?filter in sync so a refresh / shared link reflects the
+    // current view (and doesn't silently re-apply a stale not-indexed filter).
+    const url = new URL(window.location.href)
+    if (f === 'not-indexed') url.searchParams.set('filter', 'not-indexed')
+    else url.searchParams.delete('filter')
+    window.history.replaceState(null, '', url)
   }
 
   const totalPages = Math.ceil(total / LIMIT)
@@ -406,7 +418,9 @@ export default function SiteAuditPagesPage() {
           ) : pages.length === 0 ? (
             <div className="p-12 text-center text-sm text-gray-400">
               {indexFilter === 'not-indexed'
-                ? '没有未被谷歌收录的页面 🎉'
+                ? (selectedType === 'all'
+                    ? '没有未被谷歌收录的页面 🎉'
+                    : `没有未收录的 ${TYPE_LABELS[selectedType]} 类型页面（其他类型可能仍有，切「全部」类型看）`)
                 : selectedType === 'all' ? '暂无采集数据' : `暂无 ${TYPE_LABELS[selectedType]} 类型页面`}
             </div>
           ) : (
