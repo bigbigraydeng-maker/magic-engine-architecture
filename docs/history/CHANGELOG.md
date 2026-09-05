@@ -5,6 +5,14 @@
 
 ---
 
+### 2026-09-05（Articles 首页编辑式视觉重做，PR [#1389](https://github.com/bigbigraydeng-maker/magic-engine/pull/1389)）
+
+**上线内容**：将 `/blog/` 从大面积留白加两张同权重白卡片，重做为 Magic Engine 黑金米白的编辑式入口：首页使用 Field Notes 刊头和真实文章数量版面，明确区分 Articles 实操指南与 Magic Insight 研究简报；两篇现有文章改为一篇主打流程视觉、一篇横向最新指南，形成清楚的阅读层级。未改文章正文、URL、canonical、结构化数据、分析脚本或转化路径。
+
+**验证**：1440×1100 桌面与 390×844 手机浏览器渲染通过；无横向溢出、页面错误或资源失败；深色主打卡片标题对比度已实测为白色；title、description、canonical、H1、JSON-LD 和全部核心链接检查通过。
+
+**Reuse Statement**：复用现有 `next-market.css`、全站导航/页尾、Magic Engine 品牌色与两篇已发布文章；未新增平台 capability、行业规则、客户专属 runtime 或虚构内容。
+
 ### 2026-09-05（官网 Technical SEO v1 与 Articles 导航统一，PR [#1387](https://github.com/bigbigraydeng-maker/magic-engine/pull/1387)）
 
 **上线内容**：把 `Articles` 加入当前英文首页、waitlist、Magic Insight、两份报告详情页和中文单页的桌面与移动导航；`/blog/` 及两篇文章从旧版 AU/NZ AI 服务菜单迁移到当前 Magic Engine 黑金米白视觉与「进入下一个市场」定位，页尾和转化入口同步统一。
