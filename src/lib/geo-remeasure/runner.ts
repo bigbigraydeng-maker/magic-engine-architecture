@@ -21,6 +21,28 @@
 import type { GeoBudgetStore } from './budget-ledger'
 import { resolveClientGeoBudget, type GeoBudgetAuthorization } from './budget-ledger'
 
+/**
+ * 🔴 batch_failed 的 reason 会流到 Inngest receipt / dashboard 里，可能被非工程角色看到。
+ *    3b 装配真 provider 后，异常里可能含 API key 残片（`sk-...`）、Bearer token、prompt 明文、
+ *    完整 URL 等敏感字符串。**必须**在写进 outcome **之前**脱敏，且要在**这里**而非 receipt 层
+ *    脱敏 —— 后者容易忘（狄仁杰 §C）。3a 只走 stub 常量字符串，理论上无泄露，但把脱敏钉在这里
+ *    是为了保证 3b 换 stub 时能"最小侵入"，不会有人在 3b PR 里忘加。
+ *
+ *    策略：截断到 200 字符 + 剔除常见 secret 前缀模式。**故意保守** —— 宁可少显示细节，
+ *    也不让 secret 溜出去。
+ */
+export function sanitizeErrorMessage(raw: unknown): string {
+  const s = raw instanceof Error ? raw.message : String(raw)
+  if (s.length === 0) return 'unknown_error'
+  // 剔除疑似 secret 模式（sk-XXX / Bearer XXX / eyJXXX JWT / 长 hex/base64 连续串）
+  const scrubbed = s
+    .replace(/sk-[A-Za-z0-9_-]{6,}/g, 'sk-***')
+    .replace(/(Bearer|Basic)\s+[A-Za-z0-9._+/=-]{6,}/g, '$1 ***') // 严格大小写：Bearer/Basic 是标准 auth scheme
+    .replace(/eyJ[A-Za-z0-9._-]{10,}/g, 'eyJ***')
+    .replace(/[A-Fa-f0-9]{32,}/g, '***hex***')
+  return scrubbed.length > 200 ? scrubbed.slice(0, 200) + '…' : scrubbed
+}
+
 /** runBatch 契约：调用者装配好 provider/parse/store，跑一批次，返回归一化的结果。 */
 export interface RemeasureBatchResult {
   /** 实际计费金额（USD）。unknown 时调用者必须以 worstCaseUsd 传，保守扣款。 */
@@ -57,9 +79,23 @@ export type RemeasureOutcome =
  *    Inngest step 天然幂等；scripts/geo-baseline-run.ts 是人手触发，reservationId 由 PM/系统构造。
  *    本函数不生成 reservationId —— 生成即绑定语义，容易和 Inngest step 的幂等键漂移。
  *
- * 🔴 crash-after-provider-before-settle（Codex 提示）：这一层保不住 —— 如果 runBatch 已经调 provider
- *    花了钱、进程紧接着崩了，settle 不会跑。真防线在 Inngest step：measure step 和 settle step
- *    在同一个函数里独立分段，重试整个 run 时同一 step id 会拿到既有结果（durable execution）。
+ * 🔴 crash-after-provider-before-settle（Codex 提示）：runner 这一层保不住 —— 如果 runBatch 已经
+ *    调 provider 花了钱、进程紧接着崩了，settle 不会跑。
+ *
+ *    🔴 **切片 3a 的实际结构与 3b 必做条款**：本 PR 的 Inngest 消费者
+ *       （`src/lib/inngest/functions/geo-remeasure.ts`）用**单一** `step.run` 把 authorize→
+ *       measure→settle 包在一起。3a 是 stub（`runBatchStub` 抛错，不真调 provider），单 step
+ *       无害；但 3b 装真 provider 后，**单 step 结构会让 crash-after-provider-before-settle 变成
+ *       "重跑整段 = 再调 provider"**（authorize 命中 status='reserved' 幂等，budget 层放行；
+ *       provider 再花一次；账本记一笔），双花根治不了。
+ *
+ *    🔴 **3b 复审必须验证**（缺一不可）：
+ *       (a) `step.run('authorize-{id}', ...)` / `step.run('measure-{id}', ...)` /
+ *           `step.run('settle-{id}', ...)` 拆三段，让 measure 结果被 Inngest 缓存；
+ *       (b) `measure` 内所有 provider 调用带 `reservation_id` 派生的幂等键
+ *           （OpenAI 支持 `Idempotency-Key` header）。
+ *       两条都做才是 crash-after-provider 的完整防线；单做 (a) 是必要不充分；单做 (b) 是
+ *       provider 侧保险但 Inngest 侧仍会浪费一次调用配额。
  */
 export async function authorizeMeasureSettle(
   req: RemeasureRequest,
@@ -78,7 +114,7 @@ export async function authorizeMeasureSettle(
     // 批次抛错（含 preflight 拒、装配错误、provider 网络挂等）—— 尽力释放预留。
     // settle actual=0 是"没花钱"的保守表达。若 batch 内部其实已经花了部分钱，那笔损失
     // 无法从预留侧回补，但账本至少不会误记为大额支出；provider 侧账单是唯一真相。
-    const message = e instanceof Error ? e.message : String(e)
+    const message = sanitizeErrorMessage(e)
     let released = false
     try {
       const s = await budget.settle(auth.reservationId, 0)

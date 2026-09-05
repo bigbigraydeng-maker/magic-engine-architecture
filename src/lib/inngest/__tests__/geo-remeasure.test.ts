@@ -34,6 +34,11 @@ describe('parseRemeasureDue — payload fail-closed', () => {
     ['空 reservation_id', { ...good, reservation_id: '' }, 'invalid_reservation_id'],
     ['period_key 格式错', { ...good, period_key: '2026/09' }, 'invalid_period_key'],
     ['period_key 空', { ...good, period_key: '' }, 'invalid_period_key'],
+    ['period_key 月份 00', { ...good, period_key: '2026-00' }, 'invalid_period_key'],  // S1 魏征
+    ['period_key 月份 13', { ...good, period_key: '2026-13' }, 'invalid_period_key'],  // S1 魏征
+    ['period_key 月份 99', { ...good, period_key: '9999-99' }, 'invalid_period_key'],  // 狄仁杰 §A
+    ['reservation_id 10MB 攻击', { ...good, reservation_id: 'x'.repeat(200000) }, 'invalid_reservation_id'],  // 狄仁杰 §A
+    ['query_set_version 10MB 攻击', { ...good, query_set_version: 'y'.repeat(200000) }, 'invalid_query_set_version'],  // 狄仁杰 §A
     ['worst_case 是字符串', { ...good, worst_case_usd: '1.8' }, 'invalid_worst_case_usd'],
     ['worst_case NaN', { ...good, worst_case_usd: NaN }, 'invalid_worst_case_usd'],
     ['worst_case 0', { ...good, worst_case_usd: 0 }, 'invalid_worst_case_usd'],

@@ -3,8 +3,15 @@
  * 用假 GeoBudgetStore（内存两表 + 幂等） + 手写 runBatch 覆盖所有分支。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { authorizeMeasureSettle, type RemeasureBatchResult } from '../runner'
+import { authorizeMeasureSettle, sanitizeErrorMessage, type RemeasureBatchResult } from '../runner'
 import { FakeGeoBudgetStore } from './fake-budget-store'
+import type { GeoBudgetStore, GeoBudgetReserveResult, GeoBudgetSettleResult } from '../budget-ledger'
+
+/** 假 store：reserve 通过、settle 强制返回 {settled:false, reason} —— 用于锁 settle_failed 分支（魏征 S2）。 */
+class SettleFailingStore implements GeoBudgetStore {
+  async reserve(): Promise<GeoBudgetReserveResult> { return { reserved: true, remainingUsd: 1 } }
+  async settle(): Promise<GeoBudgetSettleResult> { return { settled: false, reason: 'no_reservation' } }
+}
 
 const CTS = 'c0000000-0000-0000-0000-000000000000'
 const P = '2026-09'
@@ -113,6 +120,69 @@ describe('authorizeMeasureSettle — 状态机', () => {
     )
     expect(r.kind).toBe('completed')
     if (r.kind === 'completed') expect(r.chargedUsd).toBe(1.8)
+  })
+})
+
+describe('authorizeMeasureSettle — settle_failed 分支（魏征 S2）', () => {
+  it('settle 返回 {settled:false} → kind=settle_failed，透传 reason，不当作 completed', async () => {
+    const CTS = 'c0000000-0000-0000-0000-000000000000'
+    const P = '2026-09'
+    const r = await authorizeMeasureSettle(
+      { reservationId: 'sf-1', clientId: CTS, periodKey: P, worstCaseUsd: 1.0 },
+      new SettleFailingStore(),
+      async () => ({ actualUsd: 0.5, batchId: 'batch-sf', status: 'completed' }),
+    )
+    expect(r.kind).toBe('settle_failed')
+    if (r.kind === 'settle_failed') {
+      expect(r.reason).toBe('no_reservation')
+      expect(r.batchId).toBe('batch-sf')
+      expect(r.status).toBe('completed')
+    }
+  })
+})
+
+describe('sanitizeErrorMessage — 3b provider secret 脱敏（狄仁杰 §C）', () => {
+  it('剔除 sk- 开头的 API key', () => {
+    expect(sanitizeErrorMessage(new Error('OpenAI failed with sk-proj-abcdef123456'))).toContain('sk-***')
+    expect(sanitizeErrorMessage(new Error('sk-proj-abcdef123456'))).not.toContain('proj-abcdef')
+  })
+  it('剔除 Bearer token', () => {
+    const out = sanitizeErrorMessage(new Error('Auth failed: Bearer eyJraWQiOiIxMjMifQ.foo.bar'))
+    expect(out).toContain('Bearer ***')
+    expect(out).not.toContain('kIiOiIx')
+  })
+  it('剔除 JWT-like (eyJ...)', () => {
+    const out = sanitizeErrorMessage(new Error('bad token eyJhbGciOiJIUzI1NiJ9.abc.def'))
+    expect(out).toContain('eyJ***')
+  })
+  it('剔除长 hex 串（可能是 hash / private key 片段）', () => {
+    const hex = 'a'.repeat(40)
+    expect(sanitizeErrorMessage(new Error('key: ' + hex))).toContain('***hex***')
+  })
+  it('截断到 200 字符', () => {
+    const long = 'x'.repeat(500)
+    const out = sanitizeErrorMessage(new Error(long))
+    expect(out.length).toBeLessThanOrEqual(201)
+  })
+  it('空字符串 → unknown_error', () => {
+    expect(sanitizeErrorMessage('')).toBe('unknown_error')
+  })
+  it('非 Error → 强制转字符串', () => {
+    expect(sanitizeErrorMessage({ foo: 'bar' })).toBe('[object Object]')
+  })
+  it('batch_failed 用脱敏：runner 抛"sk-XXX"错误后 reason 不含原 key', async () => {
+    const CTS = 'c0000000-0000-0000-0000-000000000000'
+    const budget = new FakeGeoBudgetStore(); budget.setCap(CTS, '2026-09', 5)
+    const r = await authorizeMeasureSettle(
+      { reservationId: 'san-1', clientId: CTS, periodKey: '2026-09', worstCaseUsd: 1 },
+      budget,
+      async () => { throw new Error('provider hit: sk-liveXXXXXXX12345 rejected') },
+    )
+    expect(r.kind).toBe('batch_failed')
+    if (r.kind === 'batch_failed') {
+      expect(r.reason).not.toContain('sk-liveXXXXXXX12345')
+      expect(r.reason).toContain('sk-***')
+    }
   })
 })
 
