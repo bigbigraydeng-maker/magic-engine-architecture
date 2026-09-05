@@ -110,6 +110,7 @@ function convo(lastDirection: 'inbound' | 'outbound') {
         senderName: 'CTS Tours',
         body: 'Best of China departs 3 Nov.',
         sentAt: '2026-07-26T09:00:00+0000',
+        tags: [],
       },
       {
         messageId: 'mid.2',
@@ -118,6 +119,7 @@ function convo(lastDirection: 'inbound' | 'outbound') {
         senderName: lastDirection === 'inbound' ? 'Sarah Mitchell' : 'CTS Tours',
         body: 'Thanks, that helps.',
         sentAt: '2026-07-26T10:00:00+0000',
+        tags: [],
       },
     ],
   }
