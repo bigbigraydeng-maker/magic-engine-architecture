@@ -56,6 +56,8 @@ export type ManualItemKind =
   | 'dataforseo_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
+  /** 自动任务跑到一半卡死（状态永远停在 running，路由的 catch 没机会执行） */
+  | 'cron_stuck'
   | 'goal_baseline_mismatch'
   | 'diagnostic_findings'
   | 'prescription_updated'
@@ -740,6 +742,24 @@ async function pushCronHealthItems(
       client_name: 'Magic Engine 后台',
       what: `${stopped.length} 个自动任务该跑没跑：${names} —— 它们负责的活儿现在没人干，而且不会自己好`,
       how: '打开链接 → 找到这几个服务 → 看 Events 里最后一次运行是什么结果。多半是 Environment 里没关联 me-shared-cron-secret，勾上再选「Link and apply on next run」即可',
+      href: RENDER_DASHBOARD_URL,
+    })
+  }
+
+  // 卡死跟「该跑没跑」是两件事，不能合成一条：那边是**没开始**（多半是 Render 侧配置），
+  // 这边是**开始了没结束**（进程被杀 / 卡在某个外部调用上），下一步动作完全不同。
+  // 两边都接不住它：failing 只认 status='failed'，可容器被杀时路由的 catch 根本没机会跑；
+  // overdue 看 started_at，而卡死的任务开跑记录是有的。所以跑死的任务在体检里等于健康。
+  if (r.stuck.length > 0) {
+    const names = r.stuck
+      .map((s) => `${s.service}（已卡 ${s.minutesRunning >= 120 ? Math.round(s.minutesRunning / 60) + ' 小时' : s.minutesRunning + ' 分钟'}）`)
+      .join('、')
+    items.push({
+      kind: 'cron_stuck',
+      client_id: 'infra',
+      client_name: 'Magic Engine 后台',
+      what: `${r.stuck.length} 个自动任务开跑了但一直没结束：${names} —— 这类不会报错，它就那么挂着，那一轮该干的活儿等于没干`,
+      how: '打开链接 → 找到这几个服务 → Logs 看最后停在哪一步。常见是卡在某个外部接口没有超时保护。确认死了就手动重跑一次，并把那段调用加上超时',
       href: RENDER_DASHBOARD_URL,
     })
   }

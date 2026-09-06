@@ -33,7 +33,29 @@ export interface HealthReport {
    *    真坏的那天也会被一起忽略。
    */
   failing: { service: string; lastError: string | null }[]
+  /**
+   * **最近一次卡死在半路**：状态还是 `running`、`finished_at` 为空，而开跑已经很久了。
+   *
+   * 🔴 这是 `failing` 和 `overdue` 之间的一道缝，两边都接不住：
+   *    `failing` 只认 `status='failed'`（路由自己的 catch 写的），可容器被杀时那行
+   *    catch 根本没机会执行，状态就永远停在 `running`；`overdue` 看的是 `started_at`，
+   *    而卡死的任务**开跑记录是有的**，所以也不算逾期。
+   *    结果：跑死的任务在体检报告里等于健康 —— 正是本文件开头声讨的那个盲区，换了个形状。
+   *
+   *    真实规模（2026-09-06 查生产，60 天窗口）：9 个任务共 30 条卡死行，
+   *    最多的 messenger-brief-hourly 一家 15 条；attribution-cron 2026-09-02 18:00
+   *    那轮卡了 4 天没人发现。
+   */
+  stuck: { service: string; startedAt: string; minutesRunning: number }[]
 }
+
+/**
+ * 跑多久还没结束就算卡死。
+ *
+ * 全仓 cron 路由里最长的 `maxDuration` 是 900 秒（15 分钟），取 60 分钟 = 4 倍余量：
+ * 正常慢跑不会被误报，真卡死最迟一小时内现形。
+ */
+const STUCK_AFTER_MS = 60 * 60 * 1000
 
 /**
  * 每个任务各查一次「最近一次运行」。
@@ -63,22 +85,36 @@ async function lastRunByJob(supabase: SupabaseClient, jobNames: string[]): Promi
   return out
 }
 
+interface LastOutcome {
+  status: string
+  error: string | null
+  startedAt: string
+  finishedAt: string | null
+}
+
 /** 每个任务**最近一次**的结果 —— 只有最后一次失败才算「现在是坏的」。 */
 async function lastOutcome(
   supabase: SupabaseClient,
   jobNames: string[],
-): Promise<Map<string, { status: string; error: string | null }>> {
-  const out = new Map<string, { status: string; error: string | null }>()
+): Promise<Map<string, LastOutcome>> {
+  const out = new Map<string, LastOutcome>()
   const rows = await Promise.all(
     jobNames.map(async (name) => {
       const { data } = await supabase
         .from('cron_run_logs')
-        .select('status, error_message')
+        .select('status, error_message, started_at, finished_at')
         .eq('job_name', name)
         .order('started_at', { ascending: false })
         .limit(1)
-      const r = (data ?? [])[0] as { status: string; error_message: string | null } | undefined
-      return [name, r ? { status: r.status, error: r.error_message } : null] as const
+      const r = (data ?? [])[0] as
+        | { status: string; error_message: string | null; started_at: string; finished_at: string | null }
+        | undefined
+      return [
+        name,
+        r
+          ? { status: r.status, error: r.error_message, startedAt: r.started_at, finishedAt: r.finished_at }
+          : null,
+      ] as const
     }),
   )
   for (const [name, v] of rows) if (v) out.set(name, v)
@@ -116,7 +152,32 @@ export async function checkCronHealth(
     failing: CRON_REGISTRY
       .filter((e) => outcomes.get(e.jobName)?.status === 'failed')
       .map((e) => ({ service: e.service, lastError: outcomes.get(e.jobName)?.error ?? null })),
+    stuck: CRON_REGISTRY.flatMap((e) => {
+      const o = outcomes.get(e.jobName)
+      if (!o || !isStuck(o, now)) return []
+      return [{
+        service: e.service,
+        startedAt: o.startedAt,
+        minutesRunning: Math.round((now.getTime() - new Date(o.startedAt).getTime()) / 60000),
+      }]
+    }),
   }
+}
+
+/**
+ * 最近一次是不是卡死了：还挂着 `running`、没有结束时间、且开跑超过 STUCK_AFTER_MS。
+ *
+ * 三个条件缺一不可。只看 `status='running'` 会把**正在正常跑**的那一次报成卡死
+ * —— 体检本身常常就在某个任务的执行窗口里跑。
+ */
+export function isStuck(
+  o: { status: string; finishedAt: string | null; startedAt: string },
+  now: Date,
+): boolean {
+  if (o.status !== 'running' || o.finishedAt !== null) return false
+  const started = new Date(o.startedAt).getTime()
+  if (Number.isNaN(started)) return false
+  return now.getTime() - started > STUCK_AFTER_MS
 }
 
 /** 说人话的一句话结论 —— 给待办和周报用，不要求看的人懂 cron。 */
@@ -125,6 +186,7 @@ export function summarise(r: HealthReport): string {
   if (r.neverRan.length) problems.push(`${r.neverRan.length} 个从来没跑过`)
   if (r.overdue.length) problems.push(`${r.overdue.length} 个该跑没跑`)
   if (r.failing.length) problems.push(`${r.failing.length} 个在报错`)
+  if (r.stuck.length) problems.push(`${r.stuck.length} 个跑到一半卡死`)
   if (r.blind.length) problems.push(`${r.blind.length} 个查不出跑没跑`)
   if (problems.length === 0) return `${r.total} 个自动任务全部正常`
   return `${r.total} 个自动任务里：${problems.join('、')}`
