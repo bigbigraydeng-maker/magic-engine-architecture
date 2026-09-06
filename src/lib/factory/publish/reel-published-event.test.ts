@@ -64,6 +64,19 @@ describe('buildReelPublishedEvent', () => {
     expect(FactoryReelPublishedEventSchema.safeParse(data).success).toBe(true)
   })
 
+  it('🔴 相对路径 permalink(Graph 真返回 /reel/123/)补成绝对网址,不再让整条信号发不出', () => {
+    // 2026-09-07 首发实测的真 bug:FB 返回 /reel/2259550698170048/,.url() 拒相对路径 → emit 全挂。
+    const { data } = buildReelPublishedEvent({ ...BASE, permalink: '/reel/2259550698170048/' })
+    expect(data.permalink).toBe('https://www.facebook.com/reel/2259550698170048/')
+    expect(FactoryReelPublishedEventSchema.safeParse(data).success).toBe(true)
+  })
+
+  it('拼不出合法网址的 permalink 丢弃(非关键,绝不因它挡下整条信号)', () => {
+    const { data } = buildReelPublishedEvent({ ...BASE, permalink: 'not a url at all' })
+    expect(data.permalink).toBeUndefined()
+    expect(FactoryReelPublishedEventSchema.safeParse(data).success).toBe(true)
+  })
+
   it('🔴 坏 page_id(非数字)被 schema 挡在发送前,绝不发出畸形事件', () => {
     expect(() => buildReelPublishedEvent({ ...BASE, pageId: '69e777961cec3ed0f94bb7cf' })).toThrow()
   })
