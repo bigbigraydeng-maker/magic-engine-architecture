@@ -75,13 +75,27 @@ function jobNamesInFile(file: string): string[] {
     }
   }
 
+  // 认得出「换了名字」和「带命名空间」的两种叫法。
+  // 🔴 复审实测：只认裸的 `startCronRun(` 时，`import { startCronRun as begin }` 和
+  //    `import * as runLogger` + `runLogger.startCronRun(...)` 两种写法**全绿不报**。
+  //    后者是重构的常见产物 —— 也就是说随手改个 import 风格就能让一个任务从对账里消失。
+  const aliases = new Set<string>(['startCronRun'])
+  for (const stmt of src.statements) {
+    if (!ts.isImportDeclaration(stmt)) continue
+    const nb = stmt.importClause?.namedBindings
+    if (!nb || !ts.isNamedImports(nb)) continue
+    for (const el of nb.elements) {
+      if ((el.propertyName ?? el.name).text === 'startCronRun') aliases.add(el.name.text)
+    }
+  }
+
+  const isStartCronRunCall = (node: ts.CallExpression): boolean =>
+    (ts.isIdentifier(node.expression) && aliases.has(node.expression.text)) ||
+    (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'startCronRun')
+
   const out: string[] = []
   const visit = (node: ts.Node): void => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === 'startCronRun'
-    ) {
+    if (ts.isCallExpression(node) && isStartCronRunCall(node)) {
       const arg = node.arguments[0]
       if (arg && ts.isStringLiteralLike(arg)) out.push(arg.text)
       else if (arg && ts.isIdentifier(arg) && consts.has(arg.text)) out.push(consts.get(arg.text)!)
@@ -119,7 +133,8 @@ function jobNamesBySource(): Map<string, string[]> {
       if (e.name.endsWith('.test.ts') || e.name.endsWith('.test.tsx')) continue
       if (full === RUN_LOGGER) continue
       // 先粗筛再解析：全仓上千个文件，逐个走 AST 太慢，也没必要。
-      if (!readFileSync(full, 'utf8').includes('startCronRun(')) continue
+      // 粗筛不带括号：`runLogger.startCronRun(...)` 和 `begin(...)`（别名）都得先进得来。
+      if (!readFileSync(full, 'utf8').includes('startCronRun')) continue
       const names = jobNamesInFile(full)
       if (names.length > 0) out.set(path.relative(ROOT, full), names)
     }
@@ -307,7 +322,10 @@ describe('每个写运行记录的地方，都必须有人认领', () => {
   const allJobNames = Array.from(new Set(Array.from(byRoute.values()).flat()))
 
   it('前提成立：扫到了调用处，而且每一个 startCronRun 的名字都解析出来了', () => {
-    expect(byRoute.size, '一个调用处都没扫到，后面几条会全部空转成绿').toBeGreaterThan(50)
+    // 🔴 门槛贴死当前实际数量（59 处）。原来写 >50，等于允许 9 个调用处静默消失才会响 ——
+    //    一个「查漏的测试」自己留 9 个名额的余量，等于没查。
+    //    新增任务会让它变大（不报红），少一个就立刻红。
+    expect(byRoute.size, '扫到的调用处比预期少 —— 有任务从对账里消失了').toBeGreaterThanOrEqual(59)
     const unresolved = allJobNames.filter((n) => n.startsWith('UNRESOLVED:'))
     expect(
       unresolved,

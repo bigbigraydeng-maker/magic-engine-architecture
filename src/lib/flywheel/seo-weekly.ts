@@ -87,14 +87,41 @@ export async function loadSnapshotRoster(supabase: SupabaseClient): Promise<Rost
 }
 
 /**
- * ISO 8601 周编号（`2026-W37`）。
+ * 至少隔多久才允许再扫同一个客户。
  *
- * 🔴 用途只有一个：拼出**每客户每周唯一**的事件 id，让 Inngest 按 id 去重。
- *    不这么做的话，同一周里手动补触发一次 = 所有客户的数据钱再花一遍。
- *    故意用「周」而不是「日期」：补触发通常发生在另一天，按日期去重等于没去重。
+ * 🔴 **这才是防重复扣费的真闸**。原来写的是「事件 id 按周去重，所以同一周补触发不会
+ *    重复付款」—— 复审查了 Inngest 官方文档，**它的事件去重窗口只有 24 小时**，
+ *    而「手动补触发」按定义就发生在隔天。也就是说那句话是错的，照着它点一下按钮，
+ *    全体客户的数据钱会再花一遍，还不留痕迹。
+ *
+ * 用「距上次有数据不足 156 小时（6.5 天）就跳过」而不是「本自然周扫过就跳过」：
+ * 后者要在夏令时和时区之间算周边界，算错一次就是全员多付一轮；前者没有任何日历math，
+ * 而且 6.5 天 < 7 天，不会把下一次正常的周更挡掉。
+ */
+export const MIN_HOURS_BETWEEN_SNAPSHOTS = 156
+
+/**
+ * ISO 8601 周编号（`2026-W37`），**按新西兰时间算**。
+ *
+ * 🔴 必须按新西兰时间：定时器是 `TZ=Pacific/Auckland 15 5 * * 1`，新西兰的周一早上
+ *    05:15 在 UTC 是**周日** 17:15 —— 按 UTC 算出来的周编号会整整落后一周，而且
+ *    同一个新西兰周一的中午 12 点之后（UTC 跨到周一）算出来的编号又会变成下一周。
+ *    编号一变，Inngest 那 24 小时的去重也拦不住，同一天就能把全体客户再扫一遍。
+ *    复审实测出来的，不是推理。
+ *
+ * 用途：给条子一个稳定的编号（Inngest 24 小时内按 id 去重 = 第一道薄防线），
+ * 以及让回执上写的「哪一周」跟实际运行的那一周对得上。
+ * **真正防重复扣费的是上面的 MIN_HOURS_BETWEEN_SNAPSHOTS，不是这个编号。**
  */
 export function isoWeekKey(date: Date): string {
-  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
+  const nz = new Intl.DateTimeFormat('en-CA', {
+    timeZone: FLYWHEEL_SEO_WEEKLY_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+  const [y, m, day] = nz.split('-').map(Number)
+  const d = new Date(Date.UTC(y, m - 1, day))
   const dayNum = d.getUTCDay() || 7 // 周一=1 … 周日=7
   d.setUTCDate(d.getUTCDate() + 4 - dayNum) // 挪到本周的周四，ISO 周归属看周四
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
@@ -102,7 +129,40 @@ export function isoWeekKey(date: Date): string {
   return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
 }
 
-/** 每客户每周唯一的事件 id —— Inngest 的去重键。 */
+/**
+ * 这个客户最近扫过没有 —— **花钱之前必须过这一关**。
+ *
+ * 判据用 `flywheel_metrics` 里这个客户最近一条 SEO 记录的时间，不新建表：
+ * 新建表要走 migration（不可逆、要 PM 拍板），而这张表本来就是这条链路的产物，
+ * 「有没有本周的数据」跟「要不要再花一次钱」问的是同一件事。
+ *
+ * 🔴 **查不出来一律当成「扫过了」**（fail-closed 往不花钱的方向倒）。
+ *    反过来写就是：数据库一抽风，全体客户当场多付一轮。宁可这周少一次数据。
+ */
+export async function recentlySnapshotted(
+  supabase: SupabaseClient,
+  clientId: string,
+  now: Date = new Date(),
+): Promise<{ readonly skip: boolean; readonly reason: string | null; readonly lastAt: string | null }> {
+  const cutoff = new Date(now.getTime() - MIN_HOURS_BETWEEN_SNAPSHOTS * 3_600_000).toISOString()
+  const { data, error } = await supabase
+    .from('flywheel_metrics')
+    .select('measured_at')
+    .eq('client_id', clientId)
+    .eq('flywheel', 'seo')
+    .gte('measured_at', cutoff)
+    .order('measured_at', { ascending: false })
+    .limit(1)
+
+  if (error) return { skip: true, reason: `lookup_failed:${error.message}`, lastAt: null }
+
+  const row = (data ?? [])[0] as { measured_at?: unknown } | undefined
+  const lastAt = typeof row?.measured_at === 'string' ? row.measured_at : null
+  if (lastAt) return { skip: true, reason: 'snapshotted_recently', lastAt }
+  return { skip: false, reason: null, lastAt: null }
+}
+
+/** 每客户每周一个的事件 id —— 只是 Inngest 那 24 小时去重的键，不是防重复扣费的闸。 */
 export function snapshotEventId(clientId: string, weekKey: string): string {
   return `flywheel-seo-${weekKey}-${clientId}`
 }
@@ -143,16 +203,30 @@ export function parseSnapshotDue(raw: unknown): ParsedSnapshotDue {
 
 /**
  * 一个客户的快照回执。字段按 CLAUDE.md 对 Inngest 回执的要求来：
- * 谁（client_id / domain）· 哪一单（week_key）· 结果（status）· 花了多少（provider_calls）
- * · 有没有对外发布（no_publish 恒 true，这条链路只读取和入库）· 什么时候（created_at）。
+ * 谁（client_id / domain）· 哪一单（week_key）· 结果（status）· 花了多少
+ * （provider_calls_max）· 有没有对外发布（no_publish 恒 true，这条链路只读取和入库）
+ * · 什么时候（created_at）。
  */
 export interface SnapshotReceipt {
+  /**
+   * · `completed`  真拿到并写下了数据
+   * · `no_data`    一行都没写。**不算成功**：客户网址被清掉、或者数据源整段失灵，
+   *                都长这样。混进 completed 里的话，「这周 SEO 数据全是 0」会被显示成健康。
+   * · `skipped`    最近扫过了，这次不花钱（防重复扣费闸拦下的）
+   * · `failed`     抛异常了
+   */
+  readonly status: 'completed' | 'no_data' | 'skipped' | 'failed'
   readonly client_id: string
   readonly domain: string
   readonly week_key: string
-  readonly status: 'completed' | 'failed'
   readonly metrics_written: number
-  readonly provider_calls: number
+  /**
+   * 🔴 是**上限**不是实数，名字里带 max 就是为了没人能把它当账单读。
+   *    真实次数这一层看不到：`getDomainMetrics` 内部打两个接口，但客户网址被清掉时
+   *    适配器会提前返回、一次都不打。要精确记账得让适配器自己报，那是另一件事
+   *    （已单独记）。这里宁可说「最多这么多」，不说一个会被当真的数字。
+   */
+  readonly provider_calls_max: number
   readonly no_publish: true
   readonly error: string | null
   readonly created_at: string
@@ -162,31 +236,45 @@ export interface SnapshotReceipt {
  * 干一个客户的活。
  *
  * 🔴 **失败也返回回执，不往外抛**：抛出去 Inngest 会重试，而 provider 那一笔钱已经花了 ——
- *    重试等于重复付款。这里把失败变成一条 status=failed 的回执，钱花了几次如实写在
- *    provider_calls 里。真正该重试的是「根本没打出去」的情况，那种情况由下面的
- *    调用方（Inngest 函数）按需要决定，不由这里悄悄决定。
+ *    重试等于重复付款。这里把失败变成一条 status=failed 的回执。
+ *
+ * 🔴 **先过防重复扣费闸再干活**：`shouldSkip` 由调用方注入（生产传 recentlySnapshotted）。
+ *    闸拦下就直接出 skipped 回执，一次外部调用都不发生。
  */
 export async function snapshotOneClient(
   due: SnapshotDueData,
   pullMetrics: (clientId: string) => Promise<readonly unknown[]>,
+  shouldSkip: (clientId: string) => Promise<{ skip: boolean; reason: string | null }>,
   now: Date = new Date(),
 ): Promise<SnapshotReceipt> {
   const base = {
     client_id: due.client_id,
     domain: due.domain,
     week_key: due.week_key,
-    provider_calls: PROVIDER_CALLS_PER_CLIENT,
     no_publish: true as const,
     created_at: now.toISOString(),
   }
+
+  const gate = await shouldSkip(due.client_id)
+  if (gate.skip) {
+    return { ...base, status: 'skipped', metrics_written: 0, provider_calls_max: 0, error: gate.reason }
+  }
+
   try {
     const rows = await pullMetrics(due.client_id)
-    return { ...base, status: 'completed', metrics_written: rows.length, error: null }
+    return {
+      ...base,
+      status: rows.length > 0 ? 'completed' : 'no_data',
+      metrics_written: rows.length,
+      provider_calls_max: PROVIDER_CALLS_PER_CLIENT,
+      error: rows.length > 0 ? null : 'no_metrics_written',
+    }
   } catch (err: unknown) {
     return {
       ...base,
       status: 'failed',
       metrics_written: 0,
+      provider_calls_max: PROVIDER_CALLS_PER_CLIENT,
       error: err instanceof Error ? err.message : 'unknown_error',
     }
   }

@@ -20,14 +20,16 @@
  * 🔴 **一事件一主**：`flywheel/seo.snapshot.due` 是云端专属事件，本机 factory-worker
  *    不监听（见 client.ts 的 WORKER_OWNED_EVENTS，契约测试锁死）。
  *
- * 🔴 **重复触发不会重复付款**：条子的事件 id 是「客户 + ISO 周」，同一周内重复派单
- *    会被 Inngest 按 id 去重。这是防重复付款的第一道；第二道是每客户串行的并发闸。
+ * 🔴 **防重复付款靠的是「最近扫过就跳过」这道库里的闸**（`recentlySnapshotted`），
+ *    不是事件 id 去重 —— Inngest 的事件去重窗口**只有 24 小时**，而「手动补触发」
+ *    按定义就发生在隔天。事件 id 只是 24 小时内的一层薄防线，别当账算。
+ *    每客户并发上限 1 防的是同时跑（竞态），也**不**防重复付款：先后跑两次照样两次钱。
  */
 
 import { inngest, CLOUD_FN_PREFIX } from '../client'
 import { supabaseAdmin } from '@/lib/supabase'
 import { SeoContentAdapter } from '@/lib/flywheel/adapters/SeoContentAdapter'
-import { startCronRun } from '@/lib/cron/run-logger'
+import { cronRunHandle, startCronRunId } from '@/lib/cron/run-logger'
 import {
   FLYWHEEL_SEO_SNAPSHOT_DUE_EVENT,
   FLYWHEEL_SEO_WEEKLY_CRON,
@@ -37,6 +39,7 @@ import {
   loadSnapshotRoster,
   parseSnapshotDue,
   PROVIDER_CALLS_PER_CLIENT,
+  recentlySnapshotted,
   snapshotEventId,
   snapshotOneClient,
   type SnapshotRosterEntry,
@@ -78,59 +81,89 @@ export function createFlywheelSeoFanOutFunction(deps: {
       // 派单本身不该并发跑两遍 —— 两遍会发两批条子，虽然事件 id 去重挡得住，
       // 但运行记录会多一条，健康检查看到的数字就不再是真的。
       concurrency: { limit: 1 },
+      // 显式写死。默认 4 次重试，配合下面的分步记录不会写出假记录，但把次数写出来
+      // 比让人去查默认值强。
+      retries: 2,
     },
     { cron: `TZ=${FLYWHEEL_SEO_WEEKLY_TZ} ${FLYWHEEL_SEO_WEEKLY_CRON}` },
     async ({ step }): Promise<FanOutReceipt> => {
-      const now = new Date()
-      const weekKey = isoWeekKey(now)
+      /**
+       * 🔴 **每一处副作用都必须在 step 里**。Inngest 在每个 step 边界之后会把函数体
+       *    从头重放一遍（step 的结果走缓存，step **外**的代码每遍都真跑）。
+       *    第一版把开运行记录写在 step 外，复审算出来：这个函数有两个 step，
+       *    函数体至少跑 3 遍 → 每周插 3 行 cron_run_logs，其中 2 行永远停在「在跑」。
+       *    而这条链路的全部立论就是「那些记录是真的」。
+       */
+      const started = await step.run('log-start', async () => ({
+        runId: await startCronRunId(FLYWHEEL_SEO_WEEKLY_JOB),
+        startedAt: Date.now(),
+        weekKey: isoWeekKey(new Date()),
+        createdAt: new Date().toISOString(),
+      }))
+      const run = cronRunHandle(started.runId, started.startedAt)
       const base = {
         job: FLYWHEEL_SEO_WEEKLY_JOB,
-        week_key: weekKey,
+        week_key: started.weekKey,
         no_publish: true as const,
-        created_at: now.toISOString(),
+        created_at: started.createdAt,
       }
-
-      // 运行记录先写 —— 这是健康检查唯一能看到的东西。放在派单之前，
-      // 保证「跑起来了但派单炸了」也留得下痕迹。
-      const run = await startCronRun(FLYWHEEL_SEO_WEEKLY_JOB)
 
       const roster = await step.run('load-roster', async () => deps.loadRoster(deps.supabase))
 
       if (!roster.ok) {
-        await run.finish({ failed: 1, error: roster.reason })
+        await step.run('log-finish-roster-failed', async () => {
+          await run.finish({ failed: 1, error: roster.reason })
+          return null
+        })
         return { ...base, status: 'roster_failed', clients_dispatched: 0, estimated_provider_calls: 0, error: roster.reason }
       }
 
-      const events = buildSnapshotEvents(roster.entries, weekKey)
+      const events = buildSnapshotEvents(roster.entries, started.weekKey)
       if (events.length === 0) {
-        await run.finish({ processed: 0, completed: 0, failed: 0, summary: { week_key: weekKey } })
+        await step.run('log-finish-empty', async () => {
+          await run.finish({ processed: 0, completed: 0, failed: 0, summary: { week_key: started.weekKey } })
+          return null
+        })
         return { ...base, status: 'roster_empty', clients_dispatched: 0, estimated_provider_calls: 0, error: null }
       }
 
       await step.sendEvent('dispatch-snapshots', events)
 
-      // 这里是**预估**：实际花了多少以每个客户自己那份回执里的 provider_calls 为准。
+      // 🔴 这里的数字全是**派单**的数字，不是**快照**的数字：condition 是「条子发出去了」，
+      //    不是「数据拿到了」。真正干成没干成看每个客户自己那份回执，
+      //    花费是上限不是实数（见 SnapshotReceipt.provider_calls_max）。
       const estimated = events.length * PROVIDER_CALLS_PER_CLIENT
-      await run.finish({
-        processed: events.length,
-        completed: events.length,
-        failed: 0,
-        summary: { week_key: weekKey, clients_dispatched: events.length, estimated_provider_calls: estimated },
+      await step.run('log-finish-dispatched', async () => {
+        await run.finish({
+          processed: events.length,
+          completed: events.length,
+          failed: 0,
+          summary: {
+            week_key: started.weekKey,
+            counts_are: 'dispatched_not_snapshotted',
+            clients_dispatched: events.length,
+            max_provider_calls: estimated,
+          },
+        })
+        return null
       })
       return { ...base, status: 'dispatched', clients_dispatched: events.length, estimated_provider_calls: estimated, error: null }
     },
   )
 }
 
-/** 依赖注入版：便于直接注入假的 pullMetrics，不碰真 provider。 */
+/** 依赖注入版：便于直接注入假的 pullMetrics / 假的闸，不碰真 provider。 */
 export function createFlywheelSeoSnapshotOneFunction(deps: {
   pullMetrics: (clientId: string) => Promise<readonly unknown[]>
+  shouldSkip: (clientId: string) => Promise<{ skip: boolean; reason: string | null }>
 }) {
   return inngest.createFunction(
     {
       id: `${CLOUD_FN_PREFIX}flywheel-seo-snapshot-one`,
       name: 'Flywheel SEO weekly: snapshot one client',
-      // 🔴 同一客户串行：配合事件 id 去重构成防重复付款的第二道。
+      // 🔴 同一客户串行 —— 防的是**同时**跑（竞态），**不是**防重复付款：
+      //    先后跑两次照样花两次钱。防重复付款的是 snapshotOneClient 里那道
+      //    「最近扫过就跳过」的库闸。这句话第一版写错了，复审揪出来的。
       concurrency: { limit: 1, key: 'event.data.client_id' },
       // 🔴 不重试：这一步里 provider 的钱是**在函数内部**花掉的，失败回执已经如实记下
       //    花了几次。整条重试 = 再付一次钱，换来的只是同一份可能同样失败的数据。
@@ -143,7 +176,7 @@ export function createFlywheelSeoSnapshotOneFunction(deps: {
       if (!parsed.ok) return { kind: 'invalid_payload', reason: parsed.reason }
       const due = parsed.value
       return await step.run(`snapshot-${due.week_key}-${due.client_id}`, async () =>
-        snapshotOneClient(due, deps.pullMetrics),
+        snapshotOneClient(due, deps.pullMetrics, deps.shouldSkip),
       )
     },
   )
@@ -157,4 +190,5 @@ export const flywheelSeoWeeklyFanOut = createFlywheelSeoFanOutFunction({
 
 export const flywheelSeoSnapshotOne = createFlywheelSeoSnapshotOneFunction({
   pullMetrics: (clientId) => new SeoContentAdapter().pullMetrics(clientId),
+  shouldSkip: (clientId) => recentlySnapshotted(supabaseAdmin, clientId),
 })
