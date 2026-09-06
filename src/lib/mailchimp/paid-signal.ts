@@ -128,6 +128,11 @@ const INBOUND_CLAIM_PATTERNS: readonly RegExp[] = [
   /\bi(?:'ve| have)\s+(?:just\s+)?(?:made|paid|transferred|sent)\s+(?:the|your|a)?\s*(?:payment|deposit|money|funds)\b[^.!\n]*/i,
   /\b(?:payment|deposit|money)\s+(?:has\s+been\s+)?transferred\b[^.!\n]*/i,
   /\bpaid\s+the\s+(?:deposit|balance|invoice)\b[^.!\n]*/i,
+  // 客人用的是短句，不是完整主谓。真实回信里最常见的就是「Payment done」
+  // 「Payment made」这种 —— 少了它们，这句话会被下面的催款判据抢走判成
+  // 「我们在催他」，于是一个已经付了钱的客人**永远进不了人工核对名单**。
+  /\b(?:payment|deposit|transfer|invoice)\s+(?:is\s+|has\s+been\s+)?(?:done|made|paid|completed|settled|sent)\b[^.!\n]*/i,
+  /\bjust\s+(?:paid|transferred|sent)\b[^.!\n]*/i,
 ]
 
 /**
