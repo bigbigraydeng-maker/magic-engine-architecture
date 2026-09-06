@@ -134,6 +134,8 @@ export const facebookReelAdapter: PublishAdapter = {
       video_id: videoId,
       published_at: new Date().toISOString(),
       permalink,
+      // 盖戳:草稿 vs 正式。publish-worker 只在 PUBLISHED 时 emit 发布信号,草稿绝不通知下游。
+      video_state: draft ? 'DRAFT' : 'PUBLISHED',
     }
   },
 
@@ -187,5 +189,7 @@ export async function promoteReelToPublished(params: {
     video_id: params.videoId,
     published_at: new Date().toISOString(),
     permalink: typeof j['permalink_url'] === 'string' ? (j['permalink_url'] as string) : undefined,
+    // 草稿转正 = 真正对外可见的时刻,盖 PUBLISHED 戳,让调用方据此 emit 发布信号。
+    video_state: 'PUBLISHED',
   }
 }
