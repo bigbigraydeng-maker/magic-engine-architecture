@@ -163,7 +163,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | 端点 | 判断 |
 |---|---|
 | `admin-key-expiry` | ❓ 需确认是有意停用还是漏配 |
-| `flywheel-seo-weekly` | ❓ 同上（Phase 12.I 建的，ROADMAP 标已完成） |
+| `flywheel-seo-weekly` | ✅ **2026-09-07 上线**（PM 拍板开）。调度改由 Inngest 自带定时器：每周一 05:15 NZ 派单，一个客户一单跑。`/api/cron/flywheel-seo-weekly` 保留为手动补触发（只发事件、不自己干活）。⚠️ 新增 / 改 Inngest 函数后要去 Inngest 后台对 `/api/inngest` 手动 Sync 一次，否则安静地不跑 |
 | `memory-extractor` | ❓ 同上（Phase 23 Memory Layer）。⚠️ 注意：**它没被调度 ≠ 从没跑过** —— `client_learned_lessons` 里已有 21 行，是别的路径写进去的 |
 | `factory-review-sweeper` | ✅ **有意退役** —— 审核已搬到 `/dashboard/factory`（PR #581），Airtable 停用后该端点必 500 |
 
@@ -248,7 +248,7 @@ bash scripts/doctor.sh --md     # 输出 Markdown，可直接粘回本文件 §8
 ✅  已被调度           44 个 (render.yaml + .github/workflows)
 ❌  admin-key-expiry           有路由但没有任何调度器 → 永远不会自动跑
 ❌  benchmark-accumulator      有路由但没有任何调度器 → 永远不会自动跑
-❌  flywheel-seo-weekly        有路由但没有任何调度器 → 永远不会自动跑
+✅  flywheel-seo-weekly        2026-09-07 上线：Inngest 定时器每周一 05:15 NZ（PM 拍板开）
 ❌  kpi-backfill               有路由但没有任何调度器 → 永远不会自动跑
 ❌  memory-extractor           有路由但没有任何调度器 → 永远不会自动跑
 ⚠️  factory-review-sweeper     无调度 — 已知有意退役（Airtable 停用）
