@@ -49,7 +49,7 @@ import {
 /** 云端专属内部事件 —— 本机 worker 不监听（见 client.ts WORKER_OWNED_EVENTS）。 */
 export const DAILY_PLAN_POST_MEASURE_EVENT = 'daily_plan.post.measure_due'
 
-const MeasureDueSchema = z.object({
+export const MeasureDueSchema = z.object({
   client_id: z.string().min(1),
   action_id: z.string().min(1),
   idempotency_key: z.string().min(1),
