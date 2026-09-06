@@ -35,8 +35,6 @@ import {
 } from '@/lib/conversions/audience-export'
 
 export const dynamic = 'force-dynamic'
-// Mailchimp 拉取 ~3s，合并要拉两次；给足时限，别被平台默认（有的 10s）杀掉返回 HTML。
-export const maxDuration = 60
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
