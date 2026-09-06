@@ -67,6 +67,10 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   //    按本字段自己的约定：老任务不补 addedAt。（Codex thread：registry.ts L41）
   { service: 'ad-readback-sweep-daily', jobName: 'ad-readback-sweep', schedule: '40 20 * * *', logsRuns: true },
   { service: 'agent-learning-rollup', jobName: 'agent-learning-rollup', schedule: '0 7 * * 1', logsRuns: true },
+  // IMPACT 的 Tune 段。路由早就写好了，但从 Phase 23.C 起**一直没登记调度** ——
+  // cron_run_logs 里零条运行记录，而 Check 段 2026-08~09 产出了 285 条结论。
+  // 「没通电」和「一切正常」在监控里长得一模一样，正是这张表要解决的那个病。
+  { service: 'memory-extractor', jobName: 'memory-extractor', schedule: '30 6 * * *', logsRuns: true, addedAt: '2026-09-06' },
   { service: 'ai-tracker-weekly', jobName: 'ai-tracker-weekly', schedule: '0 1 * * 1', logsRuns: true },
   { service: 'anomaly-detector-daily', jobName: 'anomaly-detector-daily', schedule: '0 5 * * *', logsRuns: true },
   { service: 'attribution-cron', jobName: 'attribution-cron', schedule: '0 */6 * * *', logsRuns: true },
@@ -202,9 +206,4 @@ export const UNSCHEDULED_CRON_ROUTES: Readonly<Record<string, string>> = {
   // 一封都没发出去过）。render.yaml 里那段整段注释掉了，清单里也同步摘掉 ——
   // 留着会天天误报「没跑」。恢复时三件一起做，见 CRON_REGISTRY 里那段注释。
   'email-reply-digest': '2026-09-03 PM 叫停，render.yaml 那段已注释掉，恢复条件写在 CRON_REGISTRY 的注释里',
-
-  // 🔴 临时项：memory-extractor 的调度正由 PR #1427 单独补（同时动 render.yaml 和上面那张清单）。
-  //    那个 PR 合进来之后，这一行必须删掉 —— 上面第二条自检会替你记着：
-  //    一旦它出现在 CRON_REGISTRY 里，这条白名单就成了过期项，测试当场红。
-  'memory-extractor': '调度由 PR #1427 单独补；该 PR 合并后删掉本行（自检会强制提醒）',
 }

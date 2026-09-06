@@ -3,6 +3,7 @@ import { CLOUD_FN_PREFIX } from '../client'
 import { probePing } from './probe'
 import { geoRemeasureOne } from './geo-remeasure'
 import { dailyPlanPostFanOut, dailyPlanPostMeasure } from './daily-plan-post-measurement'
+import { factoryReelMeasurementAdapter } from './factory-reel-measurement-adapter'
 import { flywheelSeoWeeklyFanOut, flywheelSeoSnapshotOne } from './flywheel-seo-weekly'
 
 export const cloudFunctions = [
@@ -10,6 +11,7 @@ export const cloudFunctions = [
   geoRemeasureOne,
   dailyPlanPostFanOut,
   dailyPlanPostMeasure,
+  factoryReelMeasurementAdapter,
   flywheelSeoWeeklyFanOut,
   flywheelSeoSnapshotOne,
 ]

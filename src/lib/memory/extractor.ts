@@ -39,7 +39,6 @@ import {
   saveFailedExperiment,
   savePreference,
   setDerivedMemoryActive,
-  updateDecisionOutcome,
   type DerivedMemoryTable,
 } from './service'
 import type { FlywheelName, PatternType, PreferenceType } from './types'
@@ -53,7 +52,6 @@ const MIN_OUTCOME_CONFIDENCE = 0.6
 const MIN_OCCURRENCES_FOR_PREFERENCE = 3
 
 /** decision → outcome 匹配的时间窗（天） */
-const DECISION_MATCH_WINDOW_DAYS = 14
 
 // ── 公共类型 ──────────────────────────────────────────────────────────────────
 
@@ -64,7 +62,6 @@ export interface ExtractorResult {
   patterns_added: number
   experiments_added: number
   preferences_added: number
-  decisions_updated: number
   /** Rows switched off: the opposite verdict, and per-action duplicates. */
   memories_superseded: number
   /** Rows switched back on because the verdict flipped back. */
@@ -124,7 +121,6 @@ export async function runExtractorForClient(
     patterns_added: 0,
     experiments_added: 0,
     preferences_added: 0,
-    decisions_updated: 0,
     memories_superseded: 0,
     memories_reactivated: 0,
     errors: [],
@@ -243,13 +239,25 @@ export async function runExtractorForClient(
     result.errors.push(`extract preferences: ${msgOf(err)}`)
   }
 
-  // 5. 回填 decision_history.outcome_verdict
-  try {
-    const updated = await backfillDecisionOutcomes(supabase, clientId)
-    result.decisions_updated += updated
-  } catch (err) {
-    result.errors.push(`backfill decisions: ${msgOf(err)}`)
-  }
+  // 5.（已退役 2026-09-06）这里原本还有一步「回填 client_decision_history.outcome_verdict」。
+  //
+  // 判据是错的，而且错得很彻底：它只按 client_id + 时间窗查 outcome，**从不看这条决策
+  // 本身关联的是哪个动作**，然后拿窗口内全部 outcome 的多数票，给该客户窗口内的**每一条**
+  // 决策盖同一个章。生产实测（2026-09-06）：116 条自动回填只有 5 种 note，每种恰好对应
+  // 一个客户 —— 其中一家的 50 条决策被一次性全部盖成 failure。
+  //
+  // 危害不止于脏数据：`memory/format.ts` 会把它拼成 `(outcome: failure)` 写进
+  // 「Recent Decisions」段，喂给鲁班（`luban/project-prompts.ts`）和华佗
+  // （`huatuo/memory.ts`，长模式）。也就是说 AI 被告知那 50 个互不相干的选择都失败了。
+  // 而 `updateDecisionOutcome` 只填 `outcome_verdict is null` 的行，**填过就不再复查**，
+  // 是不可逆的单向写。
+  //
+  // 🔴 要重做的话，判据必须换成「只匹配这条决策**所关联动作**的 outcome」，时间窗用
+  //    `flywheel_actions.executed_at` 而不是 `flywheel_outcomes.computed_at`
+  //    （后者每轮 attribution 都会被刷成「现在」，根本不是事件发生时间）。
+  //    但 `client_decision_history` 目前**没有指向 action 的外键**，接不上就别猜 ——
+  //    宁可这一段永久不做，也不要再往客户记忆里刻一批假结论。
+  //    人工/其它调用方要写结论，走 `memory/service.ts` 的 `updateDecisionOutcome`，那条没问题。
 
   return result
 }
@@ -266,7 +274,6 @@ export async function runExtractorForAllClients(
     patterns_added: 0,
     experiments_added: 0,
     preferences_added: 0,
-    decisions_updated: 0,
     memories_superseded: 0,
     memories_reactivated: 0,
     errors: [],
@@ -299,7 +306,6 @@ export async function runExtractorForAllClients(
       aggregate.patterns_added        += r.patterns_added
       aggregate.experiments_added     += r.experiments_added
       aggregate.preferences_added     += r.preferences_added
-      aggregate.decisions_updated     += r.decisions_updated
       aggregate.memories_superseded   += r.memories_superseded
       aggregate.memories_reactivated  += r.memories_reactivated
       if (r.errors.length > 0) {
@@ -594,69 +600,6 @@ async function supersedeStalePreferences(
   for (const row of stale) row.is_active = false
 }
 
-// ── Decision verdict backfill ─────────────────────────────────────────────────
-
-/**
- * 把 client_decision_history.outcome_verdict 是 null 的记录补全：
- * 在 created_at + window 天内查该客户 outcomes，按 majority verdict 决定。
- */
-async function backfillDecisionOutcomes(
-  supabase: SupabaseClient,
-  clientId: string,
-): Promise<number> {
-  const { data: decisions, error } = await supabase
-    .from('client_decision_history')
-    .select('id, created_at')
-    .eq('client_id', clientId)
-    .is('outcome_verdict', null)
-    .order('created_at', { ascending: false })
-    .limit(50)
-
-  if (error) {
-    throw new Error(error.message)
-  }
-  if (!decisions || decisions.length === 0) return 0
-
-  let updated = 0
-  for (const d of decisions) {
-    const start = new Date(d.created_at)
-    const end = new Date(start)
-    end.setDate(end.getDate() + DECISION_MATCH_WINDOW_DAYS)
-
-    const { data: outcomes, error: oErr } = await supabase
-      .from('flywheel_outcomes')
-      .select('verdict')
-      .eq('client_id', clientId)
-      .gte('computed_at', start.toISOString())
-      .lte('computed_at', end.toISOString())
-
-    if (oErr) continue
-    if (!outcomes || outcomes.length === 0) continue
-
-    const verdict = aggregateVerdicts(outcomes.map((o: { verdict: string }) => o.verdict))
-    if (!verdict) continue
-
-    await updateDecisionOutcome(supabase, d.id, verdict, `auto-derived from ${outcomes.length} outcomes within ${DECISION_MATCH_WINDOW_DAYS}d window`)
-    updated++
-  }
-  return updated
-}
-
-function aggregateVerdicts(verdicts: string[]): 'success' | 'failure' | 'inconclusive' | null {
-  let confirmed = 0
-  let reversed = 0
-  let inconclusive = 0
-  for (const v of verdicts) {
-    if (v === 'confirmed') confirmed++
-    else if (v === 'reversed') reversed++
-    else if (v === 'inconclusive') inconclusive++
-  }
-  const total = confirmed + reversed + inconclusive
-  if (total === 0) return null
-  if (confirmed > reversed && confirmed >= total / 2) return 'success'
-  if (reversed > confirmed && reversed >= total / 2) return 'failure'
-  return 'inconclusive'
-}
 
 // ── Action-type → pattern_type / description mapping ──────────────────────────
 
