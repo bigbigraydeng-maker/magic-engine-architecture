@@ -3,8 +3,16 @@ import { CLOUD_FN_PREFIX } from '../client'
 import { probePing } from './probe'
 import { geoRemeasureOne } from './geo-remeasure'
 import { dailyPlanPostFanOut, dailyPlanPostMeasure } from './daily-plan-post-measurement'
+import { flywheelSeoWeeklyFanOut, flywheelSeoSnapshotOne } from './flywheel-seo-weekly'
 
-export const cloudFunctions = [probePing, geoRemeasureOne, dailyPlanPostFanOut, dailyPlanPostMeasure]
+export const cloudFunctions = [
+  probePing,
+  geoRemeasureOne,
+  dailyPlanPostFanOut,
+  dailyPlanPostMeasure,
+  flywheelSeoWeeklyFanOut,
+  flywheelSeoSnapshotOne,
+]
 
 /** 命名空间自检：所有注册函数 id 必须以 cloud- 开头（契约测试 + 运行期双保险）。 */
 for (const fn of cloudFunctions) {

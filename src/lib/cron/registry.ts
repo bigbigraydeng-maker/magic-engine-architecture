@@ -29,8 +29,12 @@
  * · `github-actions` —— .github/workflows/*.yml 里的定时工作流
  * · `external`       —— 仓库外：Render 后台手工建的 cron。**改不了、也 review 不到**，
  *                       所以更需要被监控：它哪天被人删了，这里是唯一会喊的地方。
+ * · `inngest`        —— Inngest 云端函数自带的 cron 触发器（见 src/lib/inngest/functions/）。
+ *                       ⚠️ Render 不是 Vercel、没有自动同步：新增函数或改了触发器之后，
+ *                       必须有人去 Inngest 后台对 `/api/inngest` 重新 Sync 一次，
+ *                       否则它**安静地不跑**。这类登记的全部意义就是把「安静地不跑」喊出来。
  */
-export type CronScheduler = 'render' | 'github-actions' | 'external'
+export type CronScheduler = 'render' | 'github-actions' | 'external' | 'inngest'
 
 export interface CronRegistryEntry {
   /** 调度它的那个东西的名字：render.yaml 服务名 / 工作流文件名 / 仓库外的标识 */
@@ -163,6 +167,16 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   // 🔴 绝对不要为了「补登记」把它加进 render.yaml —— 那会变成两个调度器同时敲，
   //    节流闸只挡得住重复的**采集**，挡不住重复的排班混乱，而且这活儿是花钱的。
   { service: 'render-dashboard:baseline-domains-monthly', jobName: 'baseline-domains-monthly', schedule: '0 17 * * 0', logsRuns: true, scheduler: 'external', addedAt: '2026-09-07' },
+
+  // ── Inngest 自带定时器 ───────────────────────────────────────────────────────
+  // 每周 SEO 快照。代码 2026-05-18 就写好了，但一次都没跑过（生产库 0 条运行记录），
+  // 因为它每周要对每个在服务的客户各花一次 SEO 数据的钱 —— 2026-08-06 架构审计标成
+  // 「等 PM 拍板」，**2026-09-07 PM 拍板开**，并要求按 Inngest 硬约束改成工作流。
+  //
+  // 🔴 schedule 这一列不许手抄：唯一定义在 src/lib/flywheel/seo-weekly.ts 的
+  //    FLYWHEEL_SEO_WEEKLY_CRON，同目录的测试会断言两边一致。抄错的后果是健康检查
+  //    按错的周期算逾期 —— 算错的告警和没有告警一样没用。
+  { service: 'inngest:cloud-flywheel-seo-weekly-fanout', jobName: 'flywheel-seo-weekly', schedule: '15 5 * * 1', logsRuns: true, scheduler: 'inngest', addedAt: '2026-09-07' },
 ] as const
 
 /**
@@ -183,12 +197,6 @@ export const UNSCHEDULED_CRON_ROUTES: Readonly<Record<string, string>> = {
   // 生产库实测：messenger-sync-hourly 每次的 summary 里都带 mailbox 那一段，
   // CTS 两个邮箱每小时都在收信。本路由保留只为单独手动触发，所以它没有运行记录是对的。
   'mailbox-sync': '邮箱同步已挂在 messenger-hourly 里跑（2026-08-03 起），本路由只留手动触发',
-
-  // 从来没跑过（生产库 0 条记录），而且**不该由工程侧决定让它跑**：
-  // 它每周对每个 active 客户跑一次 DataForSEO，是花钱的动作。
-  // 2026-08-06 的架构审计就把它标成「等 PM 拍板」，至今没有结论。
-  // 排班 = 开始花钱 = PM 的决策，不是这个 PR 能替他做的。
-  'flywheel-seo-weekly': '每周对每个客户花 DataForSEO 的钱，排不排班是 PM 的决策，2026-08-06 审计起一直挂着',
 
   // 「客人来信没回 → 每天一封汇总信」，2026-09-03 上线当天被 PM 叫停（名单里噪音占七成，
   // 一封都没发出去过）。render.yaml 里那段整段注释掉了，清单里也同步摘掉 ——
