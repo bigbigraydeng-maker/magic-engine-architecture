@@ -169,11 +169,73 @@ describe('buildTodoEmail', () => {
   })
 
   /**
-   * 2026-09-07 铁律 3 下半：`diagnostic_findings` 是"本周体检查到的严重问题"
-   * 汇总，PM 2026-08-04 的处理方式是"不用你挑，由每周方案自动排成看板动作"
-   * （how 原文见 manual-items.ts:1755）—— 跟 SEO 巡逻发现是同一条纪律。所以它
-   * 必须落在「📣 系统替你做了什么」栏，不进「🙋 需要你动手」栏，也不抬高
-   * "今天有几件事"总数。这条测试锁死这个契约。
+   * 2026-09-07 铁律 3：以下 kind 是**我们代码 / infra 欠账**——每条的 how
+   * 都是「回我一句我去改」，PM 没法真的动手，塞进「🙋 需要你动手」栏是把
+   * dev 的活假装成 PM 的活。这条测试锁死：它们进单独一栏「🛠 系统欠账」，
+   * 不进「🙋 需要你动手」，不进「📣 系统替你做了什么」，不抬高总数。
+   */
+  it.each([
+    'auto_run_stuck',
+    'action_unattributable',
+    'attribution_audit_failed',
+    'client_list_unreadable',
+    'cron_blind',
+  ] as const)('🛠 %s 走「系统欠账」栏，不进「需要你动手」，不抬高总数', (kind) => {
+    const email = buildTodoEmail(3, {
+      ...EMPTY,
+      manualItems: [
+        {
+          kind,
+          client_id: 'infra',
+          client_name: 'Magic Engine 后台',
+          what: '（dev 该看的）',
+          how: '回我一句我去改',
+          href: 'https://app.magicengine.com.au/dashboard/admin/cron-health',
+        },
+      ],
+    }, '31 Jul')
+    expect(email.html).toContain('系统欠账')
+    expect(email.html).not.toContain('需要你动手')
+    // 这些不是"系统替你做了什么"（那是给成功事件用的），也不属于那栏
+    const infoAt = email.html.indexOf('这周系统替你做了什么')
+    expect(infoAt).toBe(-1)
+    expect(email.totalItems).toBe(0)
+    expect(email.subject).toContain('无事')
+  })
+
+  it('🛠 系统欠账栏与「需要你动手」栏共存时，只有 action 类算进总数', () => {
+    const email = buildTodoEmail(3, {
+      ...EMPTY,
+      manualItems: [
+        {
+          kind: 'video_credits_out',
+          client_id: 'infra',
+          client_name: 'Magic Engine 后台',
+          what: 'AI 出片余额用完了',
+          how: '打开链接充值',
+          href: 'https://muapi.ai/topup',
+        },
+        {
+          kind: 'action_unattributable',
+          client_id: 'infra',
+          client_name: 'Magic Engine 后台',
+          what: '（dev 该看的）',
+          how: '回我一句我去改',
+          href: '',
+        },
+      ],
+    }, '31 Jul')
+    expect(email.html).toContain('需要你动手')
+    expect(email.html).toContain('系统欠账')
+    // 只有 video_credits_out 算一件
+    expect(email.totalItems).toBe(1)
+    expect(email.subject).toContain('1 件')
+  })
+
+  /**
+   * 2026-09-07 铁律 3 下半（PR #1442）：`diagnostic_findings` 走「系统替你
+   * 做了什么」栏，见 daily-todo.ts:29 INFORMATIONAL_KINDS 头注。此条测试
+   * 保护那份契约，跟上面 dev-owned 契约互不重叠。
    */
   it('🔴 本周体检查到的严重问题走「系统替你做了什么」栏，不进「需要你动手」，不抬高总数', () => {
     const email = buildTodoEmail(3, {
