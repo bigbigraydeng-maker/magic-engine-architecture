@@ -50,29 +50,45 @@ function coverage(
   qualifiedMentionQueries: number,
   explicitPositiveQueries: number,
   ruleVersion: string = GEO_M1_RULE_VERSION,
+  queryCount: number = interpretableQueries,
 ): GeoCoverageSummary {
   return {
     ruleVersion,
-    queryCount: interpretableQueries,
+    queryCount,
     interpretableQueries,
     qualifiedMentionQueries,
     explicitPositiveQueries,
     conditionalQueries: 0,
-    fullyDeferredQueries: 0,
+    fullyDeferredQueries: queryCount - interpretableQueries,
     perQuery: [],
   } as unknown as GeoCoverageSummary
 }
 
+/**
+ * 一侧输入。cohorts 是**每条成功观测一份**的数组（与平台 buildComparabilityInputs 同形状）。
+ * 默认按 interpretable 条数生成，queryKey 逐条不同，模拟真实批次。
+ */
 function side(
   interpretable: number,
   mention: number,
   explicitPositive: number,
   cohortOverrides: Record<string, unknown> = {},
   ruleVersion?: string,
+  queryCount?: number,
+  cohortCount?: number,
 ): GeoVerificationSide {
+  // 🔴 helper 自保：interpretable 可能是 Infinity/NaN（闸 0 的测试输入），
+  //    直接拿去 Array.from({length}) 会炸。cohorts 数量与被测判据无关，钳到合理范围。
+  const rawN = cohortCount ?? interpretable
+  const n = Number.isInteger(rawN) && rawN > 0 ? Math.min(rawN, 64) : 1
   return {
-    coverage: coverage(interpretable, mention, explicitPositive, ruleVersion),
-    cohort: cohort(cohortOverrides),
+    coverage: coverage(interpretable, mention, explicitPositive, ruleVersion, queryCount),
+    cohorts: Array.from({ length: n }, (_, i) =>
+      cohort({
+        acquisition: acquisition({ queryKey: K(`q${i}`) }),
+        ...cohortOverrides,
+      }),
+    ),
   }
 }
 
@@ -90,10 +106,10 @@ describe('闸 1 · 解释身份（规则版本）不一致 → indeterminate', (
 describe('闸 2 · 测量层判不可比 → indeterminate（永不 failure）', () => {
   it('查询集版本不同 → indeterminate，并透传 mismatch', () => {
     const r = evaluateQualifiedMentionVerdict({
-      baseline: side(18, 13, 3),
+      baseline: side(18, 13, 3, {}, undefined, undefined, 1),
       followUp: side(18, 5, 1, {
-        acquisition: acquisition({ querySetVersion: K('cts_geo_baseline_v2') }), // ← 换了查询集
-      }),
+        acquisition: acquisition({ querySetVersion: K('cts_geo_baseline_v2'), queryKey: K('q0') }), // ← 换了查询集
+      }, undefined, undefined, 1),
     })
     // 覆盖率从 13/18 掉到 5/18 —— 但不可比，**绝不允许**判 failure。
     expect(r.verdict).toBe('indeterminate')
@@ -103,10 +119,10 @@ describe('闸 2 · 测量层判不可比 → indeterminate（永不 failure）',
 
   it('locale 不同 → indeterminate', () => {
     const r = evaluateQualifiedMentionVerdict({
-      baseline: side(18, 13, 3),
+      baseline: side(18, 13, 3, {}, undefined, undefined, 1),
       followUp: side(18, 16, 4, {
-        acquisition: acquisition({ locale: K('en-AU') }), // ← 换了 locale
-      }),
+        acquisition: acquisition({ locale: K('en-AU'), queryKey: K('q0') }), // ← 换了 locale
+      }, undefined, undefined, 1),
     })
     expect(r.verdict).toBe('indeterminate')
     expect(r.reasonCodes).toContain('not_comparable')
@@ -114,8 +130,8 @@ describe('闸 2 · 测量层判不可比 → indeterminate（永不 failure）',
 
   it('质量阈值不过（失败率超上限）→ indeterminate', () => {
     const r = evaluateQualifiedMentionVerdict({
-      baseline: side(18, 13, 3),
-      followUp: side(18, 16, 4, { failureRate: K(0.5) }),
+      baseline: side(18, 13, 3, {}, undefined, undefined, 1),
+      followUp: side(18, 16, 4, { failureRate: K(0.5) }, undefined, undefined, 1),
     })
     expect(r.verdict).toBe('indeterminate')
     expect(r.reasonCodes).toContain('not_comparable')
@@ -160,7 +176,7 @@ describe('闸 4 · 正常判定', () => {
       followUp: side(18, 16, 3),
     })
     expect(r.verdict).toBe('success')
-    expect(r.reasonCodes).toEqual(['mention_coverage_increased'])
+    expect(r.reasonCodes).toEqual(['mention_coverage_increased', 'explicit_positive_not_decreased'])
   })
 
   it('提及覆盖上升 + explicit_positive 也升 → success', () => {
@@ -177,17 +193,146 @@ describe('闸 4 · 正常判定', () => {
       followUp: side(18, 9, 3),
     })
     expect(r.verdict).toBe('failure')
-    expect(r.reasonCodes).toEqual(['mention_coverage_decreased'])
+    // 🔴 failure 也要带 EP 方向（魏征 A1）：审计要看得到 failure 时 EP 是什么情况
+    expect(r.reasonCodes).toEqual(['mention_coverage_decreased', 'explicit_positive_not_decreased'])
   })
 
-  it('分母不同也按比率比，不按绝对数（12/18 < 9/12 应判上升）', () => {
-    // 绝对数 12 → 9 是「掉了」，但比率 0.667 → 0.75 是「涨了」。必须按比率。
+  it('分母小幅变化时按比率比，不按绝对数（12/18 → 11/16 应判上升）', () => {
+    // 绝对数 12 → 11 是「掉了」，但比率 0.667 → 0.6875 是「涨了」。必须按比率。
+    // 分母 16/18 = 0.889 > 0.8 收缩下限，不触发闸 3。
     const r = evaluateQualifiedMentionVerdict({
-      baseline: side(18, 12, 3),
-      followUp: side(12, 9, 2),
+      baseline: side(18, 12, 3, {}, undefined, 18),
+      followUp: side(16, 11, 3, {}, undefined, 18),
     })
     expect(r.verdict).toBe('success')
-    expect(r.reasonCodes).toEqual(['mention_coverage_increased'])
+    expect(r.reasonCodes).toEqual(['mention_coverage_increased', 'explicit_positive_not_decreased'])
+  })
+})
+
+describe('闸 3 · 分母收缩（华佗实测的「退步判成成功」攻击）', () => {
+  it('复测分母缩到基线 2/3（18→12）→ denominator_shrunk，不许判 success', () => {
+    // 华佗原始攻击：基线 13/18(72.2%) vs 复测 10/12(83.3%) 比率在涨，
+    // 但被提及的绝对数 13→10 其实在掉 —— 6 个 query 变 defer 把分母缩了。
+    const r = evaluateQualifiedMentionVerdict({
+      baseline: side(18, 13, 3, {}, undefined, 18),
+      followUp: side(12, 10, 3, {}, undefined, 18),
+    })
+    expect(r.verdict).toBe('indeterminate')
+    expect(r.reasonCodes).toContain('denominator_shrunk')
+  })
+
+  it('极端版：17/18 数据丢失（复测只剩 1/1 满分）→ 绝不判 success', () => {
+    const r = evaluateQualifiedMentionVerdict({
+      baseline: side(18, 13, 3, {}, undefined, 18),
+      followUp: side(1, 1, 1, {}, undefined, 18),
+    })
+    expect(r.verdict).toBe('indeterminate')
+    expect(r.reasonCodes).toContain('denominator_shrunk')
+  })
+
+  it('分母恰好在下限上（18 → 15，15/18 = 0.833 > 0.8）→ 放行，正常判定', () => {
+    const r = evaluateQualifiedMentionVerdict({
+      baseline: side(18, 12, 3, {}, undefined, 18),
+      followUp: side(15, 12, 3, {}, undefined, 18),
+    })
+    expect(r.verdict).toBe('success') // 12/18=0.667 → 12/15=0.8 上升
+    expect(r.reasonCodes).not.toContain('denominator_shrunk')
+  })
+
+  it('分母涨了（更多 query 可解释）→ 不触发收缩闸', () => {
+    const r = evaluateQualifiedMentionVerdict({
+      baseline: side(12, 8, 2, {}, undefined, 18),
+      followUp: side(18, 13, 3, {}, undefined, 18),
+    })
+    expect(r.reasonCodes).not.toContain('denominator_shrunk')
+  })
+
+  it('样本量账被报出来 —— 覆盖率永远配样本量读（finding.ts 先例）', () => {
+    const r = evaluateQualifiedMentionVerdict({
+      baseline: side(18, 13, 3, {}, undefined, 18),
+      followUp: side(12, 10, 3, {}, undefined, 18),
+    })
+    expect(r.sample.baseline).toEqual({ queryCount: 18, interpretableQueries: 18, fullyDeferredQueries: 0 })
+    expect(r.sample.followUp).toEqual({ queryCount: 18, interpretableQueries: 12, fullyDeferredQueries: 6 })
+  })
+})
+
+describe('闸 0 · 不信任输入（魏征实测：负数分子曾直接落 failure）', () => {
+  it.each([
+    ['分子为负', 18, -5, 3],
+    ['分子 > 分母', 18, 20, 3],
+    ['EP > 分母', 18, 13, 20],
+    ['分母非整数', 17.5, 13, 3],
+    ['分母 Infinity', Infinity, 13, 3],
+    ['分母 NaN', NaN, 13, 3],
+    ['分子 NaN', 18, NaN, 3],
+  ])('%s → malformed_coverage_input，绝不判 failure/success', (_, den, mention, ep) => {
+    const r = evaluateQualifiedMentionVerdict({
+      baseline: side(18, 13, 3, {}, undefined, 18),
+      followUp: side(den, mention, ep, {}, undefined, Math.max(18, Number.isFinite(den) ? den : 18)),
+    })
+    expect(r.verdict).toBe('indeterminate')
+    expect(r.reasonCodes).toEqual(['malformed_coverage_input'])
+  })
+})
+
+describe('凭据口径 · measured 的分母必须是 interpretableQueries（补 W1 漏网）', () => {
+  it('有 defer 时 measured 报的是可解释数，不是 query 总数', () => {
+    const r = evaluateQualifiedMentionVerdict({
+      baseline: side(18, 13, 3, {}, undefined, 18),
+      followUp: side(15, 12, 3, {}, undefined, 18),
+    })
+    // followUp: 总数 18、可解释 15。measured 分母必须是 15。
+    expect(r.measured.followUpMention).toEqual({ known: true, numerator: 12, denominator: 15 })
+    expect(r.measured.followUpExplicitPositive).toEqual({ known: true, numerator: 3, denominator: 15 })
+    // 同一份输出里，sample 才报总数
+    expect(r.sample.followUp.queryCount).toBe(18)
+  })
+})
+
+describe('cohorts 必须逐条比，不能只比第一条（补 cohorts 漏网）', () => {
+  it('只有第 3 条 cohort 的模型版本不同 → 仍须判 not_comparable', () => {
+    const baselineSide = side(18, 13, 3, {}, undefined, 18, 5)
+    // 复测：前两条身份一致，第 3 条换了模型版本
+    const followUpSide: typeof baselineSide = {
+      coverage: baselineSide.coverage,
+      cohorts: baselineSide.cohorts.map((c, i) =>
+        i === 2
+          ? cohort({ acquisition: acquisition({ queryKey: K('q2'), modelVersion: K('gpt-5-OTHER') }) })
+          : c,
+      ),
+    }
+    const r = evaluateQualifiedMentionVerdict({ baseline: baselineSide, followUp: followUpSide })
+    expect(r.verdict).toBe('indeterminate')
+    expect(r.reasonCodes).toContain('not_comparable')
+  })
+
+  it('mismatch 的 left 恒指 baseline（传参顺序锁住，审计不能归错侧）', () => {
+    // 只让 baseline 侧质量不合格（失败率超上限），mismatch 必须报在 left
+    const bad = side(18, 13, 3, { failureRate: K(0.9) }, undefined, 18, 3)
+    const good = side(18, 13, 3, {}, undefined, 18, 3)
+    const r = evaluateQualifiedMentionVerdict({ baseline: bad, followUp: good })
+    expect(r.verdict).toBe('indeterminate')
+    expect(r.reasonCodes).toContain('not_comparable')
+    const dims = (r.comparabilityMismatches ?? []).map((m) => m.dimension)
+    expect(dims.some((d) => String(d).startsWith('left.'))).toBe(true)
+    expect(dims.some((d) => String(d).startsWith('right.'))).toBe(false)
+  })
+})
+
+describe('魏征 M3 · queryCount 与 interpretableQueries 必须区分（Codex #1032 P1 语义）', () => {
+  it('分母误用 queryCount 会判 failure，用 interpretableQueries 才判 success', () => {
+    // 基线 13/18(可解释18)；复测 mention=11、可解释=15、总数仍 18（3 个 defer）。
+    // 正确（用 interpretable）：13/18=0.722 → 11/15=0.733 上升 → success
+    // 错误（用 queryCount）：13/18=0.722 → 11/18=0.611 下降 → failure
+    const r = evaluateQualifiedMentionVerdict({
+      baseline: side(18, 13, 3, {}, undefined, 18),
+      followUp: side(15, 11, 3, {}, undefined, 18),
+    })
+    expect(r.verdict).toBe('success')
+    expect(r.sample.followUp.queryCount).toBe(18)
+    expect(r.sample.followUp.interpretableQueries).toBe(15)
+    expect(r.sample.followUp.fullyDeferredQueries).toBe(3)
   })
 })
 
@@ -304,10 +449,10 @@ describe('硬约束：永不误判 failure', () => {
       },
       // 不可比（换查询集）
       {
-        baseline: side(18, 17, 5),
+        baseline: side(18, 17, 5, {}, undefined, undefined, 1),
         followUp: side(bigDrop.interpretable, bigDrop.mention, bigDrop.explicitPositive, {
-          acquisition: acquisition({ querySetVersion: K('other_set') }),
-        }),
+          acquisition: acquisition({ querySetVersion: K('other_set'), queryKey: K('q0') }),
+        }, undefined, undefined, 1),
       },
       // 复测证据不足
       { baseline: side(18, 17, 5), followUp: side(0, 0, 0) },
