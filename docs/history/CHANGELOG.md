@@ -5,6 +5,26 @@
 
 ---
 
+### 2026-09-06（接通 IMPACT 的 Tune 段 —— 从结果里学这一步从没跑过，PR [#1427](https://github.com/bigbigraydeng-maker/magic-engine/pull/1427)）
+
+**上线内容**：给 `/api/cron/memory-extractor` 补上调度登记（`render.yaml` + `src/lib/cron/registry.ts` 双写，`30 6 * * *`，密钥走 `fromGroup: me-shared-cron-secret`）。抽取逻辑一行没动。
+
+**为什么是个事故而不是小遗漏**：这条路由、`src/lib/memory/extractor.ts`（717 行）和配套测试从 Phase 23.C 起就在仓库里，但 `render.yaml` 和监控清单**两边都没有登记过它**，`cron_run_logs` 里一条运行记录都没有 —— 从上线起就没跑过。生产实测（2026-09-06）：Check 段近 30 天产出 285 条 `flywheel_outcomes`（confirmed 117 / reversed 146 / inconclusive 22），而 `client_proven_patterns` 14 条 + `client_failed_experiments` 7 条停在 **2026-07-15**，53 天零增长。按 [`ME_PRODUCT_DEFINITION.md`](../strategy/ME_PRODUCT_DEFINITION.md) §4「Tune 没有改变后续决策，就不能称为学习闭环」，IMPACT 最后一段整段没通电，而「没通电」和「一切正常」在监控里长得一模一样 —— 正是 `CRON_REGISTRY` 那张表要解决的病。
+
+**排班位置**按链路先后定：`attribution`(`0 */6`) 算出 outcome → 本任务(`30 6`) 抽成学习 → `agent-learning-rollup`(`0 7` 周一) 汇总。06:30 UTC 在 attribution 06:00 那轮之后半小时（其 `maxDuration` 仅 300s），又在周一汇总之前。
+
+**首跑预演**（按 `keepOneCasePerAction` 真实折叠规则在生产库上算过，非估计）：77 个动作 → `client_proven_patterns`，40 个 → `client_failed_experiments`，涉及 4 个客户，另有 758 条 `client_decision_history.outcome_verdict` 待回填；学习总量 21 → ~117 条。
+
+**排除过一个疑似坑**：原始 outcome 里 `seo.gsc.avg_position` 有 65 个动作判 reversed，其中 42 个实为「曝光 +32.7% 同时平均排名 −21.6%」（页面吃到更多长尾词把平均位置拉低，是成功不是失败）。抽取器**已处理** —— `extractor.ts:148` 调 `keepOneCasePerAction`，`avg_position` 在代表指标序里故意排最后（PR [#862](https://github.com/bigbigraydeng-maker/magic-engine/pull/862) 第 30 轮 Codex 提的）。不需要改。
+
+**顺带扫出、已单独立项**：同类「代码里调了 `startCronRun` 但两边都没登记」的孤儿还有 5 个 —— `flywheel-seo-weekly` / `mailbox-sync` 从没跑过，`messenger-brief-hourly` 跑了 483 次后 2026-08-23 停，`baseline-domains-monthly`（37 次）/ `goals-expiry-check`（9 次，活着）。现有对账只查「render.yaml ↔ 清单」两个方向，查不出这一类，需补「路由 → 清单」方向。
+
+**验证**：`npx vitest run src/lib/memory src/lib/cron` 11 files / 187 passed · `npm run build` 通过 · 3 处变异探针确认对账测试真会红（排班漂移 / 日志名写错 / 清单漏登记）。
+
+**风险级 B**。**平台层级门**：判定 L1 平台基础设施 · Memory / Verification，但**不是新增能力**（能力早在，缺的是调度），归位既有 L1，不占候选名额。
+
+**Reuse Statement**：复用 `CRON_REGISTRY` 对账机制、`run-logger` 的 `startCronRun`、`me-shared-cron-secret` 环境变量组、既有 `memory-extractor` 路由与 `lib/memory/extractor.ts` 全部逻辑 —— **本次没有新增任何代码模块**。platform-shared：两条调度登记。抽取器写的是 client-private memory（两张表均带 `client_id`），未碰 industry / global 泛化边界。industry-specific / client-specific：无。落点与 tier-gate 决策时分类一致。
+
 ### 2026-09-05（清掉自动测试与类型检查的红色基线，顺带挖出并修掉 3 个真 bug，PR [#1405](https://github.com/bigbigraydeng-maker/magic-engine/pull/1405)）
 
 **上线内容**：全仓两条质量基线长期是红的，回归藏在里面没人看得见 —— `npx vitest run` 37 个文件红 / 117 条失败，`npx tsc --noEmit` 226 个错。本次清到 **10 条失败 / 7 个类型错误**，且剩余项全部各有归属（7 条等 PR [#1328](https://github.com/bigbigraydeng-maker/magic-engine/pull/1328) 补 `logistics_3pl` 行业分类；3 条是内核文件行数超限，已登记 [#1402](https://github.com/bigbigraydeng-maker/magic-engine/issues/1402)；7 个类型错误分属 PR [#1231](https://github.com/bigbigraydeng-maker/magic-engine/pull/1231) / [#1211](https://github.com/bigbigraydeng-maker/magic-engine/pull/1211) 正在改的文件，为避冲突未动）。
