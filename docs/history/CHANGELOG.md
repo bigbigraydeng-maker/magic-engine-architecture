@@ -5,6 +5,27 @@
 
 ---
 
+### 2026-09-07（5 个定时任务脱离监控 + 每周 SEO 快照上线，PR [#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440)）
+
+**上线内容一**：代码里调了 `startCronRun`（说明它设计上要被定时触发、要留运行记录）却不在任何名单里的接口，逐个查生产库定性并补进 `CRON_REGISTRY`。`CronRegistryEntry` 新增 `scheduler` 字段（`render` / `github-actions` / `external` / `inngest`）—— 原来「不在 `render.yaml` 里 = 没人调度」这个假设被生产数据推翻了：`baseline-domains-monthly` 每周日都在跑，调度它的是**有人在 Render 后台手工建的** cron（路由自己的成本闸门注释里就写着）；`goals-expiry-check` 由 GitHub Actions 调度，实测触发时刻在 04:10 ~ 15:35 之间飘。`render.yaml` 一行没动 —— 三个都已有人调度，加了就是重复调度。确实不该排班的（`mailbox-sync` 已挂在 `messenger-hourly` 里跑、`email-reply-digest` 已被 PM 叫停）进 `UNSCHEDULED_CRON_ROUTES` 白名单并写明原因；**白名单自己也被检查**：排上班了、或路由没了都会红（合并前它就自动逮到 #1427 落地后本该删掉的那条临时项）。
+
+**顺带查出的生产事故**：`messenger-brief-hourly`（给销售写客户需求卡）**从 2026-08-23 00:12 起停了 14 天**。它是 `messenger-hourly` 那条 Render 服务里的第二条 curl，而清单原来一条服务只登记一个 `jobName`，第二条就此隐形。不是记录丢了 —— `conversation_briefs` 整张表最后被写入也停在 `2026-08-23T00:12:37`。同一条服务的第一条 curl（私信同步）945 次每小时都在跑。停因在 Render 那一侧（本仓这段配置自 2026-07-27 未动），代码侧查不到，需人工看那条服务的运行日志。
+
+**上线内容二**：`flywheel-seo-weekly`（每周 SEO 快照）**第一次真正开跑**（PM 2026-09-07 拍板）。代码 2026-05-18 就写好了，生产库 0 条运行记录，2026-08-06 架构审计标「等 PM 拍板」——因为它每周对每个在服务的客户各花一次 DataForSEO 的钱。按铁律 3 的 Inngest 硬约束拆成两段：`cloud-flywheel-seo-weekly-fanout`（每周一 05:15 NZ 派单，自己不打 provider）+ `cloud-flywheel-seo-snapshot-one`（一个客户一单，出机器可读回执：客户 / 网址 / 周编号 / 状态 / 花费上限 / `no_publish` / 时间）。原实现在一个 HTTP 请求里 for 循环跑完所有客户（`maxDuration 900`），跑到第 5 个超时则前 4 个写了后面没写而记录只有一条「完成」。`/api/cron/flywheel-seo-weekly` 改成纯手动补触发（只发同一批条子），**故意不写 `cron_run_logs`** —— 手动点一下写进去会把「人手补的」伪装成「定时器正常」。
+
+**两份复审（子牙架构 + 魏征对抗性）各自独立抓到的必改项，全部已修**：
+- **合并后按下手动按钮就会让全体客户多付一轮钱**，两个独立原因叠加：① Inngest 的事件去重窗口**只有 24 小时**（查了官方文档），而「手动补触发」按定义发生在隔天，原注释「同一周内点多少次钱只花一轮」是错的；② `isoWeekKey` 走 UTC 但定时器是 `TZ=Pacific/Auckland`，NZ 周一 05:15 在 UTC 是周日 —— 同一个 NZ 周一中午 12:00 前后算出的周编号不同，事件 id 全变，24 小时窗口也拦不住。改法：周编号按 NZ 本地日期算；真闸改成花钱**之前**查 `flywheel_metrics` 里该客户最近一条 SEO 记录，不足 156 小时直接跳过，查不出来一律往「不花钱」倒。
+- **派单函数每周会写 3 行假运行记录**：`startCronRun` 放在 `step` 外，而 Inngest 每遇一个 step 就把函数体从头重放（step 结果走缓存、step 外的代码每遍都真跑），两个 step → 插 3 行、其中 2 行永远停在「在跑」。`run-logger` 新增 `startCronRunId()` + `cronRunHandle()`，开记录和收记录各装进独立 step。
+- 回执改说实话：`provider_calls` → `provider_calls_max`（是上限不是账单，被闸拦下时报 0）；`status` 增加 `no_data` 和 `skipped` 两态 —— 底层两层 `allSettled` 意味着 DataForSEO 全挂也返回 0 值不抛异常，原来的 `failed` 分支现实中几乎走不到。
+
+**对账测试补的洞**：原来 26 条只查 `render.yaml ↔ 清单` 两个方向，查不出「代码里写着要定时跑、谁都没排班」这一类。新增「调用处 → 清单」方向，判据是**谁调了 `startCronRun`**而不是「哪个目录下的 `route.ts`」—— 按位置扫的话，把调用挪进 `src/lib/inngest/functions/` 就能让一个任务静默消失（改这条时当场自己踩到）。用 TypeScript AST 而不是正则（`email-reply-digest` 写的是 `startCronRun(JOB_NAME)`，正则版会静默漏掉），并认得 import 别名和命名空间调用。魏征实测出三个「改了也全绿」的空洞（花费常量跟自己比、假 supabase 把 `eq` 入参丢了、别名/命名空间调用），全部堵上并逐条变异复验。
+
+**验证**：916 passed / 3 skipped（62 个测试文件）· `npm run build` 通过 · 变异检验 15 次逐条确认新测试会红。
+
+**⚠️ 上线后必须人工一步**：去 Inngest 后台（Production）对 `https://app.magicengine.com.au/api/inngest` 手动 Sync 一次，新的两个函数才会被认（Render 不是 Vercel，没有自动同步）。没同步的表现是「安静地不跑」；健康检查会喊，但按宽限期算要 17.5 天才响，别指望它把关。
+
+---
+
 ### 2026-09-06（接通 IMPACT 的 Tune 段 —— 从结果里学这一步从没跑过，PR [#1427](https://github.com/bigbigraydeng-maker/magic-engine/pull/1427)）
 
 **上线内容**：给 `/api/cron/memory-extractor` 补上调度登记（`render.yaml` + `src/lib/cron/registry.ts` 双写，`30 6 * * *`，密钥走 `fromGroup: me-shared-cron-secret`）。抽取逻辑一行没动。
