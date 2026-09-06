@@ -619,6 +619,40 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # Memory extractor — IMPACT 的 Tune 段（Phase 23.C）
+  #
+  # 把 Check 段算出来的 flywheel_outcomes 变成客户私有的学习：
+  #   confirmed → client_proven_patterns（这么做有效）
+  #   reversed  → client_failed_experiments（这么做反而变差）
+  #   同类动作连续跑赢 3 次 → client_learned_preferences
+  #   并回填 client_decision_history.outcome_verdict
+  #
+  # 🔴 这条路由 2026 年就写好了，但**从来没有登记过调度** —— registry.ts 和本文件
+  #    里都没有，cron_run_logs 里一条运行记录都没有。后果：Check 段一直在产出
+  #    结论（2026-08~09 两个月 285 条），Tune 段却停在 2026-07-15 的 21 条，
+  #    53 天里没有任何一条真实结果改变过下一次判断。
+  #    按 ME_PRODUCT_DEFINITION §4 的定义，Tune 没有改变后续决策就不算学习闭环 ——
+  #    也就是说 IMPACT 最后一段整段没通电，而且"没通电"和"一切正常"在监控里长得一模一样。
+  #
+  # 排班位置不是随手挑的，这条链有先后：
+  #   attribution (0 */6) 先算出 outcome → 本任务 (30 6) 抽成学习 →
+  #   agent-learning-rollup (0 7 周一) 再汇总
+  # 06:30 UTC 落在 attribution 06:00 那一轮之后半小时（它 maxDuration 才 300s），
+  # 又在周一 07:00 的汇总之前，两头都不抢。
+  #
+  # --max-time 比路由自己的 maxDuration(300s) 宽：curl 先断开的话 Render 记成失败，
+  # 但路由还在跑、库还在写 —— 运维照着"失败"重跑一次就是重复处理。
+  - type: cron
+    name: memory-extractor
+    env: node
+    schedule: "30 6 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 360 -X POST -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/memory-extractor
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
   # SEO Patrol — Phase 22.E.S2b
   #   Daily SEO opportunity engine: reads keyword_snapshots + GSC snapshots,
   #   runs the rule engine, persists fresh findings, and routes the top 3 onto
