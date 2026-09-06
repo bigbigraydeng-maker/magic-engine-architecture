@@ -70,8 +70,11 @@ export async function fetchSubscribedMembers(
   for (;;) {
     const url =
       `${base}?status=subscribed&count=${pageSize}&offset=${offset}` +
-      // 只取要用的字段，别把整份成员画像拉回来（省流量，也少 PII 暴露面）。
-      `&fields=members.email_address,members.merge_fields,total_items`
+      // 🔴 只取这几列，别拉整个 merge_fields。
+      //    2026-09-06：拉整份（526 人 × 十几个合并字段）在 prod 小机器上把进程压到 502。
+      //    这里精确到 FNAME/LNAME/PHONE，响应缩到约 1/5。
+      `&fields=members.email_address,members.merge_fields.FNAME,` +
+      `members.merge_fields.LNAME,members.merge_fields.PHONE`
     // 🔴 加超时。不加的话 prod 连 Mailchimp 卡住会一直挂，最后被平台判 504 返回
     //    HTML 报错页，前端 res.json() 就炸「Unexpected token '<'」（2026-09-06 线上）。
     const ctrl = new AbortController()
