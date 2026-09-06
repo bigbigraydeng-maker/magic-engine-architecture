@@ -35,6 +35,8 @@ import {
 } from '@/lib/conversions/audience-export'
 
 export const dynamic = 'force-dynamic'
+// Mailchimp 拉取 ~3s，合并要拉两次；给足时限，别被平台默认（有的 10s）杀掉返回 HTML。
+export const maxDuration = 60
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -55,6 +57,20 @@ type TouchRow = {
 }
 
 export async function GET(request: Request) {
+  // 🔴 顶层保险：任何漏网的抛都返回 JSON，**绝不出 HTML 报错页** ——
+  //    前端拿 HTML 去 res.json() 会炸「Unexpected token '<'」（2026-09-06 线上）。
+  try {
+    return await handleGet(request)
+  } catch (e) {
+    console.error('[audience-export] 未捕获异常:', e)
+    return NextResponse.json(
+      { error: `服务端出错：${e instanceof Error ? e.message : String(e)}` },
+      { status: 500 },
+    )
+  }
+}
+
+async function handleGet(request: Request) {
   const guard = await guardAdmin()
   if (guard) return guard
 
@@ -167,25 +183,27 @@ export async function GET(request: Request) {
   }
 
   async function newsletterRows(): Promise<{ rows: AudienceRow[]; stats: ReturnType<typeof buildNewsletterAudience>['stats'] } | { error: string }> {
-    const apiKey = process.env.MAILCHIMP_API_KEY ?? ''
-    const audienceId = audienceFromLeadsConfig(clientRow?.leads_config)
-    if (!apiKey) return { error: '没配 Mailchimp 钥匙（MAILCHIMP_API_KEY）' }
-    if (!audienceId) return { error: '这个客户没配 Mailchimp 名单（leads_config.mailchimp_audience_id）' }
-    let members
+    // 🔴 整段套 try —— 拉取之后的处理（datacenterFromKey/kind 分类/组装）任何一步抛，
+    //    都要变成 JSON error，绝不能漏成没人接的 500 HTML 页
+    //    （2026-09-06 线上：只套了 fetch，拉取后抛就成了 <!DOCTYPE，前端 json() 炸）。
     try {
-      members = await fetchSubscribedMembers({ apiKey, audienceId })
+      const apiKey = process.env.MAILCHIMP_API_KEY ?? ''
+      const audienceId = audienceFromLeadsConfig(clientRow?.leads_config)
+      if (!apiKey) return { error: '没配 Mailchimp 钥匙（MAILCHIMP_API_KEY）' }
+      if (!audienceId) return { error: '这个客户没配 Mailchimp 名单（leads_config.mailchimp_audience_id）' }
+      const members = await fetchSubscribedMembers({ apiKey, audienceId })
+      const nl: NewsletterContact[] = members.map((m) => ({
+        email: m.email,
+        phone: m.phone,
+        firstName: m.firstName,
+        lastName: m.lastName,
+        kind: contactKindOf([m.email], rules),
+        doNotContact: dncEmails.has(m.email.trim().toLowerCase()),
+      }))
+      return buildNewsletterAudience(nl, phoneCountry)
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) }
     }
-    const nl: NewsletterContact[] = members.map((m) => ({
-      email: m.email,
-      phone: m.phone,
-      firstName: m.firstName,
-      lastName: m.lastName,
-      kind: contactKindOf([m.email], rules),
-      doNotContact: dncEmails.has(m.email.trim().toLowerCase()),
-    }))
-    return buildNewsletterAudience(nl, phoneCountry)
   }
 
   // ── 只看数字（不含 PII）：让人先看池子够不够 100 门槛 ──────────────────
