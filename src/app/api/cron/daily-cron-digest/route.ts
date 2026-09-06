@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { Resend } from 'resend'
 import { startCronRun } from '@/lib/cron/run-logger'
 import { meMailFrom, ME_MAIL_TO_ADDRESS } from '@/lib/email/sender'
+import { failureCell } from '@/lib/cron/digest-cells'
 
 const TO_EMAIL = ME_MAIL_TO_ADDRESS
 
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest) {
     <tr>
       <td style="padding:8px 12px;font-family:monospace;font-size:13px;border-bottom:1px solid #e2e8f0">${r.job_name}</td>
       <td style="padding:8px 12px;font-size:13px;border-bottom:1px solid #e2e8f0">${new Date(r.started_at).toLocaleString('en-NZ', { timeZone: 'Pacific/Auckland', hour12: false })}</td>
-      <td style="padding:8px 12px;font-size:13px;color:#dc2626;font-weight:600;border-bottom:1px solid #e2e8f0">${r.failed_count ?? 0} failed</td>
+      <td style="padding:8px 12px;font-size:13px;color:#dc2626;font-weight:600;border-bottom:1px solid #e2e8f0">${failureCell(r)}</td>
       <td style="padding:8px 12px;font-size:12px;color:#6b7280;border-bottom:1px solid #e2e8f0">${(r.error_message ?? '').substring(0, 200) || '—'}</td>
     </tr>
   `).join('')
