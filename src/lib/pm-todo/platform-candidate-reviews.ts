@@ -113,4 +113,9 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '内容发布→广告草稿直链（Daily Plan 发布完成 → 自动建暂停态广告进指定广告组 · me_ad_launch）',
     reviewDate: '2026-10-06',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'Meta 广告数据地基健康诊断（pixel/CAPI 分浏览器端 vs 服务端回传 · 修前基线→修后验证标准）',
+    reviewDate: '2026-10-06',
+  },
 ]
