@@ -51,7 +51,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       console.log(
         `[memory-extractor/cron] client=${clientId} outcomes=${result.outcomes_processed} ` +
         `patterns+${result.patterns_added} experiments+${result.experiments_added} ` +
-        `preferences+${result.preferences_added} decisions+${result.decisions_updated} ` +
+        `preferences+${result.preferences_added} ` +
         `errors=${result.errors.length}`,
       )
       await cronRun.finish({
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     console.log(
       `[memory-extractor/cron] all clients_processed=${batch.clients_processed} ` +
       `patterns+${batch.aggregate.patterns_added} experiments+${batch.aggregate.experiments_added} ` +
-      `preferences+${batch.aggregate.preferences_added} decisions+${batch.aggregate.decisions_updated} ` +
+      `preferences+${batch.aggregate.preferences_added} ` +
       `client_errors=${batch.per_client_errors.length}`,
     )
     await cronRun.finish({
