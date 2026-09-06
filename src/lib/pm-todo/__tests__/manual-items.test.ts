@@ -132,6 +132,43 @@ describe('pushMailchimpExportItems', () => {
     expect(items).toEqual([])
   })
 
+  it('人在名单里但来源标签没补上 → 也要报（归因证据没落地，跟发失败一样严重）', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: NOW.toISOString(),
+      summary: {
+        results: [
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'already_member:tag_failed:http_429': 4, already_member: 6 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken' })
+    // 只数坏的那 4 条，正常的 6 条不许算进去
+    expect(items[0].what).toContain('4 条')
+  })
+
+  it('标签都打上了的正常 already_member → 一条都不报，别天天骚扰', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: NOW.toISOString(),
+      summary: {
+        results: [{ clientId: 'c-ok', clientName: 'CTS', mailchimp: { already_member: 10 } }],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toEqual([])
+  })
+
   it('压根没有运行记录 → 不报', async () => {
     const items: ManualItem[] = []
     await pushMailchimpExportItems(fakeLastRun(null), items, NOW)
