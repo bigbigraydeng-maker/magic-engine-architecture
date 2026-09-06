@@ -66,6 +66,13 @@ export interface ExtractorResult {
   memories_superseded: number
   /** Rows switched back on because the verdict flipped back. */
   memories_reactivated: number
+  /**
+   * 因为「太久没重算」被挡在门外的 outcome 行数。
+   *
+   * **必须报出来**，不能静默丢弃：这个数不为零，说明有一批动作的归因已经不再更新，
+   * 而系统仍然在拿它们当证据。零和非零是两件完全不同的事，看不见就等于没发生。
+   */
+  outcomes_stale_skipped: number
   errors: string[]
 }
 
@@ -114,6 +121,8 @@ interface DerivedMemoryRow {
 export async function runExtractorForClient(
   supabase: SupabaseClient,
   clientId: string,
+  /** 测试注入用；生产不传。新鲜度闸拿它算截止时间。 */
+  now: Date = new Date(),
 ): Promise<ExtractorResult> {
   const result: ExtractorResult = {
     outcomes_processed: 0,
@@ -123,13 +132,16 @@ export async function runExtractorForClient(
     preferences_added: 0,
     memories_superseded: 0,
     memories_reactivated: 0,
+    outcomes_stale_skipped: 0,
     errors: [],
   }
 
   // 1. 拉取该客户所有 high-confidence outcomes + JOIN action
   let outcomes: OutcomeJoinRow[] = []
   try {
-    outcomes = await loadOutcomesWithActions(supabase, clientId)
+    const loaded = await loadOutcomesWithActions(supabase, clientId, now)
+    outcomes = loaded.rows
+    result.outcomes_stale_skipped = loaded.staleSkipped
     result.outcomes_processed = outcomes.length
   } catch (err) {
     result.errors.push(`load outcomes: ${msgOf(err)}`)
@@ -267,6 +279,8 @@ export async function runExtractorForClient(
  */
 export async function runExtractorForAllClients(
   supabase: SupabaseClient,
+  /** 测试注入用；生产不传。 */
+  now: Date = new Date(),
 ): Promise<ExtractorBatchResult> {
   const aggregate: ExtractorResult = {
     outcomes_processed: 0,
@@ -276,6 +290,7 @@ export async function runExtractorForAllClients(
     preferences_added: 0,
     memories_superseded: 0,
     memories_reactivated: 0,
+    outcomes_stale_skipped: 0,
     errors: [],
   }
   const perClientErrors: Array<{ client_id: string; error: string }> = []
@@ -299,7 +314,7 @@ export async function runExtractorForAllClients(
 
   for (const clientId of clientIds) {
     try {
-      const r = await runExtractorForClient(supabase, clientId)
+      const r = await runExtractorForClient(supabase, clientId, now)
       processed++
       aggregate.outcomes_processed    += r.outcomes_processed
       aggregate.actions_processed     += r.actions_processed
@@ -308,6 +323,7 @@ export async function runExtractorForAllClients(
       aggregate.preferences_added     += r.preferences_added
       aggregate.memories_superseded   += r.memories_superseded
       aggregate.memories_reactivated  += r.memories_reactivated
+      aggregate.outcomes_stale_skipped += r.outcomes_stale_skipped
       if (r.errors.length > 0) {
         perClientErrors.push({ client_id: clientId, error: r.errors.join(' | ') })
       }
@@ -321,10 +337,27 @@ export async function runExtractorForAllClients(
 
 // ── 数据加载 helpers ──────────────────────────────────────────────────────────
 
+/**
+ * 归因结果多久没被重算就不再当证据用。
+ *
+ * attribution 每 6 小时把所有**现役**动作的 outcome 重算一遍（`computed_at` 刷成现在），
+ * 所以健康的行永远不超过一天。取 7 天 = 28 倍余量：attribution 短暂中断不会误伤，
+ * 但真正停止更新的行会被挡住。
+ *
+ * 🔴 为什么必须有这道闸（2026-09-06 生产实测）：库里有 **51 行 / 17 个动作**的归因
+ *    永久冻结在 2026-08-04~05。成因见 Issue #859 —— page-upgrade 的 PR 被拒后
+ *    `expected_metric` 被写成 null，而两个写入方的查询都带
+ *    `.not('expected_metric','is',null)`，从此谁都不再选中它们，既不刷新也不删除。
+ *    抽取器不看时间读全表，于是一个多月前的读数一直被当现役证据学 ——
+ *    已经有 10 条生效中的记忆（5 proven + 5 failed）是从这批冻结行长出来的。
+ */
+const OUTCOME_FRESH_DAYS = 7
+
 async function loadOutcomesWithActions(
   supabase: SupabaseClient,
   clientId: string,
-): Promise<OutcomeJoinRow[]> {
+  now: Date,
+): Promise<{ rows: OutcomeJoinRow[]; staleSkipped: number }> {
   // 单跑 JOIN 在 PostgREST 风格里不直观；用两步查询并在内存里合并
   const { data: outcomeRows, error: outcomeErr } = await supabase
     .from('flywheel_outcomes')
@@ -334,10 +367,22 @@ async function loadOutcomesWithActions(
     .order('computed_at', { ascending: false })
 
   if (outcomeErr) throw new Error(outcomeErr.message)
-  if (!outcomeRows || outcomeRows.length === 0) return []
+  if (!outcomeRows || outcomeRows.length === 0) return { rows: [], staleSkipped: 0 }
 
-  const actionIds = Array.from(new Set(outcomeRows.map(r => r.action_id).filter(Boolean)))
-  if (actionIds.length === 0) return []
+  // 新鲜度闸：太久没被重算的行不再当证据。**在内存里筛而不是加到查询条件里**，
+  // 是为了能数出「挡掉了多少」—— 数据库过滤掉的行没人数得着，那就又变成静默丢弃了。
+  const cutoff = now.getTime() - OUTCOME_FRESH_DAYS * 86_400_000
+  const fresh = outcomeRows.filter((r) => {
+    const t = Date.parse(r.computed_at)
+    // 时间读不出来时**保留**：不认识的格式不该等于「过期」，
+    // 宁可多学一条也不要因为解析口径变化悄悄丢掉一批证据。
+    return Number.isNaN(t) || t >= cutoff
+  })
+  const staleSkipped = outcomeRows.length - fresh.length
+  if (fresh.length === 0) return { rows: [], staleSkipped }
+
+  const actionIds = Array.from(new Set(fresh.map(r => r.action_id).filter(Boolean)))
+  if (actionIds.length === 0) return { rows: [], staleSkipped }
 
   const { data: actionRows, error: actionErr } = await supabase
     .from('flywheel_actions')
@@ -360,7 +405,7 @@ async function loadOutcomesWithActions(
   }
 
   const joined: OutcomeJoinRow[] = []
-  for (const o of outcomeRows) {
+  for (const o of fresh) {
     const a = actionMap.get(o.action_id)
     if (!a) continue
     joined.push({
@@ -381,7 +426,7 @@ async function loadOutcomesWithActions(
       expected_metric: a.expected_metric,
     })
   }
-  return joined
+  return { rows: joined, staleSkipped }
 }
 
 /**

@@ -232,11 +232,18 @@ SOP：`docs/sops/brand-aliases-setup-for-gsc.md`。
 
 **症状**：功能「上线了」，但从来没自动跑过，也没有任何地方报错。
 
-**清单**：`admin-key-expiry` · `benchmark-accumulator` · `flywheel-seo-weekly` · `kpi-backfill` ·
+**清单**：`admin-key-expiry` · `benchmark-accumulator` · `kpi-backfill` ·
 `memory-extractor` · `poster-studio-daily` · `factory-review-sweeper`（最后一个是有意退役）。
+`flywheel-seo-weekly` 已于 2026-09-07 上线（PM 拍板开，改挂 Inngest 定时器），不再属于本条。
 
 **怎么防**：新建 `/api/cron/*` 路由的同一个 PR 里就要加 `render.yaml` 条目。
 `bash scripts/doctor.sh --cron` 会列出所有「有路由无调度」的端点。
+
+**2026-09-07 补的自动闸**（`src/lib/cron/registry.test.ts`）：任何地方只要调了 `startCronRun`，
+就必须出现在 `CRON_REGISTRY` 里，或在 `UNSCHEDULED_CRON_ROUTES` 里写明为什么不排班，否则测试红。
+判据是「谁调了 startCronRun」而不是「哪个目录下的 route.ts」—— 按位置扫的话，
+把调用挪进 `src/lib/inngest/functions/` 就能让一个任务从对账里静默消失（改这条时当场踩到过）。
+白名单自己也被查：排上班了 / 路由没了，都会红。
 
 ### F2 · GitHub Actions 的 scheduled run 是 best-effort
 

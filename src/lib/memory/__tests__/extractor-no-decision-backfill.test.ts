@@ -21,6 +21,8 @@ import { runExtractorForClient } from '../extractor'
 import { makeFakeSupabase, type FakeDb, type Row } from './fake-supabase'
 
 const CLIENT = 'client-a'
+/** 夹具都是 2026-06 的数据；新鲜度闸按 now 算截止时间，所以测试必须自己给钟。 */
+const NOW = new Date('2026-06-03T00:00:00Z')
 
 function outcomeRow(id: string, actionId: string, verdict: 'confirmed' | 'reversed'): Row {
   return {
@@ -66,7 +68,7 @@ describe('抽取器不碰决策结论（防 2026-09-06 那次记忆污染复发�
       pendingDecisions(),
     )
 
-    await runExtractorForClient(makeFakeSupabase(fake), CLIENT)
+    await runExtractorForClient(makeFakeSupabase(fake), CLIENT, NOW)
 
     for (const d of fake.client_decision_history ?? []) {
       expect(d.outcome_verdict, `决策 ${d.id} 被盖了章`).toBeNull()
@@ -81,7 +83,7 @@ describe('抽取器不碰决策结论（防 2026-09-06 那次记忆污染复发�
       pendingDecisions(),
     )
 
-    await runExtractorForClient(makeFakeSupabase(fake), CLIENT)
+    await runExtractorForClient(makeFakeSupabase(fake), CLIENT, NOW)
 
     const notes = (fake.client_decision_history ?? []).map((d) => String(d.outcome_notes ?? ''))
     expect(notes.some((n) => n.includes('auto-derived'))).toBe(false)
@@ -94,7 +96,7 @@ describe('抽取器不碰决策结论（防 2026-09-06 那次记忆污染复发�
       pendingDecisions(),
     )
 
-    const result = await runExtractorForClient(makeFakeSupabase(fake), CLIENT)
+    const result = await runExtractorForClient(makeFakeSupabase(fake), CLIENT, NOW)
 
     expect(result.patterns_added).toBe(1)
     expect(result.errors).toEqual([])

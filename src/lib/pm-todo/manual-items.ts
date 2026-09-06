@@ -56,6 +56,8 @@ export type ManualItemKind =
   | 'dataforseo_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
+  /** 自动任务跑到一半卡死（状态永远停在 running，路由的 catch 没机会执行） */
+  | 'cron_stuck'
   | 'goal_baseline_mismatch'
   | 'diagnostic_findings'
   | 'prescription_updated'
@@ -141,6 +143,7 @@ export function gscInspectUrl(siteUrl: string, pageUrl: string): string {
 import { verifyActionLink } from './action-link'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { checkCronHealth } from '@/lib/cron/health'
+import { CRON_REGISTRY } from '@/lib/cron/registry'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
 import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
@@ -715,6 +718,31 @@ export async function pushDataForSeoCreditsItem(
 const RENDER_DASHBOARD_URL = 'https://dashboard.render.com'
 
 /**
+ * 「任务该跑没跑」按调度方给不同的动手指引。
+ *
+ * 三件套里的 how / href 必须**对得上真实系统**：让人去 Render 找一个由 GitHub 或
+ * Inngest 调度的任务，他会翻半天再回来问 —— 等于这条待办没下发好。
+ */
+const CRON_STOPPED_GUIDE = {
+  render: {
+    how: '打开链接 → 找到这几个服务 → 看 Events 里最后一次运行是什么结果。多半是 Environment 里没关联 me-shared-cron-secret，勾上再选「Link and apply on next run」即可',
+    href: RENDER_DASHBOARD_URL,
+  },
+  'github-actions': {
+    how: '打开链接 → Actions 页找到同名的工作流 → 看最近几次是不是被跳过或报错。GitHub 的免费定时任务经常延迟几小时，但连着几天没有记录就是真停了；可以先点 Run workflow 手动跑一次确认',
+    href: 'https://github.com/bigbigraydeng-maker/magic-engine/actions',
+  },
+  inngest: {
+    how: '打开链接 → 进 Production 环境 → Apps → 找到 magic-engine-web，点 Sync 一次（地址是 https://app.magicengine.com.au/api/inngest）。新增函数或改了触发时间之后必须手动同步一次，否则它安静地不跑；同步完在 Functions 里能看到就对了',
+    href: 'https://app.inngest.com',
+  },
+  external: {
+    how: '这几个的定时器**不在我们代码仓库里**，是有人在 Render 后台手工建的 —— 打开链接 → 在服务列表里按名字找 → 看它还在不在、Events 里最后一次跑成什么样。如果整条被删了，回我一句我把它接回代码里管',
+    href: RENDER_DASHBOARD_URL,
+  },
+} as const
+
+/**
  * 自动任务该跑没跑 → 下发。
  *
  * 现有 daily-cron-digest 只报「跑了但失败」。**「压根没跑」没有任何记录**，
@@ -733,13 +761,43 @@ async function pushCronHealthItems(
 
   const stopped = [...r.neverRan, ...r.overdue]
   if (stopped.length > 0) {
-    const names = stopped.map((h) => h.service).join('、')
+    // 🔴 按**谁在调度它**分组下发。原来一律写「打开 Render → 找到这几个服务」，
+    //    但清单里已经有不是 Render 调度的任务（GitHub Actions / Render 后台手工建 /
+    //    Inngest 自带定时器）—— 照着那条指引去 Render 找一个根本不存在的服务，
+    //    等于把人支到错的系统里，正是 CLAUDE.md 说的「下发了但没法照做」。
+    const bySvc = new Map(CRON_REGISTRY.map((e) => [e.service, e.scheduler ?? 'render']))
+    const groups = new Map<string, string[]>()
+    for (const h of stopped) {
+      const who = bySvc.get(h.service) ?? 'render'
+      groups.set(who, [...(groups.get(who) ?? []), h.service])
+    }
+    for (const [who, names] of groups) {
+      const guide = CRON_STOPPED_GUIDE[who as keyof typeof CRON_STOPPED_GUIDE] ?? CRON_STOPPED_GUIDE.render
+      items.push({
+        kind: 'cron_not_running',
+        client_id: 'infra',
+        client_name: 'Magic Engine 后台',
+        what: `${names.length} 个自动任务该跑没跑：${names.join('、')} —— 它们负责的活儿现在没人干，而且不会自己好`,
+        how: guide.how,
+        href: guide.href,
+      })
+    }
+  }
+
+  // 卡死跟「该跑没跑」是两件事，不能合成一条：那边是**没开始**（多半是 Render 侧配置），
+  // 这边是**开始了没结束**（进程被杀 / 卡在某个外部调用上），下一步动作完全不同。
+  // 两边都接不住它：failing 只认 status='failed'，可容器被杀时路由的 catch 根本没机会跑；
+  // overdue 看 started_at，而卡死的任务开跑记录是有的。所以跑死的任务在体检里等于健康。
+  if (r.stuck.length > 0) {
+    const names = r.stuck
+      .map((s) => `${s.service}（已卡 ${s.minutesRunning >= 120 ? Math.round(s.minutesRunning / 60) + ' 小时' : s.minutesRunning + ' 分钟'}）`)
+      .join('、')
     items.push({
-      kind: 'cron_not_running',
+      kind: 'cron_stuck',
       client_id: 'infra',
       client_name: 'Magic Engine 后台',
-      what: `${stopped.length} 个自动任务该跑没跑：${names} —— 它们负责的活儿现在没人干，而且不会自己好`,
-      how: '打开链接 → 找到这几个服务 → 看 Events 里最后一次运行是什么结果。多半是 Environment 里没关联 me-shared-cron-secret，勾上再选「Link and apply on next run」即可',
+      what: `${r.stuck.length} 个自动任务开跑了但一直没结束：${names} —— 这类不会报错，它就那么挂着，那一轮该干的活儿等于没干`,
+      how: '打开链接 → 找到这几个服务 → Logs 看最后停在哪一步。常见是卡在某个外部接口没有超时保护。确认死了就手动重跑一次，并把那段调用加上超时',
       href: RENDER_DASHBOARD_URL,
     })
   }
