@@ -22,10 +22,16 @@ import { requireAdmin } from '@/lib/auth/require-admin'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { isDoNotContact } from '@/lib/crm/dnc'
 import { contactKindOf, readDomainRules } from '@/lib/crm/contact-kind'
+import { audienceFromLeadsConfig } from '@/lib/mailchimp/audience-config'
+import { fetchSubscribedMembers } from '@/lib/mailchimp/audience-members'
 import {
   audienceToCsv,
   buildMetaAudienceA,
+  buildNewsletterAudience,
+  mergeAudiences,
   type AudienceContact,
+  type AudienceRow,
+  type NewsletterContact,
 } from '@/lib/conversions/audience-export'
 
 export const dynamic = 'force-dynamic'
@@ -148,49 +154,109 @@ export async function GET(request: Request) {
     ),
   }))
 
-  const result = buildMetaAudienceA(audienceContacts, clientRow?.default_phone_country ?? null)
+  const phoneCountry = clientRow?.default_phone_country ?? null
+  const fbleads = buildMetaAudienceA(audienceContacts, phoneCountry)
 
-  // 只看数字：不含一个字节 PII。让人先判断够不够门槛。
+  // source: fbleads（广告，默认）| newsletter（Mailchimp 订阅）| combined（去重合并）
+  const source = (searchParams.get('source') ?? 'fbleads').toLowerCase()
+
+  // ME 侧拒联的邮箱集 —— newsletter 成员即使还在订阅，只要 CTS 说过别联系，也剔掉。
+  const dncEmails = new Set<string>()
+  for (const c of audienceContacts) {
+    if (c.doNotContact && c.email) dncEmails.add(c.email.trim().toLowerCase())
+  }
+
+  async function newsletterRows(): Promise<{ rows: AudienceRow[]; stats: ReturnType<typeof buildNewsletterAudience>['stats'] } | { error: string }> {
+    const apiKey = process.env.MAILCHIMP_API_KEY ?? ''
+    const audienceId = audienceFromLeadsConfig(clientRow?.leads_config)
+    if (!apiKey) return { error: '没配 Mailchimp 钥匙（MAILCHIMP_API_KEY）' }
+    if (!audienceId) return { error: '这个客户没配 Mailchimp 名单（leads_config.mailchimp_audience_id）' }
+    let members
+    try {
+      members = await fetchSubscribedMembers({ apiKey, audienceId })
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) }
+    }
+    const nl: NewsletterContact[] = members.map((m) => ({
+      email: m.email,
+      phone: m.phone,
+      firstName: m.firstName,
+      lastName: m.lastName,
+      kind: contactKindOf([m.email], rules),
+      doNotContact: dncEmails.has(m.email.trim().toLowerCase()),
+    }))
+    return buildNewsletterAudience(nl, phoneCountry)
+  }
+
+  // ── 只看数字（不含 PII）：让人先看池子够不够 100 门槛 ──────────────────
   if (format !== 'csv') {
+    if (source === 'fbleads') {
+      return NextResponse.json({ source, ...fbleads.stats, lookalike_threshold: 100, note: thresholdNote(fbleads.stats.kept) })
+    }
+    const nl = await newsletterRows()
+    if ('error' in nl) return NextResponse.json({ source, error: nl.error }, { status: 502 })
+    if (source === 'newsletter') {
+      return NextResponse.json({ source, ...nl.stats, lookalike_threshold: 100, note: thresholdNote(nl.stats.kept) })
+    }
+    // combined
+    const merged = mergeAudiences(fbleads.rows, nl.rows)
     return NextResponse.json({
-      list: 'A',
-      ...result.stats,
+      source: 'combined',
+      total: fbleads.stats.total + nl.stats.total,
+      kept: merged.length,
+      fbleads_kept: fbleads.stats.kept,
+      newsletter_kept: nl.stats.kept,
+      overlap_removed: fbleads.stats.kept + nl.stats.kept - merged.length,
       lookalike_threshold: 100,
-      note:
-        result.stats.kept >= 100
-          ? '池子够 lookalike 的 100 门槛（注意那是「匹配上」100，实际要看上传后匹配率）'
-          : `池子只有 ${result.stats.kept} 人，可能不够 lookalike 的 100 门槛 —— 建议先上传看匹配数`,
+      note: thresholdNote(merged.length),
     })
   }
 
+  // ── 下载 CSV：按 source 决定 rows ──────────────────────────────────
+  let rows: AudienceRow[]
+  if (source === 'fbleads') {
+    rows = fbleads.rows
+  } else {
+    const nl = await newsletterRows()
+    if ('error' in nl) {
+      return NextResponse.json({ error: `拉 newsletter 名单失败：${nl.error}` }, { status: 502 })
+    }
+    rows = source === 'newsletter' ? nl.rows : mergeAudiences(fbleads.rows, nl.rows)
+  }
+
   // 🔴 谁导出了这份 PII，必须留痕（狄仁杰红线：对外交客户联系方式却无审计=硬伤）。
-  //    这是结构化日志（Render 日志可搜 [audience-export]），总能生效、不依赖任何未上线的表。
-  //    日志里**只记数量与操作者，不记一个客户字节** —— 审计不能自己变成第二个 PII 泄露面。
+  //    结构化日志（Render 可搜 [audience-export]），只记数量与操作者，不记一个客户字节。
   const fwd = request.headers.get('x-forwarded-for') ?? ''
   console.log(
     '[audience-export]',
     JSON.stringify({
       action: 'download_csv',
-      list: 'A',
+      source,
       client_id: clientId,
       actor: admin.user.email ?? null,
       ip: fwd.split(',')[0]?.trim() || null,
       ua: request.headers.get('user-agent') || null,
-      kept: result.stats.kept,
+      kept: rows.length,
       at: new Date().toISOString(),
     }),
   )
 
   // 真下载：明文 CSV，直接进浏览器，不落地服务器。
-  const csv = audienceToCsv(result.rows)
+  const csv = audienceToCsv(rows)
   const today = new Date().toISOString().slice(0, 10)
   return new NextResponse(csv, {
     status: 200,
     headers: {
       'content-type': 'text/csv; charset=utf-8',
-      'content-disposition': `attachment; filename="meta-audience-A-${today}.csv"`,
+      'content-disposition': `attachment; filename="meta-audience-${source}-${today}.csv"`,
       // 别让浏览器/CDN 缓存这份 PII。
       'cache-control': 'no-store',
     },
   })
+}
+
+function thresholdNote(kept: number): string {
+  return kept >= 100
+    ? '池子够 lookalike 的 100 门槛（注意那是「匹配上」100，实际要看上传后匹配率）'
+    : `池子只有 ${kept} 人，可能不够 lookalike 的 100 门槛 —— 建议先上传看匹配数`
 }
