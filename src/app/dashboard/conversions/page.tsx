@@ -275,7 +275,7 @@ export default function ConversionsPage() {
   )
 
   // 键盘：Y 告诉平台 / N 不发送 / ↑↓ 换一条
-  const [audienceStats, setAudienceStats] = useState<Record<string, number | string> | null>(null)
+  const [aud, setAud] = useState<Record<string, Record<string, number | string>>>({})
   const [audienceLoading, setAudienceLoading] = useState(false)
   const [keyLock, setKeyLock] = useState(false)
   useEffect(() => {
@@ -300,17 +300,19 @@ export default function ConversionsPage() {
   const checkAudience = useCallback(async () => {
     if (!clientId) return
     setAudienceLoading(true)
-    try {
-      const res = await fetch(
-        `/api/admin/conversions/audience-export?client_id=${encodeURIComponent(clientId)}&format=stats`,
-      )
-      const body = await res.json()
-      setAudienceStats(res.ok ? body : { error: 1, note: body.error })
-    } catch (e) {
-      setAudienceStats({ error: 1, note: e instanceof Error ? e.message : String(e) })
-    } finally {
-      setAudienceLoading(false)
+    const base = `/api/admin/conversions/audience-export?client_id=${encodeURIComponent(clientId)}&format=stats`
+    const next: Record<string, Record<string, number | string>> = {}
+    for (const source of ['fbleads', 'newsletter', 'combined']) {
+      try {
+        const res = await fetch(`${base}&source=${source}`)
+        const body = await res.json()
+        next[source] = res.ok ? body : { error: 1, note: body.error ?? '出错' }
+      } catch (e) {
+        next[source] = { error: 1, note: e instanceof Error ? e.message : String(e) }
+      }
     }
+    setAud(next)
+    setAudienceLoading(false)
   }, [clientId])
 
   const summary = useMemo(() => {
@@ -349,44 +351,56 @@ export default function ConversionsPage() {
       </div>
 
       <div style={{ border: '1px solid #d4c4a6', background: '#faf6ec', borderRadius: 8, padding: 14, marginBottom: 16 }}>
-        <div style={{ fontWeight: 600, fontSize: 15 }}>Meta 客户名单 A（做 lookalike 用）</div>
+        <div style={{ fontWeight: 600, fontSize: 15 }}>Meta 客户名单（做 lookalike 用）</div>
         <div style={{ fontSize: 13, color: '#6a5f4a', margin: '4px 0 10px' }}>
-          只含从 Meta 广告来、有同意、没拒联的<strong>终端客户</strong>（旅行社同行和员工自动排除）。
-          先看人数够不够，再下载。
+          都只含<strong>终端客户</strong>（旅行社同行、员工、拒联的自动排除）。三份任选，看够不够 100 人再下载。
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button onClick={() => void checkAudience()} disabled={!clientId || audienceLoading} style={btn()}>
-            {audienceLoading ? '统计中…' : '① 先看人数'}
-          </button>
-          {audienceStats && !audienceStats.error && (
-            <a
-              href={`/api/admin/conversions/audience-export?client_id=${encodeURIComponent(clientId)}&format=csv`}
-              style={{ ...btn('#16a34a', '#fff'), textDecoration: 'none' }}
-            >
-              ② 下载 CSV（{audienceStats.kept} 人）
-            </a>
-          )}
-        </div>
-        {audienceStats && (
-          <div style={{ fontSize: 13, marginTop: 10, color: audienceStats.error ? '#c00' : '#333' }}>
-            {audienceStats.error ? (
-              `出错：${audienceStats.note}`
-            ) : (
-              <>
-                <div>
-                  可上传 <strong>{audienceStats.kept}</strong> 人（有邮箱 {audienceStats.with_email} · 有电话{' '}
-                  {audienceStats.with_phone}）。{audienceStats.note}
-                </div>
+        <button onClick={() => void checkAudience()} disabled={!clientId || audienceLoading} style={btn()}>
+          {audienceLoading ? '统计中…（订阅名单要拉 Mailchimp，稍等）' : '① 先看人数'}
+        </button>
+
+        {(['fbleads', 'newsletter', 'combined'] as const).map((source) => {
+          const st = aud[source]
+          if (!st) return null
+          const label =
+            source === 'fbleads' ? 'FB 广告来的' : source === 'newsletter' ? 'Newsletter 订阅' : '合并去重（推荐）'
+          const name =
+            source === 'fbleads' ? 'fbleads' : source === 'newsletter' ? 'newsletter' : 'combined'
+          const today = new Date().toISOString().slice(0, 10)
+          return (
+            <div key={source} style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #e8ddc9', fontSize: 13 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <strong style={{ minWidth: 130 }}>{label}</strong>
+                {st.error ? (
+                  <span style={{ color: '#c00' }}>出错：{String(st.note)}</span>
+                ) : (
+                  <>
+                    <span>可上传 <strong>{st.kept}</strong> 人</span>
+                    <a
+                      href={`/api/admin/conversions/audience-export?client_id=${encodeURIComponent(clientId)}&format=csv&source=${source}`}
+                      style={{ ...btn('#16a34a', '#fff'), textDecoration: 'none', padding: '4px 10px' }}
+                    >
+                      下载（命名 CTS · LIST · {name} · {today.replace(/-/g, '')}）
+                    </a>
+                  </>
+                )}
+              </div>
+              {!st.error && source === 'combined' && (
                 <div style={{ color: '#8a7d64', marginTop: 4 }}>
-                  从 {audienceStats.total} 人里排除：同行/员工 {audienceStats.excluded_not_retail} · 没同意{' '}
-                  {audienceStats.excluded_no_consent} · 拒联 {audienceStats.excluded_dnc} · 无邮箱电话{' '}
-                  {audienceStats.excluded_no_key}
+                  广告 {st.fbleads_kept} + 订阅 {st.newsletter_kept}，去掉重复 {st.overlap_removed} → {st.kept} 独立人。{st.note}
                 </div>
-                <div style={{ color: '#a15c00', marginTop: 6 }}>
-                  下载后到 Meta 后台建 Customer List 上传（Meta 会自己加密），传完请删掉这份文件。
-                </div>
-              </>
-            )}
+              )}
+              {!st.error && source !== 'combined' && (
+                <div style={{ color: '#8a7d64', marginTop: 4 }}>{st.note}</div>
+              )}
+            </div>
+          )
+        })}
+
+        {Object.keys(aud).length > 0 && (
+          <div style={{ color: '#a15c00', marginTop: 10, fontSize: 13 }}>
+            🔴 下载后到 Meta 后台建 Customer List 上传（Meta 自己加密）。<strong>传完请删掉文件。</strong>
+            退订/未订阅的人已自动不在名单里。
           </div>
         )}
       </div>

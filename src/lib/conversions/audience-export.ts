@@ -124,6 +124,103 @@ export function buildMetaAudienceA(
   return { rows, stats }
 }
 
+/**
+ * 一个 Mailchimp 已订阅成员，配上「算好的 kind」和「是否 ME 侧拒联」。
+ * 上游负责用邮箱域名算 kind、用 ME 的 DNC 邮箱集判 doNotContact。
+ */
+export type NewsletterContact = {
+  email: string
+  phone: string | null
+  firstName: string | null
+  lastName: string | null
+  kind: ContactKind
+  /** 这个邮箱在 ME 侧被标了「别再联系」。 */
+  doNotContact: boolean
+}
+
+/**
+ * 筛出 newsletter 名单（Mailchimp 已订阅者）。
+ *
+ * 同意基础是「主动订阅营销邮件」，比广告表单更硬 —— 所以**不要求**来自广告，
+ * 但仍剔掉：非终端客户(agent/员工)、ME 侧明确拒联的、没匹配键的。
+ * 退订者不会进来（上游只拉 subscribed）。
+ */
+export function buildNewsletterAudience(
+  members: readonly NewsletterContact[],
+  defaultPhoneCountry: string | null,
+): AudienceResult {
+  const stats: AudienceResult['stats'] = {
+    total: members.length,
+    kept: 0,
+    excluded_not_retail: 0,
+    excluded_no_consent: 0, // newsletter 源天然有同意，这项恒 0
+    excluded_dnc: 0,
+    excluded_no_key: 0,
+    with_email: 0,
+    with_phone: 0,
+  }
+  const rows: AudienceRow[] = []
+
+  for (const m of members) {
+    if (m.kind !== 'retail') {
+      stats.excluded_not_retail++
+      continue
+    }
+    if (m.doNotContact) {
+      stats.excluded_dnc++
+      continue
+    }
+    const email = m.email ? m.email.trim().toLowerCase() : ''
+    const phone = normalizePhone(m.phone, defaultPhoneCountry) ?? ''
+    if (!email && !phone) {
+      stats.excluded_no_key++
+      continue
+    }
+    rows.push({
+      email,
+      phone,
+      fn: normalizeName(m.firstName) ?? '',
+      ln: normalizeName(m.lastName) ?? '',
+      country: 'nz',
+    })
+    stats.kept++
+    if (email) stats.with_email++
+    if (phone) stats.with_phone++
+  }
+
+  return { rows, stats }
+}
+
+/**
+ * 合并两份名单并去重。
+ *
+ * 去重键：先邮箱，无邮箱用电话。同一个人在两份里都出现时只留一条
+ * （优先保留信息更全的：有名字的压过没名字的）。
+ */
+export function mergeAudiences(...lists: ReadonlyArray<readonly AudienceRow[]>): AudienceRow[] {
+  const byKey = new Map<string, AudienceRow>()
+  for (const list of lists) {
+    for (const r of list) {
+      const key = r.email || `phone:${r.phone}`
+      if (!key || key === 'phone:') continue
+      const existing = byKey.get(key)
+      if (!existing) {
+        byKey.set(key, r)
+        continue
+      }
+      // 已有：补齐缺的字段（电话/名字），不新增行。
+      byKey.set(key, {
+        email: existing.email || r.email,
+        phone: existing.phone || r.phone,
+        fn: existing.fn || r.fn,
+        ln: existing.ln || r.ln,
+        country: existing.country || r.country,
+      })
+    }
+  }
+  return [...byKey.values()]
+}
+
 function csvCell(v: string): string {
   return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
 }
