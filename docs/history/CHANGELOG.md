@@ -21,6 +21,14 @@
 
 **验证**：`npx vitest run src/lib/memory src/lib/cron` 11 files / 187 passed · `npm run build` 通过 · 3 处变异探针确认对账测试真会红（排班漂移 / 日志名写错 / 清单漏登记）。
 
+**Inngest 豁免声明**（铁律 3 要求：暂不上 Inngest 的必须写明原因 / 恢复条件 / 替代 receipt）：
+
+- **原因**：`memory-extractor` 本身是纯库读库写（读 `flywheel_outcomes` → 写两张 memory 表 + 回填 `client_decision_history`），**不调任何外部服务、无外部副作用、单次同步跑完**，落在铁律 3 自己写的豁免范围内。为单个无副作用的 cron 套工作流层属于「为了用 Inngest 而复杂化」，规矩明确禁止。
+- **但链路耦合是隐式的**：`attribution`(`0 */6`) → 本任务(`30 6`) → `agent-learning-rollup`(`0 7` 周一) 目前**只靠时钟先后串联**，没有事件也没有回执。铁律 3 点名「Outcome 回写」属于应上 Inngest 的场景，所以这是一笔明确的技术债，不是「不适用」。
+- **当前风险量化**：`attribution-cron` 近 30 天 118 次，最长 353s / 平均 236s / **0 次失败**；本任务留 30 分钟间隔，约 5 倍余量。今天不构成实际风险。
+- **替代 receipt 在哪**：`cron_run_logs`（路由已调 `startCronRun('memory-extractor')`，写 processed / completed / failed），配合本次同步登记的 `CRON_REGISTRY` —— `lib/cron/health.ts` 会把「从来没跑过」(`neverRan`) 和「该跑没跑」(`overdue`) 单独报出来，跟只报「跑了但失败」的日报是两条线。
+- **恢复条件（满足任一就把这条链事件化）**：① `attribution-cron` 出现单次超过 25 分钟或连续失败；② 抽取器读到的 outcome 明显滞后于 attribution 那一轮（学到残缺数据）；③ 这条链上再接第四个环节。届时改为 `attribution` 完成后发 `flywheel.outcomes.computed`（带 run id / client 数 / outcome 数），由 Inngest 接力触发抽取与汇总。
+
 **风险级 B**。**平台层级门**：判定 L1 平台基础设施 · Memory / Verification，但**不是新增能力**（能力早在，缺的是调度），归位既有 L1，不占候选名额。
 
 **Reuse Statement**：复用 `CRON_REGISTRY` 对账机制、`run-logger` 的 `startCronRun`、`me-shared-cron-secret` 环境变量组、既有 `memory-extractor` 路由与 `lib/memory/extractor.ts` 全部逻辑 —— **本次没有新增任何代码模块**。platform-shared：两条调度登记。抽取器写的是 client-private memory（两张表均带 `client_id`），未碰 industry / global 泛化边界。industry-specific / client-specific：无。落点与 tier-gate 决策时分类一致。
