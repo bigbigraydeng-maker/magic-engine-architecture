@@ -108,4 +108,9 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '三层漏斗广告打法剧本（认知→线索→再营销→回传闭环 · 骨架通用 + 分行业配方）',
     reviewDate: '2026-10-06',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '内容发布→广告草稿直链（Daily Plan 发布完成 → 自动建暂停态广告进指定广告组 · me_ad_launch）',
+    reviewDate: '2026-10-06',
+  },
 ]
