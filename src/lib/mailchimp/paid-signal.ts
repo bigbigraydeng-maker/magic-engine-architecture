@@ -149,15 +149,19 @@ const EVIDENCE_MAX = 200
  * 「一旦 / 当 / 如果」收到钱 —— 这是**还没发生的事**，不是确认句。
  *
  * 真实语料里就有这种写法：`Once your payment is received, we will send the
- * invoice.` / `Once we have received your payment, ...`。它们跟
- * `Your payment has been received` 长得几乎一样（都含 `payment ... received`），
- * 但语义完全相反 —— 前者还在等钱，后者钱已经到账。判断依据是**整个分句**开头
- * 是不是条件词，而不是只看紧贴在命中短语前面的那几个字：「Once we have
- * received your payment」里，条件词 `once` 隔着 `we have` 才挨到
- * `received your payment`，只看紧邻前缀会漏掉它。命中 RECEIVED_PATTERNS 后
- * 必须回头看它所在分句开头，不然就是把「还没付」判成「已付」，比催款误判更隐蔽。
+ * invoice.` / `Once we have received your payment, ...` /
+ * `Until your payment is received, ...` / `Before the payment is received,
+ * ...`。它们跟 `Your payment has been received` 长得几乎一样（都含
+ * `payment ... received`），但语义完全相反 —— 前者还在等钱，后者钱已经到账。
+ * 判断依据是**整个分句**开头是不是条件词，而不是只看紧贴在命中短语前面的
+ * 那几个字：「Once we have received your payment」里，条件词 `once` 隔着
+ * `we have` 才挨到 `received your payment`，只看紧邻前缀会漏掉它。命中
+ * RECEIVED_PATTERNS 后必须回头看它所在分句开头，不然就是把「还没付」判成
+ * 「已付」，比催款误判更隐蔽。`until` / `before` 是 2026-09-03 复审补的两个
+ * 常见前缀 —— 之前只覆盖了 once/when/if 这类，漏了这两个同样常见的条件句。
  */
-const CONDITIONAL_CLAUSE_START = /^\s*(?:once|when|if|after|upon|as\s+soon\s+as|provided\s+that|assuming)\b/i
+const CONDITIONAL_CLAUSE_START =
+  /^\s*(?:once|when|if|after|upon|until|before|as\s+soon\s+as|provided\s+that|assuming)\b/i
 
 /** 分句边界：句号/问号/感叹号/换行/逗号 —— 条件从句常见的收尾都在这几个字符上。 */
 function clauseStart(text: string, index: number): number {
@@ -293,13 +297,21 @@ export interface PaidSignalInput {
  * 判定顺序是有意的，换顺序会出事：
  *
  *   1. 先找**我们自己的确认句** —— 一封「定金收到了，尾款请点链接」两种句子
- *      都有，先看确认句才不会把它误判成催款。
- *   2. 再看**催款句** —— 到这一步说明全文没有任何确认，那就是真的还没付。
- *      单独标出来而不是并进 not_payment，是为了让调用方能把它记成
- *      「这个人被催过款」，将来做跟进用。
- *   3. 最后才看客人的声明 —— 只到 needs_review，永不自动打标签。
- *   4. 声明都没有、但带附件又在谈付款 —— 证据可能就在附件里，同样只到
- *      needs_review，理由标成 `attachment_only` 方便人工核对时先看附件。
+ *      都有，先看确认句才不会把它误判成催款。只认 outbound。
+ *   2. inbound 里先看**客人自己的付款声明** —— 客人回信「I have made the
+ *      payment using the payment link below」时，正文里同样含
+ *      `payment link` 这个催款关键词，但这封信是客人在说他已经付过款，
+ *      不是我们在催他付款。催款句 CHASING_PATTERNS 是从 outbound 视角写的
+ *      （「请点链接付款」），套在 inbound 上会把「我已经付了」错判成
+ *      「还没付」，然后这个人会继续被群发（2026-09-03 复审发现）。所以
+ *      inbound 必须先过一遍客人声明，声明命中就直接 needs_review，不再看
+ *      催款句。
+ *   3. inbound 声明都没有、但带附件又在谈付款 —— 证据可能就在附件里，同样
+ *      只到 needs_review，理由标成 `attachment_only` 方便人工核对时先看
+ *      附件。
+ *   4. 走到这里说明：outbound 没有确认句，或 inbound 没有声明/附件证据 ——
+ *      再看**催款句**。单独标出来而不是并进 not_payment，是为了让调用方
+ *      能把它记成「这个人被催过款」，将来做跟进用。
  */
 export function readPaidSignal(input: PaidSignalInput): PaidSignal {
   const text = (input.text ?? '').replace(/\s+/g, ' ').trim()
@@ -325,21 +337,24 @@ export function readPaidSignal(input: PaidSignalInput): PaidSignal {
     }
   }
 
-  // ② 没有任何确认句，却在催款 —— 这个人还没付，明确标出来别碰。
-  const chasing = firstMatch(text, CHASING_PATTERNS)
-  if (chasing) return { kind: 'chasing', evidence: chasing }
-
-  // ③ 客人自己说付了 / 甩了张回单 —— 交给人点一下。
   if (input.direction === 'inbound') {
+    // ② 客人自己说付了 —— 必须先于催款句判断，否则「I have made the payment
+    // using the payment link below」会被 CHASING_PATTERNS 的 `payment link`
+    // 抢先命中，误判成还没付。
     const claim = firstMatch(text, INBOUND_CLAIM_PATTERNS)
     if (claim) return { kind: 'needs_review', evidence: claim, reason: 'inbound_claim' }
 
-    // ④ 正文没写声明，但带附件、又在谈付款 —— 证据大概率在附件里，别静默丢掉。
+    // ③ 声明都没有，但带附件、又在谈付款 —— 证据大概率在附件里，别静默丢掉。
     if (input.hasAttachment) {
       const ctx = firstMatch(text, ATTACHMENT_PAYMENT_CONTEXT_PATTERNS)
       if (ctx) return { kind: 'needs_review', evidence: ctx, reason: 'attachment_only' }
     }
   }
+
+  // ④ 没有确认句（outbound）也没有付款声明/附件证据（inbound），却在催款 ——
+  // 这个人还没付，明确标出来别碰。
+  const chasing = firstMatch(text, CHASING_PATTERNS)
+  if (chasing) return { kind: 'chasing', evidence: chasing }
 
   return { kind: 'not_payment' }
 }
