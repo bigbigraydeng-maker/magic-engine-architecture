@@ -166,6 +166,36 @@ describe('buildTodoEmail', () => {
     expect(many.subject).toContain('无事')
   })
 
+  /**
+   * 2026-09-07 铁律 3 下半：`diagnostic_findings` 是"本周体检查到的严重问题"
+   * 汇总，PM 2026-08-04 的处理方式是"不用你挑，由每周方案自动排成看板动作"
+   * （how 原文见 manual-items.ts:1755）—— 跟 SEO 巡逻发现是同一条纪律。所以它
+   * 必须落在「📣 系统替你做了什么」栏，不进「🙋 需要你动手」栏，也不抬高
+   * "今天有几件事"总数。这条测试锁死这个契约。
+   */
+  it('🔴 本周体检查到的严重问题走「系统替你做了什么」栏，不进「需要你动手」，不抬高总数', () => {
+    const email = buildTodoEmail(3, {
+      ...EMPTY,
+      manualItems: [
+        {
+          kind: 'diagnostic_findings',
+          client_id: 'cid-1',
+          client_name: 'CTS Tours NZ',
+          what: '本周体检查出 3 个严重、5 个高优先问题。最要紧的一条：首页 H1 缺失',
+          how: '不用你挑 —— 每周方案会把这些自动排成看板上的动作',
+          href: 'https://app.magicengine.com.au/dashboard/clients/cid-1/execution',
+        },
+      ],
+    }, '31 Jul')
+    // 不进「需要你动手」，走「系统替你做了什么」
+    expect(email.html).not.toContain('需要你动手')
+    expect(email.html).toContain('系统替你做了什么')
+    expect(email.html).toContain('CTS Tours NZ')
+    // 不抬高总数
+    expect(email.totalItems).toBe(0)
+    expect(email.subject).toContain('无事')
+  })
+
   it('zero-count sections are omitted entirely', () => {
     const email = buildTodoEmail(3, {
       ...EMPTY,

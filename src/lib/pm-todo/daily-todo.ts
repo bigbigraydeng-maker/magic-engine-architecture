@@ -25,8 +25,14 @@ import {
 /**
  * 这些是**知会**，不是待办 —— 单独一栏，也不计进「今天有几件事」。
  * 判断标准：PM 不动手也不会出事。会出事的一律留在「需要你动手」那栏。
+ *
+ * 2026-09-07 `diagnostic_findings` 挪进来：跟 SEO 巡逻发现是同一条纪律 ——
+ * 本周体检查到的严重问题**已经**由每周方案自动排成了执行看板的建议卡
+ * （见 manual-items.ts:1741-1758 how 原文「不用你挑」），本就不是要 PM
+ * 单独动手处理的事，之前算进「今天有几件事」是口径 bug（跟 91 那次
+ * 「巡逻发现被数两遍」是同一类错，PM 2026-08-04 拍板）。
  */
-const INFORMATIONAL_KINDS: ManualItemKind[] = ['prescription_updated']
+const INFORMATIONAL_KINDS: ManualItemKind[] = ['prescription_updated', 'diagnostic_findings']
 
 /** FDE focus clients: CTS + Oztop. */
 export const FOCUS_CLIENT_IDS = [
