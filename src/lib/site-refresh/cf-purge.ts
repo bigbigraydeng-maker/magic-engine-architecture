@@ -1,12 +1,11 @@
 /**
- * Purge specific URLs from Cloudflare's edge cache.
+ * Purge specific URLs from Cloudflare's edge cache for one customer site.
  *
- * Uses `CLOUDFLARE_MGMT_TOKEN` (customer-site DNS / Pages management)
- * and `CTS_CLOUDFLARE_ZONE_ID` (the zone id for ctstours.co.nz). Both
- * must be present or the call short-circuits and returns a structured
- * error — we never fall back to purging everything by accident.
+ * Zone id + origin come from the registry (client_site_platforms). The
+ * ambient Cloudflare token is CLOUDFLARE_MGMT_TOKEN — that one is shared
+ * across every customer site ME manages, so it stays as an env var.
  *
- * Cloudflare accepts up to 30 URLs per request; MVP chunks by 25.
+ * Cloudflare accepts up to 30 URLs per request; we chunk by 25.
  */
 
 export interface CloudflarePurgeResult {
@@ -23,26 +22,30 @@ function chunk<T>(arr: readonly T[], size: number): T[][] {
   return out
 }
 
-export async function purgeCloudflarePaths(
-  paths: readonly string[],
-  opts: {
-    origin?: string
-    zoneId?: string
-    token?: string
-    fetcher?: typeof fetch
-  } = {},
-): Promise<CloudflarePurgeResult> {
-  const zoneId = opts.zoneId ?? process.env.CTS_CLOUDFLARE_ZONE_ID
-  const token = opts.token ?? process.env.CLOUDFLARE_MGMT_TOKEN
-  const origin = opts.origin ?? 'https://www.ctstours.co.nz'
-  const fetcher = opts.fetcher ?? fetch
+export interface CloudflarePurgeParams {
+  paths: readonly string[]
+  origin: string
+  zoneId: string
+  token?: string
+  fetcher?: typeof fetch
+}
 
-  if (!zoneId || !token) {
+export async function purgeCloudflarePaths(
+  params: CloudflarePurgeParams,
+): Promise<CloudflarePurgeResult> {
+  const { paths, origin, zoneId } = params
+  const token = params.token ?? process.env.CLOUDFLARE_MGMT_TOKEN
+  const fetcher = params.fetcher ?? fetch
+
+  if (!token) {
     return {
       ok: false,
       purged: [],
-      errors: ['CTS_CLOUDFLARE_ZONE_ID or CLOUDFLARE_MGMT_TOKEN missing'],
+      errors: ['CLOUDFLARE_MGMT_TOKEN missing'],
     }
+  }
+  if (!zoneId) {
+    return { ok: false, purged: [], errors: ['zoneId missing'] }
   }
   if (paths.length === 0) {
     return { ok: true, purged: [], errors: [] }

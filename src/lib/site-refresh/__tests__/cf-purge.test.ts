@@ -10,10 +10,20 @@ function makeOkFetch() {
   )
 }
 
+const base = {
+  origin: 'https://www.ctstours.co.nz',
+  zoneId: 'zone123',
+  token: 'tok',
+}
+
 describe('purgeCloudflarePaths', () => {
-  it('fails closed when required credentials are missing', async () => {
+  it('fails closed when the Cloudflare token is missing', async () => {
     const fetcher = vi.fn()
-    const res = await purgeCloudflarePaths(['/tours/foo'], {
+    const res = await purgeCloudflarePaths({
+      paths: ['/tours/foo'],
+      origin: base.origin,
+      zoneId: base.zoneId,
+      token: undefined,
       fetcher: fetcher as unknown as typeof fetch,
     })
     expect(res.ok).toBe(false)
@@ -21,11 +31,27 @@ describe('purgeCloudflarePaths', () => {
     expect(fetcher).not.toHaveBeenCalled()
   })
 
+  it('fails closed when the zone id is missing', async () => {
+    const fetcher = vi.fn()
+    const res = await purgeCloudflarePaths({
+      paths: ['/tours/foo'],
+      origin: base.origin,
+      zoneId: '',
+      token: base.token,
+      fetcher: fetcher as unknown as typeof fetch,
+    })
+    expect(res.ok).toBe(false)
+    expect(res.errors[0]).toContain('zoneId')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   it('short-circuits with ok=true when no paths given', async () => {
     const fetcher = vi.fn()
-    const res = await purgeCloudflarePaths([], {
-      zoneId: 'z',
-      token: 't',
+    const res = await purgeCloudflarePaths({
+      paths: [],
+      origin: base.origin,
+      zoneId: base.zoneId,
+      token: base.token,
       fetcher: fetcher as unknown as typeof fetch,
     })
     expect(res.ok).toBe(true)
@@ -35,10 +61,11 @@ describe('purgeCloudflarePaths', () => {
 
   it('builds absolute URLs from paths and POSTs to CF purge_cache', async () => {
     const fetcher = makeOkFetch()
-    const res = await purgeCloudflarePaths(['/tours/a', 'tours/b'], {
-      origin: 'https://www.ctstours.co.nz',
-      zoneId: 'zone123',
-      token: 'tok',
+    const res = await purgeCloudflarePaths({
+      paths: ['/tours/a', 'tours/b'],
+      origin: base.origin,
+      zoneId: base.zoneId,
+      token: base.token,
       fetcher: fetcher as unknown as typeof fetch,
     })
     expect(res.ok).toBe(true)
@@ -57,21 +84,25 @@ describe('purgeCloudflarePaths', () => {
   it('chunks large path lists (25 per request)', async () => {
     const fetcher = makeOkFetch()
     const paths = Array.from({ length: 60 }, (_, i) => `/p${i}`)
-    const res = await purgeCloudflarePaths(paths, {
-      zoneId: 'z',
-      token: 't',
+    const res = await purgeCloudflarePaths({
+      paths,
+      origin: base.origin,
+      zoneId: base.zoneId,
+      token: base.token,
       fetcher: fetcher as unknown as typeof fetch,
     })
     expect(res.ok).toBe(true)
-    expect(fetcher.mock.calls.length).toBe(3) // 25 + 25 + 10
+    expect(fetcher.mock.calls.length).toBe(3)
     expect(res.purged.length).toBe(60)
   })
 
   it('reports HTTP errors instead of throwing', async () => {
     const fetcher = vi.fn(async () => new Response('server error', { status: 500 }))
-    const res = await purgeCloudflarePaths(['/a'], {
-      zoneId: 'z',
-      token: 't',
+    const res = await purgeCloudflarePaths({
+      paths: ['/a'],
+      origin: base.origin,
+      zoneId: base.zoneId,
+      token: base.token,
       fetcher: fetcher as unknown as typeof fetch,
     })
     expect(res.ok).toBe(false)
@@ -81,13 +112,16 @@ describe('purgeCloudflarePaths', () => {
 
   it('reports CF success:false payloads instead of pretending purge worked', async () => {
     const fetcher = vi.fn(async () =>
-      new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'nope' }] }), {
-        status: 200,
-      }),
+      new Response(
+        JSON.stringify({ success: false, errors: [{ code: 10000, message: 'nope' }] }),
+        { status: 200 },
+      ),
     )
-    const res = await purgeCloudflarePaths(['/a'], {
-      zoneId: 'z',
-      token: 't',
+    const res = await purgeCloudflarePaths({
+      paths: ['/a'],
+      origin: base.origin,
+      zoneId: base.zoneId,
+      token: base.token,
       fetcher: fetcher as unknown as typeof fetch,
     })
     expect(res.ok).toBe(false)

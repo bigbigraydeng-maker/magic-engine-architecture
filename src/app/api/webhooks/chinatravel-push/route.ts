@@ -1,39 +1,32 @@
 /**
  * POST /api/webhooks/chinatravel-push
  *
- * GitHub webhook receiver for pushes on the `chinatravel` repo.
+ * GitHub webhook receiver for pushes on customer site repos that ME
+ * manages the cache-refresh pipeline for. Deliberately generic despite
+ * the route name — any repo registered in @/lib/site-refresh/paths
+ * (INVENTORY_BY_REPO) can point its webhook here and the pipeline
+ * fans out automatically. (The route name reflects its first customer,
+ * chinatravel / ctstours.co.nz; new customer sites can either share
+ * this URL or register a sibling under /api/webhooks/<name>-push.)
  *
- * Why: after any data-only push to chinatravel's main branch (tour
- *   departure dates, blog copy, JSON-LD schema tweaks), the produced
- *   Render build eventually replaces the artifact but Next.js's Full
- *   Route Cache and Cloudflare's edge cache serve the previous
- *   version for up to a year. This endpoint receives the push,
- *   HMAC-verifies it, and emits a `cts_site.data.updated` event that
- *   drives the CTS site cache-refresh Inngest function (which waits
- *   for the build, revalidates the paths in Next.js, purges them in
- *   Cloudflare, and verifies).
- *
- * Configuration (one-time, in the chinatravel repo on GitHub):
+ * Configuration (per customer repo, one-time, in GitHub):
  *   - Settings → Webhooks → Add webhook
  *   - Payload URL:  https://app.magicengine.com.au/api/webhooks/chinatravel-push
  *   - Content type: application/json
- *   - Secret:       $GITHUB_WEBHOOK_SECRET (same value already used by
- *                   /api/cms/github/webhook — no new secret needed)
+ *   - Secret:       $GITHUB_WEBHOOK_SECRET (reused, no new secret)
  *   - Events:       "Just the push event"
  *
- * Non-goals: we do NOT parse the diff to figure out which specific
- *   tour or blog slug changed. planSiteRefresh() takes a conservative
- *   fan-in view of the changed file paths and lets verify smoke each
- *   published URL.
+ * Per-customer runtime config (Cloudflare zone id, revalidate secret,
+ * origin URL) lives in the Supabase `client_site_platforms` table.
+ * NO per-customer environment variables in the ME app.
  */
 
 import { createHmac, timingSafeEqual } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { inngest } from '@/lib/inngest/client'
-import { planSiteRefresh } from '@/lib/site-refresh/paths'
+import { planSiteRefresh, getInventoryForRepo } from '@/lib/site-refresh/paths'
 import { CTS_SITE_DATA_UPDATED_EVENT } from '@/lib/inngest/functions/cts-site-cache-refresh'
 
-const APPROVED_REPO = 'bigbigraydeng-maker/chinatravel'
 const APPROVED_BRANCH = 'refs/heads/main'
 
 function verifySignature(rawBody: string, signatureHeader: string | null): boolean {
@@ -110,9 +103,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'invalid json' }, { status: 400 })
   }
 
-  const repoName = typeof parsed.repository?.full_name === 'string' ? parsed.repository.full_name : ''
-  if (repoName !== APPROVED_REPO) {
-    return NextResponse.json({ ignored: `repo:${repoName || 'unknown'}` })
+  const repoName =
+    typeof parsed.repository?.full_name === 'string' ? parsed.repository.full_name : ''
+
+  // Approved-repo gate is now data-driven: any repo we have a URL
+  // inventory registered for is welcome. Repos we don't know about get
+  // acknowledged with a clear reason so misconfiguration is visible in
+  // GitHub's webhook delivery history rather than silent.
+  if (!getInventoryForRepo(repoName)) {
+    return NextResponse.json({ ignored: `no_inventory_for_repo:${repoName || 'unknown'}` })
   }
 
   const ref = typeof parsed.ref === 'string' ? parsed.ref : ''
@@ -130,6 +129,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       dispatched: false,
       reason: 'no_site_change',
       commit_sha: commitSha,
+      github_repo: repoName,
       changed_file_count: changedFiles.length,
     })
   }
@@ -139,6 +139,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     data: {
       commit_sha: commitSha,
       ref,
+      github_repo: repoName,
       changed_files: changedFiles,
       triggered_at_ms: Date.now(),
     },
@@ -149,6 +150,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     dispatched: true,
     event: CTS_SITE_DATA_UPDATED_EVENT,
     commit_sha: commitSha,
+    github_repo: repoName,
     tour_data_changed: plan.tourDataChanged,
     blog_data_changed: plan.blogDataChanged,
     plan_reasons: plan.reasons,

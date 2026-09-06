@@ -1,17 +1,16 @@
 /**
- * Given a list of files touched by a chinatravel push, decide which
- * front-end paths need to be revalidated in Next.js Full Route Cache
- * and purged in Cloudflare's edge cache.
+ * Given a list of files touched by a customer-site push, decide
+ * whether the push affects the public site at all, and (if so) which
+ * bucket it hits (tour data / blog data / schema-shared).
  *
- * Deliberately conservative: if we don't recognise a data path we
- * don't over-scope. `hasSiteChange` returns false when nothing looks
- * like it would change what a public page renders — the caller then
- * skips the whole refresh pipeline.
+ * This is intentionally lightweight and platform-shared — it does NOT
+ * know the concrete list of published URLs for any particular customer.
+ * The concrete URL list is provided by the caller (registry payload or
+ * client-specific config).
  *
- * We do NOT try to introspect which specific tour or blog slug changed
- * inside those bundled data files (they're all one big `.ts` module).
- * MVP behaviour: mark every published tour URL and every blog URL as
- * potentially stale, and let the verify step confirm each one.
+ * Not registering a specific file pattern here means we simply don't
+ * fire a refresh for that push. We prefer over-purging on ambiguity
+ * to under-purging.
  */
 
 export interface SiteRefreshPlan {
@@ -62,34 +61,54 @@ export function planSiteRefresh(changedFiles: readonly string[]): SiteRefreshPla
 }
 
 /**
- * The published tour URLs on ctstours.co.nz. Kept as an explicit list
- * so the refresh pipeline stays deterministic (build never sees the
- * chinatravel repo). Add a new row when a new tour lands on the site.
+ * Compute the concrete list of paths to refresh, given the plan and
+ * the site's URL inventory. The caller supplies each bucket's URL list
+ * so this module stays customer-agnostic.
  */
-export const CTS_TOUR_PATHS: readonly string[] = [
-  '/tours/china/discovery/essentials',
-  '/tours/china/discovery/beijing-xian',
-  '/tours/china/discovery/shanghai-surroundings',
-  '/tours/china/discovery/golden-china',
-  '/tours/china/discovery/tale-of-two-cities',
-  '/tours/china/signature/imperial-heritage',
-  '/tours/china/signature/silk-road',
-] as const
+export interface SiteUrlInventory {
+  readonly tourPaths: readonly string[]
+  readonly blogPaths: readonly string[]
+}
 
-/** Blog hub + high-value long-tail blog URLs whose Full Route Cache we */
-/** actively refresh. Kept short on purpose — deep long-tail is handled */
-/** by the next scheduled Render build.                                  */
-export const CTS_BLOG_PATHS: readonly string[] = [
-  '/blog/beijing-xian-itinerary-10-days',
-  '/blog/shanghai-suzhou-hangzhou-itinerary',
-  '/blog/holidays-to-china-from-new-zealand',
-  '/blog/china-tour-packages-including-airfare-from-nz',
-] as const
-
-/** Convert a SiteRefreshPlan into the concrete list of paths to hit. */
-export function pathsFromPlan(plan: SiteRefreshPlan): readonly string[] {
+export function pathsFromPlan(
+  plan: SiteRefreshPlan,
+  inventory: SiteUrlInventory,
+): readonly string[] {
   const out: string[] = []
-  if (plan.tourDataChanged) out.push(...CTS_TOUR_PATHS)
-  if (plan.blogDataChanged) out.push(...CTS_BLOG_PATHS)
+  if (plan.tourDataChanged) out.push(...inventory.tourPaths)
+  if (plan.blogDataChanged) out.push(...inventory.blogPaths)
   return Array.from(new Set(out))
+}
+
+/**
+ * CTS Tours current published URL inventory. This is the ONE customer-
+ * specific hardcode in the ME repo — small enough to be worth it, and
+ * future customer sites should either add their own inventory constant
+ * next to this one or (better) declare it in client_site_platforms.
+ */
+export const CTS_TOURS_INVENTORY: SiteUrlInventory = {
+  tourPaths: [
+    '/tours/china/discovery/essentials',
+    '/tours/china/discovery/beijing-xian',
+    '/tours/china/discovery/shanghai-surroundings',
+    '/tours/china/discovery/golden-china',
+    '/tours/china/discovery/tale-of-two-cities',
+    '/tours/china/signature/imperial-heritage',
+    '/tours/china/signature/silk-road',
+  ],
+  blogPaths: [
+    '/blog/beijing-xian-itinerary-10-days',
+    '/blog/shanghai-suzhou-hangzhou-itinerary',
+    '/blog/holidays-to-china-from-new-zealand',
+    '/blog/china-tour-packages-including-airfare-from-nz',
+  ],
+} as const
+
+const INVENTORY_BY_REPO: Record<string, SiteUrlInventory> = {
+  'bigbigraydeng-maker/chinatravel': CTS_TOURS_INVENTORY,
+}
+
+/** Look up a customer's URL inventory by GitHub repo full name. */
+export function getInventoryForRepo(githubRepo: string): SiteUrlInventory | null {
+  return INVENTORY_BY_REPO[githubRepo] ?? null
 }

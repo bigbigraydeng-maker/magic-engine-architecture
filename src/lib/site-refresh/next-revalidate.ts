@@ -1,12 +1,12 @@
 /**
- * Ask chinatravel's Next.js app to blow specific paths out of its
- * Full Route Cache. This calls the `/api/revalidate` endpoint that
- * lives in the chinatravel repo (added there in a separate PR), gated
- * by a Bearer token that must match its `REVALIDATE_SECRET` env var
- * (mirrored here as `CTS_REVALIDATE_SECRET`).
+ * Ask a customer site's Next.js app to blow specific paths out of its
+ * Full Route Cache. Calls the /api/revalidate endpoint that lives in
+ * the customer's repo (one per site), gated by a Bearer token that must
+ * match the site's REVALIDATE_SECRET env var.
  *
- * We call one path per request — the chinatravel endpoint takes
- * `?path=` and revalidates that single path.
+ * The secret is per-site, held in the registry (client_site_platforms).
+ * It is NEVER read from process.env here — that keeps the ME app free
+ * of one-env-per-customer sprawl.
  */
 
 export interface NextRevalidateResult {
@@ -15,23 +15,24 @@ export interface NextRevalidateResult {
   readonly errors: readonly string[]
 }
 
-export async function revalidateCtsPaths(
-  paths: readonly string[],
-  opts: {
-    origin?: string
-    secret?: string
-    fetcher?: typeof fetch
-  } = {},
+export interface RevalidateParams {
+  paths: readonly string[]
+  origin: string
+  secret: string
+  fetcher?: typeof fetch
+}
+
+export async function revalidateSitePaths(
+  params: RevalidateParams,
 ): Promise<NextRevalidateResult> {
-  const secret = opts.secret ?? process.env.CTS_REVALIDATE_SECRET
-  const origin = opts.origin ?? 'https://www.ctstours.co.nz'
-  const fetcher = opts.fetcher ?? fetch
+  const { paths, origin, secret } = params
+  const fetcher = params.fetcher ?? fetch
 
   if (!secret) {
     return {
       ok: false,
       revalidated: [],
-      errors: ['CTS_REVALIDATE_SECRET missing'],
+      errors: ['revalidate secret missing'],
     }
   }
   if (paths.length === 0) {
