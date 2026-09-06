@@ -72,9 +72,25 @@ export async function fetchSubscribedMembers(
       `${base}?status=subscribed&count=${pageSize}&offset=${offset}` +
       // 只取要用的字段，别把整份成员画像拉回来（省流量，也少 PII 暴露面）。
       `&fields=members.email_address,members.merge_fields,total_items`
-    const res = await fetcher(url, {
-      headers: { Authorization: authHeader(cfg.apiKey), 'Content-Type': 'application/json' },
-    })
+    // 🔴 加超时。不加的话 prod 连 Mailchimp 卡住会一直挂，最后被平台判 504 返回
+    //    HTML 报错页，前端 res.json() 就炸「Unexpected token '<'」（2026-09-06 线上）。
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 20_000)
+    let res: Response
+    try {
+      res = await fetcher(url, {
+        headers: { Authorization: authHeader(cfg.apiKey), 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
+      })
+    } catch (e) {
+      throw new Error(
+        (e as Error)?.name === 'AbortError'
+          ? 'Mailchimp 20 秒没响应，先跳过'
+          : `连 Mailchimp 失败：${e instanceof Error ? e.message : String(e)}`,
+      )
+    } finally {
+      clearTimeout(timer)
+    }
     if (!res.ok) {
       let detail = ''
       try {
