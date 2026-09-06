@@ -89,7 +89,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 4. 定时任务全表
 
-### 4.1 Render Cron（**47 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
+### 4.1 Render Cron（**48 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
 
 | Cron 名 | 调度 (UTC) | 端点 |
 |---|---|---|
@@ -117,6 +117,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | anomaly-detector-daily | `0 5 * * *` | `/api/cron/anomaly-detector` |
 | daily-cron-digest | `0 6 * * *` | `/api/cron/daily-cron-digest` |
 | winner-reel-sync-daily | `0 15 * * *` | `/api/cron/winner-reel-sync-daily` |
+| cron-run-logs-cleanup | `50 16 * * *` | `/api/cron/cron-run-logs-cleanup` —— 清运行记录自己的旧行（2026-09-07 从表上的触发器搬过来）|
 | proposal-view-digest | `0 19 * * *` | `/api/cron/proposal-view-digest` |
 | factory-order-scheduler | `0 20 * * *` | `/api/cron/factory-order-scheduler` |
 | content-factory-intake | `0 22 * * *` | `/api/cron/content-factory-intake` |
