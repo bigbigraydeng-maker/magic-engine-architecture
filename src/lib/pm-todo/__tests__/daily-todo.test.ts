@@ -22,13 +22,13 @@ describe('buildTodoEmail · setup tasks', () => {
       name: 'CTS Tours NZ',
       id: 'cid-1',
       label: '连接 Google 商家页（点一次授权，之后自动发帖）',
-      href: 'https://app.magicengine.com.au/api/auth/google/gbp/start?clientId=cid-1',
+      href: 'https://app.magicengine.com.au/api/auth/google/google/connect?client_id=cid-1',
     },
     {
       name: 'oztop',
       id: 'cid-2',
       label: '连接 Google 商家页（点一次授权，之后自动发帖）',
-      href: 'https://app.magicengine.com.au/api/auth/google/gbp/start?clientId=cid-2',
+      href: 'https://app.magicengine.com.au/api/auth/google/google/connect?client_id=cid-2',
     },
   ]
 
@@ -38,8 +38,8 @@ describe('buildTodoEmail · setup tasks', () => {
     expect(email.totalItems).toBe(2)
     expect(email.subject).toContain('2 件')
     expect(email.html).toContain('去连接')
-    expect(email.html).toContain('gbp/start?clientId=cid-1')
-    expect(email.html).toContain('gbp/start?clientId=cid-2')
+    expect(email.html).toContain('google/connect?client_id=cid-1')
+    expect(email.html).toContain('google/connect?client_id=cid-2')
   })
 
   it('setup card is rendered above the routine review queues', () => {
@@ -86,7 +86,9 @@ describe('loadGbpSetupTasks', () => {
   it('lists clients with no connection at all', async () => {
     const tasks = await loadGbpSetupTasks(makeSupabase(CLIENTS, []) as never)
     expect(tasks.map((t) => t.id)).toEqual(['cts', 'oz'])
-    expect(tasks[0].href).toContain('gbp/start?clientId=cts')
+    // 2026-09-07 铁律 3：合并流一次授权覆盖 GBP + GSC + GA4 + Indexing
+    expect(tasks[0].href).toContain('/api/auth/google/connect?client_id=cts')
+    expect(tasks[0].href).not.toContain('gbp/start')
   })
 
   it('a connected client WITHOUT a confirmed storefront stays on the list', async () => {
@@ -111,7 +113,7 @@ describe('loadGbpSetupTasks', () => {
       ]) as never,
     )
     expect(tasks.map((t) => t.id)).toEqual(['cts'])
-    expect(tasks[0].href).toContain('gbp/start')
+    expect(tasks[0].href).toContain('/api/auth/google/connect?client_id=cts')
   })
 
   it('fully set up → empty list', async () => {

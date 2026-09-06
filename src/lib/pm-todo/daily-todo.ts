@@ -84,9 +84,20 @@ const REEL_REVIEW_STATUSES = ['video_ready', 'images_ready', 'in_review'] as con
 
 const APP_BASE = 'https://app.magicengine.com.au'
 
-/** 板桥审：给 PM/FDE 看的 GBP 待办文案（含「用谁的账号」这个最易翻车点）。 */
+/**
+ * 板桥审：给 PM/FDE 看的 GBP 待办文案（含「用谁的账号」这个最易翻车点）。
+ *
+ * 2026-09-07 铁律 3 「遇卡点必自动化」落地：这条 setup 从前只覆盖商家页一个
+ * scope，Ray 还得再单独点一次 Google Search Console / Analytics 授权 ——
+ * 每客户要跳两遍 Google consent。合到 `/api/auth/google/connect` 之后，一次
+ * 点完覆盖商家页 + Search Console + Analytics + 收录申请，同一个 Google 账号
+ * 只跳一次；用户不用在同一个客户上二次授权。判据仍是 `client_connectors.gbp`
+ * / `platform_oauth_connections.google_gbp` 上有活跃行 + location_name 有值，
+ * 所以商家页仍然是这条待办的触发条件（有些客户没 GSC/GA4 也没关系）。
+ */
 const GBP_CONNECT_LABEL =
-  '连接 Google 商家页 · 约 1 分钟。连上后不会自动发东西，每条帖子仍要你点确认才发。' +
+  '一次点完客户全部 Google 权限 · 约 1 分钟。覆盖商家页 + Search Console + Analytics + 收录申请，' +
+  '同一个 Google 账号只跳一次同意页。连上后不会自动发东西，每条帖子仍要你点确认才发。' +
   '跳到 Google 后要用「能管理这家客户商家页的那个账号」登录 —— 通常是客户老板的账号，不是你自己的；' +
   '用错账号连不上，退出重来一次就行，不会弄坏任何东西。一般由 Ray 或客户老板本人点，FDE 看到转给 Ray 就行。'
 
@@ -149,7 +160,8 @@ export async function loadGbpSetupTasks(
       label: connectedButUnlocated.has(c.id) ? GBP_LOCATION_LABEL : GBP_CONNECT_LABEL,
       href: connectedButUnlocated.has(c.id)
         ? `${APP_BASE}/dashboard/clients/${c.id}/settings`
-        : `${APP_BASE}/api/auth/google/gbp/start?clientId=${c.id}`,
+        // combined flow: 一次授权覆盖 GBP + GSC + GA4 + Indexing（见 GBP_CONNECT_LABEL 头注）
+        : `${APP_BASE}/api/auth/google/connect?client_id=${c.id}`,
     }))
     .sort((a, b) => a.name.localeCompare(b.name))
 }
