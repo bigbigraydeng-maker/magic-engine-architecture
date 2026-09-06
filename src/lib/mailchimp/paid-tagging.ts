@@ -36,7 +36,7 @@ import {
   looksLikeCustomerAddress,
   isForwardedSubject,
 } from './paid-signal'
-import { applyMemberTags, type MailchimpTagsConfig } from './tags'
+import { applyMemberTags, findMemberByEmail, type MailchimpTagsConfig } from './tags'
 
 /** 一封待判定的邮件。字段刻意只取 `microsoft/mail-graph` 已经给的那些。 */
 export interface CandidateMail {
@@ -156,6 +156,17 @@ export async function runPaidTagging(
     if (!evidenceIsVerbatim(verdict.evidence, text)) continue
 
     if (verdict.kind === 'needs_review') {
+      // 已经打过付费标签的人不用再问。
+      //
+      // 2026-09-06 生产实测：待确认名单上 4 个人**全部**已经有 paid_customer 了
+      // —— Baker 每天打开待办看到的是同一批已处理的名字，处理完也不消失。
+      // 这种待办栏人很快就不看了，等于铁律 3 下半的人工车道白建。
+      //
+      // 查询失败时**照常问**：宁可多问一次，也不要因为一次网络抖动把一个
+      // 真的待确认漏掉（同 `applyMemberTags` 那条「分不清就交给人」的取向）。
+      const known = await findMemberByEmail(cfg, email)
+      if (known.status === 'found' && known.member.tags.includes(policy.paidTag)) continue
+
       out.needsReview.push({
         email,
         name: mail.counterparty?.name ?? null,
