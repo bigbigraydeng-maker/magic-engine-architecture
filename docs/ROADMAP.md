@@ -108,7 +108,20 @@
 - [ ] 次要（魏征复审发现，非阻塞）：`discovery_leads` 表建表起没有任何 migration 显式 `enable row level security`/加 policy，虽然 service-role 调用不受 RLS 影响、暂无实际泄露，但应补一条独立 RLS migration 让它符合"新表必须 service-role 模板"的红线并消除账本漂移
 - [ ] 次要：`website/_headers` 对 `/api/*` 声明 `Access-Control-Allow-Origin: https://magicengine.com.au`，而各 Function 自己又各设 `Access-Control-Allow-Origin: *`——未验证 Cloudflare Pages 对两者如何合并，换一个 origin（如 `www` 子域名/`*.pages.dev` 预览域）访问不排除请求直接被 CORS 拦掉
 
+---
 
+## 每日待办 href 落地页 action-gap（2026-09-07 审计发现，PR #1467 未合并）
+
+**背景**：审计了 `src/lib/pm-todo/**` 下发给 PM 的所有 `href`，逐条实测「点开链接是不是真能办成那件事」。4 个「链接完全打不开 / 静默丢失」的问题已经修复并合并（`crawl_stale` 404、`blog_draft_waiting` 与两条 `conversion_*` 相对路径被链接闸丢弃）——见 [history/CHANGELOG.md](./history/CHANGELOG.md) 对应条目。
+
+Codex 复审又挖出 6 个「落地页存在，但操作的东西跟待办要修的不是一回事」的问题，按 [ENGINEERING_QUALITY_GATES.md §11](./ENGINEERING_QUALITY_GATES.md#11-资源优先级判断pm-2026-09-07-拍板) 三维打分排了优先级（PM 2026-09-07 拍板顺序）：
+
+- [ ] 🔴 **[P0] `price_claim_unbacked` 落地页读写错了表**（`src/lib/pm-todo/manual-items.ts` `pushPriceGateItems`）：这条待办检查的是 `visual_assets` 表按 `post_id` 关联的配图，但 href 指向的 `/dashboard/clients/{id}/assets` 素材库页读写的是 `client_assets` 表——两张不同的表，PM 点进去根本找不到要改来源的那张图。要么把 href 改到能操作 `visual_assets` 的地方，要么把这条检查也接到 `client_assets`。客户投诉风险直接（配错图客户按图下单对不上）。
+- [ ] 🔴 **[P0] `factory_worker_idle` 落地页无法远程启动 worker**（`src/lib/pm-todo/manual-items.ts` `pushFactoryWorkerItems` + `/dashboard/factory`）：待办的 how 要求「在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`」，但 `/dashboard/factory` 页面只能看 worker 心跳状态，没有任何远程启动/连接控制。要么加一个能远程触发 worker 的入口，要么把 worker 迁到不依赖单台 Mac 开机的执行环境（长期更优，但改动更大，先讨论方案）。
+- [ ] **[P1] `kernel_needs_human` 三处分支生成空 href**（`src/lib/kernel/handoff.ts` 91/103/112 行）：这几类交接待办的 `href: ''`，PM 点开邮件根本没有入口可点，只能靠 how 里的文字描述摸索。是「管道不许断头」这条铁律的安全网本身在这几个分支失效。要给这几类交接补上真实入口（哪怕是执行看板的一个筛选视图）。
+- [ ] **[P1] `leads_metric_untrusted` 落地页没有修复入口**（`src/lib/pm-todo/manual-items.ts` `pushLeadsSanityItems` + `/goal/{goalId}`）：待办要求 PM 去客户网站统计后台收窄「产生线索」触发条件，但目标页是纯展示、没有任何外部统计后台的链接。要么加一条到客户 GA4/GTM 后台的直达链接（如果连接器里存了 property id），要么在 how 里明确「这一步要联系客户或自己去 GA4 后台改」而不是暗示落地页能做。
+- [ ] **[P2] `meta_stuck` 落地页跟需要做的事不对应**（`src/lib/pm-todo/manual-items.ts` 515-520 行 + `/dashboard/clients/{id}/settings`）：待办要求登录**客户自己的** WordPress 后台启用 Magic Engine 插件，但 `/settings` 页是我们自己的连接器配置（API 密钥、SEO 字段探测），不是客户 WP 后台，也没给客户后台的直达链接。要在 CmsPanel 里补上客户 WP 后台的地址（如果连接时存了站点 URL）。
+- [ ] **[P2] `goal_baseline_mismatch` 目标起点数字改不了**（`/goal/{goalId}` 页 + `src/app/api/goals/[goalId]/route.ts` 只有 GET/DELETE）：待办要求把错误的起点改成重算值，但目标详情页只读展示 `baseline_value`，也没有对应的 PATCH/PUT 接口。要新增一个编辑 baseline 的入口（前端表单 + 后端接口），同时要考虑这个字段被改动后要不要留痕（谁在什么时候把起点从 A 改成了 B）。
 
 ### ME 产品动态自动发 LinkedIn（2026-08-20 建成，默认关闭）
 
