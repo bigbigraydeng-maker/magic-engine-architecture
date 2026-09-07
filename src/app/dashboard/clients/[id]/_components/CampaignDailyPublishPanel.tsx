@@ -9,7 +9,9 @@
  * to open a console or paste an id to publish — every field the API demands is
  * supplied from the loaded plan, and the Page comes from the client record.
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { TuneSuggestionInline } from './TuneSuggestionInline'
+import type { TuneRecommendation } from '@/lib/flywheel/tune/types'
 
 interface Props {
   clientId: string
@@ -81,6 +83,7 @@ export function CampaignDailyPublishPanel({
   const [error, setError] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [progress, setProgress] = useState('')
+  const [tuneSuggestions, setTuneSuggestions] = useState<Record<string, TuneRecommendation | null>>({})
 
   const identityReady = Boolean(planId && planRevision && reviewRevision)
   const canDryRun = identityReady && queueReceiptReady && Boolean(facebookPageId)
@@ -186,6 +189,31 @@ export function CampaignDailyPublishPanel({
 
   const publishedPosts = publishReceipt?.published ?? []
 
+  /**
+   * 一次拉齐本活动所有已发布帖子的 Tune 建议（Gate B/3，只读）。
+   * 失败静默：build 面板不因为读侧建议挂掉主发布流程 —— 建议只是辅助信息。
+   */
+  useEffect(() => {
+    if (publishedPosts.length === 0) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/campaign-daily-plan/tune-suggestions?campaign_id=${encodeURIComponent(campaignId)}`,
+          { cache: 'no-store' },
+        )
+        if (!res.ok) return
+        const json = (await res.json()) as { success?: boolean; suggestions?: Record<string, TuneRecommendation | null> }
+        if (!cancelled && json.success && json.suggestions) {
+          setTuneSuggestions(json.suggestions)
+        }
+      } catch {
+        // 静默：Tune 是辅助信息，读失败不打扰发布流程。
+      }
+    })()
+    return () => { cancelled = true }
+  }, [clientId, campaignId, publishedPosts.length])
+
   return (
     <div className="border-t border-black/[.06] pt-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -227,6 +255,7 @@ export function CampaignDailyPublishPanel({
               <p className="mt-0.5 text-[10px] text-me-charcoal/45">
                 发布时间 {formatWhen(post.published_at)} · 帖子编号 {post.post_id}
               </p>
+              <TuneSuggestionInline suggestion={tuneSuggestions[post.post_id] ?? null} />
             </div>
           ))}
         </div>
