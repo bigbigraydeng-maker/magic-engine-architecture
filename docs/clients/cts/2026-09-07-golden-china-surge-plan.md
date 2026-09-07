@@ -183,3 +183,61 @@
 
 *v2 落档人:顾问窗口统筹隔壁 + 视频 sub-agent 交付 · 2026-09-07 晚*
 
+---
+
+# v3 补(2026-09-07 深夜)· 账户错位真相 + 双账户并跑决策
+
+## 🔴 隔壁上传收尾后发现的关键错位
+
+**Meta 政策事实**(隔壁 2026-09-07 实测):
+- 个人号 `2775766642787274`(现所有 CTS 广告投放地) **建不了 Custom Audience**——`error_subcode 1870050`「账户要先加入 Business 才能建/编辑客户名单受众」
+- 因此隔壁把 530 人 audience 建在 **CTStours 账户 `2202695063810470`**(受众 id `52549822861673`)
+- **跨账户不通用**:CTStours 账户建的 Custom Audience 和 Lookalike,**只能被 CTStours 账户里的广告使用**
+
+**PM 之前(2026-09-06)决策「不迁账户」是基于旧信息**——那时不知道 Custom Audience 是企业账户独有能力。今晚上传后暴露真相。
+
+## PM 2026-09-07 拍板 · 方案 B 双账户并跑
+
+**个人号 `2775766642787274`**:现有 3 条 CTS 广告不动(保留历史学习)
+- Reborn Lead Form 继续投
+- Retargeting Warm 继续投
+- 顶层 4 条视频广告(明早 FDE 建的)也在这里
+
+**CTStours 账户 `2202695063810470`**:开一条**实验性 Lookalike 广告**
+- 目的:验证「真金付费客户 Lookalike」种子的价值
+- 预算:**$20-30/天**(实验预算,别多)
+- 一周后看数据决定要不要 A 迁移(全部搬 CTStours)or C 认账停止
+
+**总每日预算调整**:$80(个人号顶层+中层+底层) + $25(CTStours 实验) = **~$105/天**
+
+## Lookalike 建法(顾问窗口负责,60 分钟匹配率出后自动动)
+
+- 用 `ads_create_custom_audience` API 建 1% NZ Lookalike,种子 = `52549822861673`
+- 命名:`CTS · LAL · list-paid · 1pct · NZ`(遵守命名分区约定)
+- 建成后在 CTStours 账户 `2202695063810470` 新开:
+  - Campaign objective: OUTCOME_LEADS(或 OUTCOME_TRAFFIC 引流官网)
+  - Ad set 受众:该 Lookalike,排除 已提交表单 90d
+  - 3 条创意 A/B/C(用视频 sub-agent 交付的清单里的 Top 3)
+  - 日预算 $20-30
+
+## 已删的东西
+
+- **ME dashboard 里 newsletter 按钮**(PM 决定去掉,功能已用 audience 上传路做成,按钮报红没用了)——隔壁窗口负责清理
+
+## 明早 09:00 我做的(更新)
+
+- 查匹配率 → 达标就建 Lookalike → 在 CTStours 账户开实验广告
+- 拉个人号 4 条视频广告基线数据
+- 出「个人号 vs CTStours 两账户对比」监控口径
+
+## 关键教训进记忆(避免下次踩)
+
+- Meta 政策:Custom Audience 只能建在 business 账户
+- 跨账户 audience/lookalike 不通用
+- 「不迁账户」决策要基于「知道能力边界后」再拍(不知道 Custom Audience 是企业特权就拍不迁,是残缺信息决策)
+
+---
+
+*v3 落档人:顾问窗口 · 隔壁上传后暴露账户错位 · PM 拍板双账户并跑 · 2026-09-07 深夜*
+
+
