@@ -86,14 +86,18 @@ CREATE TABLE tour_products (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  CONSTRAINT tour_products_source_key UNIQUE (client_id, source_kind, source_ref)
+  CONSTRAINT tour_products_source_key UNIQUE (client_id, source_kind, source_ref),
+  -- 复合外键的目标列：让子表能把 (client_id, tour_product_id) 一起校验，见下方
+  CONSTRAINT tour_products_client_id_unique UNIQUE (client_id, id)
 );
 
 -- ② 每次出发 = 真正的可售单元
 CREATE TABLE tour_departures (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id         UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  tour_product_id   UUID NOT NULL REFERENCES tour_products(id) ON DELETE RESTRICT,
+  -- 不用单列 REFERENCES tour_products(id)：那样客户 A 的 client_id 配客户 B 的
+  -- tour_product_id 也能通过约束。必须用下方复合外键把两列一起钉死。
+  tour_product_id   UUID NOT NULL,
 
   departure_date    DATE NOT NULL,
   departure_city    TEXT,                   -- 展示用，人工填，不进任何键
@@ -106,22 +110,30 @@ CREATE TABLE tour_departures (
   -- 🔴 可空。NULL = 「名额未设定」，**不是 0**。见 §2.4
   seats_total       INTEGER CHECK (seats_total IS NULL OR seats_total >= 0),
 
+  -- 'retired' = 源里已经没有这个出发日期了（§2.6 硬约束 4：标 retired，不删行）。
+  -- 只有 open/closed/cancelled 时，导入遇到「团还在但这个出发日期没了」无状态可写。
   status            TEXT NOT NULL DEFAULT 'open'
-                      CHECK (status IN ('open', 'closed', 'cancelled')),
+                      CHECK (status IN ('open', 'closed', 'cancelled', 'retired')),
 
   source_date_text  TEXT,                   -- 导入时的原文日期串，供人工对账
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   CONSTRAINT tour_departures_natural_key
-    UNIQUE (client_id, tour_product_id, departure_date)
+    UNIQUE (client_id, tour_product_id, departure_date),
+
+  -- 复合外键：强制这次出发的 client_id 与它所属团的 client_id 一致，
+  -- 否则客户 A 的 client_id 搭客户 B 的 tour_product_id 也能建出发团。
+  CONSTRAINT tour_departures_product_client_fk
+    FOREIGN KEY (client_id, tour_product_id)
+    REFERENCES tour_products (client_id, id) ON DELETE RESTRICT
 );
 
 -- ③ 逐日行程（"具体玩什么"，可调整）
 CREATE TABLE tour_itinerary_days (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id         UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  tour_product_id   UUID NOT NULL REFERENCES tour_products(id) ON DELETE CASCADE,
+  tour_product_id   UUID NOT NULL,        -- 复合外键见下，理由同 tour_departures
 
   day_number        INTEGER NOT NULL CHECK (day_number > 0),
   city              TEXT,
@@ -132,7 +144,10 @@ CREATE TABLE tour_itinerary_days (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  CONSTRAINT tour_itinerary_days_key UNIQUE (tour_product_id, day_number)
+  CONSTRAINT tour_itinerary_days_key UNIQUE (tour_product_id, day_number),
+  CONSTRAINT tour_itinerary_days_product_client_fk
+    FOREIGN KEY (client_id, tour_product_id)
+    REFERENCES tour_products (client_id, id) ON DELETE CASCADE
 );
 ```
 
@@ -302,6 +317,28 @@ CREATE UNIQUE INDEX tour_orders_one_live_per_contact
   ON tour_orders (departure_id, contact_id) WHERE status <> 'cancelled';
 ```
 
+**`travel_agents` 必须跟 `tour_orders` 同一批建**（Codex 复审发现的顺序问题）：`tour_orders.agent_id` 引用它，如果把它留到「门户」那一期，建 `tour_orders` 会直接报 `relation "travel_agents" does not exist`。
+
+拆法：**「代理是谁」的身份台账跟订单一起建；「代理怎么登录」留到门户期**。员工录代理订单时从这张表选或新建一条，不涉及登录。
+
+```sql
+CREATE TABLE travel_agents (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id      UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  contact_email  TEXT,
+  contact_phone  TEXT,
+  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT travel_agents_name_unique UNIQUE (client_id, name)
+);
+ALTER TABLE travel_agents ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_full" ON travel_agents
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+门户期只需给它加一列登录关联（如 `portal_user_id`），不改已有语义，也不用重建。
+
 **占用公式（单一定义，不许在别处再写一份）**：
 ```
 occupied(departure) = Σ tour_orders.pax
@@ -323,7 +360,10 @@ remaining = seats_total - occupied           -- seats_total 为 NULL 时 remaini
 
 ### 5.4 订单与 CRM / 广告的接线
 
-- **CRM**：订单驱动联系人阶段。方向单一（订单 → 联系人，永不反向）；UPDATE 必须带条件不覆盖人工判断（照抄 `stage-infer.ts:261` 的写法）；取消最后一单时必须写回可营销阶段而不是 NULL（否则退订的人被 `won` 永久 suppress，或被 `stage-infer` 从旧邮件重新填回已付款）；映射表落 `clients.leads_config`，不写死在代码（红线 2）。
+- **CRM**：订单驱动联系人阶段，方向单一（订单 → 联系人，永不反向）。三条硬规则：
+  1. **UPDATE 的条件要验证「当前档位是谁写的」，不能只看档位取值在不在允许集里**。只判取值不够——员工手工把人设成 `contacted` / `quoted` 这类本来就在允许集里的档位后，下一次自动派生照样命中、照样覆盖人工判断。`contact_stage_events.changed_by` 已经区分人工与系统，WHERE 必须用它：只在 (a) `stage IS NULL`，或 (b) 该联系人最近一条阶段事件是 `changed_by='system'`（当前值就是上次自动写的、还没被人碰过）时才允许写。最近一条是人改的，一律命中 0 行。
+  2. **取消最后一单时的回退档位必须从客户配置读，不能硬编码 `contacted`**。CTS 的 9 档种子把它配成 `contacted`，但那是 CTS 的配置值不是代码默认值；换一个不用这套档位模型的旅游客户，它可能根本没有 `contacted` 这一档。**客户没配、或配的档位名在 `client_pipeline_stages` 里找不到 → fail closed**：不写 `stage`，落人工待办说明「客户未配置取消回退档位」，不许套用别的客户的档位名，也不许置回 `NULL`（置 NULL 会被 `stage-infer` 从旧邮件重新填回已付款，又被 suppress）。
+  3. **映射表（含回退档位）落 `clients.leads_config`，不写死在代码**（红线 2）。`contacts.stage` 本身没有外键约束，写一个客户配置里不存在的档位名不会报错，只会留下孤儿键——所以第 2 条的检查必须在写入前做，不能指望数据库拦。
 - **广告**：收到定金 = 成交，走**已上线**的 `me_sale_outcomes` + `me_conversion_writebacks`（`20260905000002`），幂等键 `source_kind='api'` + `source_ref='tour_order:<id>:deposit'`。**不再建第二本钱的账**——同一笔定金记两次会发给 Meta 两次，而 CAPI 没有删除端点、撤不回。
 - **不自造事件名**：冻结契约 `me/crm.deal.closed` 写着「不能改」，若要 emit 必须沿用它，并在契约文档补一句「上游可能是 ME 自己」。
 
