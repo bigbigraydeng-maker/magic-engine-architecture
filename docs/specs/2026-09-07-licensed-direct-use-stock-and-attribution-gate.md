@@ -67,17 +67,23 @@ ME 工厂现有 stock 链（`stock-pipeline.ts` `ingestHarvestedImages` → `sto
 ### 4.2 落库字段（video_clips）
 - `track='b_generated'`、`is_still_image=true`、`is_real_footage=false`（保持"氛围底料、绝不当真拍打真价"的隔离，与现有一致）。
 - **新增 provenance**（存 `source_meta` jsonb，避免 migration；若需大规模按景点查再考虑加列）：
-  `{ origin:'licensed_stock', provider:'wikimedia_commons', license, author, source_url, requires_attribution:bool, city, landmark, orientation }`。
-- `requires_attribution` = license ∈ {CC-BY, CC-BY-SA} → true；{CC0, Public domain} → false。
+  `{ origin:'licensed_stock', provider:'wikimedia_commons', license, license_url, author, source_url, note, requires_attribution:bool, city, landmark, orientation }`。
+  🔴 `license_url`（协议链接）和 `note`（修改说明，如 "resized to 1150px wide, re-encoded JPEG q68"）**必须落库**，不能只存 license 名称——发布闸最终要拼出完整 CC 署名（作者 + 协议 + 协议链接 + 是否修改），少一项署名就不完整。现有 `templates/tailor-made-itinerary/heroes/CREDITS.json` 已经在存这两项，入库时原样带过来，不要再重新调查。
+- **`requires_attribution` 判定必须先规范化再比对，不能直接对原始字符串做集合成员判断**：Wikimedia 实际值带空格和版本号（`CC BY 2.0`、`CC BY-SA 3.0`、`CC BY-SA 4.0`，见上面 CREDITS.json 的真实样本），逐字比 `license ∈ {'CC-BY','CC-BY-SA'}` 会全部判不中导致误判为无需署名，署名闸形同虚设。改为：
+  1. 解析出受控的 `license_family`（`CC-BY` / `CC-BY-SA` / `CC0` / `PUBLIC_DOMAIN`）+ `license_version`，只认白名单模式（如 `/^CC[- ]BY(-SA)?[- ]?\d+(\.\d+)?$/i` 加归一化空格/连字符）；
+  2. `license_family ∈ {CC-BY, CC-BY-SA}` → `requires_attribution=true`；`∈ {CC0, PUBLIC_DOMAIN}` → `false`；
+  3. **无法归一化解析的原始 license 字符串一律 fail-closed**：`requires_attribution=true` 且该行禁止进入 4.3 的直用分支，直到人工修正 license 字段为受控值——不允许"未知值默认不需要署名"。
 - **不碰** scene_tag 白名单：scene_tag 走既有兜底即可；**景点查询靠 source_meta.landmark**（需给 strategist 挑片逻辑加读 source_meta.landmark 的分支，或 evaluate 侧带出）。
 
 ### 4.3 进池（evaluate.ts sourceImagePool）
-- 新增分支：`origin='licensed_stock'` 且 `status='active'` 的行**直接进** sourceImagePool（对标 `client-asset-pool.ts` 的"直用不改写"），**不要求** `is_ai_transformed`。
+- 新增分支：`origin='licensed_stock'` 且 `status='active'` **且 `source_meta.requires_attribution===false`** 的行**直接进** sourceImagePool（对标 `client-asset-pool.ts` 的"直用不改写"），**不要求** `is_ai_transformed`。
+- 🔴 **`requires_attribution=false` 是查询层硬条件，不是靠人审流程去把关**：只检查 `origin` + `status` 不够——人审只要把一张 CC-BY/CC-BY-SA 图设成 `active`，它就会在 P3 署名闸落地前直接进池，跟第 94 行"P3 通过前一张都不许进池"的边界矛盾。`requires_attribution=true` 的行即使 `status='active'` 也必须被这条查询排除，直到 P3 署名闸上线并验证通过后，才把这个条件放宽为"闸存在则放行、闸不存在则拦"。
 - 与 Pinterest 链彻底分开：licensed_stock **永不**进 `transformStockImages`（不重绘、不脱版权，本来就干净）。
 
 ### 4.4 🔴 发布前署名闸（本 spec 的核心新能力）
-- **provenance 传递**：工单要记录它用了哪些 source 图（image_asset → work_order），把 `requires_attribution` 的图的 author/license 汇总带到发布层。
-- **闸**：`publish-worker` 发布前检查——若本片用到任一 `requires_attribution=true` 的图，则**成片 endcard 或首评必须含**对应摄影者+协议 credit；缺 = **fail-closed 拦发**（比照现有红线闸 `scanPublishCaption` 的 fail-closed 写法）。
+- **provenance 传递**：工单要记录它用了哪些 source 图（image_asset → work_order），把 `requires_attribution` 的图的 author/license/license_url/note 汇总带到发布层（4.2 的 `source_meta` 全字段一起带，不能只带 author + license 名称——闸要能拼出完整 CC 署名：作者 + 协议 + 协议链接 + 修改说明）。
+- **闸**：`publish-worker` 发布前检查——若本片用到任一 `requires_attribution=true` 的图，则**成片 caption 或 endcard 文案必须含**对应摄影者 + 协议名 + 协议链接（+ 有修改则注明"modified"）；缺任一项 = **fail-closed 拦发**（比照现有红线闸 `scanPublishCaption` 的 fail-closed 写法，闸校验的是最终署名文本内容，不是"有没有填 credit 字段"）。
+- 🔴 **credit 载体只能是发布前可校验的位置（caption / endcard），本期不做"首评"**：现有 `publish-worker.ts`（`src/lib/factory/publish/publish-worker.ts:254-255`）发布调用只传 `videoUrl` + `caption`，没有首评步骤；首评通常要先拿到已发布帖子 ID 才能创建，等于帖子先公开、评论后补。若评论请求失败，就会留下一条已公开但无署名的内容，不满足 fail-closed。因此本期署名闸**只接受 caption/endcard 这类发布前即可读取校验的字段**；"先建不可见草稿 → 写首评拿到回执 → 再公开"的分阶段发布工作流留作后续能力，需要 provider 支持隐藏发布 + 独立立项评估，本 spec 不含。
 - CC0/PD 图不触发此闸。
 - SA（ShareAlike）注记：i2v 衍生是否触发 SA 的"同协议"义务需法务确认；**保守起见 licensed_stock 一期只走"直用/蒙太奇"，CC-BY-SA 图先不喂 i2v 重构**（重绘=衍生，SA 风险高）。
 
@@ -90,8 +96,8 @@ ME 工厂现有 stock 链（`stock-pipeline.ts` `ingestHarvestedImages` → `sto
 ## 5. 分期（严格顺序：署名闸必须先于任何 CC-BY 图对外）
 
 - **P1**：入库通路 + provenance 落库 + quarantine 开关 + origin 隔离。产物：图安全进库、可查、**inert（不进池、不发布）**。
-- **P2**：evaluate `licensed_stock` 直用分支 + strategist 按 landmark 挑片。产物：CC0/PD 图可进池喂出片。
-- **P3**：发布前署名闸（fail-closed）。**P3 通过前，CC-BY/CC-BY-SA 图一张都不许进出片池/发布**；只有 CC0/PD 可先用。
+- **P2**：evaluate `licensed_stock` 直用分支 + strategist 按 landmark 挑片。查询条件**代码层强制** `requires_attribution=false`（见 4.3），不依赖人审自觉。产物：CC0/PD 图可进池喂出片；CC-BY/CC-BY-SA 图即使 `status='active'` 仍被查询排除，物理上进不了池。
+- **P3**：发布前署名闸（fail-closed）。P3 落地并验证通过后，才把 4.3 的 `requires_attribution=false` 条件放宽为"闸存在则按闸结果放行"。**在此之前，CC-BY/CC-BY-SA 图一张都不许进出片池/发布**；只有 CC0/PD 可先用。
 
 ---
 
