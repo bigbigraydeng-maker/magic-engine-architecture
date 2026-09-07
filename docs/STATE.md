@@ -90,7 +90,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 4. 定时任务全表
 
-### 4.1 Render Cron（**48 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
+### 4.1 Render Cron（**47 个在跑 + 1 个已暂停 factory-stock-refill**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
 
 | Cron 名 | 调度 (UTC) | 端点 |
 |---|---|---|
@@ -134,7 +134,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | oztop-seo-optimizer | `0 5 * * 1` | `/api/cron/oztop-seo-optimizer?max=8` |
 | cts-seo-optimizer | `30 5 * * 1` | `/api/cron/cts-seo-optimizer` |
 | agent-learning-rollup | `0 7 * * 1` | `/api/cron/agent-learning-rollup` |
-| factory-stock-refill | `0 19 * * 1` | `/api/cron/factory-stock-refill` |
+| ~~factory-stock-refill~~ | ~~`0 19 * * 1`~~ | **已暂停 2026-09-08**（PM 停抓图：抓来的图无人消费，白花 Apify 钱；render.yaml/registry 已注释） |
 | blog-weekly | `0 3 * * 2` | `/api/cron/blog-weekly` |
 
 **2026-08-12 补录 —— `render.yaml` 里有、本表此前漏了的 7 条**：
