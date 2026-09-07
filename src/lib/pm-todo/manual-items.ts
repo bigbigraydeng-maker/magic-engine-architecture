@@ -77,6 +77,8 @@ export type ManualItemKind =
   | 'dm_maybe_stop'
   /** 平台候选（docs/registry/platform-candidates.md）到了复查日期 —— 见 me-platform-tier-gate skill */
   | 'platform_candidate_review_due'
+  /** 客户方案文档里写了一次性人工动作（如"明早 09:00 前扫一眼 xx"），只登记在文档里等于没下发 */
+  | 'client_doc_manual_task'
   /** 客人像是说他付款了，但不是我们自己确认的 —— 只有人能核对到账，不许机器自己打 paid 标签 */
   | 'paid_signal_needs_review'
   | CommentScopeTodoKind
@@ -162,6 +164,7 @@ import {
   PLATFORM_CANDIDATE_REGISTRY_URL,
   type PlatformCandidateReview,
 } from './platform-candidate-reviews'
+import { CLIENT_DOC_MANUAL_TASKS, type ClientDocManualTask } from './client-doc-manual-tasks'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
   if (!iso) return null
@@ -315,6 +318,8 @@ export async function loadManualItems(
   await pushCronHealthItems(supabase, items, now)
   // 平台候选到了复查日期 —— 不落库、不查表，纯本地日期判断
   pushPlatformCandidateReviewItems(items, now)
+  // 客户方案文档里写的一次性人工动作 —— 同样不落库、纯本地日期判断，过期自动消失
+  pushClientDocManualTaskItems(items, now)
   // 成交/咨询等着人核对要不要告诉广告平台 —— 撤不回的动作，只能人点（#1397）
   await pushConversionReviewItems(supabase, items, clients, now).catch((e) =>
     console.warn('[manual-items] 成交待核对读取失败（不阻塞其他待办）:', e),
@@ -1083,6 +1088,35 @@ export function pushPlatformCandidateReviewItems(
       what: `平台候选「${c.name}」到了复查日期（${c.reviewDate}），该扫一遍有没有新客户/新行业的硬证据了`,
       how: '打开候选登记表，看这条候选的「硬证据进度」列要不要更新；凑齐晋升判据就走 2 审提案，没有就把「复查日」列往后推一个月（同时更新 platform-candidate-reviews.ts 里的日期，否则这条提醒下次不会再出现）',
       href: PLATFORM_CANDIDATE_REGISTRY_URL,
+    })
+  }
+}
+
+/**
+ * 一次性 client ops 请求（写在客户方案文档里、只对某个日期有效）——
+ * 只登记在文档里等于没下发（CLAUDE.md 铁律 3 下半：管道不许断头）。
+ *
+ * 与 PLATFORM_CANDIDATE_REVIEWS 同样是"纯本地日期判断，不落库"，但语义不同：
+ * 那边是"到期该做"，这里是"过期就不用再提醒"——用 `expiresAt` 而不是 `dueDate`。
+ * 过了 `expiresAt` 不用回来删这一行，判据本身会让它自然消失。
+ *
+ * 任务清单本身在 `client-doc-manual-tasks.ts`（同 platform-candidate-reviews.ts
+ * 的分离方式）：这里只留通用加载逻辑，客户特例数据不进这份共享运行时文件。
+ */
+export function pushClientDocManualTaskItems(
+  items: ManualItem[],
+  now: Date,
+  tasks: ClientDocManualTask[] = CLIENT_DOC_MANUAL_TASKS,
+): void {
+  for (const t of tasks) {
+    if (now.getTime() > Date.parse(t.expiresAt)) continue
+    items.push({
+      kind: 'client_doc_manual_task',
+      client_id: t.clientId,
+      client_name: t.clientName,
+      what: t.what,
+      how: t.how,
+      href: t.href,
     })
   }
 }
