@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   DataForSeoTaskError,
+  getDomainMetrics,
   getKeywordsForSite,
   getKeywordIdeas,
   bulkKeywordVolume,
@@ -144,5 +145,34 @@ describe('bulkKeywordVolume — 端点必须是真实存在的那个', () => {
       json: () => Promise.resolve({ tasks: [{}] }),
     } as Response))
     await expect(bulkKeywordVolume(['test'])).rejects.toThrow(/missing/)
+  })
+})
+
+describe('getDomainMetrics — provider failures are not zeros', () => {
+  beforeEach(() => mockFetch.mockReset())
+
+  const overviewResponse = {
+    ok: true,
+    json: () => Promise.resolve({
+      tasks: [{ result: [{ items: [{ metrics: { organic: { count: 12, etv: 340 } } }] }] }],
+    }),
+  } as Response
+  const rankResponse = {
+    ok: true,
+    json: () => Promise.resolve({ tasks: [{ result: [{ rank: 420 }] }] }),
+  } as Response
+
+  it('throws when the domain overview provider fails instead of returning zero metrics', async () => {
+    mockFetch.mockReturnValueOnce(Promise.resolve({ ok: false, status: 503 } as Response))
+    mockFetch.mockReturnValueOnce(Promise.resolve(rankResponse))
+
+    await expect(getDomainMetrics('example.com')).rejects.toThrow('domain overview unavailable')
+  })
+
+  it('throws when the backlink provider fails instead of returning authority_score zero', async () => {
+    mockFetch.mockReturnValueOnce(Promise.resolve(overviewResponse))
+    mockFetch.mockReturnValueOnce(Promise.resolve({ ok: false, status: 429 } as Response))
+
+    await expect(getDomainMetrics('example.com')).rejects.toThrow('backlink rank unavailable')
   })
 })

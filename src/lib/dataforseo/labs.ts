@@ -838,14 +838,28 @@ export async function getDomainMetrics(
     fetchBacklinkRank(domain),
   ])
 
-  const overview     = overviewResult.status === 'fulfilled' ? overviewResult.value : null
-  const backlinkRank = rankResult.status     === 'fulfilled' ? rankResult.value     : 0
+  // A rejected provider call means the composite snapshot is unknowable.
+  // Never turn an outage into a believable zero; callers can then record a
+  // failed/no-data run and retry according to their own policy.
+  if (overviewResult.status === 'rejected') {
+    throw new Error(`DataForSEO domain overview unavailable: ${errorMessage(overviewResult.reason)}`)
+  }
+  if (rankResult.status === 'rejected') {
+    throw new Error(`DataForSEO backlink rank unavailable: ${errorMessage(rankResult.reason)}`)
+  }
+
+  const overview     = overviewResult.value
+  const backlinkRank = rankResult.value
 
   return {
     organic_keywords: overview?.organic_keywords ?? 0,
     organic_traffic:  overview?.organic_traffic  ?? 0,
     authority_score:  Math.min(100, Math.round(backlinkRank / 10)),
   }
+}
+
+function errorMessage(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason)
 }
 
 /**
