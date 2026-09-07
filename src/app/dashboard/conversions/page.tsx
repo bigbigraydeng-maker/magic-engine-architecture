@@ -119,12 +119,13 @@ export default function ConversionsPage() {
     setError(null)
     setWritebackDisabled(false)
     try {
-      // limit=200（接口上限）—— 待核对堆积超过默认 50 条时，今日待办给的深链
-      // ?focus=<id> 可能指向一条更早的记录，默认 limit 会把它筛没了，害深链白点。
       const base = `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}&limit=200`
-      const [pendingRes, approvedRes] = await Promise.all([
+      // 已批准但没走完的：发出去没下文的、失败可重试的。send_status 交给接口在 SQL
+      // 层筛（不是先按最新 200 条截断再筛）—— 否则堆积超过 200 条时，卡住的老记录
+      // 会先被"最新 N 条"的窗口挤掉，压根轮不到这一步筛选。
+      const [pendingRes, stuckRes] = await Promise.all([
         fetch(`${base}&review_status=pending_review`),
-        fetch(`${base}&review_status=approved`),
+        fetch(`${base}&review_status=approved&send_status=in_doubt,failed`),
       ])
       const pending = await pendingRes.json()
       if (!pendingRes.ok) {
@@ -142,14 +143,9 @@ export default function ConversionsPage() {
       setRows(pending.outcomes ?? [])
       setCursor(0)
 
-      // 已批准但没走完的：发出去没下文的、失败可重试的。
       // 今日待办叫人来点这里的按钮 —— 不列出来就是让人扑空（管道断头）。
-      const approved = await approvedRes.json()
-      const needsHand: Outcome[] = (approved.outcomes ?? []).filter((o: Outcome) => {
-        const st = sendState(o)?.status
-        return st === 'in_doubt' || st === 'failed'
-      })
-      setStuck(needsHand)
+      const stuckBody = await stuckRes.json()
+      setStuck(stuckBody.outcomes ?? [])
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -163,19 +159,44 @@ export default function ConversionsPage() {
 
   /**
    * 邮件深链 ?focus=<outcomeId>：数据到手后，把 cursor 跳到那条 + scrollIntoView。
-   * 找不到（可能已经被人处理掉了、或 outcomeId 拼错）就静默不动 —— 用户看到普通
-   * 列表，不弹错。跳完清空 focusOutcomeId，同一 URL 不会二次跳。
+   * 待核对堆积超过 200 条时，目标可能比默认列表窗口更老、根本不在 `rows` 里
+   * ——这种情况按 id 直查一次（不受 limit/排序影响），把这一条插到列表最前面。
+   * 直查也找不到才是真的没了（可能已经被人处理掉了、或 outcomeId 拼错）——
+   * 静默不动，用户看到普通列表，不弹错。跳完清空 focusOutcomeId，同一 URL 不会二次跳。
    */
   useEffect(() => {
     if (!focusOutcomeId || rows.length === 0) return
-    const idx = rows.findIndex((r) => r.id === focusOutcomeId)
+    const id = focusOutcomeId
+    const idx = rows.findIndex((r) => r.id === id)
     if (idx >= 0) {
       setCursor(idx)
       // ref 可能因为渲染时序还没设上，用 setTimeout 让 React 提交完再 scroll
-      setTimeout(() => outcomeRefs.current[focusOutcomeId]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+      setTimeout(() => outcomeRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+      setFocusOutcomeId(null)
+      return
     }
-    setFocusOutcomeId(null)
-  }, [focusOutcomeId, rows])
+    if (!clientId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}&id=${encodeURIComponent(id)}`,
+        )
+        const body = await res.json()
+        if (cancelled || !res.ok) return
+        const found: Outcome | undefined = (body.outcomes ?? [])[0]
+        if (!found || found.review_status !== 'pending_review') return
+        setRows((rs) => (rs.some((r) => r.id === found.id) ? rs : [found, ...rs]))
+        setCursor(0)
+        setTimeout(() => outcomeRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+      } finally {
+        if (!cancelled) setFocusOutcomeId(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [focusOutcomeId, rows, clientId])
 
   /**
    * 邮件深链 ?status=in_doubt：数据到手后 scroll 到「需要你动手」区块，
