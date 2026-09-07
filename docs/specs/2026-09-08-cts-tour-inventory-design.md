@@ -1,133 +1,87 @@
-# ME 旅游版 · 出发团库存 + 员工看板 + Agent 门户 —— 设计方案 v2
+# ME Travel · 团管理模块 + 下单系统 —— 产品与技术方案 v3
 
-**状态**：设计稿 v2（已吸收子牙 / 魏征 2 审）。**未建表、未写 migration、未实现任何代码。**
-**风险级**：A（数据库 schema / migration；④ 另触发鉴权 + 并发 + 资金记录）
+**状态**：设计稿 v3。**未建表、未写 migration、未实现代码。**
+**风险级**：A（数据库 schema / migration；下单系统另触发鉴权）
 **上游需求单**：[`2026-09-08-cts-tour-inventory-and-agent-portal-spec.md`](./2026-09-08-cts-tour-inventory-and-agent-portal-spec.md)
 **Repository Fact Gate**：`git fetch origin` 已跑（2026-09-08），`origin/main` = `1ed91a314d836ad3d524a152255f4dd47f39e1f4`
 
-> **v1 → v2 的定性变化**：PM 2026-09-08 明确「**这是 ME 旅游行业的通用需求**」。
-> v1 把它当成「CTS 要的东西，顺便别写死」；v2 把它当成 **ME 旅游版的地基**，CTS 是第一个使用者而不是唯一使用者。
-> 这条改变了三个具体设计（见 §0.6），不只是措辞。
+> **v2 → v3 的定性变化**（PM 2026-09-08 连续三次校正）：
+> 1. 这是 **ME Travel 版所有客户都用的功能**，不是 CTS 的活。
+> 2. 它是**把团当商品卖的下单系统**，不是「库存表」。目前不涉及收付款。
+> 3. **当务之急是「团管理模块」**——客户在 ME 后台管理自己的团（价格 / 行程 / 报名人数 / 图片 / 出发时间）。有了它，**广告、社媒、SEO、GEO、做手册**才能随时调用，不用每次去杂乱仓库里翻素材。
+> 4. 管道要能装 1 个团也能装 100 个团；**卖几个团是客户的生意，不是我们的范围问题**。
 
 ---
 
-## 0. 平台层级判定（me-platform-tier-gate · Full Report · v2）
+## 0. 平台层级判定（me-platform-tier-gate · Full Report · v3）
 
-### 0.1 被判定对象
-「出发团库存（可售单元 + 容量 + 座位占用 + 防超卖 + 代理下单）」属平台层 Capability、行业 Playbook 还是客户配置。
+**结论：L2 · ME 旅游版（`me-travel`）。** PM 2026-09-08 明确定性为「ME Travel 里面的一个功能，所有 Travel 客户都会用到」。
 
-### 0.2 结论
+| 块 | 层级 |
+|---|---|
+| 团管理模块（团 → 出发 → 行程 → 图片）+ 下单系统的领域模型 | **L2 · ME 旅游版** |
+| 客户的具体团 / 日期 / 价格 / 名额 / 行程文字 / 图片 / 报名人 | **L4 客户数据** |
+| chinatravel 仓 `tours.ts` 的一次性导入器 | **L3 Connector**（可插拔且可缺席） |
+| 素材上传 / 视觉打标 / 免登陆上传链接 | **已存在的平台能力，直接复用，不新建** |
 
-**L2 · ME 旅游版 Playbook（PM 2026-09-08 拍板确认为旅游行业通用需求）。**
+- **不是 L1**：换行业测试 ✗。Oztop（建材）没有「出发日期 + 名额」；Roman（地产）房源是唯一件不是容量；Magic Picks（电商）是 SKU 件数不绑人头。
+- **够 L2**：换旅游客户测试 ✓。第二家旅游运营商（悉尼入境游批发商 / 邮轮代理）——团 → 多次出发 → 每次有限名额 → 逐日行程 → 图片集 → 直客与同业代理下单，全部成立。
+- **禁止包装成「库存智能层」/「Travel Intelligence」**（红线 1）。它是 ME Travel 的**事实底座**，不是一条新智能能力线。
+- `me-travel` 已在 [`docs/registry/product-versions.md`](../registry/product-versions.md) 在册，不需新增版本。
+- **候选登记：PM 2026-09-08 明确回「跳」，本轮不登记。**
 
-拆解后各归各层：
-
-| 块 | 层级 | 落点 |
-|---|---|---|
-| 出发团台账的领域模型（product → departure → seats → 订位单 → 直招/代理两来源） | **L2 · ME 旅游版** | 本方案的三张表；任何旅游客户共用 |
-| CTS 的具体 tour / 日期 / 价格 / 容量 / 报名人 / 代理名单 | **L4 客户数据** | 数据行 + 客户配置，不进 shared runtime |
-| chinatravel 仓 `tours.ts` 的读取适配器 | **L3 Connector** | **可插拔且可缺席**——第二个旅游客户没有这个仓也要能用（红线 3 显式排除 L3，不占候选名额） |
-| 「容量型资源的原子占位」（先锁行 → 重算 → 超了拒绝 → 过期靠算不靠任务） | **L1 候选 · 默认降级不直建** | 子牙提出；跨行业成立（电商 SKU / 地产带看时段 / 课程席位 / 外呼并发数），登记候选 |
-| 「可售状态作为营销闸门」（售罄 → 停投广告 / 停群发 / 停排内容） | **L1 候选 · 默认降级不直建** | 登记候选，等第 2 个行业事实复制 |
-| 座位扣减 / 代理下单 / 佣金结算作为**完整订位系统** | **不是 ME 能力** | **PM 拍板项**，见 §0.5 |
-
-### 0.3 归属
-- ME 6 支柱之一：**都不是**（库存不是 SEO / 社媒 / 广告 / 口碑 / AI 可见度 / 竞品）
-- 平台基础设施：**都不是**
-- → 不是 L1。**禁止包装成「库存智能层」/「Inventory Intelligence」**——那正是 2026-08-27 HBay「KOL 智能层」事故的同一个动作（红线 1）。
-- `me-travel`（ME 旅游版）已在 [`docs/registry/product-versions.md`](../registry/product-versions.md) 在册（状态「规划中」），L2 绑定合法，**不需要新增版本**。
-
-### 0.4 换客户 / 换行业测试（语义级）
-
-**换行业测试 ✗**（这是它不能升 L1 的原因）
-- **反例 · Oztop（建材 / 展厅）**：没有「座位」。可售单元是库存件数或展厅预约时段，容量恒为 1，无定金/尾款两段付款，无代理分销层。
-- **反例 · Magic Picks（电商 DTC）**：库存是 SKU 件数，无出发日期，不绑人头，退款即时回补。
-- **反例 · Roman（地产中介）**：房源是唯一件（卖掉即下架），open home 是时段不是容量，付款走律师信托账户。
-
-**换旅游客户测试 ✓**（这是它够得上 L2 的原因，也是 v2 新增的判据）
-问句：**换成第二家旅游运营商（悉尼的入境游批发商 / 奥克兰的邮轮代理），本方案的表和代码要不要改？**
-- 产品 → 出发团 → 每团有限座位 → 定金锁位 + 尾款结清 → 直客与同业代理两条来源：**全部成立**。
-- 需要按客户变的只有：币种（AUD / NZD）、阶段档位名、定金比例、代理佣金率、内容数据源。**这些必须全部是配置或数据，不能是代码分支。**
-- **验收判据（写进 §6）**：新建一个虚构旅游客户，只插数据 + 改配置、**不改一行代码**，能跑通「建团 → 设容量 → 录报名 → 看板显示剩余」。做不到就说明有客户语义漏进了 shared runtime。
-
-### 0.5 PM 拍板项（2 条，本方案不替 PM 决定）
-1. **ME 旅游版要不要做到「完整订位系统」这一步？** 记台账（本方案）和做订位系统（代理自助下单 + 座位实时扣减）是两个量级。②③ 是台账，④ 是订位系统的入口。
-2. **ME 要不要进代理佣金的资金链路？** 本方案 v1/v2 一律**只记账不动钱**（记佣金率、算应付额，实际付款线下走）。
-
-### 0.6 PM 定性为「行业通用」后，设计实际改了什么（不是措辞，是三处结构）
-
-| # | v1（当 CTS 的活） | v2（当旅游版地基） |
-|---|---|---|
-| 1 | 库存靠 chinatravel 仓同步进来，手工录入是补丁 | **手工建团 / 设容量是主路径**，chinatravel 同步降为可选适配器。第二个旅游客户没有那个仓，主路径必须不依赖它 |
-| 2 | `currency` 被 2 审判为过度设计，建议删 | **保留**。ME 旅游版第一个 AU 客户就要 AUD，删了等于给行业版埋雷 |
-| 3 | 订位单状态 → CRM 阶段的映射可以写在代码里 | **必须落客户配置**（`client_pipeline_stages` / `clients.leads_config`）。阶段档位本来就是按客户可配的，写死 = 客户语义进 shared runtime（红线 2） |
-
-### 0.7 红线检查
-- 红线 1 禁包装升级：✓
-- 红线 2 禁客户/行业事实进 shared runtime：✓（新增 §0.6-3 的映射外置；`src/lib` 里不出现 `cts` / `c0000000-...` / 具体团名）
-- 红线 3 禁直建 L1：✓（判 L2 实现 + 2 条 L1 候选登记）
-- 红线 4 换客户测试语义级：✓（旅游内 ✓ / 跨行业 ✗，两侧都列了具体反例）
-- 红线 5 换行业测试语义级：✓
-- 红线 6 若 L1 走五道 Build Gate：不适用
-- 红线 7 L2 只装行业级：✓（旅游行业形状进表结构，CTS 具体事实全在数据行与配置）
-
-### 0.8 结论
-- **判定层级：L2 · ME 旅游版**（+ L4 客户数据 + L3 可选适配器 + 2 条 L1 候选）
-- 改口话术：不说「给 CTS 做个库存表」，说「**ME 旅游版的出发团台账**：旅游客户共用的可售容量与报名占位模型，把『还能不能卖』这条事实喂给已有的广告 / 外发 / 内容闸门」
-- 候选登记：**待 PM 一句「记」**（3 条，见 §7）
+**PM 拍板项（挂起，不阻塞团管理模块）**：ME 要不要进代理佣金的资金链路。本方案一律**只记事实不动钱**。
 
 ---
 
-## 1. 分期
+## 1. 产品定义（PM 原话拆解）
 
-| 期 | 内容 | 风险级 | 本方案深度 |
-|---|---|---|---|
-| ① | 出发团库存（`tour_products` / `tour_departures`）+ 容量录入 UI | A | 可实施 |
-| ② | `tour_bookings` 订位台账（原 `contact_deals`，改名理由见 §3.0） | A | 可实施 |
-| ③ | 员工看板 UI | A | 可实施 |
-| ④ | Agent 门户 | A | **拆出去单独出方案**（见 §5） |
+**ME Travel 的下单系统 —— 把每个出发团当成商品来卖。**
 
-**分期硬约束**：①②③ 合并上线并跑满一个真实报名周期后再动 ④。
+- 有权限的人登录（**ME 管理员统一开账号**：给自己员工开，也给 agent 开）
+- 挑团 → 录客人信息（**手工录，或 AI 从往来邮件里抓**）→ **生成订单**
+- **收到定金才扣名额**
+- 后台看每个团的报名情况和统计
+
+**分两步走**：
+
+| 步 | 内容 | 为什么这个顺序 |
+|---|---|---|
+| **第一步 · 团管理模块** | 客户在 ME 后台管理自己的团 | 没有「团」这个商品，就没有东西可挑、可下单、可扣名额；而且广告/社媒/SEO/GEO 现在就缺这个数据源 |
+| **第二步 · 下单系统** | 账号 + 下单 + 扣名额 + 统计看板 | 依赖第一步 |
 
 ---
 
-## 2. ①出发团库存
+## 2. 第一步：团管理模块（当务之急）
 
-### 2.1 两张表的理由
-PM 的问题本身是两个维度：「有多少个 tour 在卖」= 产品；「每个 tour 招募情况」= 出发团。一个产品多个出发团，出发团才是可售单元。
+### 2.1 客户在后台管四件事（PM 列的）
 
-### 2.2 源数据的真实情况（v1 三处写错，已实地核对更正）
+1. **价格和行程**（行程中途可能调整）
+2. **报名人数**（每次出发的名额）
+3. **行程里的图片介绍**
+4. **出发时间**
 
-实测 `/Users/raydeng/Projects/chinatravel/src/lib/data/tours.ts`：
+### 2.2 数据结构
 
-| 事实 | 数字 | 对设计的影响 |
-|---|---|---|
-| tour 条目 | **32 个**（31 个 `isActive:true`） | 需求单写的「7 个产品」是错的 |
-| 带 `departureDates` 的 | **14 个**，共约 **25 个出发团** | 需求单写的「8 个出发团」是错的；18 个产品没有出发日期，同步只能建产品不建团 |
-| 带 `maxGroupSize` 的 | **只有 1 个**（`golden-china` = 12） | **容量没有数据源**，见 §2.4 |
-| 出发城市字段 | **不存在**（grep `departureCity` / `departsFrom` 零命中） | `departure_code` 不能包含出发城市，见 §2.5 |
-| `id` 唯一性 | **不唯一**（`tour-jp-sig-1` 用了两次：2401 行 / 2729 行） | 不能拿 `id` 当同步键 |
-| `slug` 唯一性 | **不唯一**（`highlights` 同时属于 japan 和 vietnam） | 不能拿 `slug` 单独当同步键 → 必须 `(destination, slug)` |
-| `departureDates` 是否都是字面量 | **否**，749 / 962 两行是 `[...OCTOBER_2026_DISCOVERY_BY_SLUG[...]]` 计算展开 | 文本解析会静默拿到空，必须靠 import 模块而不是正则 |
-| `departurePricing` | 全文件只有 3 处 | 绝大多数出发团没有价格 → 价格必须可空 + UI 显示「未标价」 |
-
-**v1 的错误更正**：v1 §2.2 用「圣诞团两个出发城市变体同一天」论证 `slug + date` 不够用。实测这两个变体是**两个不同的产品**（`china-icons-collection` $7,188 / `china-icons-collection-christchurch` $6,188），slug 不同。**结论没变（不用 slug+date 当主键），但理由是错的**——错的理由会让实现者去写一段解析产品名取城市的代码，那才是真会出错的地方。
-
-### 2.3 表结构
+**一个团（商品）→ 挂着它的多次出发 → 挂着它的逐日行程 → 挂着它的图片。**
 
 ```sql
--- tour_products —— 在卖的产品
+-- ① 团 = 商品
 CREATE TABLE tour_products (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id     UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
 
-  -- 外部内容源的标识。手工建的团为空 —— 手工是主路径，不是补丁。
-  source_kind   TEXT,                       -- 'chinatravel_repo' | NULL(手工)
-  source_ref    TEXT,                       -- 该源内的稳定标识，chinatravel = 'china/silk-road'
   title         TEXT NOT NULL,
-  destination   TEXT,
+  summary       TEXT,                       -- 一句话卖点，广告/社媒直接用
+  destination   TEXT,                       -- 'china' / 'japan' / 'vietnam'
+  duration_days INTEGER CHECK (duration_days IS NULL OR duration_days > 0),
+
   status        TEXT NOT NULL DEFAULT 'selling'
-                  CHECK (status IN ('selling', 'retired')),
+                  CHECK (status IN ('draft', 'selling', 'retired')),
+
+  -- 外部内容源（一次性导入用）。手工建团时为空 —— 手工是主路径。
+  source_kind   TEXT,                       -- 'chinatravel_repo' | NULL
+  source_ref    TEXT,
 
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -135,75 +89,129 @@ CREATE TABLE tour_products (
   CONSTRAINT tour_products_source_key UNIQUE (client_id, source_kind, source_ref)
 );
 
--- tour_departures —— 可售单元
+-- ② 每次出发 = 真正的可售单元
 CREATE TABLE tour_departures (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id         UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   tour_product_id   UUID NOT NULL REFERENCES tour_products(id) ON DELETE RESTRICT,
 
   departure_date    DATE NOT NULL,
-  departure_city    TEXT,                   -- 展示用，人工填，**不进任何键**
-  duration_days     INTEGER CHECK (duration_days IS NULL OR duration_days > 0),
+  departure_city    TEXT,                   -- 展示用，人工填，不进任何键
+  duration_days     INTEGER,                -- 覆盖团级默认值（同团不同出发地天数可不同）
 
   price_amount_minor BIGINT CHECK (price_amount_minor IS NULL OR price_amount_minor > 0),
   price_currency     TEXT CHECK (price_currency IS NULL OR
                        (price_currency = upper(price_currency) AND length(price_currency) = 3)),
 
-  -- 🔴 可空。NULL = 「容量未设定」，不是 0。见 §2.4
+  -- 🔴 可空。NULL = 「名额未设定」，**不是 0**。见 §2.4
   seats_total       INTEGER CHECK (seats_total IS NULL OR seats_total >= 0),
 
   status            TEXT NOT NULL DEFAULT 'open'
                       CHECK (status IN ('open', 'closed', 'cancelled')),
 
-  source_date_text  TEXT,                   -- 外部源的原文日期串，供人工对账
+  source_date_text  TEXT,                   -- 导入时的原文日期串，供人工对账
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  -- 唯一性直接建在业务字段上，不再引入 departure_code（见 §2.5）
   CONSTRAINT tour_departures_natural_key
     UNIQUE (client_id, tour_product_id, departure_date)
 );
 
-CREATE INDEX tour_departures_client_date_idx ON tour_departures (client_id, departure_date);
-CREATE INDEX tour_departures_product_idx     ON tour_departures (tour_product_id);
+-- ③ 逐日行程（"具体玩什么"，可调整）
+CREATE TABLE tour_itinerary_days (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id         UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  tour_product_id   UUID NOT NULL REFERENCES tour_products(id) ON DELETE CASCADE,
+
+  day_number        INTEGER NOT NULL CHECK (day_number > 0),
+  city              TEXT,
+  title             TEXT NOT NULL,
+  description       TEXT,
+  highlights        TEXT[],                 -- 卖点数组，广告/社媒按条取用
+
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT tour_itinerary_days_key UNIQUE (tour_product_id, day_number)
+);
 ```
 
-金额一律 `*_minor BIGINT`（分/仙），跟已上线的 `me_sale_outcomes.amount_minor` 保持同一种存法。**同一个仓库不许两种钱的存法。**
+**为什么行程挂在「团」上而不是「每次出发」上**：同一个团不同批次玩的一样。**同团不同出发城市行程真的不同时**（例如南岛出发少去一个城市），实践中官网就是把它做成两个独立的团——已实测确认（`china-icons-collection` 与 `china-icons-collection-christchurch` 是两个不同产品）。所以不为这个情况增加一层结构。
 
-### 2.4 `seats_total` —— 必须连录入 UI 一起做（2 审 blocker）
+**金额一律 `*_minor BIGINT`（分/仙）**，跟已上线的 `me_sale_outcomes.amount_minor` 同一种存法。同一个仓库不许两种钱的存法。
 
-- 源数据 32 个团里**只有 1 个**有容量。前端 `TourHero.tsx:74` 那个 `?? 18` 是营销文案的默认值，**不是真容量，绝不许拿来当数据**（铁律 8：不凭空注入客户业务数据）。
-- 所以 `seats_total` **可空**，`NULL` 的语义是「还没设」。
-- 看板对 `NULL` 显示「**容量未设置**」+ 一个「去设置」的入口，**绝不显示 0**。显示 0 会让员工以为团满了；再叠加 §7 候选「售罄就停投广告」，就是一次自动停掉全部投放。
-- **出发团详情页必须有可编辑的座位数字段 + 改动留痕**（铁律 8：FDE 要填的字段必须连 Settings UI 一起做完，绝不写「让 PM 进 Supabase Studio 直填」）。这一条进 §6 验证清单。
+### 2.3 ④图片：**复用已有素材管道，不新建**（铁律 0）
 
-### 2.5 不要 `departure_code`（v1 的设计删掉）
+ME 里已经跑着一整套，是做地产房源时建的：
 
-v1 设计 `departure_code = (slug, ISO 日期, 出发城市)`。两个问题：
-1. **出发城市源数据里没有**，只能解析产品名，必然出错。
-2. **日期解析跟机器时区走**：实测 `new Date('13 May 2027').toISOString().slice(0,10)`，本机 `TZ=Pacific/Auckland` 得 `2027-05-12`，Render 容器 `TZ=UTC` 得 `2027-05-13`。同一个团在本机和生产会生成两个不同的键 → 生产多出一份空团，报名挂在另一份上。
+| 已有的东西 | 在哪 | 怎么用到团上 |
+|---|---|---|
+| 素材库表 `client_assets` | `20260612000001` | 加一列 `tour_product_id`（照 `listing_id` 的既有做法，含"绑定后不可更改"触发器） |
+| **免登陆上传链接**（加密令牌，不带明文客户 UUID，fail-closed） | `src/lib/uploads/client-upload-token.ts` | 令牌里加 `tour_product_id`，跟现有的 `listing_id` 完全同构 —— **一个团一条链接** |
+| 上传路由（图 + 视频，200MB，一次 20 个） | `src/app/api/upload/[token]/route.ts` | 不改逻辑，只多认一个归属字段 |
+| AI 看图打标（每 2 分钟一轮，出 `vision_metadata` + hook/middle/cta 评分） | `src/lib/assets/vision-analyzer.ts` | 直接受益：传进来的团图自动打标、自动评分「适合做开头/中段/结尾」 |
+| 素材来源与归属标记（客户自传 / 官网 / 图库 + 是否核实） | `20260803090000` | **铁律 8 靠它守**：客户真实产品画面只能用客户自己提供的素材 |
 
-v2 改法：
-- 唯一性直接用 `(client_id, tour_product_id, departure_date)` 这条自然键，不再引入派生字符串。
-- **禁止 `new Date(<字符串>)`**。日期解析写成显式纯函数（`'13 May 2027'` → 拆日/月名/年 → `2027-05-13`），配时区无关的单测（同一输入在 `TZ=UTC` 与 `TZ=Pacific/Auckland` 下必须相等）。
+**这解决的正是 PM 说的那个问题**——「每次都要在一个杂乱无章的仓库里现去找素材」。以后是：**CTS 员工点一条链接把这个团的图传上来 → AI 自动打标 → 做手册/广告/reel 时按团直接调。**
 
-### 2.6 内容同步 —— 可选适配器，不是主路径
+可选增强（v1 不做）：图片再挂到具体某一天（`itinerary_day_id`），做手册时按天配图。先用「团级图片集」跑通。
 
-**定位变了**（因为 PM 定性为行业通用）：手工建团是主路径；chinatravel 同步是 CTS 这一个客户的可选加速器。
+### 2.4 名额（`seats_total`）必须连录入界面一起做
 
-- **复用已有通道**：ME 里已经有读写 chinatravel 仓的能力——`src/lib/cms/github-client.ts` + `src/lib/cms/connection-store.ts`，`src/lib/seo-meta/cts-meta-pr.ts` 已经在解析并改写该仓 `src/lib/data/*.ts`。**不许另起一套读法**（铁律 0）。
-- **已知冲突**：`cts-meta-pr` 会自动改写 `title` 字面量，而同步用 `title` 做展示。两个自动化动同一个文件，PR 里要写明谁先谁后。
+- 官网源数据 32 个团里**只有 1 个**填了人数上限（实测）。前端那个 `?? 18` 是营销文案默认值，**不是真容量，绝不许拿来当数据**（铁律 8：不凭空注入客户业务数据）。
+- 所以 `seats_total` 可空，`NULL` = 「还没设」。
+- 界面对 `NULL` 显示「**名额未设置**」+ 一个设置入口，**绝不显示 0**。显示 0 会让员工以为团满了。
+- **出发团编辑页必须有可编辑的名额字段**（铁律 8：FDE/客户要填的字段必须连界面一起做完，绝不写「进 Supabase Studio 直填」）。
+
+### 2.5 行程调整的处理
+
+PM 明确「中间可能会调整行程」。而广告 / 社媒 / SEO / GEO 都在引用它，所以：
+
+- 每次改动落一条变更记录（谁、什么时候、改了哪一天、改前改后），复用现有的审计写法。
+- **已发布的下游产物不追溯改写**（已投的广告、已发的帖、已导出的手册），但变更记录能让人查到「这条广告是按哪一版行程做的」。
+- v1 **不做**行程版本号 / 生效时间 / 多版本并存——没有当前调用方（Scope 闸）。真需要时再加。
+
+### 2.6 一次性导入 chinatravel（CTS 专用加速器，不是主路径）
+
+第二个旅游客户没有那个仓，所以**手工建团是主路径**，导入只是让 CTS 少打一遍字。
+
+- **复用已有通道**：`src/lib/cms/github-client.ts` + `connection-store.ts` 已经在读写该仓（`src/lib/seo-meta/cts-meta-pr.ts` 每周开 PR 改它）。**不许另起一套读法。**
+- **已知冲突**：`cts-meta-pr` 会自动改写 `title` 字面量，两个自动化动同一个文件，PR 里要写明先后。
+- **源数据的真实情况**（实测更正需求单）：
+
+  | 事实 | 数字 | 影响 |
+  |---|---|---|
+  | tour 条目 | **32 个**（需求单写 7 个，错） | — |
+  | 带出发日期的 | **14 个**，约 **25 个出发团**（需求单写 8 个，错） | 18 个团只能建商品不建出发 |
+  | 带人数上限的 | **只有 1 个** | 名额必须人工补，见 §2.4 |
+  | 出发城市字段 | **不存在** | 不能进任何键，只能人工填 |
+  | `id` 唯一性 | **不唯一**（`tour-jp-sig-1` 用了两次） | 不能当导入键 |
+  | `slug` 唯一性 | **不唯一**（`highlights` 同属 japan 和 vietnam） | 必须 `(destination, slug)` |
+  | `departureDates` 全是字面量？ | **否**，2 处是计算展开 | 必须 import 模块，正则会静默拿到空 |
+
 - **五条硬约束**：
-  1. 同步**只碰内容字段**（title / destination / 日期 / 价格）；**绝不写 `seats_total`，绝不碰任何报名数据**。
+  1. 导入**只碰内容字段**，**绝不写 `seats_total`，绝不碰任何订单数据**。
   2. 日期解析失败 → 落人工待办，不静默跳过。
-  3. 「产品有 `departureDates` 但解出 0 个」→ 同样落待办（对付 749/962 两处计算展开）。
+  3. 「有 `departureDates` 但解出 0 个」→ 同样落待办。
   4. 源里消失的团 → 标 `retired`，**不删行**。
-  5. **改日期 = 删旧建新**：同一产品下出现「已 retired 但还挂着报名」的团 → 必须落待办说明「这个团的日期可能改了，X 个报名需要迁移」。v1 完全漏了这一类。
-- **人工待办怎么落**：`src/lib/pm-todo/manual-items.ts` 是**拉取式**的（`loadManualItems` 现算，不是往表里插行）。所以要先把同步异常**持久化**（建议 `tour_sync_issues` 表或产品行上的一个 JSONB 列），再加一个 `push*Items` 函数 + 一个新的 `ManualItemKind`。只写「复用 manual-items.ts」会让实现者发现无处可插。
-- **cron**：新建 `/api/cron/*` 必须**同一个 PR 内**加 `render.yaml` 条目（铁律 7），并手动 link 密钥环境变量组（漏了会每天 401 静默失败）。
-- **免 Inngest 的理由要写全**：CLAUDE.md §3 要求写明**原因 + 恢复条件 + 替代 receipt 在哪**，v1 只写了原因。
+  5. 「已 retired 但还挂着订单」→ 必须落待办说明「这个团的日期可能改了，X 个订单需要迁移」。
+- **禁止 `new Date(<字符串>)`**：实测 `new Date('13 May 2027')` 在 `TZ=Pacific/Auckland` 得 `2027-05-12`、`TZ=UTC` 得 `2027-05-13`。写显式纯函数 + 时区无关单测。
+- **人工待办怎么落**：`pm-todo/manual-items.ts` 是**拉取式**的（现算，不是插行）。必须先把异常持久化（建议 `tour_import_issues` 表），再加 `push*Items` 函数 + 新的 `ManualItemKind`。只写「复用 manual-items」实现者会发现无处可插。
+- 若做成定时任务，**同一个 PR 内加 `render.yaml` 条目**（铁律 7）并 link 密钥环境变量组。
 
-### 2.7 RLS
+### 2.7 界面
+
+| 路由 | 干什么 |
+|---|---|
+| `/dashboard/clients/[id]/tours` | 团列表：标题 / 目的地 / 状态 / 几次出发 / 图片数 / 名额与已订 |
+| `/dashboard/clients/[id]/tours/[tourId]` | 团详情：改标题卖点、**编辑逐日行程**、**图片集 + 上传链接**、**管理出发时间与名额价格** |
+
+**三条硬规则**：
+1. 读失败**不许渲染成 0 或空**——显示「读不到，不代表没有」。
+2. 名额未设置显示「未设置」，**不是 0**。
+3. 未标价显示「未标价」，**不是 0**。
+
+### 2.8 RLS
 
 ```sql
 ALTER TABLE tour_products ENABLE ROW LEVEL SECURITY;
@@ -212,235 +220,164 @@ CREATE POLICY "service_role_full" ON tour_products
 ```
 **必须带 `TO service_role`**（铁律 7）。
 
-> **v1 的误报已删**：v1 §2.6 称现有 4 张 CRM 表漏 `TO service_role` 需单独报 PM。**实测生产库（`glbdnayojixmexgofbsd`）这 5 张表的策略 `roles` 全部是 `{service_role}`，RLS 均已开启**，`20260803020000_rls_lock_policies_to_service_role.sql` 早已批量收口，`scripts/db-invariants.sql` 不变量 1 还在 CI 里守着。**没有这个问题，不要报给 PM。**
+> v2 曾报「现有 CRM 表漏 `TO service_role`」——**已实测生产库（`glbdnayojixmexgofbsd`）确认是误报**，`20260803020000` 早已批量收口，`db-invariants.sql` 不变量 1 在 CI 里守着。不要报给 PM。
 
 ---
 
-## 3. ②订位台账
+## 3. 下游怎么调用（PM 点名：广告 / 社媒 / SEO / GEO）
 
-### 3.0 改名：`contact_deals` → `tour_bookings`
+**一个统一读取口，谁都从这里拿，不许各自查库各自解读。**
 
-2026-07-28 草案叫 `contact_deals`。v2 改名，两个理由：
-1. ME 里 **`deal` 这个词已经被占了**——冻结契约 `me/crm.deal.closed` 的 `deal_id` 指的是**成交**。订位单不等于成交（占位、取消都不是）。同名会让两套东西在代码和事件里混淆。
-2. 这是 ME 旅游版的表，`booking` 是这个行业的通用词。
+建议 `src/lib/travel/tour-catalog.ts`，提供：
+- 「这个客户在卖哪些团」
+- 「这个团的行程、卖点、图（按 hook/middle/cta 评分排序）」
+- 「这次出发还剩几个名额、卖没卖完」
 
-### 3.1 2026-07-28 草案能不能直接用：形状对，5 个洞
+| 谁调 | 拿什么 | 今天的问题 |
+|---|---|---|
+| **广告** | 团名 / 卖点 / 价格 / 出发日期 / 图 | 每次现翻仓库；**团满了没人停广告，钱还在烧** |
+| **社媒** | 图 + 逐日亮点 | 做 reel 每次现找素材 |
+| **SEO** | 行程文字 / 团页结构化事实 | 官网与 ME 各写一份 |
+| **GEO / AI 可见度** | 团的事实（去哪几个城市、几天、多少钱） | AI 被问「新西兰去中国的团」时没有可引用的结构化事实 |
+| **做手册** | 行程 + 图 + 价格 | 已有 catalogue 能力，但每次手拼 |
+| **下单系统** | 挑团 / 挑出发 / 看剩余 | 还没有 |
 
-草案：`contact_id` + `tour_slug` + `departure_date` + `source_channel` + `agent_name` + `deposit_amount`/`total_amount` + 两个付款时间
+**注意**：`tour-catalog.ts` 属 **L2 ME 旅游版共享代码**，里面**不许出现任何客户名 / 客户 ID / 具体团名**（红线 2）。
 
-| # | 洞 | 后果 | 修法 |
-|---|---|---|---|
-| **1** | **没有人数（pax）** | **致命。** 一家四口是一条单。按单计数得「报了 1 个」，实际占 4 个位置——「还剩几个位置」直接错 | `seats INTEGER NOT NULL CHECK (seats > 0)` |
-| 2 | `tour_slug + departure_date` 当外键 | 无外键约束，团改名即断链 | `departure_id UUID REFERENCES tour_departures(id)` |
-| 3 | `agent_name` 自由文本 | 建不了代理门户（无代理身份，做不到「只看自己的客人」）；同一家代理三种写法 | `agent_id UUID REFERENCES travel_agents(id)` |
-| 4 | 没有单据状态 | 退订/取消无法表达，座位永远还不回来 | `status` 状态机 |
-| **5** | **自带金额字段** | **跟已上线的成交账本重复建账**，见 §3.3 | 金额不自己存，引用 `me_sale_outcomes` |
+---
 
-### 3.2 表结构
+## 4. 与官网的关系（分两步，本方案只做第一步）
+
+- **第一步（本方案）**：官网仍是团内容的真相源，ME 一次性导入 + 之后在 ME 里管理。**两边会漂移**，这是已知代价。
+- **第二步（将来，PM 拍板）**：ME 成为真相源，官网读 ME 的接口。好处是官网能显示「仅剩 3 位」、SEO 内容和广告文案同源。代价是要动另一个仓 + 处理缓存与 CDN 刷新。**不在本方案范围。**
+
+---
+
+## 5. 第二步：下单系统（方案深度，暂不实施）
+
+### 5.1 PM 已拍板的四条规则
+
+| 问题 | PM 的答案 | 设计后果 |
+|---|---|---|
+| 一个订单几个人 | **AI 从订单和往来邮件里判断，人工可改** | 订单存 `pax` 数字 + `pax_source`（`ai` / `manual`）+ 原始依据；AI 判断走已有的邮箱→ME 通道 |
+| 谁能开账号 | **ME 管理员统一开**，给自己员工开，也给 agent 开 | 账号发放是管理员动作，不是自助注册 —— 风险面小很多 |
+| 什么时候扣名额 | **收到定金才扣** | **不需要占位/超时释放机制**，并发抢位问题基本消失（定金由客户线下收，天然串行） |
+| 订单能不能改 | **agent 不能改，找管理员改** | agent 侧只有「建」和「看」，改和取消是管理员权限 |
+
+### 5.2 表结构（草案）
 
 ```sql
-CREATE TABLE tour_bookings (
+CREATE TABLE tour_orders (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id       UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   contact_id      UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   departure_id    UUID NOT NULL REFERENCES tour_departures(id) ON DELETE RESTRICT,
 
-  seats           INTEGER NOT NULL CHECK (seats > 0),
+  pax             INTEGER NOT NULL CHECK (pax > 0),
+  pax_source      TEXT NOT NULL DEFAULT 'manual' CHECK (pax_source IN ('manual', 'ai')),
+  pax_evidence    JSONB,                    -- AI 判断的依据（邮件 id / 原文片段），可追溯
 
   source_channel  TEXT NOT NULL CHECK (source_channel IN ('direct', 'agent')),
   agent_id        UUID REFERENCES travel_agents(id) ON DELETE RESTRICT,
-  agent_name      TEXT,                       -- 显示快照，代理改名不影响历史单
 
-  -- 🔴 单一状态机。占用公式必须从这里派生，不许在别处再写一份字面量。
-  status          TEXT NOT NULL DEFAULT 'held'
-                    CHECK (status IN ('held', 'confirmed', 'cancelled')),
+  -- 🔴 名额的开关。收到定金 = 占名额。ME 不经手收付，这只是"客户说收到了"的事实记录。
+  deposit_received_at TIMESTAMPTZ,
+  deposit_recorded_by TEXT,
+
+  status          TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open', 'cancelled')),
   cancelled_at    TIMESTAMPTZ,
   cancel_reason   TEXT,
 
-  -- 钱不在这张表。收款事实一律落 me_sale_outcomes（见 §3.3）。
   note            TEXT,
   created_by      TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  -- 代理单必须有代理身份（收紧 v1 那条形同虚设的 CHECK）
-  CONSTRAINT tour_bookings_agent_requires_id
+  CONSTRAINT tour_orders_agent_requires_id
     CHECK (source_channel <> 'agent' OR agent_id IS NOT NULL)
 );
 
--- 同一个人在同一个团上只能有一条未取消的单（防员工录一次 + 代理再提一次的双倍占位）
-CREATE UNIQUE INDEX tour_bookings_one_live_per_contact
-  ON tour_bookings (departure_id, contact_id) WHERE status <> 'cancelled';
-
-CREATE INDEX tour_bookings_departure_status_idx ON tour_bookings (departure_id, status);
-CREATE INDEX tour_bookings_contact_idx          ON tour_bookings (contact_id);
-CREATE INDEX tour_bookings_agent_idx            ON tour_bookings (agent_id) WHERE agent_id IS NOT NULL;
+CREATE UNIQUE INDEX tour_orders_one_live_per_contact
+  ON tour_orders (departure_id, contact_id) WHERE status <> 'cancelled';
 ```
 
-**跨表 client_id 一致性**：`client_id` 是冗余列，必须有触发器（或复合外键）保证它同时等于 `contacts.client_id` 与 `tour_departures.client_id`。否则在 ④ 里，代理传一个别的客户的 `departure_id` 就能跨客户写数据。参照 `contact_identities` 的做法。
-
-### 3.3 钱去哪：**引用已上线的成交账本，不自己建一本**（2 审 blocker）
-
-ME 里 2026-09-05 已上线 `me_sale_outcomes`（`20260905000002_conversion_writeback_v1.sql`），语义一一对应：
-- `outcome_kind='purchase'` = 收到定金（PM 定义：收到定金即成交）
-- `outcome_kind='balance'` = 尾款到账
-- 带 `contact_id` / `amount_minor` / `currency` / `order_ref` / 人工审核闸 / 脱敏列
-- 配套 `me_conversion_writebacks` 有三道防重发闸
-
-**再建一本的后果**：同一笔定金被记两次 → 发给 Meta 两次 → **CAPI 没有删除端点，发错撤不回**。PM 2026-09-05 明令「定金算成交，坚决不能记成 2 笔」。
-
-**v2 的接法**：
-- 员工在看板点「已收定金」→ 往 `me_sale_outcomes` 插一行：`source_kind='api'`、`source_ref='tour_booking:<booking_id>:deposit'`（尾款用 `:balance`）。
-- 幂等由已有的 `uq_me_sale_outcomes_source (client_id, source_kind, source_ref)` 保证——**连点两次不会双发**。
-- 后续人工审核 → CAPI 发送，**全走已有的那条链，一行新逻辑都不写**。
-- 「这单收了多少钱」在看板上通过 `source_ref` 反查显示。
-- **不新增任何事件名**。冻结契约 `me/crm.deal.closed` 的上游是外部 CRM；ME 自己确认的成交走 `me_sale_outcomes` 现有通路。若将来要 emit，必须沿用 `me/crm.deal.closed` 这个名字（契约里写着「不能改」），不许自造 `me/travel.deal.confirmed`。**这一条要在 PR 里对 `2026-09-07-crm-deal-closed-event-contract.md` 补一句「上游可能是 ME 自己」。**
-
-### 3.4 占用怎么算 —— 单一状态机派生，三态返回
-
+**占用公式（单一定义，不许在别处再写一份）**：
 ```
-计入占用的 booking 状态 = OCCUPYING_STATUSES = ('held', 'confirmed')
-occupied(departure) = Σ tour_bookings.seats   WHERE status ∈ OCCUPYING_STATUSES
-                    + Σ departure_seat_holds.seats WHERE status='active' AND expires_at > now()   -- ④ 才有
-remaining(departure) = seats_total - occupied     -- seats_total 为 NULL 时 remaining 也是 NULL
+occupied(departure) = Σ tour_orders.pax
+                      WHERE status = 'open' AND deposit_received_at IS NOT NULL
+remaining = seats_total - occupied           -- seats_total 为 NULL 时 remaining 也是 NULL
 ```
+- **不存 `seats_taken` 计数器**。计数器一次漏改就让「还剩几个」开始骗人，而那是这功能存在的唯一目的。
+- **占用是三态**：`number | null（名额未设） | 'unknown'（查询失败）`。**绝不把查询失败算成 0**——那会显示成一个看起来完全正常的满仓数字，比空列表更骗人。
+- 跨表 `client_id` 一致性必须有触发器保证（否则代理传别的客户的 `departure_id` 就能跨客户写数据）。
 
-三条硬规则：
-1. **`OCCUPYING_STATUSES` 只定义一次**，CHECK 约束和查询都引用它。加一条测试断言「状态机全集 ⊇ 占用集」，防止 v1 那种「公式里写了个不存在的状态、又漏了默认状态」的错。
-   > v1 的实际错误：公式写 `('confirmed','deposit_paid','paid_full')`，而 CHECK 是 `('reserved','deposit_paid','paid_full','cancelled')`——`confirmed` 不存在，默认值 `reserved` 被漏掉。员工录一家 4 口，看板显示「已订 0」。
-2. **占用是三态：`number | null | 'unknown'`**。`null` = 容量未设置；`'unknown'` = 任一子查询失败。**绝不许把查询失败算成 0**——那会显示成一个看起来完全正常的满仓数字，比空列表更骗人。
-3. **`'unknown'` 必须让 ④ 的下单闸 fail-closed**（算不出剩余就拒绝下单）。
+### 5.3 下单系统的前置条件（不满足不开工）
 
-**不存 `seats_taken` 计数器**：8 个团几十条报名，现算开销可忽略；计数器一次漏改就让「还剩几个位置」开始骗人，而那正是这个功能存在的唯一目的。数据量涨到万级再加物化视图（Scope 闸）。
-
-### 3.5 booking 与 `contacts.stage` 的关系（v1 这一段被 2 审判定「自称说死、实际没说死」）
-
-现有代码里最强的不变量是「**绝不覆盖人工判断**」：
-- `src/lib/crm/stage-infer.ts:261` UPDATE 带 `.is('stage', null)`
-- `src/lib/crm/qualified-buyer-autotag.ts:200` UPDATE 带 `.or('stage.is.null,stage.in.(...)')`
-- `src/lib/crm/stage-from-conversation.ts:62` 的 `SAFE_STAGES` 故意排除 `deposit_paid` / `paid_full`，注释：「牵扯钱 —— 那得看账不看话」
-
-也就是说**今天 `deposit_paid` / `paid_full` 只有人手能写**。本方案会是第一个自动写入者，所以规则必须写死：
-
-1. **方向单一**：booking / 收款 → contact.stage，**永不反向**。员工手改 stage 不回写 booking。
-2. **「最靠前」定义死**：取该联系人**在当前在售出发团上**、未取消的单里，映射阶段 `sort_order` **最大**的那一档（= 漏斗最深）。**历史团不参与**。
-   > 这解决了 v1 的二义：老客人去年付清黄山团、今年新报圣诞团，不会被拉回前段当新线索群发。
-3. **UPDATE 必须带条件**，照抄 `stage-infer` 的写法：只在 `stage IS NULL`、或 stage 仍停在「允许被自动推进的档位集」时才写。人一旦动过，命中 0 行。
-4. **取消的收尾必须显式**：一条未取消的单都不剩时，**必须写回一个可营销的阶段**（默认 `contacted`）+ 落 `contact_stage_events` 审计。
-   > 两种偷懒写法都会出事：保持 `paid_full` 不动 → 退订的客人被 `marketing_action='won'` 永久 suppress，再没人联系他；置回 `NULL` → `stage-infer` 专挑 `stage IS NULL` 的人读历史邮件（里面写着「定金已付」）→ 又把他填回 `deposit_paid` → 又被 suppress。
-5. **映射表进客户配置，不进代码**：`booking.status + 收款事实 → stage_key` 写在 `clients.leads_config`（已存在的 JSONB 列）或 `client_pipeline_stages` 的一列。阶段档位本来就是按客户可配的（CTS 那 9 档只是 seed），写死在 `src/lib` = 客户语义进 shared runtime（红线 2），也让第二个旅游客户接不进来。
-6. **`stage-infer` 要加排除条件**：本人有过 booking 的，不再由邮件推断阶段。
-7. **交互说明**：每次自动派生会产生一条 `changed_by='system'` 的 `contact_stage_events`，`day-list.ts:389-455` 的「今天改过阶段变灰不消失」逻辑会把这些人算成「今天改过」。行为上可接受，但要在 PR 里写明，别让员工困惑。
-
----
-
-## 4. ③员工看板
-
-挂在客户工作区下，与 CRM 平级（库存不是 CRM）：
-
-| 路由 | 回答哪一问 | 内容 |
-|---|---|---|
-| `/dashboard/clients/[id]/tours` | 有多少个 tour 在卖 | 产品列表 + 每个产品下的出发团数、总容量、总占用 |
-| `/dashboard/clients/[id]/tours/[departureId]` | 这个团招得怎么样 | 出发团详情 + 报名名单 + **可编辑座位数** |
-
-**列表每行**：出发日期 · 出发城市 · 天数 · 价格（无价显示「未标价」） · `已订 X / 共 Y`（Y 未设显示「容量未设置」） · 剩余 · 直招 vs 代理拆分 · 收款情况。
-
-**详情页**：报名名单（姓名直链回 CRM 联系人 · 人数 · 来源 · 代理 · 收款状态 · 备注）+ 「加报名」表单 + 「设置座位数」入口 + 「标记已收定金 / 已收尾款」按钮（写 `me_sale_outcomes`）。
-
-**四条硬规则**：
-1. **读失败不许渲染成 0 或空**。占用为 `'unknown'` 时显示「读不到，不代表没人报」。
-2. **容量未设置显示「未设置」，不是 0**。
-3. **超卖只警告不阻断**（员工可能故意收候补），行标红提示，不拦。硬拦只在 ④ 的代理入口。
-4. **员工「加报名」也走加锁函数**（见 §5.2），只是把「允许超卖」作为显式参数传 true——**不是走另一条不加锁的路**。
-
----
-
-## 5. ④Agent 门户 —— 本方案只留结论，细化拆到单独文档
-
-2 审一致判定：**④ 现在深度不够，不具备再审条件**（4 条独立失效路径 + 2 个越权面）。因此本方案只保留三条结论，实施设计另起 `docs/specs/…-travel-agent-portal-spec.md`。
-
-### 5.1 复用结论（成立但被 v1 夸大了）
-ME 已有邮箱验证码登录（`/api/auth/magic-link` + `/api/auth/verify-otp`）、授权表 `client_portal_users`、分级映射 `src/lib/auth/access-types.ts`。代理可以复用**登录**，加一个 `access_type='agent'` + `travel_agents` 档案表。
-**但**：「代理只能看自己的客人」是**客户内再按 agent_id 二次收窄**，ME 今天**完全没有**这一层，是全新授权逻辑。v1 说「砍掉了外部账号体系的绝大部分风险面」——砍掉的只是登录，授权层没砍多少。
-
-### 5.2 ④ 的前置条件（不满足不开工）
-1. ①②③ 上线并跑满一个真实报名周期。
-2. **先堵 5 个放行口**：`/prospect` 分支（middleware 22-33 行，无 membership 检查）、`api/mtc/checkout`（**外部代理能对客户账户发起 Stripe 付款**）、`api/mtc/balance`、`api/clients`、`api/onboard/self`（会触发计费副作用）——这 5 处查 `client_portal_users` 时**都没有 access_type 过滤**。这是 ④ 的**前置条件**，不是 ④ 内部的一步。
-3. **鉴权覆盖面**：`src/middleware.ts` 的 `config.matcher` 只覆盖 `/dashboard` `/portal` `/prospect`，**不覆盖 `/api/*`**（仓库自己在 `require-session.ts` 注释里写明）。所以代理门户的每个 API 路由必须各自调守卫；新前缀必须进 matcher。回归测试要断言这 5 个入口对 `'agent'` 全部拒绝——**不是**断言「'agent' 不在那两个数组里」（`ACCESS_TYPES_PORTAL` 运行时零引用，锁它等于虚假安全感）。
-4. 加 `access_type='agent'` 时必须同步改三处：DB CHECK、`ACCESS_TYPE_VALUES`（有测试断言两者同步）、`tierForAccessType`。
-5. PM 对 §0.5 两条拍板项给出答案。
+1. 团管理模块上线并有真实数据。
+2. **先堵 5 个鉴权放行口**：`/prospect` 分支（middleware 22-33 行无 membership 检查）、`api/mtc/checkout`（**外部账号能对客户账户发起 Stripe 付款**）、`api/mtc/balance`、`api/clients`、`api/onboard/self`（触发计费副作用）——这 5 处查 `client_portal_users` 时**都没有 access_type 过滤**。
+3. **鉴权覆盖面**：`src/middleware.ts` 的 matcher **不覆盖 `/api/*`**（仓库自己在 `require-session.ts` 注释里写明）。每个订单 API 必须各自调守卫；新前缀必须进 matcher。
+4. 新增 `access_type` 值要同步三处：DB CHECK、`ACCESS_TYPE_VALUES`（有测试断言同步）、`tierForAccessType`。
+5. **「agent 只能看自己的客人」是全新授权层**——ME 今天完全没有客户内再按 agent 收窄的能力。不要低估。
 6. 单独 PR + 子牙/魏征 2 审 + **狄仁杰安全复审**。
 
-### 5.3 防超卖的技术结论（这部分 2 审认可，直接带进新文档）
-- **占位过期靠算不靠任务**：有效占位 = `status='active' AND expires_at > now()`。正确性不依赖任何 cron 准时。
-- **所有增加占用的写入走同一个 Postgres 函数**，函数内 `SELECT ... FROM tour_departures WHERE id=$1 FOR UPDATE` 先锁行再重算。**员工手工录入不例外**——否则锁只防住了「代理 vs 代理」，员工那条路一插就超卖。
-- **占位转 booking 时必须重新加锁重算**：占位在 T 时刻失效、座位已被别人拿走，员工 T+1s 点确认 → 不重算就直接超卖，而且是已收钱的单。容量不足时 fail-closed + 落人工待办，不许静默成功也不许静默丢弃。
-- **函数必须 REVOKE**：Supabase 默认把新函数的 EXECUTE 授给 `anon` / `authenticated`。照 `20260904000001_geo_client_budget_ledger_v1.sql:266-271` 的写法 `REVOKE ... FROM PUBLIC, anon, authenticated` 再单授 `service_role`，否则 `scripts/db-invariants.sql` 不变量 4 直接把 CI 打红。
-- **占位要有上限和 TTL**：单个代理未转化占位数量上限（否则建 12 个占位就能锁死一个团），TTL 默认值要定。
-- `departure_seat_holds` 需要 `(departure_id, status, expires_at)` 索引。
-- **代理下单流转上 Inngest**（跨步骤接力 + 外部可见副作用，命中 CLAUDE.md §3）：`me/travel.agent_order.submitted` → 员工确认 → `me/travel.seat_hold.expired`。**人工审核只推进到下一个事件，不等于成交授权。**
+### 5.4 订单与 CRM / 广告的接线
+
+- **CRM**：订单驱动联系人阶段。方向单一（订单 → 联系人，永不反向）；UPDATE 必须带条件不覆盖人工判断（照抄 `stage-infer.ts:261` 的写法）；取消最后一单时必须写回可营销阶段而不是 NULL（否则退订的人被 `won` 永久 suppress，或被 `stage-infer` 从旧邮件重新填回已付款）；映射表落 `clients.leads_config`，不写死在代码（红线 2）。
+- **广告**：收到定金 = 成交，走**已上线**的 `me_sale_outcomes` + `me_conversion_writebacks`（`20260905000002`），幂等键 `source_kind='api'` + `source_ref='tour_order:<id>:deposit'`。**不再建第二本钱的账**——同一笔定金记两次会发给 Meta 两次，而 CAPI 没有删除端点、撤不回。
+- **不自造事件名**：冻结契约 `me/crm.deal.closed` 写着「不能改」，若要 emit 必须沿用它，并在契约文档补一句「上游可能是 ME 自己」。
 
 ---
 
-## 6. 实施顺序与验证（A 级）
+## 6. 不做什么（Scope 闸）
 
-| 步 | 内容 | 验证证据 |
-|---|---|---|
-| 1 | migration：`tour_products` / `tour_departures` / `tour_bookings` | 本机 PG 沙盘真跑 `scripts/db-replay-and-verify.sh`，证明能从零重放 |
-| 2 | 占用计算 | 边界用例：容量未设(NULL) / 0 座位 / 恰好满 / 超卖 / 已取消不计 / 多人单按 seats 计 / 子查询失败返回 `'unknown'` |
-| 3 | 日期解析纯函数 | 同一输入在 `TZ=UTC` 与 `TZ=Pacific/Auckland` 下结果相等 |
-| 4 | chinatravel 同步 | 真实 `tours.ts` 跑一次：**产品 32 行、出发团 25 行**；圣诞两个 slug 各 1 行；749/962 两处计算展开必须解出日期而不是 0；解析失败落待办 |
-| 5 | 收款接 `me_sale_outcomes` | 连点两次「已收定金」只产生 1 行（幂等索引生效） |
-| 6 | 阶段派生 | 人工改过 stage 的联系人，派生命中 0 行；取消最后一单后 stage 落到可营销档而不是 NULL |
-| 7 | **第二个旅游客户接入测试** | 建虚构旅游客户，**只插数据 + 改配置、不改一行代码**，跑通「建团 → 设容量 → 录报名 → 看板显示剩余」 |
-| 8 | 看板 UI | 截图 + 读失败态截图 + 容量未设置态截图 |
-| 9 | RLS / 函数授权 | 新表用 anon key 实测读写被拒；新函数 anon 无 EXECUTE |
-| 10 | cron | `render.yaml` 条目在同一个 PR 内；密钥环境变量组已 link |
-
-**不做的（Scope 闸）**：物化视图、计数器触发器、官网回写 API、代理门户任何代码、`tour_products` 的 draft/paused 态、`tour_departures` 的 departed 态（当前无调用方）。
+行程版本号与生效时间 · 图片挂到具体某一天 · 物化视图 / 计数器触发器 · 官网回写接口 · 占位与超时释放机制（因为改成"收定金才扣"了）· 佣金结算 · 任何收付款处理 · 下单系统的代码。
 
 ---
 
-## 7. 候选登记（待 PM 一句「记」）
+## 7. 验证（A 级）
 
-| 候选 | 层级 | 归属 | 证据 |
-|---|---|---|---|
-| **A** 出发团台账领域模型（product → departure → seats → 订位单 → 直招/代理） | L2 · ME 旅游版 | ME 旅游版 | PM 2026-09-08 定性为行业通用；实现证据 1/2 旅游客户 |
-| **B** 容量型资源的原子占位（锁行 → 重算 → 超了拒绝 → 过期靠算不靠任务） | L1 候选 · 默认降级不直建 | 平台基础设施 · Kernel/并发 | 跨行业成立（电商 SKU / 地产带看 / 课程席位 / 外呼并发）；1/2 行业 |
-| **C** 可售状态作为营销闸门（售罄 → 停投广告 / 停群发 / 停排内容） | L1 候选 · 默认降级不直建 | 平台基础设施 · Measurement/Governance | 1/2 行业（电商缺货停投同形状） |
-
-登记须同时写 `docs/registry/platform-candidates.md` **和** `src/lib/pm-todo/platform-candidate-reviews.ts`（漏写第二个 = 复查永远不会被提醒）。
+| 步 | 证据 |
+|---|---|
+| migration | 本机 PG 沙盘真跑 `scripts/db-replay-and-verify.sh`，证明能从零重放 |
+| 日期解析 | 同一输入在 `TZ=UTC` 与 `TZ=Pacific/Auckland` 下结果相等 |
+| 导入 | 真实 `tours.ts` 跑一次：**商品 32 行、出发 25 行**；2 处计算展开必须解出日期而不是 0；失败落待办 |
+| 图片 | 生成一条团上传链接 → 传图 → 图归到该团 → vision-analyzer 自动打标；令牌里不含明文客户 UUID |
+| 名额 | 未设置显示「未设置」不是 0；编辑入口能改并留痕 |
+| **第二个旅游客户接入** | 建虚构旅游客户，**只插数据 + 改配置、不改一行代码**，跑通「建团 → 排出发 → 设名额 → 传图 → 列表显示」 |
+| 界面 | 截图 + 读失败态截图 + 名额未设置态截图 |
+| RLS | 新表用 anon key 实测读写被拒 |
 
 ---
 
 ## 8. Reuse Statement
 
-- **复用了什么**：`me_sale_outcomes` + `me_conversion_writebacks` 收款与 CAPI 回传全链（**不新建钱的账本**）· Supabase Email OTP 登录 · `client_portal_users` + `access-types.ts` · `contacts` / `contact_identities` 身份合并 · `contact_stage_events` 审计 + `client_pipeline_stages` 可配置阶段 · `clients.leads_config` 配置位 · `src/lib/cms/github-client.ts` 读 chinatravel 仓 · `pm-todo/manual-items.ts` 人工待办管道 · Inngest（④）
-- **本次会新增的 `src/lib/` 共享代码**（v1 声称「无」是错的，此处更正）：`src/lib/travel-inventory/` —— 占用计算、日期解析纯函数、阶段派生器、chinatravel 适配器。**这些是 L2 ME 旅游版的共享代码，不是 L1 平台能力**，里面不许出现任何客户名 / 客户 ID / 具体团名。
-- **industry-specific**：三张表的领域形状 + `src/lib/travel-inventory/` → L2 候选 A
-- **client-specific**：CTS 的 tour / 日期 / 价格 / 容量 / 报名人 / 代理名单 / 阶段映射 → 数据行与 `leads_config`
-- **有没有把客户名 / ID / 行业判断写进 shared runtime**：没有。`c0000000-...` 只在 seed 出现，且照既有做法带 `WHERE EXISTS` 守卫。
-- **学习边界**：结论留在 client-private + 候选表，未升 industry/global。
+- **复用**：`client_assets` 素材库 + `/api/upload/[token]` 免登陆上传 + `client-upload-token.ts` 加密令牌 + `vision-analyzer` 看图打标 + `assets/provenance.ts` 来源归属（铁律 8 的守卫）· `cms/github-client.ts` 读 chinatravel 仓 · `me_sale_outcomes` + `me_conversion_writebacks` 收款与 CAPI 全链 · `contacts` / `contact_stage_events` / `client_pipeline_stages` / `clients.leads_config` · `pm-todo/manual-items.ts` · `client_portal_users` + `access-types.ts`
+- **新增的 `src/lib/` 共享代码**：`src/lib/travel/` —— 团目录读取口、日期解析纯函数、导入器、（第二步）名额计算与阶段派生。**这些是 L2 ME 旅游版共享代码，不是 L1 平台能力**，里面不许出现任何客户名 / 客户 ID / 具体团名。
+- **industry-specific**：三张新表的领域形状 + `src/lib/travel/` → L2
+- **client-specific**：客户的团 / 日期 / 价格 / 名额 / 行程 / 图片 / 订单 / 代理名单 / 阶段映射 → 数据行与 `leads_config`
+- **有没有把客户名 / ID / 行业判断写进 shared runtime**：没有。
+- **与 tier-gate 决策一致性**：一致，判定 L2 · ME 旅游版，实现落在 `src/lib/travel/` 与三张 client-scoped 表。
+- **学习边界**：留在 client-private；PM 2026-09-08 回「跳」，本轮不登记平台候选。
 
 ---
 
-## 9. 已知薄弱点（主动交代）
+## 9. 已知薄弱点
 
-1. **内容双真相源**：内容在官网仓、库存在 ME。官网改团名而 ME 没同步 → 看板显示旧名。且 `cts-meta-pr` 会自动改写 title，两个自动化动同一个文件。
-2. **容量全靠人填**：源数据几乎没有容量，看板上线初期绝大多数团是「容量未设置」。这是如实反映现状，不是 bug，但需要 CTS 员工投入一次填表。
-3. **占用现算**：万级数据要改法，现在故意不提前优化。
-4. **阶段派生方向**：靠 UPDATE 条件 + code review 保证，没有数据库层强制。
-5. **候补没有独立状态**：员工故意收候补时占用会超过容量，`remaining` 为负；④ 上线后会让该团对所有代理锁死，需要在 ④ 的方案里处理。
-6. **④ 佣金只记账不动钱**：刻意的范围限制，不是遗漏。
+1. **内容双真相源**（本方案第一步的代价）：官网与 ME 各存一份团内容会漂移；且 `cts-meta-pr` 会自动改写官网的 title。
+2. **名额全靠人填**：源数据几乎没有容量，上线初期大多数团显示「名额未设置」。这是如实反映现状。
+3. **行程改动不追溯下游**：已投广告 / 已发帖 / 已导手册按旧版行程做的，不自动改写，只留变更记录可查。
+4. **占用现算**：万级数据要改法，现在故意不提前优化。
+5. **下单系统的授权层是全新的**：「agent 只能看自己的客人」ME 今天没有，不要按「复用登录就好了」估工。
 
 ---
 
-## 10. 2 审记录
+## 10. 审查记录
 
-| 审查 | 结论 | 处理 |
+| 轮次 | 结论 | 处理 |
 |---|---|---|
-| 子牙（架构） | CONDITIONAL PASS · 6 blocker | B1 钱重复建账 → §3.3 改为引用 `me_sale_outcomes`；B2 事件契约 → §3.3 不自造事件名；B3 departure_code → §2.5 删掉；B4 鉴权 5 个放行口 → §5.2 列为 ④ 前置；B5 阶段派生覆盖人工 → §3.5 七条；B6 seats_total 无来源无入口 → §2.4。N1-N8 除「删 currency」外全部吸收 |
-| 魏征（挑刺） | FAIL · 10 blocker | B1 状态机对不上 → §3.4 单一状态机；B2 seats_total → §2.4；B3 取消不回退 → §3.5-4；B4「最靠前」二义 → §3.5-2；B5 读失败算 0 → §3.4 三态；B6 middleware 不覆盖 API → §5.2-3；B7 函数默认匿名可执行 → §5.3；B8 员工录入绕过锁 → §4-4 / §5.3；B9 占位转换竞态 → §5.3；B10 日期时区 + 城市无源 → §2.5。H1-H10 / M1-M5 全部吸收 |
-| 事实更正 | 两审共指出 7 处 | §2.2 表格（32 tour / 25 出发团 / 1 个 maxGroupSize / id 与 slug 均不唯一 / 2 处计算展开）· §2.2 圣诞团理由更正 · §2.7 删掉 RLS 误报（已实测生产库确认无此问题） |
+| 子牙（架构）· 对 v2 | CONDITIONAL PASS · 6 blocker | 全部吸收：钱不重复建账 / 不自造事件名 / 删 departure_code / 5 个鉴权口列为前置 / 阶段派生七条 / 名额连界面一起做 |
+| 魏征（挑刺）· 对 v2 | FAIL · 10 blocker | 全部吸收：单一状态机 / 名额可空 / 取消回退阶段 / 「最靠前」定义死 / 读失败三态 / matcher 不覆盖 API / 函数 REVOKE / 日期时区 / 城市无源 |
+| 事实更正 | 7 处 | §2.6 表格 · 圣诞团理由更正 · §2.8 删掉 RLS 误报 |
 
-**两审均要求：改完再审一轮，才能进 PM 授权与五道 Build Gate。**
+**v3 因产品定义变化引入的新面（团管理模块 + 素材管道复用 + 下游统一读取口）尚未过审，需再走一轮子牙 + 魏征。**
