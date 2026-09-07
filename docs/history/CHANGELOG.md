@@ -104,6 +104,42 @@
 
 ---
 
+### 2026-09-06 ~ 09-07（Tune 段接通后的连锁修复：一次假结论污染 + 三个飞轮学习链隐患）
+
+> 起因：PR [#1427](https://github.com/bigbigraydeng-maker/magic-engine/pull/1427) 把停摆 53 天的 Tune 段接通后手动触发了一次，**「0 报错」被当成了验证通过**。子牙架构复审读代码后指出同一个程序还在往客户记忆里刻假结论。以下四条均由生产库独立验证后修复。
+
+**① 摘掉判据错误的「决策结论回填」** — PR [#1433](https://github.com/bigbigraydeng-maker/magic-engine/pull/1433)
+
+`extractor.ts` 的 `backfillDecisionOutcomes` 只按 `client_id` + 时间窗查 outcome，**从不看这条决策关联哪个动作**，然后拿窗口内全部 outcome 的多数票，给该客户窗口内**每一条**决策盖同一个章。生产证据：116 条自动回填只有 5 种 `outcome_notes`，每种恰好对应一个客户 —— 一家的 50 条决策被一次性全盖成 `failure`。而 `memory/format.ts:117` 把它拼成 `(outcome: failure)` 喂进鲁班（`luban/project-prompts.ts`）和华佗（`huatuo/memory.ts` 长模式）的提示词；`updateDecisionOutcome` 只填 null 行、填过不复查，是不可逆单向写，库里还有 662 条 null 排队等着被同样盖满。已摘除调用并删掉不可达函数，原地留下重做时的正确判据；**已清理 116 条已污染行**（判据 `outcome_notes LIKE 'auto-derived from%'`，人工写的 4 条不带该前缀，未误伤）。重做前提：判据必须只匹配该决策**所关联动作**的 outcome，时间窗用 `flywheel_actions.executed_at`；但 `client_decision_history` 目前没有指向 action 的外键，接不上就别猜。
+
+**② 体检看得见「跑到一半卡死」的任务** — PR [#1435](https://github.com/bigbigraydeng-maker/magic-engine/pull/1435)
+
+`lib/cron/health.ts` 的 `failing` 只认 `status='failed'`（路由自己 catch 写的，容器被杀时那行根本没机会执行），`overdue` 看 `started_at`（卡死的任务开跑记录是有的）—— 两边都接不住，跑死的任务在体检里等于健康。生产实测 60 天窗口：**9 个任务共 30 条卡死行**（`messenger-brief-hourly` 一家 15 条；`attribution-cron` 2026-09-02 18:00 那轮卡了 4 天）。新增 `isStuck()`（`running` + `finished_at` 为空 + 开跑超 60 分钟，三条缺一不可）与 `HealthReport.stuck`，并下发 `cron_stuck` 今日待办 —— 不跟「该跑没跑」合并，那边是没开始、这边是开始了没结束，下一步动作不同。
+
+**③ 周学习汇总的窗口切在动作执行时间上** — PR [#1436](https://github.com/bigbigraydeng-maker/magic-engine/pull/1436)
+
+`learning-rollup` 原按 `flywheel_outcomes.computed_at` 切周窗口，但那一列是「最后一次被重算的时间」—— attribution 每 6 小时把所有现役行刷成「现在」。生产实测：全表 336 行的 `computed_at` 只有 **3 个取值**，285 行全挤在最近一轮。按它切窗口结果只有两种：**全部**或**零**；2026-08-31 那次周报窗口（08-24~08-31）里一行都没有，整轮空转而周报照发。改为按 `flywheel_actions.executed_at`（生产上分布在 18 个不同的周），**客户发现与逐客户取数两处同时改**以保持一致。测试假件同步修正：原假件不认嵌套列过滤，会把所有行滤掉、测试靠「结果恒为空」假绿；现按 PostgREST 真行为建模并**区分内连接与左连接** —— 不区分的话「孤儿不进查询」那条断言把 `!inner` 去掉照样绿（实测如此）。
+
+**④ 抽取器不再拿过期归因当现役证据** — PR [#1437](https://github.com/bigbigraydeng-maker/magic-engine/pull/1437)
+
+`loadOutcomesWithActions` 读全表不看时间，而库里有 **51 行 / 17 个动作**的归因永久冻结在 2026-08-04~05（成因见 Issue #859：page-upgrade 的 PR 被拒后 `expected_metric` 被写 null，两个写入方的查询都带 `.not('expected_metric','is',null)`，从此谁都不再选中它们，既不刷新也不删除）。已有 10 条**生效中**的记忆是从这批冻结行长出来的。新增 `OUTCOME_FRESH_DAYS = 7` 新鲜度闸；三个刻意选择：**在内存里筛不加进查询条件**（数据库滤掉的行数不着，那就又成了静默丢弃）、**`outcomes_stale_skipped` 进结果 / cron 日志 / `cron_run_logs.summary`**（只挡不报 = 换一种静默）、**时间读不出来的行保留**（不认识的格式不等于过期）。已学到的 10 条不动 —— 它们是历史事实，不是错误结论。
+
+**⑤ 日报区分「取不到线索」与「进了 CRM 没进邮件名单」** — PR [#1356](https://github.com/bigbigraydeng-maker/magic-engine/pull/1356)
+
+`summariseFailures()` 只吃每客户的 `error`，句式写死「N/M 个客户取不到线索」。Mailchimp 出口失败时线索其实已进 CRM，直接套那句话是在日报里说假话，且会污染 `failed_count`「取不到线索的客户数」的语义。新增 `summariseOutletGaps()` 与 `summariseSyncProblems()` 分别成句（取不到线索排前，日报只截 200 字符）；判据收敛进 `lib/mailchimp/outlet-tally.ts` 作为唯一事实定义（日报与 PM 今日待办两个消费者共用，判据分叉会导致「邮件报了、待办里找不到」）；判「预期跳过」用白名单不用黑名单，新失败默认说出来。配套 `lib/cron/digest-cells.ts` 的 `failureCell()` 修掉日报里 `failed_count=0 && status=failed` 显示成红色「0 failed」配 Cron Job Failures 表头的自相矛盾。
+
+**首次自动运行验证（2026-09-07 06:30:42 UTC）**：`completed`、25 秒、4 个客户、0 失败；`summary` = `{"outcomes_stale_skipped": 49}`（新鲜度闸生效并如实报数）。决策表假结论 0 条、人工写的 4 条完好（回填确已摘除）；`client_proven_patterns` 生效 67 条、`client_failed_experiments` 生效 52 条，写入时间均为该轮 —— 学习部分未被误伤。**Render 确实按 blueprint 建出了新 cron 服务，`fromGroup: me-shared-cron-secret` 的写法免去了手动 link。**
+
+**验证汇总**：四张 PR 各自 CI 全绿并做了变异检验（#1433 一处 · #1435 四处 · #1436 三处 · #1437 四处 · #1356 七处，全部咬住）；合并后一起重跑 `src/lib/memory` + `src/lib/cron` + `src/lib/pm-todo` 共 23 files / 345 passed。
+
+**过程教训（比修复本身重要）**：本轮四次抢先下结论均被代码或生产数据推翻 —— 误判 `avg_position` 方向（`gsc-bridge.ts` 早已翻转）、误判抽取器未按 action 折叠（`extractor.ts:36` 早已 import `keepOneCasePerAction`）、首跑预演高估近一倍（把「先过滤再折叠」的顺序搞反）、误称 attribution「30 天 0 次失败」（只数了 `status='failed'`，漏了卡死在 `running` 的）。**`errors: []` 只说明程序没崩，不说明写对了；手动触发一次成功 ≠ 管道验证通过。**
+
+**风险级**：#1433 A 级（改客户记忆写入路径 + 清理生产数据，PM 显式授权后执行）· 其余 B 级。
+
+**Reuse Statement**：五张 PR 合计新增两个小模块（`lib/mailchimp/outlet-tally.ts` 判据唯一事实定义、`lib/cron/digest-cells.ts` 纯展示函数），其余均为删除、过滤与注释。复用 `CRON_REGISTRY` 对账机制、`run-logger`、`keepOneCasePerAction`（与 aggregate / case-library / execution board 同一把尺）、`manual-items` 下发管道、既有 `fake-supabase` 夹具。platform-shared：全部；抽取器写的是 client-private memory（两张表均带 `client_id`），未碰 industry / global 泛化边界；未把客户名、客户 ID 或行业判断写进 shared runtime。平台层级门：判定 L1 平台基础设施 · Memory / Verification，**非新增能力**（能力早在，缺的是调度与判据修正），不占候选名额，落点与决策时分类一致。
+
+---
+
 ### 2026-09-06（接通 IMPACT 的 Tune 段 —— 从结果里学这一步从没跑过，PR [#1427](https://github.com/bigbigraydeng-maker/magic-engine/pull/1427)）
 
 **上线内容**：给 `/api/cron/memory-extractor` 补上调度登记（`render.yaml` + `src/lib/cron/registry.ts` 双写，`30 6 * * *`，密钥走 `fromGroup: me-shared-cron-secret`）。抽取逻辑一行没动。
@@ -122,7 +158,7 @@
 
 **Inngest 豁免声明**（铁律 3 要求：暂不上 Inngest 的必须写明原因 / 恢复条件 / 替代 receipt）：
 
-- **原因**：`memory-extractor` 本身是纯库读库写（读 `flywheel_outcomes` → 写两张 memory 表 + 回填 `client_decision_history`），**不调任何外部服务、无外部副作用、单次同步跑完**，落在铁律 3 自己写的豁免范围内。为单个无副作用的 cron 套工作流层属于「为了用 Inngest 而复杂化」，规矩明确禁止。
+- **原因**：`memory-extractor` 本身是纯库读库写（读 `flywheel_outcomes` → 写两张 memory 表；当时还有一步回填 `client_decision_history`，**同日下午已由 PR [#1433](https://github.com/bigbigraydeng-maker/magic-engine/pull/1433) 摘除**，见下条），**不调任何外部服务、无外部副作用、单次同步跑完**，落在铁律 3 自己写的豁免范围内。为单个无副作用的 cron 套工作流层属于「为了用 Inngest 而复杂化」，规矩明确禁止。
 - **但链路耦合是隐式的**：`attribution`(`0 */6`) → 本任务(`30 6`) → `agent-learning-rollup`(`0 7` 周一) 目前**只靠时钟先后串联**，没有事件也没有回执。铁律 3 点名「Outcome 回写」属于应上 Inngest 的场景，所以这是一笔明确的技术债，不是「不适用」。
 - **当前风险量化**：`attribution-cron` 近 30 天 118 次，最长 353s / 平均 236s / **0 次失败**；本任务留 30 分钟间隔，约 5 倍余量。今天不构成实际风险。
 - **替代 receipt 在哪**：`cron_run_logs`（路由已调 `startCronRun('memory-extractor')`，写 processed / completed / failed），配合本次同步登记的 `CRON_REGISTRY` —— `lib/cron/health.ts` 会把「从来没跑过」(`neverRan`) 和「该跑没跑」(`overdue`) 单独报出来，跟只报「跑了但失败」的日报是两条线。
