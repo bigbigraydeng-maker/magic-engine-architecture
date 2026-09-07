@@ -133,7 +133,10 @@ export async function pushConversionReviewItems(
         '去广告平台后台的事件管理页看一眼这笔在不在：' +
         '在，就点「已确认收到」；不在，就点「重新发送」。',
       // 🔴 必须是绝对网址（见上面同类注释）。
-      href: `https://app.magicengine.com.au/dashboard/conversions?client=${outcome.client_id}&status=in_doubt`,
+      // 带上 focus=<outcome_id> —— 同客户多条 in_doubt 时，光滚到 "需要你动手"
+      // 区块不够，PM 分不清邮件说的是哪一笔。page.tsx 的 focus effect 会用这个
+      // id 定位到具体卡片，找不到就静默不动（stuck 空表面上说明已处理完）。
+      href: `https://app.magicengine.com.au/dashboard/conversions?client=${outcome.client_id}&focus=${row.outcome_id}&status=in_doubt`,
     })
   }
 }

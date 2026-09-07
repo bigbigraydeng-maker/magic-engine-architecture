@@ -172,16 +172,29 @@ export default function ConversionsPage() {
    * 静默不动，用户看到普通列表，不弹错。跳完清空 focusOutcomeId，同一 URL 不会二次跳。
    */
   useEffect(() => {
-    if (!focusOutcomeId || rows.length === 0) return
+    if (!focusOutcomeId) return
+    // rows / stuck 都还没读回来，等 —— 先返回，等某一边填了再触发本 effect
+    if (rows.length === 0 && stuck.length === 0) return
     const id = focusOutcomeId
-    const idx = rows.findIndex((r) => r.id === id)
-    if (idx >= 0) {
-      setCursor(idx)
-      // ref 可能因为渲染时序还没设上，用 setTimeout 让 React 提交完再 scroll
+
+    // 先在两个列表里找
+    const inRowsIdx = rows.findIndex((r) => r.id === id)
+    if (inRowsIdx >= 0) {
+      setCursor(inRowsIdx)
       setTimeout(() => outcomeRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
       setFocusOutcomeId(null)
       return
     }
+    if (stuck.some((s) => s.id === id)) {
+      // stuck 用的是 stuckSectionRef 而不是 outcomeRefs（stuck 卡片没进 outcomeRefs
+      // 池 —— 那是 rows 才注册的），滚到「需要你动手」区块顶就行
+      setTimeout(() => stuckSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+      setFocusOutcomeId(null)
+      return
+    }
+
+    // 两边都没有 —— 按 id 直查一次（可能被 200 条窗口挤掉），拿回来后按
+    // review_status 决定塞 rows 还是 stuck。
     if (!clientId) return
     let cancelled = false
     void (async () => {
@@ -192,10 +205,20 @@ export default function ConversionsPage() {
         const body = await res.json()
         if (cancelled || !res.ok) return
         const found: Outcome | undefined = (body.outcomes ?? [])[0]
-        if (!found || found.review_status !== 'pending_review') return
-        setRows((rs) => (rs.some((r) => r.id === found.id) ? rs : [found, ...rs]))
-        setCursor(0)
-        setTimeout(() => outcomeRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+        if (!found) return
+        if (found.review_status === 'pending_review') {
+          setRows((rs) => (rs.some((r) => r.id === found.id) ? rs : [found, ...rs]))
+          setCursor(0)
+          setTimeout(() => outcomeRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+          return
+        }
+        // approved + 卡在 in_doubt/failed 的 outcome：走 stuck 展示（只当它真有
+        // writeback 时才塞 —— 跟 load() 里的防御过滤同一口径）
+        const wb = found.me_conversion_writebacks?.[0]
+        if (found.review_status === 'approved' && wb && (wb.status === 'in_doubt' || wb.status === 'failed')) {
+          setStuck((s) => (s.some((r) => r.id === found.id) ? s : [found, ...s]))
+          setTimeout(() => stuckSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+        }
       } finally {
         if (!cancelled) setFocusOutcomeId(null)
       }
@@ -203,7 +226,7 @@ export default function ConversionsPage() {
     return () => {
       cancelled = true
     }
-  }, [focusOutcomeId, rows, clientId])
+  }, [focusOutcomeId, rows, stuck, clientId])
 
   /**
    * 邮件深链 ?status=in_doubt：数据到手后 scroll 到「需要你动手」区块，
