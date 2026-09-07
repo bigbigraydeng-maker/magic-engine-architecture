@@ -31,11 +31,12 @@ vi.mock('@/lib/workflows/inngest-event', () => ({
   sendInngestEvent: (...args: unknown[]) => mockSendInngestEvent(...args),
 }))
 
-function makeRequest(secret: string | null, clientId?: string) {
+function makeRequest(secret: string | null, clientId?: string, attempt?: string) {
   const headers: Record<string, string> = {}
   if (secret !== null) headers['authorization'] = `Bearer ${secret}`
   const url = new URL('http://localhost:3001/api/cron/flywheel-seo-weekly')
   if (clientId) url.searchParams.set('client_id', clientId)
+  if (attempt) url.searchParams.set('attempt', attempt)
   return new NextRequest(url, {
     method: 'GET',
     headers,
@@ -151,6 +152,19 @@ describe('GET /api/cron/flywheel-seo-weekly — 手动补触发', () => {
     expect(await res.json()).toMatchObject({ client_id: CTS, clients_dispatched: 1 })
     expect(mockSendInngestEvent).toHaveBeenCalledTimes(1)
     expect(mockSendInngestEvent.mock.calls[0][0].data.client_id).toBe(CTS)
+  })
+
+  it('attempt 模式生成新的去重键，且只接受安全字符', async () => {
+    mockClientsQuery.mockResolvedValue({ data: [{ id: CTS, domain: 'ctstours.co.nz' }], error: null })
+    const { GET } = await import('./route')
+    const res = await GET(makeRequest(CRON_SECRET, CTS, 'retry-1'))
+    expect(res.status).toBe(200)
+    expect(mockSendInngestEvent.mock.calls[0][0].id).toContain('-retry-1')
+
+    vi.clearAllMocks()
+    const bad = await GET(makeRequest(CRON_SECRET, CTS, 'retry/unsafe'))
+    expect(bad.status).toBe(400)
+    expect(mockSendInngestEvent).not.toHaveBeenCalled()
   })
 
   it('🔴 一个人发失败不影响其他人 —— 后面的还得继续发', async () => {

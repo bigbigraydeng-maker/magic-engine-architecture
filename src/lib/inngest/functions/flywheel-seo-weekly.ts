@@ -61,9 +61,10 @@ export interface FanOutReceipt {
 export function buildSnapshotEvents(
   entries: readonly SnapshotRosterEntry[],
   weekKey: string,
+  attempt?: string,
 ): Array<{ id: string; name: string; data: { client_id: string; domain: string; week_key: string } }> {
   return entries.map((e) => ({
-    id: snapshotEventId(e.clientId, weekKey),
+    id: snapshotEventId(e.clientId, weekKey, attempt),
     name: FLYWHEEL_SEO_SNAPSHOT_DUE_EVENT,
     data: { client_id: e.clientId, domain: e.domain, week_key: weekKey },
   }))
