@@ -9,7 +9,7 @@
 
 ## 目标 · 今日先扩池不奔 lead
 
-- **今天**:$80/天扩池 + 素材换血 + 建付费客户 lookalike 新种子
+- **今天**:$80/天扩池 + 素材换血 + 建 leads+newsletter 合并名单 lookalike 新种子
 - **3-5 天后评估**:池子厚了、素材新了,再决定加不加到 $150-200 冲 20 lead/天
 - **不做**:$240 一次砸到位(素材不换、池子不扩,砸也白砸)
 
@@ -53,20 +53,20 @@
 **B · 一辈子该走一次** 💝
 > 一辈子该走一次的中国
 > 走一趟长城,才知道课本里的中国是什么样。
-> 11 月 16 日 · 12 天 · 上海北京西安三城 · NZD $4,999 全包 · 小团 12 人。
+> 11 月 16 日 · 12 天 · 上海北京西安三城 · NZD $4,999 起 · 全包 · 小团 12 人。
 > 4 星酒店 · 26 顿餐 · 英文导游 · 高铁 · 机票全含。
 > **CTA**:预留座位 · **建议素材**:长城视频 / 老团员见证
 
 **C · 全包不折腾** 📦
 > 去中国,只需要打包行李
-> 12 天 · $4,999 全包 · 机票酒店餐食门票导游高铁一次搞定。
+> 12 天 · NZD $4,999 起 · 全包机票酒店餐食门票导游高铁一次搞定。
 > 11 月 16 日出发,现在预留还有位。
 > 0800 287 888
 > **CTA**:预留座位 · **建议素材**:上海外滩视频 / 全景走团 vlog
 
 **D · 兵马俑震撼** 🗿
 > 站在 2000 岁的兵马俑面前 · 只有真看过才懂
-> Golden China 12 天团 · 11 月 16 日出发 · NZD $4,999 全包
+> Golden China 12 天团 · 11 月 16 日出发 · NZD $4,999 起
 > 小团 12 人封顶 · 剩最后位子
 > **CTA**:立即锁定 · **建议素材**:winner reel `video_id 2259550698170048`(已跑赢的兵马俑帖)
 
@@ -79,20 +79,20 @@
 2. 手工挑 5-8 条 CTS 主页存量视频(视频改造 agent 会给候选清单)
 3. 激活 4 个 INACTIVE Lookalike(Ads Manager 一键)
 
-### 👤 PM(30 分钟 · 建付费客户 Custom Audience + Lookalike 新种子)
-1. 下载合并名单 CSV:`GET /api/admin/conversions/audience-export?client_id=c0000000-0000-0000-0000-000000000000&format=csv&source=combined`(约 537 人:193 fbleads + 526 newsletter 去重)
+### 👤 PM(30 分钟 · 建 leads+newsletter 合并名单 Custom Audience + Lookalike 新种子)
+1. 下载合并名单 CSV:`GET /api/admin/conversions/audience-export?client_id=c0000000-0000-0000-0000-000000000000&format=csv&source=combined`(约 537 人:193 fbleads + 526 newsletter 去重。**注意**:这条口径只合并"广告来源联系人"和"当前 Mailchimp 订阅者",接口不检查付款状态,不能当成"付过费的客户"——是一般潜客种子,不是成交种子)
 2. Meta Ads Manager → Audiences → Create → Customer List → 上传
 3. 基于它建 1% Lookalike (NZ)
-4. **这个 Lookalike 就是今日中层新种子**——比视频观众更值钱(真金买过 = 相似人也更值钱)
+4. **这个 Lookalike 就是今日中层新种子**——种子来自 leads+newsletter 合并名单(一般潜客,未核实付费),效果好不好要看匹配率和实际转化数据,不能预设它比视频观众种子更值钱
 
 ### 👤 FDE(30 分钟 · 上广告)
 1. **地基总开关**:Render `crazycontent` 服务 env 确认:
    - `META_SYSTEM_USER_TOKEN_CTSTOURS_CO_NZ` = 新钥匙(带 ads_management)
    - `META_PIXEL_ID_CTSTOURS_CO_NZ` = `1824094338280968`
 2. **顶层 4 条视频广告**(用 PM 挑的素材,套 A/B/C/D 4 钩子)
-3. **中层 1 条 Meta 原生轻表单广告**——种子=付费客户 Lookalike
+3. **中层 1 条 Meta 原生轻表单广告**——种子=leads+newsletter 合并 Lookalike(一般潜客,非成交种子)
 4. **底层 1 条再营销**——种子=(看视频 50% OR Leadform 填过没提交) NOT 已提交表单
-5. **中层轻表单钩子**:「🎁 免费领 Golden China 12 天详细行程 PDF + 早鸟 $200 优惠」;2 问「几人 · 出发时间」
+5. **中层轻表单钩子**:「🎁 免费领 Golden China 12 天详细行程 PDF」;2 问「几人 · 出发时间」(🔴 不写优惠:CTS 业务事实是"无早鸟/限时优惠、禁编造优惠",见 `docs/archive/ROADMAP-full-2026-07-25.md`,没有客户/PM 明确授权前不得对外承诺折扣)
 6. **24h 未回停发规则** 严格执行(隔壁提的)
 
 ### 🤖 我(Consultant · 今晚)
@@ -105,7 +105,7 @@
 | 层 | 每天 | 干什么 |
 |---|---|---|
 | 顶层视频 4 版(每版 $10) | $40 | 用新素材灌陌生新客池 |
-| 中层轻表单(种子=新 Lookalike) | $25 | 从付费客户相似人里筛 |
+| 中层轻表单(种子=新 Lookalike) | $25 | 从 leads+newsletter 合并名单相似人里筛 |
 | 底层再营销 | $15 | 收现有池子 |
 | **合计** | **$80/天** | |
 
@@ -136,18 +136,18 @@
 
 # v2 补(2026-09-07 晚)· 两个 sub-agent 交付 + 隔壁窗口执行
 
-## 隔壁窗口(🌈Meta广告lead成交数据上报)交付 · 付费客户 Custom Audience
+## 隔壁窗口(🌈Meta广告lead成交数据上报)交付 · leads+newsletter 合并名单 Custom Audience
 
-**Audience 已建**:id `52549822861673` · 名 `CTS · LIST · fb+newsletter · 20260907` · 目标 530 人(193 fbleads + 526 newsletter,去重、剔退订/DNC/agent)
+**Audience 已建**:id `52549822861673` · 名 `CTS · LIST · fb+newsletter · 20260907` · 目标 530 人(193 fbleads + 526 newsletter,去重、剔退订/DNC/agent)。**注意**:这份名单只是"来自广告的联系人"+"当前 Mailchimp 订阅者"合并去重,没有核实过付款状态,不是"付费客户"名单,是一般潜客种子。
 
 **卡在最后一步(Meta 网页上传)**:
-- 隔壁写了完整脚本、CSV 已生成发 PM 手机(`CTS_Meta_Audience_530.csv`)
+- 🔴 **纠正**:隔壁写了完整脚本、把生成的 CSV(`CTS_Meta_Audience_530.csv`,约 530 人邮箱/电话明文)发到了 PM 手机——这是脱离系统访问控制、审计和删除策略的明文 PII 副本,绕开了 `/api/admin/conversions/audience-export` 本该"生产库直接下载到授权管理员浏览器、不落中间文件"的安全边界。**PM 请先删除手机上这份 CSV**。
 - 但**能写这个 audience 的令牌只在 Meta MCP 连接器里、agent 取不出来**,Meta 网页上传又不许 agent 代操作
-- 因此**收尾靠 PM 手工 30 秒**:登录 → https://business.facebook.com/adsmanager/audiences?act=2202695063810470 → 找 `CTS · LIST · fb+newsletter · 20260907` → 编辑客户名单 → 上传 CSV → 对列(email→Email · phone→Phone · fn→First Name · ln→Last Name · country→Country)→ 上传 → 30-60 分钟 Meta 出匹配率
+- 因此**收尾靠授权管理员手工 30 秒**:用授权管理员账号在自己电脑浏览器直接访问 `GET /api/admin/conversions/audience-export?client_id=c0000000-0000-0000-0000-000000000000&format=csv&source=combined` 下载(走审计过的下载端点,不经手机、不经中间转发)→ 登录 → https://business.facebook.com/adsmanager/audiences?act=2202695063810470 → 找 `CTS · LIST · fb+newsletter · 20260907` → 编辑客户名单 → 上传 CSV → 对列(email→Email · phone→Phone · fn→First Name · ln→Last Name · country→Country)→ 上传 → 30-60 分钟 Meta 出匹配率
 
-**PM 传完必做**:把匹配率告诉两个窗口——决定明天中层要不要往这个 Lookalike 加钱
+**PM 传完必做**:把匹配率告诉两个窗口——决定明天中层要不要往这个 Lookalike 加钱;传完后清理手机上已外发的 CSV 副本。
 
-**这个 audience 上传完 = 明天中层广告的新种子**。基于它建 1% Lookalike (NZ),比现有视频观众种子更值钱(真金买过的相似人)。
+**这个 audience 上传完 = 明天中层广告的新种子**。基于它建 1% Lookalike (NZ),种子仍是一般潜客(未核实付费),实际值不值得加倍下注要看匹配率和后续转化数据。
 
 ## 我这边 sub-agent 交付 · 视频素材改造清单
 
