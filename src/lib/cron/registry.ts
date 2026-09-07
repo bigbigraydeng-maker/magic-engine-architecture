@@ -96,7 +96,9 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   { service: 'factory-order-scheduler', jobName: 'factory-order-scheduler', schedule: '0 20 * * *', logsRuns: true },
   { service: 'factory-publish-sweeper', jobName: 'factory-publish-sweeper', schedule: '25 * * * *', logsRuns: true },
   { service: 'factory-publish-worker', jobName: 'factory-publish-worker', schedule: '5 * * * *', logsRuns: true },
-  { service: 'factory-stock-refill', jobName: 'factory-stock-refill', schedule: '0 19 * * 1', logsRuns: true },
+  // 🔴 已暂停(2026-09-08,PM「停抓图」):抓来的图无人消费(改图那步是死代码),白花 Apify 钱。
+  //    恢复三件套:render.yaml 取消注释 + 本行加回来 + 先把 stock-transform 接进调用链。
+  // { service: 'factory-stock-refill', jobName: 'factory-stock-refill', schedule: '0 19 * * 1', logsRuns: true },
   { service: 'goal-current-value-refresh', jobName: 'goal-current-value-refresh', schedule: '0 3 * * *', logsRuns: true },
   { service: 'google-data-pullback-daily', jobName: 'google-data-pullback-daily', schedule: '0 3 * * *', logsRuns: true },
   { service: 'industry-ai-visibility-daily', jobName: 'industry-ai-visibility-daily', schedule: '30 2 * * *', logsRuns: true },
@@ -223,4 +225,9 @@ export const UNSCHEDULED_CRON_ROUTES: Readonly<Record<string, string>> = {
   // 一封都没发出去过）。render.yaml 里那段整段注释掉了，清单里也同步摘掉 ——
   // 留着会天天误报「没跑」。恢复时三件一起做，见 CRON_REGISTRY 里那段注释。
   'email-reply-digest': '2026-09-03 PM 叫停，render.yaml 那段已注释掉，恢复条件写在 CRON_REGISTRY 的注释里',
+
+  // 素材抓取,2026-09-08 PM「停抓图」叫停:抓来的图无人消费(改图那步是死代码),白花 Apify 钱。
+  // render.yaml + CRON_REGISTRY 那行都注释掉了;路由留着并加了 FACTORY_STOCK_REFILL_ENABLED
+  // 开关兜底(默认关)。恢复条件见 CRON_REGISTRY 里那段注释。
+  'factory-stock-refill': '2026-09-08 PM 停抓图,render.yaml/registry 已注释,恢复条件见 CRON_REGISTRY 注释',
 }
