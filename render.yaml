@@ -619,6 +619,40 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # Memory extractor — IMPACT 的 Tune 段（Phase 23.C）
+  #
+  # 把 Check 段算出来的 flywheel_outcomes 变成客户私有的学习：
+  #   confirmed → client_proven_patterns（这么做有效）
+  #   reversed  → client_failed_experiments（这么做反而变差）
+  #   同类动作连续跑赢 3 次 → client_learned_preferences
+  #   并回填 client_decision_history.outcome_verdict
+  #
+  # 🔴 这条路由 2026 年就写好了，但**从来没有登记过调度** —— registry.ts 和本文件
+  #    里都没有，cron_run_logs 里一条运行记录都没有。后果：Check 段一直在产出
+  #    结论（2026-08~09 两个月 285 条），Tune 段却停在 2026-07-15 的 21 条，
+  #    53 天里没有任何一条真实结果改变过下一次判断。
+  #    按 ME_PRODUCT_DEFINITION §4 的定义，Tune 没有改变后续决策就不算学习闭环 ——
+  #    也就是说 IMPACT 最后一段整段没通电，而且"没通电"和"一切正常"在监控里长得一模一样。
+  #
+  # 排班位置不是随手挑的，这条链有先后：
+  #   attribution (0 */6) 先算出 outcome → 本任务 (30 6) 抽成学习 →
+  #   agent-learning-rollup (0 7 周一) 再汇总
+  # 06:30 UTC 落在 attribution 06:00 那一轮之后半小时（它 maxDuration 才 300s），
+  # 又在周一 07:00 的汇总之前，两头都不抢。
+  #
+  # --max-time 比路由自己的 maxDuration(300s) 宽：curl 先断开的话 Render 记成失败，
+  # 但路由还在跑、库还在写 —— 运维照着"失败"重跑一次就是重复处理。
+  - type: cron
+    name: memory-extractor
+    env: node
+    schedule: "30 6 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 360 -X POST -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/memory-extractor
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
   # SEO Patrol — Phase 22.E.S2b
   #   Daily SEO opportunity engine: reads keyword_snapshots + GSC snapshots,
   #   runs the rule engine, persists fresh findings, and routes the top 3 onto
@@ -977,6 +1011,34 @@ services:
     envVars:
       - fromGroup: me-shared-cron-secret
 
+  # 付款邮件 → Mailchimp `paid_customer` 标签（付了钱的人自动退出群发名单）。
+  #
+  # 在这之前这件事完全是手工的：CTS 那 19 个 paid_customer 标签是 2026-08-30
+  # 有人翻 info@ 邮箱手打的，之后再没人打过。代价当天就付了 —— 9/1 那次 192 人
+  # 的群发混进 2 个已付款客户，其中一个是 Baker 亲口回过
+  # 「your payment has been received in full」的 Nikki Smith。
+  #
+  # 只自动做「我们自己确认收款」那一档；客人自己说付了的一律不自动打，
+  # 攒进 summary.needsReview 由今日待办下发给人点一下（判据见 lib/mailchimp/paid-signal，
+  # 那里有一条红线：这个邮箱里催款信和收款信长得几乎一样，判错会把正在谈的客人停掉）。
+  #
+  # 排在 activity-sync（4:40）之后 —— 那条把邮件反应搬进 CRM，这条改标签，
+  # 两条都碰 Mailchimp，错开避免同一分钟撞 API 限流。
+  #
+  # 补历史：手动 POST 带 ?days=N（如 ?days=365），跟每天对账同一套代码。
+  #
+  # ⚠️ 密钥用 fromGroup 自动挂，**不要**改回 `sync: false`（同上一条的坑）。
+  - type: cron
+    name: mailchimp-paid-tagging-daily
+    env: node
+    schedule: "10 5 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/mailchimp-paid-tagging
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
   # ─────────────────────────────────────────────────────────────────────────
   # Team Working Memory 兜底清扫 — 每 30 分钟
   #
@@ -1054,3 +1116,59 @@ services:
         https://app.magicengine.com.au/api/cron/market-intel-daily
     envVars:
       - fromGroup: me-shared-cron-secret
+
+  # 清一次 cron_run_logs 的旧运行记录。
+  #
+  # 🔴 这活儿以前是表上的 AFTER INSERT 触发器干的 —— 每天 400~600 次插入就跑
+  #    400~600 次全表 DELETE，并发插入还会死锁，而死锁会让**插入本身失败**。
+  #    运行记录写不进去恰好是这套监控最不能出的事，所以搬成每天一次的独立任务
+  #    （触发器在 supabase/migrations/20260907000001 里拆掉了）。
+  #
+  # 保留规则一行没改，还是生产上那两条：7 天以上的空记录 + 180 天以上的全部。
+  # 16:50 UTC ≈ NZ 凌晨 04:50，避开整点那批任务的插入高峰。
+  # 密钥走 fromGroup，不留「记得手动 link」这一步。
+  - type: cron
+    name: cron-run-logs-cleanup
+    env: node
+    schedule: "50 16 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 180 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/cron-run-logs-cleanup
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
+  # 客人来信没人回 —— 每天早上给销售发一封汇总信（测试期发到 ME 自己的信箱）。
+  #
+  # 判据 src/lib/crm/email-reply-due.ts（超时 24 小时，PM 2026-09-03 拍板），
+  # 文案 src/lib/crm/email-reply-digest.ts（主题和正文都带「【测试功能】」）。
+  #
+  # 时区换算：NZ 冬令时 NZST = UTC+12，所以 **UTC 20:00 = 次日 NZ 08:00**。
+  # 夏令时 NZDT = UTC+13（9 月底～4 月初）时同一条排班落在 NZ 09:00 ——
+  # 「上班后第一件事」这个位置两季都成立，不为夏令时另开一条。
+  #
+  # 密钥直接走 fromGroup，不留「记得手动 link」这一步 —— daily-cron-digest 就是
+  # 靠人记住这件事，51 天没人发现地哑了。
+  #
+  # 🔴 2026-09-03 PM 拍板**暂停调度**（上线当天，一封都还没发出去过）。
+  # 原因：拿生产库核对名单发现，现有排除规则只挡「自己人域名」和「同行域名」，
+  # 挡不住陌生公司群发的推销。CTS 当天 32 条候选里噪音占七成，而排序按「等最久」，
+  # 等最久的恰好是没人理的营销邮件 —— 前 10 条里 8 条是垃圾，真正欠回复的客人
+  # （Julie Cawte 的发票、Torran Lepper 的日本行程）反而被挤出名单。
+  #
+  # 判据和文案本身没问题，差的是一层噪音过滤。加好、并用生产数据验证准确率之后，
+  # 把下面整段取消注释、同时把 EMAIL_REPLY_DIGEST_ENABLED 设成 true（两道闸都要开）。
+  #
+  # - type: cron
+  #   name: email-reply-digest
+  #   env: node
+  #   schedule: "0 20 * * *"
+  #   buildCommand: ""
+  #   # --max-time 要比路由自己的 maxDuration(300s) 宽：curl 先断开的话 Render 把这次
+  #   # 记成失败，可路由还在跑、信照样发出去 —— 运维照着「失败」重跑一次就是重复发信。
+  #   # 重跑本身另有幂等闸挡着（见路由里的 RESEND_GUARD_HOURS），这里只是别去主动制造它。
+  #   startCommand: |
+  #     curl -fsS --max-time 360 -H "Authorization: Bearer $CRON_SECRET" \
+  #       https://app.magicengine.com.au/api/cron/email-reply-digest
+  #   envVars:
+  #     - fromGroup: me-shared-cron-secret

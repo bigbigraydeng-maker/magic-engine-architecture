@@ -100,6 +100,19 @@ PM **不**决策：分支策略 · 修复走 A 还是 B · 字段命名 · 测�
 
 > 一句话：**能自动就别丢给人；真丢给人，就把话说到他不用问第二遍。发现不许死在日志里。**
 
+#### Inngest 工作流硬约束（2026-09-03）
+
+凡是代码设计涉及**跨步骤异步接力**或**外部副作用**，必须把 Inngest 作为默认工作流层接入，而不是只靠页面状态、脚本日志或人工记忆串联。包括但不限于：内容生成 → Ray 审核 → 发布/排期 → provider 回执 → T+N 监控 → Outcome 回写。
+
+最小要求：
+- 事件名必须业务可读，例如 `daily_plan.publish_queue.ready` / `factory.cts_candidate.reviewed`；
+- 每个关键阶段必须有机器可读 receipt：request id、client id、source record id、status、cost/provider 影响、no_publish / authorization 状态、created_at；
+- 人工审核只能推进到下一事件，不等于发布授权；
+- 发布、扣费、客户可见外发、排期这类副作用必须 fail-closed：没有 Ray 授权事件和 provider receipt，不许伪造完成；
+- 如果某个工作流暂时不上 Inngest，PR 必须写明原因、恢复条件和替代 receipt 存在哪里。
+
+不需要上 Inngest 的例外：纯展示 UI、单次同步读取、无外部副作用的本地纯函数或测试修复。不要为了“用了 Inngest”而把简单组件复杂化。
+
 反模式与真实事故见 [PITFALLS §F](./docs/PITFALLS.md)。实现参考 `src/lib/pm-todo/manual-items.ts`（今日待办「🙋 需要你动手」栏）。
 
 ### 4. 大任务必须 ≥2 审
@@ -156,6 +169,8 @@ Claude Code 干：大范围重构 · 跨模块长链路 · 复杂调试 · 架�
 
 - **绝不凭空注入客户业务数据**：写任何 Goal / Initiative / 关键词前，先查 `master_briefs` + `clients.primary_keywords`。搜索量 / KD / 点击数**必须来自 DataForSEO 或 GSC**，不能估不能编
 - **对外内容必先 grounding 官网**：写 reel / post / 广告 / 邮件前先 WebFetch 客户官网真实产品页。`master_briefs` 只给方向，不含运营细节。发布前逐句标「官网可溯 / brief 可溯 / 未证实」
+- **对外画面必先跑配方对账**：只要要**写视频模板 / 调生图·生视频 API / 拼片出成片**，先查 `viral_reference_library` 拿该行业配方，**并输出一张对账表**（配方每一列 → 这次做了什么 → 满足 / 未满足 / 不适用），再动手。**只满足镜长、切点这类「改个数字就行」的列，跳过真人出镜 / 航拍 / 真实感这类「要换素材才行」的列 = 没照配方做**，成品会是「卡得很准的幻灯片」。2026-07-20、2026-09-03 两次同样事故，见 [PITFALLS D5](./docs/PITFALLS.md)
+- **对外成片交付前必先出「分镜自检表」**：把成片截成逐镜缩略图（9 宫格），**自己逐镜过一遍再发 PM**——每镜检查①图对不对（是不是这个城市/地标，AI 生成的有没有糊脸/糊字）②文字对不对（错别字/张冠李戴）③logo 完不完整清不清晰。**禁止用「渲一版给 PM 看 → PM 挑错 → 重渲」的循环替代自检**：那样每轮五六分钟，本该一次抓全的问题拖成四五轮。图库图 / i2v 输出必逐帧核对来源与内容（见 [PITFALLS D6](./docs/PITFALLS.md)）
 - **客户营销落地页必须建在客户自己的域名**，绝对禁止 `magicengine.com.au/<客户>/...`
 - **FDE/PM 要填的字段必须连 Settings UI 一起做完**，绝不写「让 PM 进 Supabase Studio 直填」
 - **素材不足去全网抓**：Unsplash/Pexels（首选，零风险）→ Apify（找参考定风格）→ 客户自传（质量最高）。但客户**真实产品 / 真实价格**的画面只能用客户自己提供的素材

@@ -9,7 +9,7 @@
 --   This table supersedes google_oauth_tokens for all future OAuth work.
 --   google_oauth_tokens is left in place (backward-compat) but no longer written to.
 
-CREATE TABLE platform_oauth_connections (
+CREATE TABLE IF NOT EXISTS platform_oauth_connections (
   id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id         UUID        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
 

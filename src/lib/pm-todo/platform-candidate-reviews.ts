@@ -31,6 +31,26 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     reviewDate: '2026-09-27',
   },
   {
+    name: '品牌 VI 强制执行（brand tokens 中央注入所有客户交付物 · logo / 色 / 字体 / 风格）',
+    reviewDate: '2026-09-28',
+  },
+  {
+    name: '客户官网结构化素材抓取（sitemap → 产品页 → 图片 → 品牌片段）',
+    reviewDate: '2026-09-28',
+  },
+  {
+    name: 'HTML → PDF 多页排版渲染（A4/A3 print / 品牌一致的多章节 brochure）',
+    reviewDate: '2026-09-28',
+  },
+  {
+    name: 'ME 旅游版 Catalogue Chapter Playbook（旅游行业 catalogue 的 chapter 结构 / 素材抓取通道 / 版式规则）',
+    reviewDate: '2026-09-28',
+  },
+  {
+    name: 'Lead 温度打分（多因子：邮件打开频次+最近打开衰减+注册新旧+备注文字里的时间意向 → Hot/Warm/Cold）',
+    reviewDate: '2026-09-09',
+  },
+  {
     name: 'Current-Sponsored Competitor Discovery（当前活跃广告主实时发现 + diff 竞品清单）',
     reviewDate: '2026-09-28',
   },
@@ -72,5 +92,35 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     // 与 docs/registry/platform-candidates.md 候选名逐字一致
     name: 'Governed Lead-Reply Agent（结构化事实驱动的广告留资对话生成 + 发送前防幻觉/禁用清单校验引擎，接管 Messenger/WhatsApp 等渠道的黑箱平台自带 AI 客服）',
     reviewDate: '2026-09-15',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '行业市场研究报告出品能力（署名 "Magic Insight 数据研究院"，面向高级会员定期出品行业级市场研究）',
+    reviewDate: '2026-10-03',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'Meta 广告受众管理与类似人群能力（建/改自定义受众 + 建 Lookalike 类似人群 + audience-ladder 接线到触发点）',
+    reviewDate: '2026-10-06',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '三层漏斗广告打法剧本（认知→线索→再营销→回传闭环 · 骨架通用 + 分行业配方）',
+    reviewDate: '2026-10-06',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '内容发布→广告草稿直链（Daily Plan 发布完成 → 自动建暂停态广告进指定广告组 · me_ad_launch）',
+    reviewDate: '2026-10-06',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'Meta 广告数据地基健康诊断（pixel/CAPI 分浏览器端 vs 服务端回传 · 修前基线→修后验证标准）',
+    reviewDate: '2026-10-06',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '转化真相回流能力（Conversion Truth Uplink · 从 CRM 成交事件 → 多平台广告 API：Meta CAPI 先做，Google/TikTok 预留接口）',
+    reviewDate: '2026-10-07',
   },
 ]

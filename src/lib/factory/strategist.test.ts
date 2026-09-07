@@ -2,7 +2,13 @@
 import { describe, expect, it } from 'vitest'
 import { pickShotRecipe } from './shot-recipes'
 import { decideSignal, maxNewClipsFor, normalizeAngle, pickFactoryGoal } from './strategist'
-import type { DemandSignal, GateContext, GoalSlice } from './types'
+import type { Decision, DemandSignal, GateContext, GoalSlice, WorkOrderDraft } from './types'
+
+/** Decision 是判别式 union：先按 outcome 收窄，再拿 workOrder（没接受的工单没有 workOrder）。 */
+function acceptedWorkOrder(d: Decision): WorkOrderDraft {
+  if (d.outcome !== 'accepted') throw new Error(`expected accepted decision, got ${d.outcome}`)
+  return d.workOrder
+}
 
 function makeSignal(over: Partial<DemandSignal> = {}): DemandSignal {
   return {
@@ -197,7 +203,7 @@ describe('骨架 + 工单组装', () => {
       }),
     )
     expect(d.outcome).toBe('accepted')
-    const wo = (d as { workOrder: Record<string, unknown> }).workOrder as {
+    const wo = acceptedWorkOrder(d) as unknown as {
       order_type: string
       winner_structure_id: string
       angle_source: { type: string; ref_id: string }
@@ -218,7 +224,7 @@ describe('骨架 + 工单组装', () => {
   it('疲劳信号 happy path:rationale 带 frequency 数字 + 溯源 + 预扣硬数 + 生成计划', () => {
     const d = decideSignal(makeCtx())
     expect(d.outcome).toBe('accepted')
-    const wo = (d as { workOrder: Record<string, unknown> }).workOrder as {
+    const wo = acceptedWorkOrder(d) as unknown as {
       rationale_one_liner: string
       angle_source: { type: string; ref_text: string }
       brief: { max_new_clips: number; clip_generation_plan: unknown[]; segments: unknown[] }
@@ -332,7 +338,7 @@ describe('魏征 M1 评审修复回归', () => {
       }),
     )
     expect(d.outcome).toBe('accepted')
-    const wo = (d as { workOrder: Record<string, unknown> }).workOrder as {
+    const wo = acceptedWorkOrder(d) as unknown as {
       order_type: string
       angle: string
       angle_source: { type: string; ref_text: string }

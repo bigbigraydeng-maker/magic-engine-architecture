@@ -14,16 +14,14 @@
  * in P34.5.
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { logMcpAccess, requireMeClientId } from '@/lib/auth/api-key-access'
 import { createScopedQueries, type ScopedQueries } from '@/lib/mcp/scoped-queries'
 import { checkRateLimit } from '@/lib/mcp/rate-limit'
 import { scrubVendorNames } from '@/lib/mcp/vendor-filter'
 
-interface ToolResult {
-  content: Array<{ type: 'text'; text: string }>
-  isError?: boolean
-}
+type ToolResult = CallToolResult
 
 function errorResult(message: string): ToolResult {
   return { content: [{ type: 'text', text: message }], isError: true }

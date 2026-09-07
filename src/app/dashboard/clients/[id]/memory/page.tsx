@@ -131,7 +131,6 @@ export default function ClientMemoryPage() {
           patterns_added: number
           experiments_added: number
           preferences_added: number
-          decisions_updated: number
           errors: string[]
         }
       }
@@ -142,7 +141,7 @@ export default function ClientMemoryPage() {
         flashAction(
           `抽取完成 — 处理 ${r?.outcomes_processed ?? 0} outcomes；` +
           `新增 patterns:${r?.patterns_added ?? 0} / experiments:${r?.experiments_added ?? 0} / ` +
-          `preferences:${r?.preferences_added ?? 0}；回填 decisions:${r?.decisions_updated ?? 0}` +
+          `preferences:${r?.preferences_added ?? 0}` +
           (r?.errors?.length ? `（${r.errors.length} 条错误）` : ''),
           true,
         )

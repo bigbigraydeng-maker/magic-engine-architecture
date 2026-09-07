@@ -21,8 +21,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
+import { pushConversionReviewItems } from './conversion-review-items'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
+import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
+import { pushEmailReplyItems, type EmailReplyItemKind } from './email-reply-items'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
 import { LINKEDIN_PROGRESS_CLIENT_ID, LINKEDIN_PROGRESS_SOURCE } from '@/lib/linkedin-progress/constants'
@@ -53,12 +56,16 @@ export type ManualItemKind =
   | 'dataforseo_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
+  /** 自动任务跑到一半卡死（状态永远停在 running，路由的 catch 没机会执行） */
+  | 'cron_stuck'
   | 'goal_baseline_mismatch'
   | 'diagnostic_findings'
   | 'prescription_updated'
   | 'leads_metric_untrusted'
   | 'factory_worker_idle'
   | 'ad_readback_blocker'
+  /** Mailchimp 出口 tally 里出现非预期失败（配置读不出来 / API key 失效 / 被限流 / provider 5xx） */
+  | 'mailchimp_export_broken'
   | 'blog_draft_waiting'
   | 'cross_client_leak'
   | 'price_claim_unbacked'
@@ -70,14 +77,21 @@ export type ManualItemKind =
   | 'dm_maybe_stop'
   /** 平台候选（docs/registry/platform-candidates.md）到了复查日期 —— 见 me-platform-tier-gate skill */
   | 'platform_candidate_review_due'
+  /** 客人像是说他付款了，但不是我们自己确认的 —— 只有人能核对到账，不许机器自己打 paid 标签 */
+  | 'paid_signal_needs_review'
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
+  /** 有成交/咨询等着人核对要不要告诉广告平台 —— 撤不回，所以必须人点 */
+  | 'conversion_needs_review'
+  /** 发给广告平台时断线了，不知道对方收没收 —— 程序绝不自己重发，等人核对 */
+  | 'conversion_send_in_doubt'
   | AttributionItemKind
   | ClientRosterItemKind
   | 'linkedin_progress_needs_review'
   | 'linkedin_progress_needs_setup'
   | 'linkedin_progress_failed'
+  | EmailReplyItemKind
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -126,8 +140,10 @@ export function gscInspectUrl(siteUrl: string, pageUrl: string): string {
   )
 }
 
-import { gscPropertyUrl, gscInspectSteps, verifyActionLink } from './action-link'
+import { verifyActionLink } from './action-link'
+import { fetchAll } from '@/lib/supabase-paginate'
 import { checkCronHealth } from '@/lib/cron/health'
+import { CRON_REGISTRY } from '@/lib/cron/registry'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
 import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
@@ -196,6 +212,90 @@ export async function dropBrokenLinks(
   return { kept, dropped }
 }
 
+/** 一行 `client_site_pages`（只声明这条待办用得到的列）。 */
+export interface NotIndexedRow {
+  client_id: string
+  url: string
+  index_verdict: string | null
+  first_not_indexed_at: string | null
+  word_count: number | null
+}
+
+/**
+ * 谷歌没收录的页面 —— **一个客户汇总成一条，不是一页一条**。
+ *
+ * 🔴 实测 oztop 一家就 116 个未收录页面（PM 2026-09-04 fix闭环），一页一条会把
+ * 今日待办正文淹掉 122 行 —— 跟 pushDiagnosticItems / pushLinkedinProgressItems
+ * 早就立下的「别把待办刷屏」是同一条纪律，唯独这条线之前漏了。逐条的网址和单独
+ * 深链没意义（谁也不会点 116 个链接），价值全在「哪个客户、几个、什么原因、去哪
+ * 看全部」。三类页面处理方式不同（内容太薄 / 爬过没收录 / 谷歌还不认识），在 what
+ * 里分别报数、在 how 里一句话说清，别让人以为一律去 GSC 点提交。
+ */
+export function buildNotIndexedItems(
+  rows: NotIndexedRow[],
+  /** client_id → GSC site_url。没有 GSC 连接的客户不下发（没有能直达的可执行清单）。 */
+  siteUrlOf: Map<string, string>,
+  nameOf: (id: string) => string,
+  now: Date,
+): ManualItem[] {
+  const byClient = new Map<
+    string,
+    { total: number; unknown: number; thin: number; declined: number; oldest: string | null }
+  >()
+  for (const row of rows) {
+    // Assets (images/PDFs) are not pages — "not indexed as a page" is normal
+    // for them and flagging it burns the whole list's credibility.
+    if (!isHtmlPageUrl(row.url)) continue
+    const cur = byClient.get(row.client_id) ?? {
+      total: 0,
+      unknown: 0,
+      thin: 0,
+      declined: 0,
+      oldest: null as string | null,
+    }
+    cur.total += 1
+    // 判据顺序与站点清单页共用同一份 classifyNotIndexed（seo/index-status）——
+    // 「300 词」和 unknown 文案只此一处定义，两边永远同口径。
+    cur[classifyNotIndexed(row)] += 1
+    if (row.first_not_indexed_at && (!cur.oldest || row.first_not_indexed_at < cur.oldest)) {
+      cur.oldest = row.first_not_indexed_at
+    }
+    byClient.set(row.client_id, cur)
+  }
+
+  const items: ManualItem[] = []
+  for (const [clientId, agg] of Array.from(byClient.entries())) {
+    // 未收录数据（first_not_indexed_at）只由每日收录轮检写入，而轮检只跑连了
+    // GSC 的客户 —— 所以没连 GSC 的客户本就不会有未收录行。这道闸是双保险：
+    // 而且「谷歌爬过没收录 / 还不认识」两类的处理动作仍要去 GSC 点「请求编入索引」，
+    // 没连 GSC 这动作做不了，下发也白搭（与原逐页版一致，跳过不下发）。
+    if (!siteUrlOf.get(clientId)) continue
+
+    const parts = [
+      agg.thin > 0 ? `${agg.thin} 个内容太薄` : null,
+      agg.declined > 0 ? `${agg.declined} 个谷歌爬过却没收录` : null,
+      agg.unknown > 0 ? `${agg.unknown} 个谷歌还不认识这网址` : null,
+    ]
+      .filter(Boolean)
+      .join('、')
+    const days = daysAgo(agg.oldest, now)
+    const age = days !== null && days > 0 ? `，最久的已 ${days} 天` : ''
+    items.push({
+      kind: 'not_indexed',
+      client_id: clientId,
+      client_name: nameOf(clientId),
+      what: `${agg.total} 个页面没被谷歌收录（${parts}）${age}，这些页面现在拿不到任何谷歌流量`,
+      // 落到 ME 后台的站点页面清单（已带 ?filter=not-indexed 直达未收录）：每页都标了
+      // 本地分类和该做什么。这解决 GSC「网页(Pages)」报告的两个盲区 —— 它不显示我们本地
+      // 推导的「内容太薄」，「谷歌还不认识」的页面也可能压根不在它清单里（Codex #1375）。
+      how: `打开这份站内清单（已只筛未收录），每页都标了原因和该做的动作：「内容太薄」的，去把正文补到 ${THIN_WORD_COUNT_THRESHOLD} 词以上、加内链；「爬过没收录 / 谷歌还不认识」的，去 Search Console 在最上方搜索框粘上这个网址、点「请求编入索引」。一次弄不完就先挑最想被搜到的几页`,
+      // app.magicengine.com.au 是登录类站点，链接闸判 unverifiable 会保留（见 action-link）。
+      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit/pages?filter=not-indexed`,
+    })
+  }
+  return items
+}
+
 export async function loadManualItems(
   supabase: SupabaseClient,
   now: Date = new Date(),
@@ -215,6 +315,10 @@ export async function loadManualItems(
   await pushCronHealthItems(supabase, items, now)
   // 平台候选到了复查日期 —— 不落库、不查表，纯本地日期判断
   pushPlatformCandidateReviewItems(items, now)
+  // 成交/咨询等着人核对要不要告诉广告平台 —— 撤不回的动作，只能人点（#1397）
+  await pushConversionReviewItems(supabase, items, clients, now).catch((e) =>
+    console.warn('[manual-items] 成交待核对读取失败（不阻塞其他待办）:', e),
+  )
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
@@ -225,9 +329,18 @@ export async function loadManualItems(
   await pushAdReadbackItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 广告闸门结果读取失败（不阻塞其他待办）:', e),
   )
+  // Mailchimp 出口在 tally 里非预期失败（配置读不出来 / API key 失效 / 被限流 / 5xx）——
+  // 这类失败从不设置 cron 结果的 error，cron 整体照样显示 completed，不单独捞出来就永远没人看见
+  await pushMailchimpExportItems(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] Mailchimp 出口检查失败（不阻塞其他待办）:', e),
+  )
   // ME 产品动态自动发 LinkedIn —— 敏感内容待审 / 账号未连 / 发布失败三种卡点
   await pushLinkedinProgressItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] LinkedIn 进度贴待办检查失败（不阻塞其他待办）:', e),
+  )
+  // 客人说他付款了但没法自动确认 —— 只有人能对银行流水，不许机器自己打 paid 标签
+  await pushPaidSignalReviewItems(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] 待确认付款读取失败（不阻塞其他待办）:', e),
   )
   if (clientsError) {
     items.push(clientListUnreadableItem(clientsError.message))
@@ -295,10 +408,17 @@ export async function loadManualItems(
     console.warn('[manual-items] 私信拒联提示生成失败（不阻塞其他待办）:', e),
   )
 
+  // 客人来信超过一天没人回 + 公司邮箱同步哑了（后者会让前者假装成零条），见 email-reply-items.ts
+  await pushEmailReplyItems(supabase, items, ids, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 客人来信没回待办生成失败（不阻塞其他待办）:', e),
+  )
+
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
   await pushAttributionItems(supabase, items, ids, nameOf, now)
 
-  // GSC property identifiers (needed for the inspect deep link).
+  // GSC property per client —— 汇总后的「未收录页面」待办链到这里。谷歌自己的
+  // 「索引 → 网页」报告才是权威的「哪些页面没被收录、为什么」清单；ME 后台没有
+  // 任何展示收录状态的页面（实测 /site-audit/pages 只有网址/字数，无收录状态）。
   const { data: connectors } = await supabase
     .from('client_connectors')
     .select('client_id, config')
@@ -317,11 +437,30 @@ export async function loadManualItems(
       .select('client_id, title, topic, pr_url, pr_number')
       .eq('status', 'pr_open')
       .in('client_id', ids),
-    supabase
-      .from('client_site_pages')
-      .select('client_id, url, index_verdict, first_not_indexed_at, word_count')
-      .not('first_not_indexed_at', 'is', null)
-      .in('client_id', ids),
+    // 🔴 未收录页面必须读全（Codex P2）：一页一条时截断只是少报几行，但汇总
+    //    报数时截断会让「N 个页面」谎报、甚至把整客户漏掉。用 fetchAll 分页读全，
+    //    按 (client_id, url) 全序排序保证跨页不重不漏。
+    // 🔴 fetchAll 会**抛错**（分页失败 / 触 10 万行硬顶），而普通 supabase 查询
+    //    只返回 {error} 不抛。它在这个 Promise.all 里，抛出会让整个 loadManualItems
+    //    失败 → daily-todo.ts 把**所有**人工待办替换成 []（广告红线、串台、LinkedIn
+    //    全从邮件和看板消失，只剩一行日志）。所以这一路必须自己兜住，只丢 not_indexed，
+    //    不拖垮别的通道 —— 跟本文件每条通道的 .catch 隔离纪律一致（Codex P1 #1375）。
+    fetchAll<NotIndexedRow>((from, to) =>
+      supabase
+        .from('client_site_pages')
+        .select('client_id, url, index_verdict, first_not_indexed_at, word_count')
+        .not('first_not_indexed_at', 'is', null)
+        .in('client_id', ids)
+        .order('client_id', { ascending: true })
+        .order('url', { ascending: true })
+        .range(from, to),
+    ).catch((e: unknown) => {
+      console.warn(
+        '[manual-items] 未收录页面读取失败（不阻塞其他待办）:',
+        e instanceof Error ? e.message : String(e),
+      )
+      return [] as NotIndexedRow[]
+    }),
     supabase
       .from('seo_meta_log')
       .select('client_id, page_slug, created_at')
@@ -355,56 +494,8 @@ export async function loadManualItems(
     })
   }
 
-  // 2. Pages Google won't index. Detection is automatic; the resubmit button
-  //    lives in Google's own console, so this one is genuinely manual.
-  for (const row of (notIndexed.data ?? []) as Array<{
-    client_id: string
-    url: string
-    index_verdict: string | null
-    first_not_indexed_at: string | null
-    word_count: number | null
-  }>) {
-    // Assets (images/PDFs) are not pages — "not indexed as a page" is normal
-    // for them and flagging it burns the whole list's credibility.
-    if (!isHtmlPageUrl(row.url)) continue
-
-    const days = daysAgo(row.first_not_indexed_at, now)
-    const siteUrl = siteUrlOf.get(row.client_id)
-    if (!siteUrl) continue
-
-    // The advice MUST match the verdict. "Crawled - currently not indexed"
-    // means Google already looked and declined — sending someone to press
-    // 「请求编入索引」 there is busywork that changes nothing. Thin content is
-    // the usual cause, so say that instead.
-    const unknown = row.index_verdict === 'URL is unknown to Google'
-    const thin = (row.word_count ?? 0) < 300
-    // Day 0 reads as "（已 0 天）" — noise. Say nothing until it has aged.
-    const age = days !== null && days > 0 ? `（已 ${days} 天）` : ''
-
-    const what = unknown
-      ? `${row.url} 谷歌根本不知道这个网址${age}，它拿不到任何谷歌流量`
-      : `${row.url} 谷歌爬过但决定不收录${age}${thin ? `，正文只有 ${row.word_count ?? 0} 词` : ''}，它拿不到任何谷歌流量`
-
-    // 🔴 链接要指向**动作真正发生的地方**,不是「跟这事有关的地方」。
-    //    内容太薄 → 活儿在网页上,给页面链接;谷歌不认识这网址 → 活儿在 GSC。
-    //    此前一律给 GSC 深链,结果既 404、方向也错(补内容不在 GSC 里做)。
-    const how = unknown
-      ? `打开 Google Search Console，${gscInspectSteps(row.url)}，然后点「请求编入索引」；如果这页本来就不该被搜到，回我一句，我把它从检查名单去掉`
-      : thin
-        ? `这条别去点「请求编入索引」——谷歌已经看过并拒绝了，再点一次也一样。真问题是内容太薄（${row.word_count ?? 0} 词）：打开链接看这一页，要么补厚到 300 词以上并配图加内链，要么合并进相关页面做跳转。拿不准回我一句`
-        : `先打开 Google Search Console，${gscInspectSteps(row.url)}，点一次「请求编入索引」；如果一周后还是不收录，说明谷歌认为内容价值不够，要补内链和内容`
-
-    items.push({
-      kind: 'not_indexed',
-      client_id: row.client_id,
-      client_name: nameOf(row.client_id),
-      what,
-      how,
-      // 补内容的活儿落在网页上,给页面本身(公开网址,能实测);
-      // 要 GSC 操作的给属性首页(稳定入口,不是会 404 的深链)。
-      href: thin && !unknown ? row.url : gscPropertyUrl(siteUrl),
-    })
-  }
+  // 2. Pages Google won't index —— 一个客户汇总成一条，见 buildNotIndexedItems。
+  items.push(...buildNotIndexedItems(notIndexed, siteUrlOf, nameOf, now))
 
   // 3. Meta changes queued but not applied — the Oztop WP plugin polls this
   //    queue; a long backlog means the plugin stopped.
@@ -503,6 +594,97 @@ async function pushVideoCreditsItem(
   })
 }
 
+/** Mailchimp 后台的联系人页 —— 登录后一定打得开的稳定入口。 */
+const MAILCHIMP_AUDIENCE_URL = 'https://admin.mailchimp.com/audience/contacts/'
+
+/**
+ * 客人像是说他付款了，但**不是我们自己确认的** → 下发给人核一眼。
+ *
+ * 为什么不自动打标签：`mailchimp/paid-signal` 里那条红线 —— 一封写着
+ * 「I'll transfer tomorrow」或者甩了张回单截图的邮件，不等于钱到账。看账不看话。
+ * 错打一个 `paid_customer`，这个正在谈的客人会被停掉全部跟进邮件，这单就丢了。
+ *
+ * 所以这一档只能是人工：Baker 去银行对一眼，到账了就在 Mailchimp 点上标签。
+ *
+ * 数据来自 `mailchimp-paid-tagging` cron 写进 `cron_run_logs.summary.needsReview`
+ * —— 不为它单开一张表（新表要 migration，而这条信息本来就是那次运行的产物）。
+ */
+export async function pushPaidSignalReviewItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  /**
+   * 看**最近 7 天所有跑完的非预演运行**，按邮箱去重 —— 不是「最近一次」。
+   *
+   * 首版写的是 limit(1)，子牙复审指出三个具体漏法，每一个都会让待办静默消失：
+   *
+   *   1. **漏发**：日常只回溯 3 天。一条待确认在第 1 天出现、Baker 三天没处理，
+   *      第 4 天的运行已经扫不到那封信 → 待办凭空消失，再没人看见。
+   *      铁律 3 下半在第 4 天失效 —— 管道断头。
+   *   2. **被冲掉**：`?dry=1&days=365` 写的是同一个 job_name 的行。PM 跑一次预演，
+   *      待办被一年历史刷满；5:10 的 daily 一跑又全换掉。两个方向都不是预期。
+   *   3. **读到半截**：不筛 status 的话，最新一行可能是 `running`（summary 还是
+   *      null）→ 当天待办静默为空。cron 5:10 跑、今日待办也是早上生成，撞上概率不低。
+   *
+   * 去重之后，多看几次运行反而比只看一次轻 —— 同一个人不会出现两遍。
+   *
+   * 彻底的「人处理完就消失」需要一张 ack 表，那是 A 级改动，不塞进这个 PR。
+   */
+  const since = new Date(now.getTime() - 7 * 86_400_000).toISOString()
+  const { data, error } = await supabase
+    .from('cron_run_logs')
+    .select('summary, started_at, status')
+    .eq('job_name', 'mailchimp-paid-tagging')
+    .eq('status', 'completed')
+    .gte('started_at', since)
+    .order('started_at', { ascending: false })
+    .limit(30)
+
+  if (error) throw new Error(`cron_run_logs query failed: ${error.message}`)
+
+  const rows: unknown[] = []
+  const seen = new Set<string>()
+  for (const run of (data ?? []) as Array<{ summary?: { needsReview?: unknown; dryRun?: unknown } | null }>) {
+    // 预演不是真运行 —— 它的结果不该变成任何人的待办。
+    if (run.summary?.dryRun === true) continue
+    const list = Array.isArray(run.summary?.needsReview) ? run.summary.needsReview : []
+    for (const item of list) {
+      const email = typeof (item as { email?: unknown })?.email === 'string' ? (item as { email: string }).email : ''
+      if (!email || seen.has(email.toLowerCase())) continue
+      seen.add(email.toLowerCase())
+      rows.push(item)
+    }
+  }
+
+  for (const raw of rows.slice(0, 20)) {
+    const r = raw as {
+      email?: unknown
+      name?: unknown
+      evidence?: unknown
+      receivedAt?: unknown
+      clientId?: unknown
+      clientName?: unknown
+    }
+    const email = typeof r.email === 'string' ? r.email : ''
+    if (!email) continue
+    const who = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : email
+    const quote = typeof r.evidence === 'string' ? r.evidence.trim() : ''
+    const days = daysAgo(typeof r.receivedAt === 'string' ? r.receivedAt : null, now)
+    const when = days === null ? '' : days === 0 ? '今天' : `${days} 天前`
+
+    items.push({
+      kind: 'paid_signal_needs_review',
+      client_id: typeof r.clientId === 'string' ? r.clientId : 'infra',
+      client_name: typeof r.clientName === 'string' ? r.clientName : 'Magic Engine 后台',
+      // 原话逐字带上 —— 人一眼就知道该不该信，不用回邮箱翻
+      what: `${who}${when ? `（${when}）` : ''}像是说他付款了${quote ? `：「${quote}」` : ''} —— 但这是他自己说的，不是我们确认到账，所以系统没敢自动标成已付款客户。不标的话，他还会继续收到招揽邮件`,
+      how: '去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 paid_customer 标签（加完他就自动退出群发名单了）；没到就不用管',
+      href: MAILCHIMP_AUDIENCE_URL,
+    })
+  }
+}
+
 /** Keyword Intelligence 余额告罄只认供应商的明确 40210，不猜其它错误。 */
 export async function pushDataForSeoCreditsItem(
   supabase: SupabaseClient,
@@ -536,6 +718,31 @@ export async function pushDataForSeoCreditsItem(
 const RENDER_DASHBOARD_URL = 'https://dashboard.render.com'
 
 /**
+ * 「任务该跑没跑」按调度方给不同的动手指引。
+ *
+ * 三件套里的 how / href 必须**对得上真实系统**：让人去 Render 找一个由 GitHub 或
+ * Inngest 调度的任务，他会翻半天再回来问 —— 等于这条待办没下发好。
+ */
+const CRON_STOPPED_GUIDE = {
+  render: {
+    how: '打开链接 → 找到这几个服务 → 看 Events 里最后一次运行是什么结果。多半是 Environment 里没关联 me-shared-cron-secret，勾上再选「Link and apply on next run」即可',
+    href: RENDER_DASHBOARD_URL,
+  },
+  'github-actions': {
+    how: '打开链接 → Actions 页找到同名的工作流 → 看最近几次是不是被跳过或报错。GitHub 的免费定时任务经常延迟几小时，但连着几天没有记录就是真停了；可以先点 Run workflow 手动跑一次确认',
+    href: 'https://github.com/bigbigraydeng-maker/magic-engine/actions',
+  },
+  inngest: {
+    how: '打开链接 → 进 Production 环境 → Apps → 找到 magic-engine-web，点 Sync 一次（地址是 https://app.magicengine.com.au/api/inngest）。新增函数或改了触发时间之后必须手动同步一次，否则它安静地不跑；同步完在 Functions 里能看到就对了',
+    href: 'https://app.inngest.com',
+  },
+  external: {
+    how: '这几个的定时器**不在我们代码仓库里**，是有人在 Render 后台手工建的 —— 打开链接 → 在服务列表里按名字找 → 看它还在不在、Events 里最后一次跑成什么样。如果整条被删了，回我一句我把它接回代码里管',
+    href: RENDER_DASHBOARD_URL,
+  },
+} as const
+
+/**
  * 自动任务该跑没跑 → 下发。
  *
  * 现有 daily-cron-digest 只报「跑了但失败」。**「压根没跑」没有任何记录**，
@@ -554,13 +761,43 @@ async function pushCronHealthItems(
 
   const stopped = [...r.neverRan, ...r.overdue]
   if (stopped.length > 0) {
-    const names = stopped.map((h) => h.service).join('、')
+    // 🔴 按**谁在调度它**分组下发。原来一律写「打开 Render → 找到这几个服务」，
+    //    但清单里已经有不是 Render 调度的任务（GitHub Actions / Render 后台手工建 /
+    //    Inngest 自带定时器）—— 照着那条指引去 Render 找一个根本不存在的服务，
+    //    等于把人支到错的系统里，正是 CLAUDE.md 说的「下发了但没法照做」。
+    const bySvc = new Map(CRON_REGISTRY.map((e) => [e.service, e.scheduler ?? 'render']))
+    const groups = new Map<string, string[]>()
+    for (const h of stopped) {
+      const who = bySvc.get(h.service) ?? 'render'
+      groups.set(who, [...(groups.get(who) ?? []), h.service])
+    }
+    for (const [who, names] of groups) {
+      const guide = CRON_STOPPED_GUIDE[who as keyof typeof CRON_STOPPED_GUIDE] ?? CRON_STOPPED_GUIDE.render
+      items.push({
+        kind: 'cron_not_running',
+        client_id: 'infra',
+        client_name: 'Magic Engine 后台',
+        what: `${names.length} 个自动任务该跑没跑：${names.join('、')} —— 它们负责的活儿现在没人干，而且不会自己好`,
+        how: guide.how,
+        href: guide.href,
+      })
+    }
+  }
+
+  // 卡死跟「该跑没跑」是两件事，不能合成一条：那边是**没开始**（多半是 Render 侧配置），
+  // 这边是**开始了没结束**（进程被杀 / 卡在某个外部调用上），下一步动作完全不同。
+  // 两边都接不住它：failing 只认 status='failed'，可容器被杀时路由的 catch 根本没机会跑；
+  // overdue 看 started_at，而卡死的任务开跑记录是有的。所以跑死的任务在体检里等于健康。
+  if (r.stuck.length > 0) {
+    const names = r.stuck
+      .map((s) => `${s.service}（已卡 ${s.minutesRunning >= 120 ? Math.round(s.minutesRunning / 60) + ' 小时' : s.minutesRunning + ' 分钟'}）`)
+      .join('、')
     items.push({
-      kind: 'cron_not_running',
+      kind: 'cron_stuck',
       client_id: 'infra',
       client_name: 'Magic Engine 后台',
-      what: `${stopped.length} 个自动任务该跑没跑：${names} —— 它们负责的活儿现在没人干，而且不会自己好`,
-      how: '打开链接 → 找到这几个服务 → 看 Events 里最后一次运行是什么结果。多半是 Environment 里没关联 me-shared-cron-secret，勾上再选「Link and apply on next run」即可',
+      what: `${r.stuck.length} 个自动任务开跑了但一直没结束：${names} —— 这类不会报错，它就那么挂着，那一轮该干的活儿等于没干`,
+      how: '打开链接 → 找到这几个服务 → Logs 看最后停在哪一步。常见是卡在某个外部接口没有超时保护。确认死了就手动重跑一次，并把那段调用加上超时',
       href: RENDER_DASHBOARD_URL,
     })
   }
@@ -645,6 +882,89 @@ async function pushAdReadbackItems(
         )}&selected_adset_ids=${s.adSetId}`,
       })
     }
+  }
+}
+
+/** meta-leads-sync 跑得多稀 —— 超过这个窗口就是这条最新记录已经过期，别再报旧问题。 */
+const MAILCHIMP_EXPORT_STALE_HOURS = 6
+
+/** 只挑「非预期」失败：配置读不出来 / API key 失效 / audience 找不到 / 限流 / provider 5xx。 */
+function isMailchimpExportFailureKey(key: string): boolean {
+  return (
+    key.startsWith('failed:') ||
+    key === 'skipped:client_config_read_failed' ||
+    key === 'skipped:source_tag_read_failed' ||
+    // 人进了名单但来源标签没补上 —— 会员关系是真的，广告归因证据却没落地。
+    // 不报的话，这一整类失败又只剩「看起来一切正常」。
+    key.startsWith('already_member:tag_failed:')
+  )
+}
+
+/**
+ * Mailchimp 出口在 `meta-leads-sync` 每小时的 tally 里非预期失败 → 下发。
+ *
+ * 为什么必须下发：`lib/meta/leads-sync.ts` 把每条 lead 的 Mailchimp 结果压进
+ * `results[].mailchimp` tally，但 tally 从不写进 `results[].error`——
+ * `summariseFailures`（`lib/meta/leads-sync-alert.ts`）读不到它，cron 整体
+ * 照样标 completed。真实事故：`clients.mailchimp_audience_id` 那一列没 apply
+ * 到生产，出口每小时都因为 `client_config_read_failed` 静默 skip 掉，连着
+ * 一个月没人发现（见 `lib/mailchimp/audience-config.ts` 文件头）。
+ *
+ * 只报 `failed:*` 和 `client_config_read_failed`：`no_audience_config` /
+ * `no_email` / `no_api_key` 是客户压根没配 Mailchimp 的正常状态，报了等于
+ * 天天骚扰不用管的人。
+ *
+ * 🔴 **不能只挑 `status = 'completed'`**：`meta-leads-sync/route.ts` 只要有
+ * 任一客户 Meta 取数报错，就会把 `summariseFailures` 的结果传给 `finish()`
+ * 的 `error`，`run-logger.ts` 因此把这一整轮标成 `failed` —— 但同一轮里其他
+ * 客户的 `results[].mailchimp` 完全可能是真实的出口故障。只查 `completed`
+ * 会让这些故障在 Meta 取数一出错的那些轮次里彻底消失。排除运行中记录该看
+ * `finished_at` 是否非空，而不是硬编码某一个终态。
+ */
+export async function pushMailchimpExportItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('cron_run_logs')
+    .select('finished_at, summary')
+    .eq('job_name', 'meta-leads-sync')
+    .not('finished_at', 'is', null)
+    .in('status', ['completed', 'failed'])
+    .order('finished_at', { ascending: false })
+    .limit(1)
+
+  if (error) throw new Error(`cron_run_logs query failed: ${error.message}`)
+
+  const run = (data ?? [])[0] as
+    | {
+        finished_at: string | null
+        summary: {
+          results?: Array<{ clientId: string; clientName: string | null; mailchimp?: Record<string, number> }>
+        } | null
+      }
+    | undefined
+  if (!run?.summary) return
+
+  const hoursOld = run.finished_at ? (now.getTime() - Date.parse(run.finished_at)) / 3_600_000 : null
+  if (hoursOld !== null && hoursOld > MAILCHIMP_EXPORT_STALE_HOURS) return
+
+  for (const r of run.summary.results ?? []) {
+    const badKeys = Object.entries(r.mailchimp ?? {}).filter(([k]) => isMailchimpExportFailureKey(k))
+    if (badKeys.length === 0) continue
+
+    const total = badKeys.reduce((n, [, count]) => n + count, 0)
+    const detail = badKeys.map(([k, count]) => `${k.replace(/^(failed|skipped):/, '')} ×${count}`).join('、')
+
+    items.push({
+      kind: 'mailchimp_export_broken',
+      client_id: r.clientId,
+      client_name: r.clientName ?? '未知客户',
+      what: `这个客户有 ${total} 条 lead 本该进 Mailchimp 邮件名单，但出口坏了没进去：${detail}。不会自己好，客户的邮件名单会一直缺这些人`,
+      how: '点链接进设置页，看「Meta 广告线索送进哪个 Mailchimp 名单」那一栏 —— 空了就把 Mailchimp 里的 Audience ID 填回去（Mailchimp → Audience → Settings → Audience name and defaults 最下面那串）；那一栏是对的话就不是配置问题，回我一句我去查授权和限流',
+      href: `https://app.magicengine.com.au/dashboard/clients/${r.clientId}/settings`,
+    })
   }
 }
 
@@ -799,104 +1119,182 @@ const LINKEDIN_PUBLISH_FAILURE_STALE_HOURS = 2
  * "cron 该跑没跑"不在这里报 —— pushCronHealthItems 已经通过 CRON_REGISTRY
  * 通用覆盖了 linkedin-progress-post-mon/-thu 这两个 job，不用再单独登记。
  */
-async function pushLinkedinProgressItems(
+export async function pushLinkedinProgressItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   now: Date,
 ): Promise<void> {
-  const { data } = await supabase
-    .from('content_posts')
-    .select('id, status, updated_at, generation_context_snapshot')
-    .eq('client_id', LINKEDIN_PROGRESS_CLIENT_ID)
-    .eq('source', LINKEDIN_PROGRESS_SOURCE)
-    .in('status', ['draft', 'approved'])
-    .order('updated_at', { ascending: false })
-    .limit(20)
-
-  for (const row of (data ?? []) as Array<{
+  /**
+   * 🔴 **必须读全，不能截断**（Codex P2 ×2, PR #1375）。
+   *
+   * 待办文案会明确说「有 N 条」，而且是**按类归堆**后再下发。任何 `.limit()`
+   * 都在归类**之前**砍行：
+   *   ① 会把「N 条」说成截断后的数（PM 清完以为清空、更旧的还卡着）；
+   *   ② 更糟——若被砍掉的那批恰好是某一整类（比如最新一批全是敏感草稿，
+   *      把更旧的「已发布但回写失败」整类挤出窗口），那一类会**完全不下发**，
+   *      连"千万别重发"的红线告警都消失。
+   * 所以走平台既有的 `fetchAll` 分页读全（这条线单客户、每周 ~2 条，天然有界；
+   * fetchAll 到 10 万行硬顶会抛错而非静默给半份，正是我们要的 fail-loud）。
+   */
+  const rows = await fetchAll<{
     id: string
     status: string
     updated_at: string
     generation_context_snapshot: { reason?: string; publish_error?: string } | null
-  }>) {
+  }>((from, to) =>
+    supabase
+      .from('content_posts')
+      .select('id, status, updated_at, generation_context_snapshot')
+      .eq('client_id', LINKEDIN_PROGRESS_CLIENT_ID)
+      .eq('source', LINKEDIN_PROGRESS_SOURCE)
+      .in('status', ['draft', 'approved'])
+      // range 必须配**全序** order，否则分页之间顺序不稳、会重复或漏行。
+      // updated_at 有并列值，单靠它不是全序 —— 相同 updated_at 的行跨 1000 行
+      // 页边界时相对位置不固定（Codex P2 #1375）。补 id 作唯一 tie-breaker。
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+
+  /**
+   * 🔴 **同一类卡点只出一条、带上条数 —— 绝不许一条草稿一行。**
+   *
+   * 这个函数原来对每一行 `push` 一条，而同一类里每条的 what/how/href **逐字相同**：
+   * 三条待审草稿 = 今日待办里连着冒三行一模一样的「需要你看一眼」
+   * （PM 2026-09-03 实测，见 fix 闭环那两张截图）。这正是
+   * `pushDiagnosticItems` / `pushPrescriptionItems` 早就立下的那条纪律
+   * ——「别把待办刷屏」——唯独这条线漏掉了。
+   *
+   * 所以先按类归堆再下发：一类一条，多于一条时把条数说出来，让 PM 知道有几条
+   * 要处理，而不是被同一句话重复轰炸。单条时的文案逐字保留（那几句是多轮 review
+   * 磨出来的，尤其"已发布但回写失败"那条的红线话术不能回退）。
+   */
+  const many = (n: number) => n > 1
+  const countLabel = (n: number) => `${n}`
+
+  let sensitiveReview = 0
+  let needsSetup = 0
+  let unknownDraft = 0
+  let dbSyncFailed = 0
+  const publishErrors: string[] = []
+
+  for (const row of rows) {
     const reason = row.generation_context_snapshot?.reason
 
-    if (row.status === 'draft' && reason === 'sensitive_content_flagged') {
-      items.push({
-        kind: 'linkedin_progress_needs_review',
-        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
-        client_name: 'ME 产品动态（LinkedIn）',
-        what: '这周的 LinkedIn 进度贴草稿里可能带了客户敏感信息，系统没敢自动发，等你看一眼',
-        how: '打开内容工厂看板，找到标题带「(needs review)」的那条草稿，读一遍确认没问题就批准发布；不想发就直接拒绝，下周照常自动生成新的',
-        href: LINKEDIN_CONTENT_BOARD_URL,
-      })
-      continue
-    }
-
-    if (row.status === 'draft' && reason === 'linkedin_account_not_configured') {
-      items.push({
-        kind: 'linkedin_progress_needs_setup',
-        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
-        client_name: 'ME 产品动态（LinkedIn）',
-        what: 'LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，该发的这条卡着没发出去',
-        // 账号连好之后这条草稿不会自己重新尝试发布——没有额外的重试 cron，
-        // 得靠 PM 回内容工厂看板对这条草稿再点一次"确认"（那个按钮现在会
-        // 真的调发布，不是走视频那套），不写清楚这一步就是永久卡死。
-        how: '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板找到这条卡住的草稿，点一次"确认"，这条就会真的发出去，不用等下一次自动跑',
-        href: LINKEDIN_CONNECTORS_URL,
-      })
-      continue
-    }
-
-    // 草稿但 reason 不认识(未来 run.ts 加了新原因、或者字段意外为空)——
-    // 兜底也要有一条,不能让它三个分支都不落、悄悄消失在待办之外。
     if (row.status === 'draft') {
-      items.push({
-        kind: 'linkedin_progress_needs_review',
-        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
-        client_name: 'ME 产品动态（LinkedIn）',
-        what: '有一条 LinkedIn 进度贴草稿卡在待处理，系统没能说清具体原因',
-        how: '打开内容工厂看板看一眼这条草稿，读一遍决定发不发',
-        href: LINKEDIN_CONTENT_BOARD_URL,
-      })
+      if (reason === 'sensitive_content_flagged') sensitiveReview += 1
+      else if (reason === 'linkedin_account_not_configured') needsSetup += 1
+      // 草稿但 reason 不认识(未来 run.ts 加了新原因、或者字段意外为空)——
+      // 兜底也要归一堆,不能让它悄悄消失在待办之外。
+      else unknownDraft += 1
       continue
     }
 
-    if (row.status === 'approved') {
-      // 用 updated_at 不用 created_at —— 一条被拦下转人审的草稿，PM 点"批准"那一刻
-      // 只会刷新 updated_at，created_at 还是它被生成那天。按 created_at 算的话，
-      // PM 前脚刚批准，下一次巡检马上就会误报"没能发出去"，而系统根本还没试着发。
-      const updatedAt = Date.parse(row.updated_at)
-      if (Number.isNaN(updatedAt)) continue
-      const hoursAgo = (now.getTime() - updatedAt) / 3_600_000
-      if (hoursAgo < LINKEDIN_PUBLISH_FAILURE_STALE_HOURS) continue
+    // 查询已用 .in('status', ['draft','approved']) 限定，走到这里只可能是 approved；
+    // 显式再挡一道，别让将来放宽查询时把别的状态误当成「没发出去」。
+    if (row.status !== 'approved') continue
 
-      // 这条其实已经真发到 LinkedIn 上了——只是发布成功后回写数据库那一步
-      // 失败了，本地状态没跟上。绝不能套用下面"没能发出去"那套话术：那会
-      // 引导人去重试/重新批准，而 Publer 那边已经真有一条了，重试 = 发出
-      // 重复的公开帖子。这里只能是"帮我手动改一下状态"，不是"帮我重试"。
-      if (row.generation_context_snapshot?.reason === 'published_but_db_sync_failed') {
-        items.push({
-          kind: 'linkedin_progress_needs_review',
-          client_id: LINKEDIN_PROGRESS_CLIENT_ID,
-          client_name: 'ME 产品动态（LinkedIn）',
-          what: '这条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子',
-          how: '回我一句，我去手动把这条记录的状态改成"已发布"，不用你操作',
-          href: LINKEDIN_CONTENT_BOARD_URL,
-        })
-        continue
-      }
+    // approved：只有卡过 stale 阈值才算「没发出去」。
+    // 用 updated_at 不用 created_at —— 一条被拦下转人审的草稿，PM 点"批准"那一刻
+    // 只会刷新 updated_at，created_at 还是它被生成那天。按 created_at 算的话，
+    // PM 前脚刚批准，下一次巡检马上就会误报"没能发出去"，而系统根本还没试着发。
+    const updatedAt = Date.parse(row.updated_at)
+    if (Number.isNaN(updatedAt)) continue
+    const hoursAgo = (now.getTime() - updatedAt) / 3_600_000
+    if (hoursAgo < LINKEDIN_PUBLISH_FAILURE_STALE_HOURS) continue
 
-      const err = row.generation_context_snapshot?.publish_error
-      items.push({
-        kind: 'linkedin_progress_failed',
-        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
-        client_name: 'ME 产品动态（LinkedIn）',
-        what: `这周的 LinkedIn 进度贴生成好了但没能发出去${err ? `(系统报的原因: ${err})` : ''}`,
-        how: '打开 Publer 连接器设置页，看看 LinkedIn 账号是不是掉线了；账号看起来没问题的话，回我一句，我来查具体原因',
-        href: LINKEDIN_CONNECTORS_URL,
-      })
-    }
+    // 这条其实已经真发到 LinkedIn 上了——只是发布成功后回写数据库那一步
+    // 失败了，本地状态没跟上。绝不能套用"没能发出去"那套话术：那会
+    // 引导人去重试/重新批准，而 Publer 那边已经真有一条了，重试 = 发出
+    // 重复的公开帖子。这里只能是"帮我手动改一下状态"，不是"帮我重试"。
+    if (reason === 'published_but_db_sync_failed') dbSyncFailed += 1
+    else publishErrors.push(row.generation_context_snapshot?.publish_error ?? '')
+  }
+
+  if (sensitiveReview > 0) {
+    const n = sensitiveReview
+    items.push({
+      kind: 'linkedin_progress_needs_review',
+      client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+      client_name: 'ME 产品动态（LinkedIn）',
+      what: many(n)
+        ? `有 ${countLabel(n)} 条 LinkedIn 进度贴草稿可能带了客户敏感信息，系统都没敢自动发，等你看一眼`
+        : '这周的 LinkedIn 进度贴草稿里可能带了客户敏感信息，系统没敢自动发，等你看一眼',
+      how: many(n)
+        ? '打开内容工厂看板，找到标题带「(needs review)」的这几条草稿，逐条读一遍确认没问题就批准发布；不想发就直接拒绝，下周照常自动生成新的'
+        : '打开内容工厂看板，找到标题带「(needs review)」的那条草稿，读一遍确认没问题就批准发布；不想发就直接拒绝，下周照常自动生成新的',
+      href: LINKEDIN_CONTENT_BOARD_URL,
+    })
+  }
+
+  if (needsSetup > 0) {
+    // 账号只需连一次，连好之后卡着的这几条都能发 —— 所以永远只出一条，
+    // 但把还卡着的条数说清楚。
+    const n = needsSetup
+    items.push({
+      kind: 'linkedin_progress_needs_setup',
+      client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+      client_name: 'ME 产品动态（LinkedIn）',
+      what: many(n)
+        ? `LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，已经有 ${countLabel(n)} 条卡着没发出去`
+        : 'LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，该发的这条卡着没发出去',
+      // 账号连好之后这些草稿不会自己重新尝试发布——没有额外的重试 cron，
+      // 得靠 PM 回内容工厂看板对每条草稿再点一次"确认"（那个按钮现在会
+      // 真的调发布，不是走视频那套），不写清楚这一步就是永久卡死。
+      how: many(n)
+        ? '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板，把卡住的这几条草稿逐条点一次"确认"，它们就会真的发出去，不用等下一次自动跑'
+        : '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板找到这条卡住的草稿，点一次"确认"，这条就会真的发出去，不用等下一次自动跑',
+      href: LINKEDIN_CONNECTORS_URL,
+    })
+  }
+
+  if (unknownDraft > 0) {
+    const n = unknownDraft
+    items.push({
+      kind: 'linkedin_progress_needs_review',
+      client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+      client_name: 'ME 产品动态（LinkedIn）',
+      what: many(n)
+        ? `有 ${countLabel(n)} 条 LinkedIn 进度贴草稿卡在待处理，系统没能说清具体原因`
+        : '有一条 LinkedIn 进度贴草稿卡在待处理，系统没能说清具体原因',
+      how: many(n)
+        ? '打开内容工厂看板看一眼这几条草稿，逐条读一遍决定发不发'
+        : '打开内容工厂看板看一眼这条草稿，读一遍决定发不发',
+      href: LINKEDIN_CONTENT_BOARD_URL,
+    })
+  }
+
+  if (dbSyncFailed > 0) {
+    const n = dbSyncFailed
+    items.push({
+      kind: 'linkedin_progress_needs_review',
+      client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+      client_name: 'ME 产品动态（LinkedIn）',
+      what: many(n)
+        ? `有 ${countLabel(n)} 条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子`
+        : '这条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子',
+      how: many(n)
+        ? '回我一句，我去手动把这几条记录的状态改成"已发布"，不用你操作'
+        : '回我一句，我去手动把这条记录的状态改成"已发布"，不用你操作',
+      href: LINKEDIN_CONTENT_BOARD_URL,
+    })
+  }
+
+  if (publishErrors.length > 0) {
+    const n = publishErrors.length
+    // 不同条的报错可能不一样 —— 去重后一起带上，别只印一条的原因。
+    const distinct = Array.from(new Set(publishErrors.map((e) => e.trim()).filter(Boolean)))
+    const errText = distinct.length > 0 ? `(系统报的原因: ${distinct.join('；')})` : ''
+    items.push({
+      kind: 'linkedin_progress_failed',
+      client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+      client_name: 'ME 产品动态（LinkedIn）',
+      what: many(n)
+        ? `这周有 ${countLabel(n)} 条 LinkedIn 进度贴生成好了但没能发出去${errText}`
+        : `这周的 LinkedIn 进度贴生成好了但没能发出去${errText}`,
+      how: '打开 Publer 连接器设置页，看看 LinkedIn 账号是不是掉线了；账号看起来没问题的话，回我一句，我来查具体原因',
+      href: LINKEDIN_CONNECTORS_URL,
+    })
   }
 }
 

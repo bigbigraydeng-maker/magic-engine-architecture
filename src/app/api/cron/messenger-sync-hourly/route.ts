@@ -5,6 +5,7 @@ import { startCronRun } from '@/lib/cron/run-logger'
 import { syncMailbox, type MailboxTarget } from '@/lib/microsoft/mail-ingest'
 import { MICROSOFT_MAIL_PROVIDER } from '@/lib/microsoft/mail-oauth'
 import { CONNECTION_STATUS } from '@/lib/platform-oauth/vocabulary'
+import { readDomainRules } from '@/lib/crm/contact-kind'
 
 /**
  * GET /api/cron/messenger-sync-hourly
@@ -131,13 +132,22 @@ async function syncConnectedMailboxes() {
   const connections = (conns ?? []) as { id: string; client_id: string; account_id: string }[]
   if (connections.length === 0) return []
 
+  // leads_config 一起取回来：里面有设置页填的「客户自己的邮件域名」（关联公司），
+  // 官网域名和收信域名都覆盖不到它 —— 漏了它同事来信会被当成新客人建档。
   const { data: clients } = await supabaseAdmin
     .from('clients')
-    .select('id, name, domain')
+    .select('id, name, domain, leads_config')
     .in('id', Array.from(new Set(connections.map((c) => c.client_id))))
 
   const byClient = new Map(
-    ((clients ?? []) as { id: string; name: string | null; domain: string | null }[]).map((c) => [c.id, c]),
+    (
+      (clients ?? []) as {
+        id: string
+        name: string | null
+        domain: string | null
+        leads_config: unknown
+      }[]
+    ).map((c) => [c.id, c]),
   )
 
   const targets: MailboxTarget[] = connections
@@ -149,6 +159,7 @@ async function syncConnectedMailboxes() {
       domain: byClient.get(c.client_id)?.domain ?? null,
       connectionId: c.id,
       mailbox: c.account_id,
+      ownDomains: readDomainRules(byClient.get(c.client_id)?.leads_config).own,
     }))
 
   const out = []

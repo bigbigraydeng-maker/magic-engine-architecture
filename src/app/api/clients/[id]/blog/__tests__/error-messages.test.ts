@@ -163,7 +163,7 @@ const mockGetWeakSpotOpportunities = vi.mocked(getWeakSpotOpportunities)
 beforeEach(() => {
   vi.resetAllMocks()
   // Allow auth through by default — these tests focus on DB error sanitisation
-  mockDashboardAccess.mockResolvedValue({ ok: true, user: { email: 'test@test.com' } as never, role: 'admin', allowedClientId: null })
+  mockDashboardAccess.mockResolvedValue({ ok: true, user: { email: 'test@test.com' } as never, role: 'admin', tier: 'admin', allowedClientId: null })
 
   // Default: supabase chain that can be overridden per test
   const mockChain = {
