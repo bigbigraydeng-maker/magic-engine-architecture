@@ -144,8 +144,15 @@ export default function ConversionsPage() {
       setCursor(0)
 
       // 今日待办叫人来点这里的按钮 —— 不列出来就是让人扑空（管道断头）。
+      // 🔴 API 的 send_status filter 只是过滤 outcome，不保证每条一定带
+      //    me_conversion_writebacks —— 万一将来 join 逻辑改了、或测试环境
+      //    只返回 outcome 主表，渲染时 `sendState(o)!` 会 crash 整页。
+      //    再挡一次：stuck 里只放**真有 writeback**的 outcome。
       const stuckBody = await stuckRes.json()
-      setStuck(stuckBody.outcomes ?? [])
+      const stuckRows: Outcome[] = (stuckBody.outcomes ?? []).filter(
+        (o: Outcome) => (o.me_conversion_writebacks?.length ?? 0) > 0,
+      )
+      setStuck(stuckRows)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
