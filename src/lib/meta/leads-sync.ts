@@ -22,6 +22,10 @@ import { getPageAccessToken } from '@/lib/meta/page-posts'
 import { fetchFormLeads, fetchPageLeadForms } from '@/lib/meta/lead-forms'
 import { ingestMetaLead } from '@/lib/crm/meta-lead'
 import type { SubscribeMemberResult } from '@/lib/mailchimp/client'
+import type { TagRepair } from '@/lib/mailchimp/tags'
+
+/** 出口结果 + 「已在名单里的人标签补打」的结论。 */
+type MailchimpOutcome = SubscribeMemberResult & { tagRepair?: TagRepair }
 
 export interface MetaLeadsSyncClient {
   id: string
@@ -64,11 +68,20 @@ export interface MetaLeadsSyncResult {
   error?: string
 }
 
-/** 把一条 `SubscribeMemberResult` 压成 tally 的 key。 */
-function mailchimpTallyKey(res: SubscribeMemberResult): string {
-  return res.status === 'skipped' || res.status === 'failed'
-    ? `${res.status}:${res.reason}`
-    : res.status
+/**
+ * 把一条 `SubscribeMemberResult` 压成 tally 的 key。
+ *
+ * `already_member` 会再分一岔：人确实在名单里（会员关系为真），但**来源标签
+ * 没补上**时必须单独成一个 key。否则它跟一切正常的 `already_member` 混在一起，
+ * 广告归因证据整月落不了地这件事就又变回「日志里看不见」——这条链路 2026-09
+ * 刚栽过一次同样的跟头。
+ */
+function mailchimpTallyKey(res: MailchimpOutcome): string {
+  if (res.status === 'skipped' || res.status === 'failed') return `${res.status}:${res.reason}`
+  if (res.status === 'already_member' && res.tagRepair?.startsWith('failed:')) {
+    return `already_member:tag_${res.tagRepair}`
+  }
+  return res.status
 }
 
 /**

@@ -890,7 +890,14 @@ const MAILCHIMP_EXPORT_STALE_HOURS = 6
 
 /** 只挑「非预期」失败：配置读不出来 / API key 失效 / audience 找不到 / 限流 / provider 5xx。 */
 function isMailchimpExportFailureKey(key: string): boolean {
-  return key.startsWith('failed:') || key === 'skipped:client_config_read_failed'
+  return (
+    key.startsWith('failed:') ||
+    key === 'skipped:client_config_read_failed' ||
+    key === 'skipped:source_tag_read_failed' ||
+    // 人进了名单但来源标签没补上 —— 会员关系是真的，广告归因证据却没落地。
+    // 不报的话，这一整类失败又只剩「看起来一切正常」。
+    key.startsWith('already_member:tag_failed:')
+  )
 }
 
 /**

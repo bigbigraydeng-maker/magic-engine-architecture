@@ -106,3 +106,40 @@ export async function readAudienceId(clientId: string): Promise<AudienceIdRead> 
     audienceId: audienceFromLeadsConfig((fallback.data as ClientAudienceRow | null)?.leads_config),
   }
 }
+
+// ── 来源标签 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 没配就用这个。**加**标签不具破坏性，所以给默认值是安全的 —— 跟
+ * `lead_tags_to_remove`「绝不给默认」的理由正相反：摘错标签会让人从名单里消失，
+ * 加一个标签最多是多一个没人用的分组。
+ */
+export const DEFAULT_META_LEAD_SOURCE_TAG = 'facebook_leadgen'
+
+/**
+ * Meta 广告线索进 Mailchimp 时打的来源标签名，从客户配置读。
+ *
+ * **为什么不能写死在共享代码里**：标签名是每家客户自己 Mailchimp 里长出来的，
+ * 不是平台规则（平台化红线 2，跟 `mailchimp-paid-tagging` 的 `paid_tag` 同一条
+ * 规矩）。CTS 用的是 `fb_lead`（名单里 33 人，2026-09-06 PM 拍板沿用），换成
+ * Oztop 或地产客户就会是别的名字。
+ *
+ * 读不到配置时**不猜**：返回 `ok:false` 让上游如实上报，不拿默认值把「读失败」
+ * 伪装成「客户就是要默认」—— 这条链路上个月刚因为分不清这两者静默跑空一整月。
+ */
+export async function readLeadSourceTag(
+  clientId: string,
+): Promise<{ ok: true; tag: string } | { ok: false; message: string }> {
+  const { data, error } = await supabaseAdmin
+    .from('clients')
+    .select('leads_config')
+    .eq('id', clientId)
+    .maybeSingle()
+
+  if (error) return { ok: false, message: error.message }
+
+  const cfg = (data?.leads_config ?? {}) as { meta_leads?: { source_tag?: unknown } }
+  const raw = cfg.meta_leads?.source_tag
+  const tag = typeof raw === 'string' && raw.trim() ? raw.trim() : DEFAULT_META_LEAD_SOURCE_TAG
+  return { ok: true, tag }
+}
