@@ -39,7 +39,6 @@ import {
   saveFailedExperiment,
   savePreference,
   setDerivedMemoryActive,
-  updateDecisionOutcome,
   type DerivedMemoryTable,
 } from './service'
 import type { FlywheelName, PatternType, PreferenceType } from './types'
@@ -53,7 +52,6 @@ const MIN_OUTCOME_CONFIDENCE = 0.6
 const MIN_OCCURRENCES_FOR_PREFERENCE = 3
 
 /** decision → outcome 匹配的时间窗（天） */
-const DECISION_MATCH_WINDOW_DAYS = 14
 
 // ── 公共类型 ──────────────────────────────────────────────────────────────────
 
@@ -64,11 +62,17 @@ export interface ExtractorResult {
   patterns_added: number
   experiments_added: number
   preferences_added: number
-  decisions_updated: number
   /** Rows switched off: the opposite verdict, and per-action duplicates. */
   memories_superseded: number
   /** Rows switched back on because the verdict flipped back. */
   memories_reactivated: number
+  /**
+   * 因为「太久没重算」被挡在门外的 outcome 行数。
+   *
+   * **必须报出来**，不能静默丢弃：这个数不为零，说明有一批动作的归因已经不再更新，
+   * 而系统仍然在拿它们当证据。零和非零是两件完全不同的事，看不见就等于没发生。
+   */
+  outcomes_stale_skipped: number
   errors: string[]
 }
 
@@ -117,6 +121,8 @@ interface DerivedMemoryRow {
 export async function runExtractorForClient(
   supabase: SupabaseClient,
   clientId: string,
+  /** 测试注入用；生产不传。新鲜度闸拿它算截止时间。 */
+  now: Date = new Date(),
 ): Promise<ExtractorResult> {
   const result: ExtractorResult = {
     outcomes_processed: 0,
@@ -124,16 +130,18 @@ export async function runExtractorForClient(
     patterns_added: 0,
     experiments_added: 0,
     preferences_added: 0,
-    decisions_updated: 0,
     memories_superseded: 0,
     memories_reactivated: 0,
+    outcomes_stale_skipped: 0,
     errors: [],
   }
 
   // 1. 拉取该客户所有 high-confidence outcomes + JOIN action
   let outcomes: OutcomeJoinRow[] = []
   try {
-    outcomes = await loadOutcomesWithActions(supabase, clientId)
+    const loaded = await loadOutcomesWithActions(supabase, clientId, now)
+    outcomes = loaded.rows
+    result.outcomes_stale_skipped = loaded.staleSkipped
     result.outcomes_processed = outcomes.length
   } catch (err) {
     result.errors.push(`load outcomes: ${msgOf(err)}`)
@@ -243,13 +251,25 @@ export async function runExtractorForClient(
     result.errors.push(`extract preferences: ${msgOf(err)}`)
   }
 
-  // 5. 回填 decision_history.outcome_verdict
-  try {
-    const updated = await backfillDecisionOutcomes(supabase, clientId)
-    result.decisions_updated += updated
-  } catch (err) {
-    result.errors.push(`backfill decisions: ${msgOf(err)}`)
-  }
+  // 5.（已退役 2026-09-06）这里原本还有一步「回填 client_decision_history.outcome_verdict」。
+  //
+  // 判据是错的，而且错得很彻底：它只按 client_id + 时间窗查 outcome，**从不看这条决策
+  // 本身关联的是哪个动作**，然后拿窗口内全部 outcome 的多数票，给该客户窗口内的**每一条**
+  // 决策盖同一个章。生产实测（2026-09-06）：116 条自动回填只有 5 种 note，每种恰好对应
+  // 一个客户 —— 其中一家的 50 条决策被一次性全部盖成 failure。
+  //
+  // 危害不止于脏数据：`memory/format.ts` 会把它拼成 `(outcome: failure)` 写进
+  // 「Recent Decisions」段，喂给鲁班（`luban/project-prompts.ts`）和华佗
+  // （`huatuo/memory.ts`，长模式）。也就是说 AI 被告知那 50 个互不相干的选择都失败了。
+  // 而 `updateDecisionOutcome` 只填 `outcome_verdict is null` 的行，**填过就不再复查**，
+  // 是不可逆的单向写。
+  //
+  // 🔴 要重做的话，判据必须换成「只匹配这条决策**所关联动作**的 outcome」，时间窗用
+  //    `flywheel_actions.executed_at` 而不是 `flywheel_outcomes.computed_at`
+  //    （后者每轮 attribution 都会被刷成「现在」，根本不是事件发生时间）。
+  //    但 `client_decision_history` 目前**没有指向 action 的外键**，接不上就别猜 ——
+  //    宁可这一段永久不做，也不要再往客户记忆里刻一批假结论。
+  //    人工/其它调用方要写结论，走 `memory/service.ts` 的 `updateDecisionOutcome`，那条没问题。
 
   return result
 }
@@ -259,6 +279,8 @@ export async function runExtractorForClient(
  */
 export async function runExtractorForAllClients(
   supabase: SupabaseClient,
+  /** 测试注入用；生产不传。 */
+  now: Date = new Date(),
 ): Promise<ExtractorBatchResult> {
   const aggregate: ExtractorResult = {
     outcomes_processed: 0,
@@ -266,9 +288,9 @@ export async function runExtractorForAllClients(
     patterns_added: 0,
     experiments_added: 0,
     preferences_added: 0,
-    decisions_updated: 0,
     memories_superseded: 0,
     memories_reactivated: 0,
+    outcomes_stale_skipped: 0,
     errors: [],
   }
   const perClientErrors: Array<{ client_id: string; error: string }> = []
@@ -292,16 +314,16 @@ export async function runExtractorForAllClients(
 
   for (const clientId of clientIds) {
     try {
-      const r = await runExtractorForClient(supabase, clientId)
+      const r = await runExtractorForClient(supabase, clientId, now)
       processed++
       aggregate.outcomes_processed    += r.outcomes_processed
       aggregate.actions_processed     += r.actions_processed
       aggregate.patterns_added        += r.patterns_added
       aggregate.experiments_added     += r.experiments_added
       aggregate.preferences_added     += r.preferences_added
-      aggregate.decisions_updated     += r.decisions_updated
       aggregate.memories_superseded   += r.memories_superseded
       aggregate.memories_reactivated  += r.memories_reactivated
+      aggregate.outcomes_stale_skipped += r.outcomes_stale_skipped
       if (r.errors.length > 0) {
         perClientErrors.push({ client_id: clientId, error: r.errors.join(' | ') })
       }
@@ -315,10 +337,27 @@ export async function runExtractorForAllClients(
 
 // ── 数据加载 helpers ──────────────────────────────────────────────────────────
 
+/**
+ * 归因结果多久没被重算就不再当证据用。
+ *
+ * attribution 每 6 小时把所有**现役**动作的 outcome 重算一遍（`computed_at` 刷成现在），
+ * 所以健康的行永远不超过一天。取 7 天 = 28 倍余量：attribution 短暂中断不会误伤，
+ * 但真正停止更新的行会被挡住。
+ *
+ * 🔴 为什么必须有这道闸（2026-09-06 生产实测）：库里有 **51 行 / 17 个动作**的归因
+ *    永久冻结在 2026-08-04~05。成因见 Issue #859 —— page-upgrade 的 PR 被拒后
+ *    `expected_metric` 被写成 null，而两个写入方的查询都带
+ *    `.not('expected_metric','is',null)`，从此谁都不再选中它们，既不刷新也不删除。
+ *    抽取器不看时间读全表，于是一个多月前的读数一直被当现役证据学 ——
+ *    已经有 10 条生效中的记忆（5 proven + 5 failed）是从这批冻结行长出来的。
+ */
+const OUTCOME_FRESH_DAYS = 7
+
 async function loadOutcomesWithActions(
   supabase: SupabaseClient,
   clientId: string,
-): Promise<OutcomeJoinRow[]> {
+  now: Date,
+): Promise<{ rows: OutcomeJoinRow[]; staleSkipped: number }> {
   // 单跑 JOIN 在 PostgREST 风格里不直观；用两步查询并在内存里合并
   const { data: outcomeRows, error: outcomeErr } = await supabase
     .from('flywheel_outcomes')
@@ -328,10 +367,22 @@ async function loadOutcomesWithActions(
     .order('computed_at', { ascending: false })
 
   if (outcomeErr) throw new Error(outcomeErr.message)
-  if (!outcomeRows || outcomeRows.length === 0) return []
+  if (!outcomeRows || outcomeRows.length === 0) return { rows: [], staleSkipped: 0 }
 
-  const actionIds = Array.from(new Set(outcomeRows.map(r => r.action_id).filter(Boolean)))
-  if (actionIds.length === 0) return []
+  // 新鲜度闸：太久没被重算的行不再当证据。**在内存里筛而不是加到查询条件里**，
+  // 是为了能数出「挡掉了多少」—— 数据库过滤掉的行没人数得着，那就又变成静默丢弃了。
+  const cutoff = now.getTime() - OUTCOME_FRESH_DAYS * 86_400_000
+  const fresh = outcomeRows.filter((r) => {
+    const t = Date.parse(r.computed_at)
+    // 时间读不出来时**保留**：不认识的格式不该等于「过期」，
+    // 宁可多学一条也不要因为解析口径变化悄悄丢掉一批证据。
+    return Number.isNaN(t) || t >= cutoff
+  })
+  const staleSkipped = outcomeRows.length - fresh.length
+  if (fresh.length === 0) return { rows: [], staleSkipped }
+
+  const actionIds = Array.from(new Set(fresh.map(r => r.action_id).filter(Boolean)))
+  if (actionIds.length === 0) return { rows: [], staleSkipped }
 
   const { data: actionRows, error: actionErr } = await supabase
     .from('flywheel_actions')
@@ -354,7 +405,7 @@ async function loadOutcomesWithActions(
   }
 
   const joined: OutcomeJoinRow[] = []
-  for (const o of outcomeRows) {
+  for (const o of fresh) {
     const a = actionMap.get(o.action_id)
     if (!a) continue
     joined.push({
@@ -375,7 +426,7 @@ async function loadOutcomesWithActions(
       expected_metric: a.expected_metric,
     })
   }
-  return joined
+  return { rows: joined, staleSkipped }
 }
 
 /**
@@ -594,69 +645,6 @@ async function supersedeStalePreferences(
   for (const row of stale) row.is_active = false
 }
 
-// ── Decision verdict backfill ─────────────────────────────────────────────────
-
-/**
- * 把 client_decision_history.outcome_verdict 是 null 的记录补全：
- * 在 created_at + window 天内查该客户 outcomes，按 majority verdict 决定。
- */
-async function backfillDecisionOutcomes(
-  supabase: SupabaseClient,
-  clientId: string,
-): Promise<number> {
-  const { data: decisions, error } = await supabase
-    .from('client_decision_history')
-    .select('id, created_at')
-    .eq('client_id', clientId)
-    .is('outcome_verdict', null)
-    .order('created_at', { ascending: false })
-    .limit(50)
-
-  if (error) {
-    throw new Error(error.message)
-  }
-  if (!decisions || decisions.length === 0) return 0
-
-  let updated = 0
-  for (const d of decisions) {
-    const start = new Date(d.created_at)
-    const end = new Date(start)
-    end.setDate(end.getDate() + DECISION_MATCH_WINDOW_DAYS)
-
-    const { data: outcomes, error: oErr } = await supabase
-      .from('flywheel_outcomes')
-      .select('verdict')
-      .eq('client_id', clientId)
-      .gte('computed_at', start.toISOString())
-      .lte('computed_at', end.toISOString())
-
-    if (oErr) continue
-    if (!outcomes || outcomes.length === 0) continue
-
-    const verdict = aggregateVerdicts(outcomes.map((o: { verdict: string }) => o.verdict))
-    if (!verdict) continue
-
-    await updateDecisionOutcome(supabase, d.id, verdict, `auto-derived from ${outcomes.length} outcomes within ${DECISION_MATCH_WINDOW_DAYS}d window`)
-    updated++
-  }
-  return updated
-}
-
-function aggregateVerdicts(verdicts: string[]): 'success' | 'failure' | 'inconclusive' | null {
-  let confirmed = 0
-  let reversed = 0
-  let inconclusive = 0
-  for (const v of verdicts) {
-    if (v === 'confirmed') confirmed++
-    else if (v === 'reversed') reversed++
-    else if (v === 'inconclusive') inconclusive++
-  }
-  const total = confirmed + reversed + inconclusive
-  if (total === 0) return null
-  if (confirmed > reversed && confirmed >= total / 2) return 'success'
-  if (reversed > confirmed && reversed >= total / 2) return 'failure'
-  return 'inconclusive'
-}
 
 // ── Action-type → pattern_type / description mapping ──────────────────────────
 

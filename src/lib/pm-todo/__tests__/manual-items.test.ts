@@ -12,6 +12,7 @@ import {
   loadManualItems,
   pushPlatformCandidateReviewItems,
   pushDataForSeoCreditsItem,
+  pushMailchimpExportItems,
   pushLinkedinProgressItems,
   buildNotIndexedItems,
   type NotIndexedRow,
@@ -73,6 +74,178 @@ describe('pushDataForSeoCreditsItem', () => {
     await pushDataForSeoCreditsItem(query.supabase, items, new Date('2026-09-01T00:00:00Z'))
 
     expect(items).toEqual([])
+  })
+})
+
+describe('pushMailchimpExportItems', () => {
+  const NOW = new Date('2026-09-03T09:00:00Z')
+
+  function fakeLastRun(row: { finished_at: string; summary: unknown } | null) {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      not: () => chain,
+      in: () => chain,
+      order: () => chain,
+      limit: async () => ({ data: row ? [row] : [], error: null }),
+    }
+    return { from: () => chain } as unknown as SupabaseClient
+  }
+
+  it('非预期失败（配置读不出来 / API key 失效）逐客户下发，正常的「没配 Mailchimp」不下发', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T08:00:00Z',
+      summary: {
+        results: [
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'skipped:client_config_read_failed': 3, 'failed:auth': 2 },
+          },
+          {
+            clientId: 'c-not-configured',
+            clientName: 'Oztop',
+            mailchimp: { 'skipped:no_audience_config': 5, 'skipped:no_email': 1 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken', client_name: 'CTS Tours NZ' })
+    expect(items[0].what).toContain('5 条')
+    expect(items[0].href).toBe('https://app.magicengine.com.au/dashboard/clients/c-broken/settings')
+  })
+
+  it('最近一次运行早就过期（超过 6 小时）→ 不再报旧问题', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T00:00:00Z',
+      summary: { results: [{ clientId: 'c-broken', clientName: 'CTS', mailchimp: { 'failed:auth': 1 } }] },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toEqual([])
+  })
+
+  it('人在名单里但来源标签没补上 → 也要报（归因证据没落地，跟发失败一样严重）', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: NOW.toISOString(),
+      summary: {
+        results: [
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'already_member:tag_failed:http_429': 4, already_member: 6 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken' })
+    // 只数坏的那 4 条，正常的 6 条不许算进去
+    expect(items[0].what).toContain('4 条')
+  })
+
+  it('标签都打上了的正常 already_member → 一条都不报，别天天骚扰', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: NOW.toISOString(),
+      summary: {
+        results: [{ clientId: 'c-ok', clientName: 'CTS', mailchimp: { already_member: 10 } }],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toEqual([])
+  })
+
+  it('压根没有运行记录 → 不报', async () => {
+    const items: ManualItem[] = []
+    await pushMailchimpExportItems(fakeLastRun(null), items, NOW)
+
+    expect(items).toEqual([])
+  })
+
+  it('只挑跑完的运行记录 —— 卡在 running（finished_at 永远 NULL）的记录不该挡住后续告警', async () => {
+    const notCalls: Array<[string, unknown]> = []
+    const inCalls: Array<[string, unknown]> = []
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      not: (col: string, op: string, val: unknown) => {
+        notCalls.push([col, val])
+        return chain
+      },
+      in: (col: string, vals: unknown) => {
+        inCalls.push([col, vals])
+        return chain
+      },
+      order: () => chain,
+      limit: async () => ({
+        data: [
+          {
+            finished_at: '2026-09-03T08:30:00Z',
+            summary: { results: [{ clientId: 'c-broken', clientName: 'CTS', mailchimp: { 'failed:auth': 1 } }] },
+          },
+        ],
+        error: null,
+      }),
+    }
+    const supabase = { from: () => chain } as unknown as SupabaseClient
+
+    const items: ManualItem[] = []
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(notCalls).toContainEqual(['finished_at', null])
+    expect(inCalls).toContainEqual(['status', ['completed', 'failed']])
+    expect(items).toHaveLength(1)
+  })
+
+  it('那一轮因为别的客户 Meta 取数报错被 run-logger 标成 failed，本客户真实的 Mailchimp 出口故障依然要下发', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: '2026-09-03T08:30:00Z',
+      summary: {
+        results: [
+          { clientId: 'c-meta-broken', clientName: '另一个客户', error: 'Meta token expired' },
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'failed:auth': 2 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken' })
+  })
+
+  it('查运行记录本身报错 → 必须抛出，不能当成「没有记录」静默吞掉', async () => {
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      not: () => chain,
+      in: () => chain,
+      order: () => chain,
+      limit: async () => ({ data: null, error: { message: 'permission denied' } }),
+    }
+    const supabase = { from: () => chain } as unknown as SupabaseClient
+
+    const items: ManualItem[] = []
+    await expect(pushMailchimpExportItems(supabase, items, NOW)).rejects.toThrow('permission denied')
   })
 })
 
@@ -304,8 +477,9 @@ describe('buildNotIndexedItems — 谷歌没收录的页面按客户汇总，别
     expect(oz.what).toContain('55 个内容太薄')
     expect(oz.what).toContain('6 个谷歌还不认识')
     expect(oz.what).toContain('55 个谷歌爬过却没收录')
-    // 🔴 链接落到能直达「哪几页、什么原因」的地方 —— GSC 属性（站内无收录状态视图）
-    expect(oz.href).toBe('https://search.google.com/search-console?resource_id=sc-domain%3Aoztop.com.au')
+    // 🔴 链接落到 ME 站内页面清单（已带 ?filter=not-indexed 直达未收录）——
+    //    GSC 网页报告不显示本地「内容太薄」分类、「谷歌还不认识」的页面也可能不在其清单里（Codex #1375）
+    expect(oz.href).toBe('https://app.magicengine.com.au/dashboard/clients/oztop/site-audit/pages?filter=not-indexed')
     expect(oz.how).toContain('索引')
   })
 

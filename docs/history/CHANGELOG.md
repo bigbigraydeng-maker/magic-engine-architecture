@@ -5,6 +5,133 @@
 
 ---
 
+### 2026-09-07（Gate A 尾声：给测量回执 RPC 钉住 search_path，Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413#issuecomment-5562430183)）
+
+**上线内容**：把 PR [#1414](https://github.com/bigbigraydeng-maker/magic-engine/pull/1414) 已合并、生产未 apply 的加固补丁 `20260905123025_fix_post_measurement_search_path.sql` 应用到 Supabase 生产（`glbdnayojixmexgofbsd`），生产版本号 `20260906215112`。补丁一行：`ALTER FUNCTION public.record_post_measurement_snapshot(...) SET search_path = pg_catalog, pg_temp;` —— 不改数据、不改权限、不改签名。
+
+**为什么补这一条**：`record_post_measurement_snapshot` 是 SECURITY DEFINER RPC（factory Reel → daily-plan post measurement 走它落回执 + 指标）。没钉 `search_path` 意味着 PostgreSQL 名字解析会走会话默认，理论上给「同名对象抢先注册」留了一线。函数体每个表都写全 `public.*`，实际风险贴近零，但 A 级 SECURITY DEFINER 的行业惯例是必须钉死。回读 `pg_proc.proconfig`：apply 前 `NULL` → apply 后 `{search_path=pg_catalog, pg_temp}` ✅。
+
+**顺带发现（不改，仅登记）**：仓库里 `20260905000001_conversion_writeback_v1.sql` 也没进生产库。属另一条 Gate（CAPI 回写基线），本次不在授权范围。
+
+**Gate A 收官盘点**（Issue #1413）：
+- Migration `20260905122541 / social_post_measurement_receipts`（回执表 + RPC 基线）：早已 applied。
+- Migration `20260906215112 / fix_post_measurement_search_path`（本次加固）：applied。
+- `factoryReelMeasurementAdapter` + `daily-plan-post-measurement` 消费者：Inngest production active（生产库里的痕迹作证 —— 2026-09-06 CTS Reel `2259550698170048` 已产生 `social.publish_post` 动作 `5752620a-…` + T+4 回执 `aead0c02-…`，`status=partial`，likes=1/comments=0，shares 因权限缺失被保守省略）。
+- T+72 应测时刻 2026-09-09 16:44Z，未到；已在 hello@magicengine.cloud 日历排 2026-09-10 09:00 NZST 做只读核对。
+- Gate A 授权的「最多一次受控 CTS Reel 回放」名额未使用（已有真实 Reel 走通）。
+- Gate B（Tune runtime）在 T+72 核对通过前不启动。
+
+**验证**：Supabase security advisor 只余 4 条 pre-existing warnings（`group_tours` RLS / `btree_gist` extension / auth OTP / leaked password protection），均与本功能无关；未新增 lint。既有 T+4 回执 `updated_at` apply 前后未变。
+
+**风险级 A**（生产 SECURITY DEFINER 属性变更）。全程未 merge 新代码、未回放事件、未调 Meta provider、未同步 Inngest、未发帖 / 排期 / 花广告预算。
+
+**Reuse Statement**：本次为已合并补丁的运维 apply + 治理证据回填，无新增代码。platform-shared：加固已在 platform 层的 measurement RPC；industry-specific：无；client-specific：CTS 只作为生产验证数据。未新增 shared runtime 字段。
+
+---
+
+### 2026-09-07（把 dev 欠账从 PM 每日待办里分流出去 · `claude/dev-owned-noise-split`）
+
+**上线内容**：新增 `DEV_OWNED_KINDS`（`src/lib/pm-todo/daily-todo.ts`），把五种「how 字段自己写"回我一句我去改"」的欠账类 kind（`auto_run_stuck` · `action_unattributable` · `attribution_audit_failed` · `client_list_unreadable` · `cron_blind`）从「🙋 需要你动手」栏挪进单独的「🛠 系统欠账（不影响你 · Ray 转给 dev 就好）」栏；不进 `totalItems`。同时新增 `src/lib/cron/__tests__/registry-logs-runs.test.ts` —— CI 守卫，`CRON_REGISTRY` 里任何一条 `logsRuns: false` 都直接 fail build，从源头阻止 `cron_blind` 类欠账进 registry。
+
+**为什么这不是删除 PM 可见性**：五个 kind 的 how 字段自己已经写「这条不用你动手 —— 是我们代码里的欠账」/「回我一句我去改」，本就是**dev 的活伪装成 PM 的活**。PM 每天早上收到 → 没法真动手 → 只能转给 Ray → Ray 转给 dev。挪到单独一栏并从"今天有几件"总数里剔除，保留可见性（铁律 3 下半"发现不许死在日志里"照样满足），只是终于不算作 PM 的活了。
+
+**预计效果**：`auto_run_stuck` 平均每周 0-2 条；`action_unattributable` 目前是 3 类子情况都在下发；`attribution_audit_failed` / `client_list_unreadable` 是 catch 类，正常无；`cron_blind` 因新加 CI 守卫从此不会再有。合计每天 PM「需要你动手」栏预计再少 2-6 行 + 总数相应下降。
+
+**后续正确形态**：自动开 GitHub issue / spawn dev-task（含所有权分配 / 去重 / 关闭跟踪），当前先做管道分流不引入新基础设施。
+
+**Reuse Statement**：
+- 复用 `INFORMATIONAL_KINDS` 分流模式（`daily-todo.ts:330-373`），新增第三档 `DEV_OWNED_KINDS`
+- 复用 `CRON_REGISTRY` schema，新增一条完整性守卫测试
+- 平台共享：`DEV_OWNED_KINDS` + registry logs-runs 守卫属 pm-todo / cron kernel L1，无客户/行业语义
+- 一致性：五个 kind 的 what/how 保持原样（不改内容，只改分流去向），单独栏使用与其它栏对称的 sectionCard 模板
+- 层级：L1 内部治理修复，不涉及新能力
+
+---
+
+### 2026-09-07（本周体检严重问题挪出「需要你动手」栏 —— 与 SEO 巡逻发现统一口径 · `claude/diagnostic-findings-informational`）
+
+**上线内容**：`diagnostic_findings` 挪进 `INFORMATIONAL_KINDS`（`src/lib/pm-todo/daily-todo.ts:29`），一行改动。加了一条回归测试锁死"体检发现不进「需要你动手」栏、不抬高'今天有几件事'总数"。
+
+**为什么这是口径修复而不是新功能**：`diagnostic_findings` 每条待办的 how 字段自己写死了"不用你挑 —— 每周方案会把这些自动排成看板上的动作"（`manual-items.ts:1755`）——PM 2026-08-04 拍板的处理方式**本来就是**「不用你单独动手」，只是当时挂到了「🙋 需要你动手」栏里，还算进了「今天有几件事」总数。跟 91 那次「巡逻发现被数两遍」是同一类错：一件事在两栏里各出现一遍 = 总数虚高 → PM 说 "91 件按不动"。这次和巡逻发现口径对齐，从 "action item" 归到 "notice"。
+
+**预计效果**：真实客户上一般每周 3-8 条 `diagnostic_findings`，本身自动汇总成"每客户一条"（`manual-items.ts:1741-1758`），所以邮件正文里少 3-8 条 "🙋 需要你动手" 行、总数下降 3-8。跟对齐后的 SEO 巡逻发现一起看：整封邮件里两条"看一眼就好"通道对称，不再有"点进去发现不用做"的破口径。
+
+**Reuse Statement**：
+- 复用了既有 `INFORMATIONAL_KINDS` 分流机制（`daily-todo.ts:330-352`），本次只增加成员，无新代码
+- 平台共享：`INFORMATIONAL_KINDS` 属 pm-todo kernel L1，无客户/行业语义
+- 一致性：与 `findingsByClient` 单独一栏、不进总数的口径对齐
+- 层级：L1 内部口径修复，不涉及新能力
+
+---
+
+### 2026-09-07（一次授权覆盖客户全部 Google 权限 —— 铁律 3 上半句落地 · `claude/grant-permissions-fix-mdqr2c`）
+
+**上线内容**：把 `business.manage`（GBP 管理）scope 合到 `COMBINED_GOOGLE_SCOPES` 里，`/api/auth/google/callback` 拿到 token 后若含 GBP scope 就顺手把 `platform_oauth_connections.google_gbp` + `client_connectors.gbp` 一起落库；持久化逻辑抽成 `src/lib/gbp/oauth-persist.ts` 让合并流 + 老的 `/api/auth/google/gbp/callback` 共用同一段代码。daily-todo「🔌 要你点一次的连接」的链接从 `/api/auth/google/gbp/start`（只覆盖商家页）改到 `/api/auth/google/connect`（一次点完覆盖商家页 + Search Console + Analytics + 收录申请）。
+
+**为什么这是「遇卡点必自动化」的落地**：邮件里三条「CTS Tours NZ · oztop · Roman HU · 去连接」每客户都要点两次 Google consent —— 一次给 GBP、一次给 GSC/GA4/Indexing —— 用的是同一个 Google 老板账号，只是我们把两条 scope 单独发起。铁律 3 上半说「能自动化就必须自动化」，两次跳同一个 Google 账号本就是我们自己造出来的手工步骤。合并后一次 consent 覆盖全部，同一封邮件的三条条目从「六次点击」压到「三次点击」。GBP scope 单独审核过的产品验证不受影响（`business.manage` 已在同一个 GCP 项目里获批）。
+
+**兼容性**：老的 `/api/auth/google/gbp/start` 入口保留 —— 走同一个 `persistGbpFromTokens` helper，不会分叉；已经只授权过 GBP 或只授权过 GSC 的客户下次跳合并流会拿到全 scope。callback 里 GBP 失败非致命（GSC/GA4 已经写好，daily-todo 明天再浮出来），失败不推翻整条授权。
+
+**验证**：`vitest run` 91 tests passed（daily-todo · gbp/start · gbp/callback · google/callback），加了两条锁契约的测试 —— scope 含 `business.manage` 必调 helper、不含则一定不调；`tsc --noEmit` 我改动文件全绿。
+
+**Reuse Statement**：
+- 复用了 `COMBINED_GOOGLE_SCOPES` 授权机制 · `platform_oauth_connections` / `client_connectors` 表 · `encryptToken` / `resolveGbpLocation` / `requireDashboardClientAccess`
+- 平台共享：新增的 `scopeIncludesGbp` 与 `persistGbpFromTokens` 属 Google OAuth L3 Connector kernel，纯参数化、无客户/行业语义
+- 行业 / 客户特定：无 —— 完全没有客户或行业事实进 shared runtime
+- Memory 泛化：本次改动不写 memory
+- 层级：L3 Connector 内部整合，红线 3 显式排除 L3，不进 `platform-candidates.md`
+
+---
+
+### 2026-09-07（5 个定时任务脱离监控 + 每周 SEO 快照上线，PR [#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440)）
+
+**上线内容一**：代码里调了 `startCronRun`（说明它设计上要被定时触发、要留运行记录）却不在任何名单里的接口，逐个查生产库定性并补进 `CRON_REGISTRY`。`CronRegistryEntry` 新增 `scheduler` 字段（`render` / `github-actions` / `external` / `inngest`）—— 原来「不在 `render.yaml` 里 = 没人调度」这个假设被生产数据推翻了：`baseline-domains-monthly` 每周日都在跑，调度它的是**有人在 Render 后台手工建的** cron（路由自己的成本闸门注释里就写着）；`goals-expiry-check` 由 GitHub Actions 调度，实测触发时刻在 04:10 ~ 15:35 之间飘。`render.yaml` 一行没动 —— 三个都已有人调度，加了就是重复调度。确实不该排班的（`mailbox-sync` 已挂在 `messenger-hourly` 里跑、`email-reply-digest` 已被 PM 叫停）进 `UNSCHEDULED_CRON_ROUTES` 白名单并写明原因；**白名单自己也被检查**：排上班了、或路由没了都会红（合并前它就自动逮到 #1427 落地后本该删掉的那条临时项）。
+
+**顺带查出的生产事故**：`messenger-brief-hourly`（给销售写客户需求卡）**从 2026-08-23 00:12 起停了 14 天**。它是 `messenger-hourly` 那条 Render 服务里的第二条 curl，而清单原来一条服务只登记一个 `jobName`，第二条就此隐形。不是记录丢了 —— `conversation_briefs` 整张表最后被写入也停在 `2026-08-23T00:12:37`。同一条服务的第一条 curl（私信同步）945 次每小时都在跑。停因在 Render 那一侧（本仓这段配置自 2026-07-27 未动），代码侧查不到，需人工看那条服务的运行日志。
+
+**上线内容二**：`flywheel-seo-weekly`（每周 SEO 快照）**第一次真正开跑**（PM 2026-09-07 拍板）。代码 2026-05-18 就写好了，生产库 0 条运行记录，2026-08-06 架构审计标「等 PM 拍板」——因为它每周对每个在服务的客户各花一次 DataForSEO 的钱。按铁律 3 的 Inngest 硬约束拆成两段：`cloud-flywheel-seo-weekly-fanout`（每周一 05:15 NZ 派单，自己不打 provider）+ `cloud-flywheel-seo-snapshot-one`（一个客户一单，出机器可读回执：客户 / 网址 / 周编号 / 状态 / 花费上限 / `no_publish` / 时间）。原实现在一个 HTTP 请求里 for 循环跑完所有客户（`maxDuration 900`），跑到第 5 个超时则前 4 个写了后面没写而记录只有一条「完成」。`/api/cron/flywheel-seo-weekly` 改成纯手动补触发（只发同一批条子），**故意不写 `cron_run_logs`** —— 手动点一下写进去会把「人手补的」伪装成「定时器正常」。
+
+**两份复审（子牙架构 + 魏征对抗性）各自独立抓到的必改项，全部已修**：
+- **合并后按下手动按钮就会让全体客户多付一轮钱**，两个独立原因叠加：① Inngest 的事件去重窗口**只有 24 小时**（查了官方文档），而「手动补触发」按定义发生在隔天，原注释「同一周内点多少次钱只花一轮」是错的；② `isoWeekKey` 走 UTC 但定时器是 `TZ=Pacific/Auckland`，NZ 周一 05:15 在 UTC 是周日 —— 同一个 NZ 周一中午 12:00 前后算出的周编号不同，事件 id 全变，24 小时窗口也拦不住。改法：周编号按 NZ 本地日期算；真闸改成花钱**之前**查 `flywheel_metrics` 里该客户最近一条 SEO 记录，不足 156 小时直接跳过，查不出来一律往「不花钱」倒。
+- **派单函数每周会写 3 行假运行记录**：`startCronRun` 放在 `step` 外，而 Inngest 每遇一个 step 就把函数体从头重放（step 结果走缓存、step 外的代码每遍都真跑），两个 step → 插 3 行、其中 2 行永远停在「在跑」。`run-logger` 新增 `startCronRunId()` + `cronRunHandle()`，开记录和收记录各装进独立 step。
+- 回执改说实话：`provider_calls` → `provider_calls_max`（是上限不是账单，被闸拦下时报 0）；`status` 增加 `no_data` 和 `skipped` 两态 —— 底层两层 `allSettled` 意味着 DataForSEO 全挂也返回 0 值不抛异常，原来的 `failed` 分支现实中几乎走不到。
+
+**对账测试补的洞**：原来 26 条只查 `render.yaml ↔ 清单` 两个方向，查不出「代码里写着要定时跑、谁都没排班」这一类。新增「调用处 → 清单」方向，判据是**谁调了 `startCronRun`**而不是「哪个目录下的 `route.ts`」—— 按位置扫的话，把调用挪进 `src/lib/inngest/functions/` 就能让一个任务静默消失（改这条时当场自己踩到）。用 TypeScript AST 而不是正则（`email-reply-digest` 写的是 `startCronRun(JOB_NAME)`，正则版会静默漏掉），并认得 import 别名和命名空间调用。魏征实测出三个「改了也全绿」的空洞（花费常量跟自己比、假 supabase 把 `eq` 入参丢了、别名/命名空间调用），全部堵上并逐条变异复验。
+
+**验证**：916 passed / 3 skipped（62 个测试文件）· `npm run build` 通过 · 变异检验 15 次逐条确认新测试会红。
+
+**⚠️ 上线后必须人工一步**：去 Inngest 后台（Production）对 `https://app.magicengine.com.au/api/inngest` 手动 Sync 一次，新的两个函数才会被认（Render 不是 Vercel，没有自动同步）。没同步的表现是「安静地不跑」；健康检查会喊，但按宽限期算要 17.5 天才响，别指望它把关。
+
+---
+
+### 2026-09-06（接通 IMPACT 的 Tune 段 —— 从结果里学这一步从没跑过，PR [#1427](https://github.com/bigbigraydeng-maker/magic-engine/pull/1427)）
+
+**上线内容**：给 `/api/cron/memory-extractor` 补上调度登记（`render.yaml` + `src/lib/cron/registry.ts` 双写，`30 6 * * *`，密钥走 `fromGroup: me-shared-cron-secret`）。抽取逻辑一行没动。
+
+**为什么是个事故而不是小遗漏**：这条路由、`src/lib/memory/extractor.ts`（717 行）和配套测试从 Phase 23.C 起就在仓库里，但 `render.yaml` 和监控清单**两边都没有登记过它**，`cron_run_logs` 里一条运行记录都没有 —— 从上线起就没跑过。生产实测（2026-09-06）：Check 段近 30 天产出 285 条 `flywheel_outcomes`（confirmed 117 / reversed 146 / inconclusive 22），而 `client_proven_patterns` 14 条 + `client_failed_experiments` 7 条停在 **2026-07-15**，53 天零增长。按 [`ME_PRODUCT_DEFINITION.md`](../strategy/ME_PRODUCT_DEFINITION.md) §4「Tune 没有改变后续决策，就不能称为学习闭环」，IMPACT 最后一段整段没通电，而「没通电」和「一切正常」在监控里长得一模一样 —— 正是 `CRON_REGISTRY` 那张表要解决的病。
+
+**排班位置**按链路先后定：`attribution`(`0 */6`) 算出 outcome → 本任务(`30 6`) 抽成学习 → `agent-learning-rollup`(`0 7` 周一) 汇总。06:30 UTC 在 attribution 06:00 那轮之后半小时（其 `maxDuration` 仅 300s），又在周一汇总之前。
+
+**首跑预演**（按 `keepOneCasePerAction` 真实折叠规则在生产库上算过，非估计）：77 个动作 → `client_proven_patterns`，40 个 → `client_failed_experiments`，涉及 4 个客户，另有 758 条 `client_decision_history.outcome_verdict` 待回填；学习总量 21 → ~117 条。
+
+**排除过一个疑似坑**：原始 outcome 里 `seo.gsc.avg_position` 有 65 个动作判 reversed，其中 42 个实为「曝光 +32.7% 同时平均排名 −21.6%」（页面吃到更多长尾词把平均位置拉低，是成功不是失败）。抽取器**已处理** —— `extractor.ts:148` 调 `keepOneCasePerAction`，`avg_position` 在代表指标序里故意排最后（PR [#862](https://github.com/bigbigraydeng-maker/magic-engine/pull/862) 第 30 轮 Codex 提的）。不需要改。
+
+**顺带扫出、已单独立项**：同类「代码里调了 `startCronRun` 但两边都没登记」的孤儿还有 5 个 —— `flywheel-seo-weekly` / `mailbox-sync` 从没跑过，`messenger-brief-hourly` 跑了 483 次后 2026-08-23 停，`baseline-domains-monthly`（37 次）/ `goals-expiry-check`（9 次，活着）。现有对账只查「render.yaml ↔ 清单」两个方向，查不出这一类，需补「路由 → 清单」方向。
+
+**验证**：`npx vitest run src/lib/memory src/lib/cron` 11 files / 187 passed · `npm run build` 通过 · 3 处变异探针确认对账测试真会红（排班漂移 / 日志名写错 / 清单漏登记）。
+
+**Inngest 豁免声明**（铁律 3 要求：暂不上 Inngest 的必须写明原因 / 恢复条件 / 替代 receipt）：
+
+- **原因**：`memory-extractor` 本身是纯库读库写（读 `flywheel_outcomes` → 写两张 memory 表 + 回填 `client_decision_history`），**不调任何外部服务、无外部副作用、单次同步跑完**，落在铁律 3 自己写的豁免范围内。为单个无副作用的 cron 套工作流层属于「为了用 Inngest 而复杂化」，规矩明确禁止。
+- **但链路耦合是隐式的**：`attribution`(`0 */6`) → 本任务(`30 6`) → `agent-learning-rollup`(`0 7` 周一) 目前**只靠时钟先后串联**，没有事件也没有回执。铁律 3 点名「Outcome 回写」属于应上 Inngest 的场景，所以这是一笔明确的技术债，不是「不适用」。
+- **当前风险量化**：`attribution-cron` 近 30 天 118 次，最长 353s / 平均 236s / **0 次失败**；本任务留 30 分钟间隔，约 5 倍余量。今天不构成实际风险。
+- **替代 receipt 在哪**：`cron_run_logs`（路由已调 `startCronRun('memory-extractor')`，写 processed / completed / failed），配合本次同步登记的 `CRON_REGISTRY` —— `lib/cron/health.ts` 会把「从来没跑过」(`neverRan`) 和「该跑没跑」(`overdue`) 单独报出来，跟只报「跑了但失败」的日报是两条线。
+- **恢复条件（满足任一就把这条链事件化）**：① `attribution-cron` 出现单次超过 25 分钟或连续失败；② 抽取器读到的 outcome 明显滞后于 attribution 那一轮（学到残缺数据）；③ 这条链上再接第四个环节。届时改为 `attribution` 完成后发 `flywheel.outcomes.computed`（带 run id / client 数 / outcome 数），由 Inngest 接力触发抽取与汇总。
+
+**风险级 B**。**平台层级门**：判定 L1 平台基础设施 · Memory / Verification，但**不是新增能力**（能力早在，缺的是调度），归位既有 L1，不占候选名额。
+
+**Reuse Statement**：复用 `CRON_REGISTRY` 对账机制、`run-logger` 的 `startCronRun`、`me-shared-cron-secret` 环境变量组、既有 `memory-extractor` 路由与 `lib/memory/extractor.ts` 全部逻辑 —— **本次没有新增任何代码模块**。platform-shared：两条调度登记。抽取器写的是 client-private memory（两张表均带 `client_id`），未碰 industry / global 泛化边界。industry-specific / client-specific：无。落点与 tier-gate 决策时分类一致。
+
 ### 2026-09-05（清掉自动测试与类型检查的红色基线，顺带挖出并修掉 3 个真 bug，PR [#1405](https://github.com/bigbigraydeng-maker/magic-engine/pull/1405)）
 
 **上线内容**：全仓两条质量基线长期是红的，回归藏在里面没人看得见 —— `npx vitest run` 37 个文件红 / 117 条失败，`npx tsc --noEmit` 226 个错。本次清到 **10 条失败 / 7 个类型错误**，且剩余项全部各有归属（7 条等 PR [#1328](https://github.com/bigbigraydeng-maker/magic-engine/pull/1328) 补 `logistics_3pl` 行业分类；3 条是内核文件行数超限，已登记 [#1402](https://github.com/bigbigraydeng-maker/magic-engine/issues/1402)；7 个类型错误分属 PR [#1231](https://github.com/bigbigraydeng-maker/magic-engine/pull/1231) / [#1211](https://github.com/bigbigraydeng-maker/magic-engine/pull/1211) 正在改的文件，为避冲突未动）。
