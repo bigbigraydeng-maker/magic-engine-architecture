@@ -302,7 +302,7 @@ export default function ConversionsPage() {
     setAudienceLoading(true)
     const base = `/api/admin/conversions/audience-export?client_id=${encodeURIComponent(clientId)}&format=stats`
     const next: Record<string, Record<string, number | string>> = {}
-    for (const source of ['fbleads', 'newsletter', 'combined']) {
+    for (const source of ['fbleads']) {
       try {
         const res = await fetch(`${base}&source=${source}`)
         const body = await res.json()
@@ -353,24 +353,20 @@ export default function ConversionsPage() {
       <div style={{ border: '1px solid #d4c4a6', background: '#faf6ec', borderRadius: 8, padding: 14, marginBottom: 16 }}>
         <div style={{ fontWeight: 600, fontSize: 15 }}>Meta 客户名单（做 lookalike 用）</div>
         <div style={{ fontSize: 13, color: '#6a5f4a', margin: '4px 0 10px' }}>
-          都只含<strong>终端客户</strong>（旅行社同行、员工、拒联的自动排除）。三份任选，看够不够 100 人再下载。
+          只含<strong>终端客户</strong>（旅行社同行、员工、拒联的自动排除）。看够不够 100 人再下载。
         </div>
         <button onClick={() => void checkAudience()} disabled={!clientId || audienceLoading} style={btn()}>
-          {audienceLoading ? '统计中…（订阅名单要拉 Mailchimp，稍等）' : '① 先看人数'}
+          {audienceLoading ? '统计中…' : '① 先看人数'}
         </button>
 
-        {(['fbleads', 'newsletter', 'combined'] as const).map((source) => {
+        {(['fbleads'] as const).map((source) => {
           const st = aud[source]
           if (!st) return null
-          const label =
-            source === 'fbleads' ? 'FB 广告来的' : source === 'newsletter' ? 'Newsletter 订阅' : '合并去重（推荐）'
-          const name =
-            source === 'fbleads' ? 'fbleads' : source === 'newsletter' ? 'newsletter' : 'combined'
           const today = new Date().toISOString().slice(0, 10)
           return (
             <div key={source} style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #e8ddc9', fontSize: 13 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <strong style={{ minWidth: 130 }}>{label}</strong>
+                <strong style={{ minWidth: 130 }}>FB 广告来的</strong>
                 {st.error ? (
                   <span style={{ color: '#c00' }}>出错：{String(st.note)}</span>
                 ) : (
@@ -380,19 +376,12 @@ export default function ConversionsPage() {
                       href={`/api/admin/conversions/audience-export?client_id=${encodeURIComponent(clientId)}&format=csv&source=${source}`}
                       style={{ ...btn('#16a34a', '#fff'), textDecoration: 'none', padding: '4px 10px' }}
                     >
-                      下载（命名 CTS · LIST · {name} · {today.replace(/-/g, '')}）
+                      下载（命名 CTS · LIST · fbleads · {today.replace(/-/g, '')}）
                     </a>
                   </>
                 )}
               </div>
-              {!st.error && source === 'combined' && (
-                <div style={{ color: '#8a7d64', marginTop: 4 }}>
-                  广告 {st.fbleads_kept} + 订阅 {st.newsletter_kept}，去掉重复 {st.overlap_removed} → {st.kept} 独立人。{st.note}
-                </div>
-              )}
-              {!st.error && source !== 'combined' && (
-                <div style={{ color: '#8a7d64', marginTop: 4 }}>{st.note}</div>
-              )}
+              {!st.error && <div style={{ color: '#8a7d64', marginTop: 4 }}>{st.note}</div>}
             </div>
           )
         })}

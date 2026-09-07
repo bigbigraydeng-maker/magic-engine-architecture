@@ -149,11 +149,12 @@ export class SeoContentAdapter implements FlywheelAdapter {
 
     if (toInsert.length === 0) return []
 
-    // Write metrics to DB; log on failure but don't throw — partial data is
-    // better than no data.
+    // A returned row is a claim that it was persisted. Do not swallow a write
+    // failure: callers must record a failed/no-data run rather than reporting
+    // a successful snapshot that is absent from flywheel_metrics.
     const { error } = await supabaseAdmin.from('flywheel_metrics').insert(toInsert)
     if (error) {
-      console.error('[SeoContentAdapter] pullMetrics insert error:', error.message)
+      throw new Error(`SeoContentAdapter.pullMetrics metrics insert error: ${error.message}`)
     }
 
     return returned
