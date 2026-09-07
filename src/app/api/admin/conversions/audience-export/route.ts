@@ -76,19 +76,6 @@ async function handleGet(request: Request) {
   if (!clientId || !UUID_RE.test(clientId)) {
     return NextResponse.json({ error: 'client_id 必填且必须是 uuid' }, { status: 400 })
   }
-
-  // newsletter/combined 两个来源 2026-09-07 已移除。老书签/脚本若还带这两个值请求，
-  // 必须明确报错，绝不能静默返回 fbleads —— 否则调用方会把一份更小、语义不同的名单
-  // 当成原来的 newsletter/合并名单上传，污染受众和实验（Codex #1458 P2）。
-  const source = searchParams.get('source')
-  if (source !== null && source.toLowerCase() !== 'fbleads') {
-    return NextResponse.json(
-      {
-        error: `来源 '${source}' 已下线。newsletter/合并名单入口已移除，现在名单改由「导出 CSV → Meta 后台上传」做成。只支持 source=fbleads（默认）。`,
-      },
-      { status: 410 },
-    )
-  }
   const denied = assertClientScope(admin.user.email ?? null, clientId)
   if (denied) return denied
 
@@ -192,10 +179,9 @@ async function handleGet(request: Request) {
   const phoneCountry = clientRow?.default_phone_country ?? null
   const fbleads = buildMetaAudienceA(audienceContacts, phoneCountry)
 
-  // 只导「广告来源」名单（fbleads）。非 fbleads 的 source 已在上面拦截报错。
+  // 只导「广告来源」名单（fbleads）。非 fbleads 的 source 在上面已 410 拒绝，走到这里必是 fbleads。
   // newsletter/combined（拉 Mailchimp 合并）2026-09-07 移除：prod 网页请求访问 Mailchimp
   // 会 502（源日志拿不到、未确诊），且实际名单已改由「导出 CSV → Meta 后台上传」这条路做成。
-  // 非 fbleads 的 source 在上面已经 410 拒绝，走到这里 source 一定是 fbleads。
 
   // ── 只看数字（不含 PII）：让人先看池子够不够 100 门槛 ──────────────────
   if (format !== 'csv') {
