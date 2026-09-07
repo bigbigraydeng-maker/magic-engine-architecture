@@ -34,6 +34,38 @@ import {
  */
 const INFORMATIONAL_KINDS: ManualItemKind[] = ['prescription_updated', 'diagnostic_findings']
 
+/**
+ * 这些条目的 how 字段自己都写着「回我一句我去改」/「回我一句我去查」——
+ * 本质是**我们代码 / 基础设施的欠账**，不是 PM 该动手的活，之前塞进
+ * 「🙋 需要你动手」栏是把 dev 的活假装成 PM 的活（每天骚扰 PM 一遍，
+ * PM 也没法真的做，只能转给 Ray/dev）。挪进单独一栏「🛠 系统欠账」：
+ *
+ *   - 不进 `totalItems`（不算 PM 的活）
+ *   - 单独渲染成一节，标题写清「不影响你 · Ray 转给 dev 就好」
+ *   - 保留可见性 —— 铁律 3 下半「发现不许死在日志里」照样满足，
+ *     只是这栏不再算作要 PM 处理的待办
+ *
+ * 后续正确形态是自动开 GitHub issue / spawn dev-task，但那需要另立项
+ * （所有权分配 / 去重 / 关闭跟踪）；本次先做管道分流，别让"应该由 dev
+ * 修的 bug"每天早上都到 PM 的动手栏里刷屏。
+ */
+const DEV_OWNED_KINDS: ManualItemKind[] = [
+  // auto-run cron 三次都失败停手 → how 自己写「回我一句「查一下这条」我去看」
+  'auto_run_stuck',
+  // 归因黑洞三个子情况（cross_flywheel / scope_mismatch / scope_skip）→
+  // how 全是「这条不用你动手 —— 是我们这边把指标配到了错的战线... 回我一句我去改」
+  'action_unattributable',
+  // 归因 audit 查询挂了 → how 写「这条不用你动手 —— 是我们这边查询挂了」
+  'attribution_audit_failed',
+  // 读客户表失败 → how 写「这条不用你动手 —— 是我们这边读客户表失败了」
+  'client_list_unreadable',
+  // cron 接口没接 startCronRun → how 写「这条不用你动手 —— 是我们代码里的欠账」
+  // 当前 registry 里全部 logsRuns=true，这条实际为空；新增 CI 守卫
+  // （cron-registry-logs-runs.test.ts）阻止未来回归。留在 DEV_OWNED_KINDS 作为
+  // 双保险：万一 CI 漏了，运行时也不再往 PM 邮件的「需要你动手」里塞。
+  'cron_blind',
+]
+
 /** FDE focus clients: CTS + Oztop. */
 export const FOCUS_CLIENT_IDS = [
   'c0000000-0000-0000-0000-000000000000',
@@ -333,8 +365,11 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
   //    往里塞不用动手的通知，等于每周每个客户往里加一行噪音；栏目一被稀释，
   //    真正等他动手的那条（比如"出片余额用完了"）会被一起划过去。
   //    所以纯知会型的单独一栏，且不计进"要你办的事"。
-  const actionItems = manualItems.filter((m) => !INFORMATIONAL_KINDS.includes(m.kind))
+  const actionItems = manualItems.filter(
+    (m) => !INFORMATIONAL_KINDS.includes(m.kind) && !DEV_OWNED_KINDS.includes(m.kind),
+  )
   const infoItems = manualItems.filter((m) => INFORMATIONAL_KINDS.includes(m.kind))
+  const devOwnedItems = manualItems.filter((m) => DEV_OWNED_KINDS.includes(m.kind))
 
   if (actionItems.length > 0) {
     const rows = actionItems.map((m) => `
@@ -355,6 +390,18 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
     // 就是让 PM 知道客户的方向被自动改成了什么 —— 他不用干活，但必须过目。
     // 「看一眼就行」两件事一起说清楚。
     sections.push(sectionCard('📣', '这周系统替你做了什么（看一眼就行）', rows))
+  }
+
+  if (devOwnedItems.length > 0) {
+    const rows = devOwnedItems.map((m) => `
+      <div style="margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9">
+        <p style="margin:0 0 2px;font-size:14px;color:#0f172a"><b>${esc(m.client_name)}</b>：${esc(m.what)}</p>
+        <p style="margin:0;font-size:13px;color:#475569">→ ${esc(m.how)}${m.href ? ` · <a href="${esc(m.href)}" style="color:#0891b2">去看看</a>` : ''}</p>
+      </div>`)
+    // 🛠 这栏是**我们代码 / infra 欠账**的清单，转给 Ray/dev 就好 —— 不算你要办的事。
+    //    见 DEV_OWNED_KINDS 头注：这几个 kind 的 how 字段自己都写「回我一句我去改」，
+    //    本就不是 PM 能动手解决的，塞到「🙋 需要你动手」栏是把 dev 的活假装成 PM 的活。
+    sections.push(sectionCard('🛠', '系统欠账（不影响你 · Ray 转给 dev 就好）', rows))
   }
 
   const totalDrafts = counts.draftsByClient.reduce((s, c) => s + c.drafts, 0)

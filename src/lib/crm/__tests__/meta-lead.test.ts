@@ -13,7 +13,7 @@
  *   7. `mailchimp_synced_at` 只在 subscribed / 明确 already_member 时才写
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: { from: vi.fn() },
@@ -31,6 +31,7 @@ vi.mock('@/lib/mailchimp/client', async () => {
 
 import { supabaseAdmin } from '@/lib/supabase'
 import { subscribeMember } from '@/lib/mailchimp/client'
+import { DEFAULT_META_LEAD_SOURCE_TAG } from '@/lib/mailchimp/audience-config'
 import { ingestMetaLead, parseLeadAnswers } from '../meta-lead'
 import type { MetaLead } from '@/lib/meta/lead-forms'
 
@@ -69,6 +70,11 @@ let providerCallState: Array<{ upserts: number; updates: number }>
 
 interface MockDbOptions {
   identityHits?: { contact_id: string; kind: string; value: string }[]
+  /**
+   * 这个客户在 `leads_config.meta_leads.source_tag` 里配的来源标签名。
+   * 不传 = 没配，代码该落到平台默认值上。
+   */
+  sourceTag?: string | null
   /** ad_creative_links 里这条广告对应的片子；null = 这条广告不是 ME 建的。 */
   creativeLinkRow?: { creative_ref: string } | null
   /**
@@ -118,6 +124,7 @@ interface MockDbOptions {
 function mockDb(opts: MockDbOptions = {}) {
   const {
     identityHits = [],
+    sourceTag = null,
     creativeLinkRow = null,
     audienceId = null,
     dedicatedColumn = 'absent',
@@ -187,10 +194,11 @@ function mockDb(opts: MockDbOptions = {}) {
               if (cols.includes('leads_config')) {
                 // 专列 present 时故意在 leads_config 里留一个**不一样**的旧值：
                 // 真库上这两处可以同时有值，代码必须只认专列。
-                row.leads_config =
-                  dedicatedColumn === 'present'
-                    ? { mailchimp_audience_id: 'stale-leads-config-value' }
-                    : { mailchimp_audience_id: audienceId }
+                row.leads_config = {
+                  mailchimp_audience_id:
+                    dedicatedColumn === 'present' ? 'stale-leads-config-value' : audienceId,
+                  ...(sourceTag ? { meta_leads: { source_tag: sourceTag } } : {}),
+                }
               }
               if (wantsDedicated) row.mailchimp_audience_id = audienceId
               return Promise.resolve({ data: row, error: null })
@@ -627,6 +635,31 @@ const consented = () =>
   })
 
 describe('ingestMetaLead → Mailchimp 出口', () => {
+  // 「人已在名单里 → 补打来源标签」那一刀走的是真 `fetch`（`applyMemberTags`）。
+  // 不接管就会在跑测试时真的打 Mailchimp —— 慢、不稳，而且拿到的
+  // `failed:network` 会把「补打成功」的用例伪装成通过。
+  let tagCalls: { url: string; body: unknown }[] = []
+  let tagStatus = 204
+  const realFetch = globalThis.fetch
+
+  beforeEach(() => {
+    tagCalls = []
+    tagStatus = 204
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      tagCalls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null })
+      // GET /members/{hash} —— 查这个人现在有哪些标签
+      if (!init?.method || init.method === 'GET') {
+        return new Response(JSON.stringify({ status: 'subscribed', tags: [] }), { status: 200 })
+      }
+      // POST /members/{hash}/tags —— 真正写标签
+      return new Response(null, { status: tagStatus })
+    }) as unknown as typeof fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
   it('R1 valid + consented + audience 已配 → 触发 subscribeMember，写 mailchimp_synced_at', async () => {
     mockDb({ audienceId: 'dda97b7e61' })
     subscribeMock.mockResolvedValueOnce({ status: 'subscribed' })
@@ -679,8 +712,81 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
 
     expect(subscribeMock).toHaveBeenCalledTimes(1)
     // 只调用了一次 —— 不会为 already_member 再 PATCH 一次去重新订阅
-    expect(res.mailchimp).toEqual({ status: 'already_member' })
+    expect(res.mailchimp).toEqual({ status: 'already_member', tagRepair: 'applied' })
     expect(contactUpdates).toHaveLength(1)
+  })
+
+  it('R2b Member Exists → 来源标签**真的**补打上去（这条链路整月漏掉的就是它）', async () => {
+    // 2026-09-06 生产实测：CTS 每小时 10 条全 already_member，跑了一个月，
+    // 来源标签在他们名单里从来没出现过 —— `POST /members` 对已存在的人整个
+    // 不生效，标签一个字都没写进去。这条用例钉的就是那一刀。
+    mockDb({ audienceId: 'dda97b7e61', sourceTag: 'fb_lead' })
+    subscribeMock.mockResolvedValueOnce({ status: 'already_member' })
+
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: consented() })
+
+    expect(res.mailchimp).toEqual({ status: 'already_member', tagRepair: 'applied' })
+    const write = tagCalls.find((c) => c.url.endsWith('/tags'))
+    expect(write).toBeDefined()
+    expect(write?.body).toEqual({ tags: [{ name: 'fb_lead', status: 'active' }] })
+  })
+
+  it('R2c 补打标签失败 → 不当成一切正常，原因如实带回给上游', async () => {
+    // 会员关系是真的（人确实在名单里），但归因证据没落地。两件事必须分开报，
+    // 否则又变成「看起来一切正常」。
+    mockDb({ audienceId: 'dda97b7e61', sourceTag: 'fb_lead' })
+    subscribeMock.mockResolvedValueOnce({ status: 'already_member' })
+    tagStatus = 429
+
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: consented() })
+
+    expect(res.mailchimp).toEqual({ status: 'already_member', tagRepair: 'failed:http_429' })
+  })
+
+  it('R2d 客户没配标签名 → 用平台默认值，不是不打', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    subscribeMock.mockResolvedValueOnce({ status: 'already_member' })
+
+    await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: consented() })
+
+    const write = tagCalls.find((c) => c.url.endsWith('/tags'))
+    expect(write?.body).toEqual({ tags: [{ name: DEFAULT_META_LEAD_SOURCE_TAG, status: 'active' }] })
+  })
+
+  it('标签名配置读失败 → 本条不发，不拿默认值糊过去', async () => {
+    // 「读不到」和「客户就是要默认」是两件事。拿默认值糊过去 = 用一个可能是错的
+    // 标签把广告归因证据打歪，而且没有任何人会发现 —— 这条链路刚栽过同款跟头。
+    // 专列 present 让 audience 那次读走专列成功，把失败精确隔离在标签这次读上。
+    mockDb({
+      audienceId: 'dda97b7e61',
+      dedicatedColumn: 'present',
+      leadsConfigReadError: 'connection reset',
+    })
+
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: consented() })
+
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'source_tag_read_failed' })
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(tagCalls).toHaveLength(0)
+  })
+
+  it('新进名单的人不走补打那一刀 —— 标签已经在建会员那次请求里带上了', async () => {
+    mockDb({ audienceId: 'dda97b7e61', sourceTag: 'fb_lead' })
+    subscribeMock.mockResolvedValueOnce({ status: 'subscribed' })
+
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: consented() })
+
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+    expect(tagCalls).toHaveLength(0)
+  })
+
+  it('标签名从客户配置读，不是写死的 —— 换个客户就该换个名字', async () => {
+    mockDb({ audienceId: 'dda97b7e61', sourceTag: 'oztop_showroom_lead' })
+    subscribeMock.mockResolvedValueOnce({ status: 'subscribed' })
+
+    await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: consented() })
+
+    expect(subscribeMock.mock.calls[0][0]).toMatchObject({ tag: 'oztop_showroom_lead' })
   })
 
   it('R3 provider 5xx → 主管道照常写入，synced_at 不写，触点里如实留 failed', async () => {
