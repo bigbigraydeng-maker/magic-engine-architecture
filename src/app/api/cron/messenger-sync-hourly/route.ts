@@ -6,6 +6,12 @@ import { syncMailbox, type MailboxTarget } from '@/lib/microsoft/mail-ingest'
 import { MICROSOFT_MAIL_PROVIDER } from '@/lib/microsoft/mail-oauth'
 import { CONNECTION_STATUS } from '@/lib/platform-oauth/vocabulary'
 import { readDomainRules } from '@/lib/crm/contact-kind'
+import { sendInngestEvent } from '@/lib/workflows/inngest-event'
+import {
+  MESSENGER_SYNC_COMPLETED_EVENT,
+  syncCompletedEventId,
+  type MessengerSyncCompletedData,
+} from '@/lib/messenger/sync-completed-event'
 
 /**
  * GET /api/cron/messenger-sync-hourly
@@ -28,6 +34,20 @@ import { readDomainRules } from '@/lib/crm/contact-kind'
  *
  * 邮箱失败不影响私信 —— 它跑在私信之后，且各自 catch。
  *
+ * ## 跑完之后谁接着干（2026-09-07 改）
+ *
+ * 跑到最后一行会发一张 `me/messenger.sync.completed` 条子，Inngest 那边的
+ * `cloud-messenger-brief-after-sync` 收到就去写客户需求卡。
+ *
+ * 🔴 **原来是 `render.yaml` 里 `curl 同步 && curl 写卡`，那个 `&&` 守错了信号** ——
+ *    它守的是「网关有没有在超时前把响应给 curl」，不是「同步有没有跑完」。
+ *    本路由 2026-08-17 起每轮约 140 秒、网关约 125 秒掐断返 524，于是写卡那条
+ *    **一次都没执行**，销售的需求卡停更 14 天。判据换成这张条子之后，响应有没有
+ *    超时跟写不写卡完全无关。整段来龙去脉见 `@/lib/messenger/sync-completed-event`。
+ *
+ * 🔴 **发条子失败不能让本轮判失败**：私信已经跑完并且入库了。发不出去只丢一轮卡，
+ *    下一轮会再发；把整轮判失败会让人以为私信也没跑（正是这次事故的形态）。
+ *
  * Auth: Bearer ${CRON_SECRET}
  */
 
@@ -47,6 +67,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  // 🔴 **必须留着裸的 `startCronRun('messenger-sync-hourly')` 字面量。**
+  //    CRON_REGISTRY 的对账测试是用 AST 找 `startCronRun(...)` 的入参来认这个任务的；
+  //    改成 `startCronRunId` 之类的别名，扫描器当场认不出来 —— 这条任务会从监控清单里
+  //    静默消失，而「不在监控范围」和「一切正常」在告警里长得一模一样。
   const run = await startCronRun('messenger-sync-hourly')
 
   const { data: clients, error } = await supabaseAdmin
@@ -102,6 +126,17 @@ export async function GET(req: NextRequest) {
     },
   })
 
+  // ── 接力：告诉写卡那一步「同步跑完了」（理由见文件头）──────────────────
+  const handoff = await dispatchBriefHandoff({
+    clients: results.length,
+    conversations,
+    messages,
+    new_contacts: newContacts,
+    failed,
+    mailbox_error: mailError,
+    completed_at: new Date().toISOString(),
+  })
+
   return NextResponse.json({
     ok: true,
     clients: results.length,
@@ -112,7 +147,31 @@ export async function GET(req: NextRequest) {
     backfillRemaining,
     results,
     mailbox: { mailboxes: mail.length, error: mailError, results: mail },
+    briefHandoff: handoff,
   })
+}
+
+/**
+ * 把「同步跑完了」这张条子发出去。**永不抛异常。**
+ *
+ * 发不出去只丢一轮卡（下一轮会再发），而把整轮判失败会让人以为私信也没跑 ——
+ * 那正是这次事故的形态：一个下游步骤的问题被误报成上游没跑。
+ */
+async function dispatchBriefHandoff(
+  data: MessengerSyncCompletedData,
+): Promise<{ sent: boolean; error: string | null }> {
+  try {
+    await sendInngestEvent({
+      id: syncCompletedEventId(new Date(data.completed_at)),
+      name: MESSENGER_SYNC_COMPLETED_EVENT,
+      data,
+    })
+    return { sent: true, error: null }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[messenger-sync-hourly] 写卡接力条子没发出去（私信已入库）:', message)
+    return { sent: false, error: message }
+  }
 }
 
 /**
