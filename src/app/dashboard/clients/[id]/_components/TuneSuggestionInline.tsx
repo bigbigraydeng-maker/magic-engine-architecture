@@ -3,7 +3,9 @@
 /**
  * Gate B 步骤 3 —— published post 卡片下方那一行 Tune 建议。
  *
- * suggestion === null   ：这条 action 还没有 T+72 receipt（未到点 / 未落 unmeasurable 行）
+ * fetchFailed === true    ：后台读失败（500 / 403 / 网络断），必须显式告知，
+ *                            不能与「尚未到点」共用同一句话（PITFALLS「读失败别显示空输入框」）。
+ * suggestion === null     ：这条 action 还没有 T+72 receipt（未到点 / 未落 unmeasurable 行）
  * decision === 'INCONCLUSIVE'：有 receipt 但 evaluator 拒绝下结论
  * 其它四种                ：REPEAT / ITERATE / STOP + 一句人话依据
  *
@@ -14,6 +16,8 @@ import type { TuneRecommendation } from '@/lib/flywheel/tune/types'
 
 interface Props {
   suggestion: TuneRecommendation | null
+  /** true 时忽略 suggestion，一律显示「暂时读不到」——防止读失败被误判成尚未到点。 */
+  fetchFailed?: boolean
 }
 
 const DECISION_LABEL: Record<string, string> = {
@@ -43,7 +47,15 @@ function formatCaveats(caveats: string[]): string {
   return caveats.map((c) => CAVEAT_LABEL[c] ?? c).join(' · ')
 }
 
-export function TuneSuggestionInline({ suggestion }: Props) {
+export function TuneSuggestionInline({ suggestion, fetchFailed = false }: Props) {
+  if (fetchFailed) {
+    return (
+      <p className="mt-1 text-[10px] italic text-[#C2453A]/70">
+        效果建议暂时读不到（后台报错），稍后刷新再看。
+      </p>
+    )
+  }
+
   if (suggestion === null) {
     return (
       <p className="mt-1 text-[10px] italic text-me-charcoal/40">

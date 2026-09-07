@@ -93,7 +93,9 @@ function toMeasurement(actionId: string, row: CampaignReceiptRow): PostMeasureme
 }
 
 function normalizeStatus(raw: string): PostMeasurementStatus {
+  // 与 social-post-cohort.normalizeStatus 同源：新 status 出现时留声，防止静默丢数据。
   if (raw === 'ok' || raw === 'partial' || raw === 'unmeasurable') return raw
+  console.warn(`[campaign-tune-suggestions] unknown receipt status '${raw}' — downgrading to unmeasurable`)
   return 'unmeasurable'
 }
 

@@ -67,4 +67,18 @@ describe('TuneSuggestionInline', () => {
     render(<TuneSuggestionInline suggestion={rec({ caveats: ['some_new_caveat'] })} />)
     expect(screen.getByText(/some_new_caveat/)).toBeTruthy()
   })
+
+  it('fetchFailed=true 时忽略 suggestion 显示「读不到」占位', () => {
+    // 即使传入完整 recommendation，读失败态优先 —— 防止 PITFALLS「读失败伪装成没到点」。
+    render(<TuneSuggestionInline suggestion={rec({ decision: 'REPEAT' })} fetchFailed />)
+    expect(screen.getByText(/暂时读不到/)).toBeTruthy()
+    expect(screen.queryByText(/值得再做一次/)).toBeNull()
+    expect(screen.queryByText(/等 T\+72/)).toBeNull()
+  })
+
+  it('fetchFailed=true 时 suggestion=null 也走「读不到」（不再走「等 T+72」）', () => {
+    render(<TuneSuggestionInline suggestion={null} fetchFailed />)
+    expect(screen.getByText(/暂时读不到/)).toBeTruthy()
+    expect(screen.queryByText(/等 T\+72/)).toBeNull()
+  })
 })

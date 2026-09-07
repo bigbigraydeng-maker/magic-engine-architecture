@@ -9,7 +9,7 @@
  *   - thresholds 传参传到 evaluator
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { evaluateCampaignPosts } from '../campaign-tune-suggestions'
 
 function receipt(actionId: string, likes: number, windowHours = 72) {
@@ -148,7 +148,8 @@ describe('evaluateCampaignPosts — 批量 fan-out', () => {
     expect(evaluateCampaignPosts({ actions: [], receipts: [] })).toEqual({})
   })
 
-  it('归一化：未知 status → unmeasurable → INCONCLUSIVE / unmeasurable_target', () => {
+  it('归一化：未知 status → unmeasurable → INCONCLUSIVE / unmeasurable_target + warn', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const suggestions = evaluateCampaignPosts({
       actions: [
         { id: 'a1', postId: 'p1' },
@@ -165,5 +166,7 @@ describe('evaluateCampaignPosts — 批量 fan-out', () => {
     })
     expect(suggestions['p1']?.decision).toBe('INCONCLUSIVE')
     expect(suggestions['p1']?.inconclusiveReason).toBe('unmeasurable_target')
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unknown receipt status 'weird'"))
+    warnSpy.mockRestore()
   })
 })

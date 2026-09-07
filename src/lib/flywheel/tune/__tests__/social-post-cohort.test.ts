@@ -7,7 +7,7 @@
  *   - 记录过滤链 —— 让「client_id 忘记加」这类漏网原地翻车。
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { loadPostCohort } from '../social-post-cohort'
 import type { PostMeasurement } from '../types'
 
@@ -309,7 +309,10 @@ describe('loadPostCohort — 越界不该被拉进来', () => {
 })
 
 describe('loadPostCohort — 归一化', () => {
-  it('未知 status → unmeasurable（fail-safe）', async () => {
+  it('未知 status → unmeasurable（fail-safe）+ console.warn 留声', async () => {
+    // 留声非常关键：DB 若加新 status（'timeout' / 'rate_limited'），静默降级
+    // 会让 partial 数据无声消失，PM 只见「数据还不够说话」。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { supabase } = makeFakeSupabase({
       actions:  [action(TARGET)],
       receipts: [receipt(TARGET, { status: 'weird-new-status' })],
@@ -318,6 +321,10 @@ describe('loadPostCohort — 归一化', () => {
       clientId: CLIENT, campaignId: CAMPAIGN, targetActionId: TARGET,
     })
     expect(result.target?.status).toBe('unmeasurable')
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("unknown receipt status 'weird-new-status'"),
+    )
+    warnSpy.mockRestore()
   })
 
   it('values 里非数字 / 非有限值被丢弃', async () => {

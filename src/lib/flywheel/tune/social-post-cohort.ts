@@ -151,7 +151,11 @@ function toMeasurement(row: ReceiptRow): PostMeasurement {
 function normalizeStatus(raw: string): PostMeasurementStatus {
   // DB check constraint 保证只有 ok / partial / unmeasurable 三态；未知值一律
   // 降级为 unmeasurable，evaluator 会挡在 Gate 2 上，绝不当作可用样本参与均值。
+  //
+  // 但降级必须留声：将来 DB 若加了新 status（'timeout' / 'rate_limited'），
+  // 静默降级会让整批 partial 数据无声消失，PM 只见「数据还不够说话」。
   if (raw === 'ok' || raw === 'partial' || raw === 'unmeasurable') return raw
+  console.warn(`[social-post-cohort] unknown receipt status '${raw}' — downgrading to unmeasurable`)
   return 'unmeasurable'
 }
 
