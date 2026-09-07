@@ -1,6 +1,7 @@
 # ME 旅游版 · 出发团库存 + 员工看板 + Agent 门户 —— 设计方案 v2
 
 **状态**：设计稿 v2（已吸收子牙 / 魏征 2 审）。**未建表、未写 migration、未实现任何代码。**
+**Codex round-2 复审新增未解决事项**：本方案与 `ME_PRODUCT_DEFINITION.md` §3.2/§3.3 的冻结产品边界存在冲突，见 §0.5 第 3 条 —— **PM 未就该条书面表态前，①②③不许进入 migration 实施。**
 **风险级**：A（数据库 schema / migration；④ 另触发鉴权 + 并发 + 资金记录）
 **上游需求单**：[`2026-09-08-cts-tour-inventory-and-agent-portal-spec.md`](./2026-09-08-cts-tour-inventory-and-agent-portal-spec.md)
 **Repository Fact Gate**：`git fetch origin` 已跑（2026-09-08），`origin/main` = `1ed91a314d836ad3d524a152255f4dd47f39e1f4`
@@ -50,9 +51,17 @@
 - 需要按客户变的只有：币种（AUD / NZD）、阶段档位名、定金比例、代理佣金率、内容数据源。**这些必须全部是配置或数据，不能是代码分支。**
 - **验收判据（写进 §6）**：新建一个虚构旅游客户，只插数据 + 改配置、**不改一行代码**，能跑通「建团 → 设容量 → 录报名 → 看板显示剩余」。做不到就说明有客户语义漏进了 shared runtime。
 
-### 0.5 PM 拍板项（2 条，本方案不替 PM 决定）
+### 0.5 PM 拍板项（3 条，本方案不替 PM 决定；第 3 条是 Codex round-2 复审新增的边界冲突，不解决不能进 §6）
 1. **ME 旅游版要不要做到「完整订位系统」这一步？** 记台账（本方案）和做订位系统（代理自助下单 + 座位实时扣减）是两个量级。②③ 是台账，④ 是订位系统的入口。
 2. **ME 要不要进代理佣金的资金链路？** 本方案 v1/v2 一律**只记账不动钱**（记佣金率、算应付额，实际付款线下走）。
+3. **本方案自建的四张表，撞上了 `ME_PRODUCT_DEFINITION.md` 的冻结产品边界，PM 必须显式表态**：
+   [`docs/strategy/ME_PRODUCT_DEFINITION.md`](../strategy/ME_PRODUCT_DEFINITION.md) §3.2「ME 不直接负责」明文把「旅游库存、正式报价、出票和预订后台」列为 ME 不自建的经营/交易系统，要求这些系统继续作为 Source of Truth、ME 只通过 Connector 读取必要事实；§3.3「最小保存原则」只允许保存**外部对象的稳定引用** / 必要营销上下文 / 授权快照与证据 / 动作与 Outcome，明令「不应因为『以后也许有用』而复制外部系统的完整…库存…订单数据」。
+   本方案①②的 `tour_products` / `tour_departures` / `tour_bookings` / `travel_agents` 四张表，是 ME 自己承载产品、容量、座位占用与订位单的**完整台账**——这正是 §3.2 排除的「预订后台」形状，不是「读取外部事实的引用」。PM 2026-09-08「这是旅游行业通用需求」这句话，定的是**层级归属**（L2 而不是 CTS 特例），**没有**显式修改这条产品边界，见 §0.1-§0.2 的判定范围本身就没有覆盖到这一条。
+   §2.2 已实地核对 chinatravel 仓（`tours.ts`）：那是内容站，没有座位 / 容量 / 订位数据，**当前不存在**一个已有的外部订位系统可以当 Connector 的源——这是本方案选择自建台账的真实原因，但这个技术现实不能替 PM 做「ME 要不要越过 §3.2 这条边界」的产品决定。
+   PM 必须二选一才能放行 §6 实施：
+   - **(a) 显式例外**：确认「CTS 目前没有独立的订位后台，ME 台账本身就是这次的 Source of Truth」，接受本方案作为 §3.2/§3.3 的一次显式例外，并把这句话连同范围（仅 CTS，还是旅游行业默认）记进 [`docs/DECISIONS.md`](../DECISIONS.md)；或
+   - **(b) 维持边界**：要求先接入/搭建一个外部订位系统作为 Source of Truth，本方案降级为读取该系统的 Connector（②③需按此方向重写，④结论不变）。
+   **在 PM 对这一条给出书面答案之前，①②③不得进入 migration 实施**；这条独立于第 1、2 条，即便 PM 已经回答了 1、2 也不构成对第 3 条的默认同意。
 
 ### 0.6 PM 定性为「行业通用」后，设计实际改了什么（不是措辞，是三处结构）
 
@@ -245,7 +254,9 @@ CREATE TABLE travel_agents (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  CONSTRAINT travel_agents_name_unique UNIQUE (client_id, name)
+  CONSTRAINT travel_agents_name_unique UNIQUE (client_id, name),
+  -- 复合外键的目标列：让 tour_bookings 能把 (client_id, agent_id) 一起校验，见 §3.2
+  CONSTRAINT travel_agents_client_id_unique UNIQUE (client_id, id)
 );
 
 ALTER TABLE travel_agents ENABLE ROW LEVEL SECURITY;
@@ -289,7 +300,9 @@ CREATE TABLE tour_bookings (
   seats           INTEGER NOT NULL CHECK (seats > 0),
 
   source_channel  TEXT NOT NULL CHECK (source_channel IN ('direct', 'agent')),
-  agent_id        UUID REFERENCES travel_agents(id) ON DELETE RESTRICT,
+  -- 不用单列 REFERENCES travel_agents(id)：那样客户 A 的 booking 能引用客户 B 的
+  -- 代理，B 的代理门户就能查到 A 的订位与联系人（2 审 blocker）。必须用下方复合外键。
+  agent_id        UUID,
   agent_name      TEXT,                       -- 显示快照，代理改名不影响历史单
 
   -- 🔴 单一状态机。占用公式必须从这里派生，不许在别处再写一份字面量。
@@ -306,7 +319,13 @@ CREATE TABLE tour_bookings (
 
   -- 代理单必须有代理身份（收紧 v1 那条形同虚设的 CHECK）
   CONSTRAINT tour_bookings_agent_requires_id
-    CHECK (source_channel <> 'agent' OR agent_id IS NOT NULL)
+    CHECK (source_channel <> 'agent' OR agent_id IS NOT NULL),
+
+  -- 复合外键：强制这条订位单的代理与自己同一个 client_id（2 审 blocker）。
+  -- agent_id 可空时（direct 单）复合外键按 Postgres 默认 MATCH SIMPLE 不校验，符合预期。
+  CONSTRAINT tour_bookings_agent_client_fk
+    FOREIGN KEY (client_id, agent_id)
+    REFERENCES travel_agents (client_id, id) ON DELETE RESTRICT
 );
 
 -- 同一个人在同一个团上只能有一条未取消的单（防员工录一次 + 代理再提一次的双倍占位）
@@ -318,7 +337,7 @@ CREATE INDEX tour_bookings_contact_idx          ON tour_bookings (contact_id);
 CREATE INDEX tour_bookings_agent_idx            ON tour_bookings (agent_id) WHERE agent_id IS NOT NULL;
 ```
 
-**跨表 client_id 一致性**：`client_id` 是冗余列，必须有触发器（或复合外键）保证它同时等于 `contacts.client_id` 与 `tour_departures.client_id`。否则在 ④ 里，代理传一个别的客户的 `departure_id` 就能跨客户写数据。参照 `contact_identities` 的做法。
+**跨表 client_id 一致性**：`client_id` 是冗余列。与 `travel_agents` 的一致性已经由上方 `tour_bookings_agent_client_fk` 复合外键在写入时静态钉死；但 `contacts.client_id` 和 `tour_departures.client_id` 没有对应的单列外键可以复合（`contact_id` / `departure_id` 各自已是单列 FK），这两条**必须另有触发器**保证 `client_id` 同时等于 `contacts.client_id` 与 `tour_departures.client_id`。否则在 ④ 里，代理传一个别的客户的 `departure_id` 就能跨客户写数据。参照 `contact_identities` 的做法。
 
 ### 3.3 钱去哪：**引用已上线的成交账本，不自己建一本**（2 审 blocker）
 
@@ -331,7 +350,9 @@ ME 里 2026-09-05 已上线 `me_sale_outcomes`（`20260905000002_conversion_writ
 **再建一本的后果**：同一笔定金被记两次 → 发给 Meta 两次 → **CAPI 没有删除端点，发错撤不回**。PM 2026-09-05 明令「定金算成交，坚决不能记成 2 笔」。
 
 **v2 的接法**：
-- 员工在看板点「已收定金」→ 往 `me_sale_outcomes` 插一行：`source_kind='api'`、`source_ref='tour_booking:<booking_id>:deposit'`（尾款用 `:balance`）。
+- **`tour_bookings` 本身不存定金/尾款金额或到账时间**（§3.2 已明确「钱不在这张表」），所以按钮点击这个动作本身**没有可落库的输入**——`booking.seats` / `departure` 都推不出「收了多少钱、什么时候到账」。「已收定金 / 已收尾款」不能是一次静默写库，必须先弹出一个小表单收两件事：**实收金额**（主单位，员工手输，默认带出 `tour_departures.price_amount_minor` 但可改，因为定金往往不等于全款）、**到账日期**（默认今天，可改，语义是 `me_sale_outcomes.occurred_at`——「钱到账 / 客人来问」的日期，不是行程出发日，`src/lib/conversions/intake.ts` 对未来时间和「超 7 天」各有一道校验）。
+- 该表单提交后**复用既有 intake 路径**：`src/lib/conversions/intake.ts` 的 `buildIntakeRow(input, ctx)`，而不是手写 insert。`input.outcomeKind` 传 `'purchase'`（定金）/`'balance'`（尾款）、`amount`/`currency` 用表单收的值、`occurredAt` 用表单收的到账日期、`customerEmail`/`customerPhone` 从 `booking.contact_id` 关联的 `contacts` 行读（`buildIntakeRow` 强制至少要有邮箱或电话之一，拿不到就在表单上提示「该联系人无邮箱/电话，此单收款证据留档但发不出去 Meta」而不是拦截整个流程——收款事实要留档，发送匹配是下游的事）、`sourceKind='api'`、`sourceRef='tour_booking:<booking_id>:deposit'`（尾款用 `:balance`）、`clientId`/`contactId` 取自 booking。
+- `buildIntakeRow` 校验失败（金额非法、币种不支持等）直接在表单里报错，不允许绕过校验直插库。
 - 幂等由已有的 `uq_me_sale_outcomes_source (client_id, source_kind, source_ref)` 保证——**连点两次不会双发**。
 - 后续人工审核 → CAPI 发送，**全走已有的那条链，一行新逻辑都不写**。
 - 「这单收了多少钱」在看板上通过 `source_ref` 反查显示。
@@ -366,12 +387,13 @@ remaining(departure) = seats_total - occupied     -- seats_total 为 NULL 时 re
 1. **方向单一**：booking / 收款 → contact.stage，**永不反向**。员工手改 stage 不回写 booking。
 2. **「最靠前」定义死**：取该联系人**在当前在售出发团上**、未取消的单里，映射阶段 `sort_order` **最大**的那一档（= 漏斗最深）。**历史团不参与**。
    > 这解决了 v1 的二义：老客人去年付清黄山团、今年新报圣诞团，不会被拉回前段当新线索群发。
-3. **UPDATE 必须带条件，且条件要验证「当前档位是谁写的」，不能只看档位取值落不落在允许集里**：只检查 `stage ∈ 允许被自动推进的档位集` 不够——员工把联系人手工设成 `contacted` / `quoted` 这类本身就在允许集里的档位后，下一次自动派生一样会命中并覆盖人工判断，因为看到的只是「档位取值可推进」，看不出「这个值是人刚填的」。`contact_stage_events.changed_by` 已经区分人工 / 系统变更，UPDATE 的 WHERE 必须把它纳入：只在 (a) `stage IS NULL`，或 (b) 该联系人最近一条 `contact_stage_events` 的 `changed_by = 'system'`（当前档位本身就是上一次自动派生写的，还没被人碰过）时才允许写。只要最近一条是人工改的（`changed_by <> 'system'`，不论改成了允许集里的哪个值），一律命中 0 行。
+3. **UPDATE 必须带条件，且条件要验证「当前档位是谁写的」，不能只看档位取值落不落在允许集里**：只检查 `stage ∈ 允许被自动推进的档位集` 不够——员工把联系人手工设成 `contacted` / `quoted` 这类本身就在允许集里的档位后，下一次自动派生一样会命中并覆盖人工判断，因为看到的只是「档位取值可推进」，看不出「这个值是人刚填的」。`contact_stage_events.changed_by` 已经区分人工 / 系统变更，UPDATE 的 WHERE 必须把它纳入。**不能只比较字面量 `'system'`**——实测现有两个自动写入者都不写这个字面量：`src/lib/crm/stage-infer.ts` 的 `STAGE_INFER_ACTOR = 'ai:conversation-read'`、`src/lib/crm/qualified-buyer.ts` 的 `AUTO_TAG_ACTOR = 'system:qualified-buyer'`。只在 (a) `stage IS NULL`，或 (b) 该联系人最近一条 `contact_stage_events` 的 `changed_by` **属于「系统 actor 集合」**（当前档位本身就是上一次自动派生写的，还没被人碰过）时才允许写。这个集合必须显式枚举并集中定义（例如 `src/lib/crm/system-actors.ts` 导出 `SYSTEM_STAGE_ACTORS = [STAGE_INFER_ACTOR, AUTO_TAG_ACTOR, TOUR_BOOKING_STAGE_ACTOR]`，本方案的派生器新增一个自己的 actor 常量、同样纳入集合），新增任何自动写入者都必须把自己的 actor 名字加进这个集合，否则要么把彼此的自动结果误判成人工改动（命中 0 行，见下方后果），要么反过来把系统写入误判成人工写入而允许被覆盖。只要最近一条的 `changed_by` 不在这个集合里（真正的人工改动，操作者邮箱），一律命中 0 行。
+   > **后果示例**：联系人若已被 `stage-infer` 或 `qualified-buyer-autotag` 自动打过阶段（`changed_by` 是 `ai:conversation-read` 或 `system:qualified-buyer`），若判断条件只认字面量 `'system'`，首次 booking/收款派生会把它误判成人工改动而命中 0 行；随后第 373 行「`stage-infer` 排除有 booking 的联系人」又会挡住 `stage-infer` 再处理它，真实的定金/尾款阶段永久卡住不更新。
 4. **取消的收尾必须显式，回退阶位必须来自客户配置，不能硬编码 `contacted`**：一条未取消的单都不剩时，必须写回一个可营销的阶段 + 落 `contact_stage_events` 审计。回退到哪一档，从 `client_pipeline_stages`（或 `clients.leads_config`）读该客户显式配置的「取消回退档位」——CTS 的 9 档种子数据把它配成 `contacted`，但那是 CTS 的配置值，不是代码里的默认值，换一个不用 CTS 九档模型的旅游客户，这个值必须能配成别的档位或者根本没有 `contacted` 这个档。**该客户没配置回退档位，或配置的档位名在 `client_pipeline_stages` 里找不到匹配行 → fail closed**：不写 `stage`，落人工待办说明「客户未配置取消回退档位」，不许套用别的客户的档位名，也不许置回 `NULL`。
    > 两种偷懒写法都会出事：保持 `paid_full` 不动 → 退订的客人被 `marketing_action='won'` 永久 suppress，再没人联系他；置回 `NULL` → `stage-infer` 专挑 `stage IS NULL` 的人读历史邮件（里面写着「定金已付」）→ 又把他填回 `deposit_paid` → 又被 suppress。
 5. **映射表进客户配置，不进代码**：`booking.status + 收款事实 → stage_key`（含上面第 4 条的取消回退档位）写在 `clients.leads_config`（已存在的 JSONB 列）或 `client_pipeline_stages` 的一列。阶段档位本来就是按客户可配的（CTS 那 9 档只是 seed），写死在 `src/lib` = 客户语义进 shared runtime（红线 2），也让第二个旅游客户接不进来。`contacts.stage` 本身没有外键约束，写入一个客户配置里不存在的档位名不会报错，只会留下一个 `client_pipeline_stages` 匹配不到的孤儿键——所以第 4 条的 fail closed 检查必须在写入前做，不能指望数据库层拦。
 6. **`stage-infer` 要加排除条件**：本人有过 booking 的，不再由邮件推断阶段。
-7. **交互说明**：每次自动派生会产生一条 `changed_by='system'` 的 `contact_stage_events`，`day-list.ts:389-455` 的「今天改过阶段变灰不消失」逻辑会把这些人算成「今天改过」。行为上可接受，但要在 PR 里写明，别让员工困惑。
+7. **交互说明**：每次自动派生会产生一条 `changed_by=`（本方案自己的系统 actor 常量，见上方第 3 条）的 `contact_stage_events`，`day-list.ts:389-455` 的「今天改过阶段变灰不消失」逻辑会把这些人算成「今天改过」。行为上可接受，但要在 PR 里写明，别让员工困惑。
 
 ---
 
@@ -386,7 +408,7 @@ remaining(departure) = seats_total - occupied     -- seats_total 为 NULL 时 re
 
 **列表每行**：出发日期 · 出发城市 · 天数 · 价格（无价显示「未标价」） · `已订 X / 共 Y`（Y 未设显示「容量未设置」） · 剩余 · 直招 vs 代理拆分 · 收款情况。
 
-**详情页**：报名名单（姓名直链回 CRM 联系人 · 人数 · 来源 · 代理 · 收款状态 · 备注）+ 「加报名」表单 + 「设置座位数」入口 + 「标记已收定金 / 已收尾款」按钮（写 `me_sale_outcomes`）。
+**详情页**：报名名单（姓名直链回 CRM 联系人 · 人数 · 来源 · 代理 · 收款状态 · 备注）+ 「加报名」表单 + 「设置座位数」入口 + 「标记已收定金 / 已收尾款」入口（**不是一次点击写库的按钮**，是收「实收金额 + 到账日期」的小表单，走 §3.3 的 `buildIntakeRow` 落 `me_sale_outcomes`）。
 
 **四条硬规则**：
 1. **读失败不许渲染成 0 或空**。占用为 `'unknown'` 时显示「读不到，不代表没人报」。
@@ -485,3 +507,5 @@ ME 已有邮箱验证码登录（`/api/auth/magic-link` + `/api/auth/verify-otp`
 | 事实更正 | 两审共指出 7 处 | §2.2 表格（32 tour / 25 出发团 / 1 个 maxGroupSize / id 与 slug 均不唯一 / 2 处计算展开）· §2.2 圣诞团理由更正 · §2.7 删掉 RLS 误报（已实测生产库确认无此问题） |
 
 **两审均要求：改完再审一轮，才能进 PM 授权与五道 Build Gate。**
+
+| Codex round-2 复审（自动化） | 4 条 P1 | ①产品边界冲突 → 新增 §0.5-3，PM 未表态前①②③不许进 migration；②代理跨客户串号 → `travel_agents`/`tour_bookings` 加复合外键（§2.8、§3.2）；③收款按钮无可落库输入 → §3.3/§4 改为收实收金额+到账日期并复用 `buildIntakeRow`；④阶段派生系统 actor 判断只认字面量 `'system'` → §3.5-3/7 改为枚举实际 actor 常量集合 |
