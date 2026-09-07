@@ -179,10 +179,34 @@ export function daysAgo(iso: string | null, now: Date): number | null {
  *
  * 单条验证失败不拖累其他条目;整体超时也只是少过滤,不阻断待办。
  */
+/**
+ * 相对路径 href 会被 `verifyActionLink` 里的 `new URL()` 抛成 broken，
+ * 于是**整条待办被 dropBrokenLinks 静默丢掉**，只留一行 console.warn ——
+ * PM 邮件里根本看不到，正是「发现死在日志里」。同一个坑早在
+ * `cross_client_leak`（2026-08-05 狄仁杰实测 kept=0）上治过一次，那次的修法
+ * 是「必须绝对网址」＋加进 NEVER_DROP_KINDS。这次审计（2026-09-07 PR #1467）
+ * 又抓到 3 个 kind 犯了同一个 bug：blog_draft_waiting、conversion_needs_review、
+ * conversion_send_in_doubt。
+ *
+ * 光靠人眼审 code review 显然不够 —— 加一道 fail-fast，让下次再有人写相对
+ * 路径时立刻在 build/test 阶段炸出来，而不是等到线上静默丢一个月才发现。
+ */
+export function assertAbsoluteHref(item: ManualItem): void {
+  const href = item.href
+  if (href === '') return // 空 href 允许（有些待办本来就没有入口，见 dropBrokenLinks 头注）
+  if (!/^https?:\/\//.test(href)) {
+    throw new Error(
+      `[manual-items] href 必须是绝对网址（相对路径会被链接闸静默丢掉）：kind=${item.kind} href=${JSON.stringify(href)}`,
+    )
+  }
+}
+
 export async function dropBrokenLinks(
   items: ManualItem[],
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ kept: ManualItem[]; dropped: ManualItem[] }> {
+  // 先把相对路径炸出来 —— 静默 drop 比错误崩溃对 PM 更糟。
+  for (const it of items) assertAbsoluteHref(it)
   const verdicts = await Promise.all(
     items.map((it) =>
       // 🔴 **没有链接 ≠ 链接坏了。**

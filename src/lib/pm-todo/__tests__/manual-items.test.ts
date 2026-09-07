@@ -15,6 +15,8 @@ import {
   pushMailchimpExportItems,
   pushLinkedinProgressItems,
   buildNotIndexedItems,
+  assertAbsoluteHref,
+  dropBrokenLinks,
   type NotIndexedRow,
   type ManualItem,
 } from '../manual-items'
@@ -983,5 +985,53 @@ describe('email_reply_due — 客人来信没人回', () => {
     expect(extra.what).toContain('还有 3 封')
     expect(extra.client_name).toBe('CTS Tours NZ')
     expect(extra.href).toBe(`https://app.magicengine.com.au/dashboard/clients/${CLIENT}/crm/all`)
+  })
+})
+
+/**
+ * href 必须绝对 —— 相对路径会被 `verifyActionLink` 里的 `new URL()` 抛错，
+ * 判成 broken，整条被 `dropBrokenLinks` 静默丢掉（=PM 邮件里根本看不到）。
+ * 同一个 bug 早在 `cross_client_leak`（2026-08-05）上治过一次；2026-09-07 的
+ * 每日待办 href 审计（PR #1467）又抓到 3 个 kind 犯了同一个 bug。加这道
+ * fail-fast 让下次再有人写相对路径时立刻在 build/test 阶段炸出来。
+ */
+describe('assertAbsoluteHref (fail-fast on relative href)', () => {
+  const base = (partial: Partial<ManualItem> = {}): ManualItem => ({
+    kind: 'not_indexed' as ManualItem['kind'],
+    client_id: 'c0000000-0000-0000-0000-000000000000',
+    client_name: 'CTS',
+    what: 'x',
+    how: 'y',
+    href: 'https://app.magicengine.com.au/dashboard/x',
+    ...partial,
+  })
+
+  it('accepts absolute https URLs', () => {
+    expect(() => assertAbsoluteHref(base())).not.toThrow()
+  })
+
+  it('accepts http URLs (external legacy)', () => {
+    expect(() => assertAbsoluteHref(base({ href: 'http://internal.example/x' }))).not.toThrow()
+  })
+
+  it('accepts empty href (some items intentionally have no entry point)', () => {
+    expect(() => assertAbsoluteHref(base({ href: '' }))).not.toThrow()
+  })
+
+  it('rejects relative paths starting with /', () => {
+    expect(() => assertAbsoluteHref(base({ href: '/dashboard/clients/xxx/blog' }))).toThrow(
+      /href 必须是绝对网址/,
+    )
+  })
+
+  it('rejects protocol-relative //host paths (would break new URL() the same way)', () => {
+    expect(() => assertAbsoluteHref(base({ href: '//app.magicengine.com.au/x' }))).toThrow(
+      /href 必须是绝对网址/,
+    )
+  })
+
+  it('dropBrokenLinks fails fast on relative href instead of silently dropping', async () => {
+    const items = [base({ href: '/dashboard/conversions?client=x' })]
+    await expect(dropBrokenLinks(items)).rejects.toThrow(/href 必须是绝对网址/)
   })
 })

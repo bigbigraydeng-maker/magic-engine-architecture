@@ -93,9 +93,15 @@ export function buildDraftTodos(
       how: connected
         ? '打开看一眼，觉得可以就点发布 —— 系统会提交到客户网站等最后确认'
         : '先去客户设置里把网站发布通道接通（现在是未连接或连接报错），接通后这几篇才发得出去',
+      // 🔴 必须是绝对网址。写成相对路径 `/dashboard/…` 时，链接闸
+      //    (`action-link.ts:verifyActionLink`) 里 `new URL(href)` 抛错 →
+      //    fetch 也抛错 → 判成 broken → 整条待办被 dropBrokenLinks 丢掉，
+      //    只剩一行 console.warn。同一个坑早在 `cross_client_leak` 上治过
+      //    (manual-items.ts:1540-1544)，`blog_draft_waiting` 漏网。
+      //    dropBrokenLinks 现在会 fail fast 拦下相对路径，别退回。
       href: connected
-        ? `/dashboard/clients/${clientId}/blog`
-        : `/dashboard/clients/${clientId}/settings`,
+        ? `https://app.magicengine.com.au/dashboard/clients/${clientId}/blog`
+        : `https://app.magicengine.com.au/dashboard/clients/${clientId}/settings`,
     })
   }
 

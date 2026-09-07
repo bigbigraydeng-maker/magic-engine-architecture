@@ -101,7 +101,9 @@ export async function pushConversionReviewItems(
       how: expired
         ? '打开页面，在这条上点「不发送」并选原因「超过时限」即可。'
         : '打开页面，看一眼客人和金额对不对，对就点「告诉广告平台」（会再确认一次），不对就点「不发送」并选个原因。',
-      href: `/dashboard/conversions?client=${row.client_id}&focus=${row.id}`,
+      // 🔴 必须是绝对网址。相对路径会被 dropBrokenLinks 静默丢掉
+      //    （同 `cross_client_leak` 那次事故，见 manual-items.ts:1540）。
+      href: `https://app.magicengine.com.au/dashboard/conversions?client=${row.client_id}&focus=${row.id}`,
     })
   }
 
@@ -130,7 +132,8 @@ export async function pushConversionReviewItems(
       how:
         '去广告平台后台的事件管理页看一眼这笔在不在：' +
         '在，就点「已确认收到」；不在，就点「重新发送」。',
-      href: `/dashboard/conversions?client=${outcome.client_id}&status=in_doubt`,
+      // 🔴 必须是绝对网址（见上面同类注释）。
+      href: `https://app.magicengine.com.au/dashboard/conversions?client=${outcome.client_id}&status=in_doubt`,
     })
   }
 }
