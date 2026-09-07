@@ -179,22 +179,57 @@ export function daysAgo(iso: string | null, now: Date): number | null {
  *
  * 单条验证失败不拖累其他条目;整体超时也只是少过滤,不阻断待办。
  */
+/**
+ * 相对路径 href 会被 `verifyActionLink` 里的 `new URL()` 抛成 broken，
+ * 于是**整条待办被 dropBrokenLinks 静默丢掉**，只留一行 console.warn ——
+ * PM 邮件里根本看不到，正是「发现死在日志里」。同一个坑早在
+ * `cross_client_leak`（2026-08-05 狄仁杰实测 kept=0）上治过一次，那次的修法
+ * 是「必须绝对网址」＋加进 NEVER_DROP_KINDS。这次审计（2026-09-07 PR #1467）
+ * 又抓到 3 个 kind 犯了同一个 bug：blog_draft_waiting、conversion_needs_review、
+ * conversion_send_in_doubt。
+ *
+ * 光靠人眼审 code review 显然不够 —— 加一道 fail-fast，让下次再有人写相对
+ * 路径时立刻在 build/test 阶段炸出来，而不是等到线上静默丢一个月才发现。
+ */
+export function assertAbsoluteHref(item: ManualItem): void {
+  const href = item.href
+  if (href === '') return // 空 href 允许（有些待办本来就没有入口，见 dropBrokenLinks 头注）
+  if (!/^https?:\/\//.test(href)) {
+    throw new Error(
+      `[manual-items] href 必须是绝对网址（相对路径会被链接闸静默丢掉）：kind=${item.kind} href=${JSON.stringify(href)}`,
+    )
+  }
+}
+
 export async function dropBrokenLinks(
   items: ManualItem[],
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ kept: ManualItem[]; dropped: ManualItem[] }> {
   const verdicts = await Promise.all(
-    items.map((it) =>
+    items.map((it) => {
+      try {
+        // 相对路径是代码 bug（写死的 href 字符串），要比「这条链接今天恰好
+        // 打不开」响得多 —— 但唯一的生产调用方 daily-todo.ts 在 dropBrokenLinks
+        // 整体失败时会兜底放行 rawManualItems（未过滤），如果这里对着整批
+        // items 同步 throw，一条相对路径就会让所有链接（含真正打不开的）
+        // 原样下发且不留日志，比「静默丢一条」更糟。所以逐条隔离：只有这一条
+        // 按坏链接处理，其余条目照常验证，且用 console.error 而不是
+        // console.warn，跟普通坏链接分开，方便回头当 bug 追。
+        assertAbsoluteHref(it)
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e))
+        return Promise.resolve({ kind: 'broken' as const, status: null })
+      }
       // 🔴 **没有链接 ≠ 链接坏了。**
       //    有些待办本来就没有可点的地方（比如那件事的入口还没上线），
       //    它的价值全在 what / how 上。空 href 交给 verifyActionLink 会走
       //    `new URL('')` / `fetch('')` 抛错 → 判成 broken → 整条被丢掉，
       //    于是「如实告诉人这件事现在做不了」变成了「人什么都看不到」——
       //    发现死在 console.warn 里，正是铁律 3 下半句禁止的那件事。
-      it.href.trim() === ''
+      return it.href.trim() === ''
         ? Promise.resolve({ kind: 'unverifiable' as const })
-        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
-    ),
+        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const }))
+    }),
   )
   const kept: ManualItem[] = []
   const dropped: ManualItem[] = []
