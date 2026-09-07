@@ -164,6 +164,7 @@ import {
   PLATFORM_CANDIDATE_REGISTRY_URL,
   type PlatformCandidateReview,
 } from './platform-candidate-reviews'
+import { CLIENT_DOC_MANUAL_TASKS, type ClientDocManualTask } from './client-doc-manual-tasks'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
   if (!iso) return null
@@ -1098,29 +1099,10 @@ export function pushPlatformCandidateReviewItems(
  * 与 PLATFORM_CANDIDATE_REVIEWS 同样是"纯本地日期判断，不落库"，但语义不同：
  * 那边是"到期该做"，这里是"过期就不用再提醒"——用 `expiresAt` 而不是 `dueDate`。
  * 过了 `expiresAt` 不用回来删这一行，判据本身会让它自然消失。
+ *
+ * 任务清单本身在 `client-doc-manual-tasks.ts`（同 platform-candidate-reviews.ts
+ * 的分离方式）：这里只留通用加载逻辑，客户特例数据不进这份共享运行时文件。
  */
-interface ClientDocManualTask {
-  clientId: string
-  clientName: string
-  what: string
-  how: string
-  href: string
-  /** ISO instant，过了这个时间点不再下发。 */
-  expiresAt: string
-}
-
-const CLIENT_DOC_MANUAL_TASKS: ClientDocManualTask[] = [
-  {
-    // 见 docs/clients/cts/2026-09-07-golden-china-surge-plan.md「已知数据缺口」
-    clientId: 'c0000000-0000-0000-0000-000000000000',
-    clientName: 'CTS Tours NZ',
-    what: 'Golden China 冲量方案的视频素材改造清单只从广告账户 Media Library 反查得到——纯自然发帖(没投过广告)的爆款不在这个库里，清单可能漏掉真正的高热素材',
-    how: '手机登录 facebook.com/CTSToursNZ/videos 扫一眼，找有没有观看数 >10k 的自然视频不在改造清单的 5 条里；有就发给顾问窗口补进去，没有就回一句「没有」',
-    href: 'https://www.facebook.com/CTSToursNZ/videos',
-    expiresAt: '2026-09-08T09:00:00+13:00',
-  },
-]
-
 export function pushClientDocManualTaskItems(
   items: ManualItem[],
   now: Date,
