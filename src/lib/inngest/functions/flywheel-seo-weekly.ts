@@ -61,9 +61,10 @@ export interface FanOutReceipt {
 export function buildSnapshotEvents(
   entries: readonly SnapshotRosterEntry[],
   weekKey: string,
+  attempt?: string,
 ): Array<{ id: string; name: string; data: { client_id: string; domain: string; week_key: string } }> {
   return entries.map((e) => ({
-    id: snapshotEventId(e.clientId, weekKey),
+    id: snapshotEventId(e.clientId, weekKey, attempt),
     name: FLYWHEEL_SEO_SNAPSHOT_DUE_EVENT,
     data: { client_id: e.clientId, domain: e.domain, week_key: weekKey },
   }))
@@ -175,9 +176,33 @@ export function createFlywheelSeoSnapshotOneFunction(deps: {
       const parsed = parseSnapshotDue(event.data)
       if (!parsed.ok) return { kind: 'invalid_payload', reason: parsed.reason }
       const due = parsed.value
-      return await step.run(`snapshot-${due.week_key}-${due.client_id}`, async () =>
+      const started = await step.run(`snapshot-log-start-${due.week_key}-${due.client_id}`, async () => ({
+        runId: await startCronRunId(FLYWHEEL_SEO_WEEKLY_JOB),
+        startedAt: Date.now(),
+      }))
+      const run = cronRunHandle(started.runId, started.startedAt)
+      const result = await step.run(`snapshot-${due.week_key}-${due.client_id}`, async () =>
         snapshotOneClient(due, deps.pullMetrics, deps.shouldSkip),
       )
+      await step.run(`snapshot-log-finish-${due.week_key}-${due.client_id}`, async () => {
+        await run.finish({
+          processed: 1,
+          completed: result.status === 'completed' || result.status === 'skipped' ? 1 : 0,
+          failed: result.status === 'failed' ? 1 : 0,
+          summary: {
+            client_id: result.client_id,
+            domain: result.domain,
+            week_key: result.week_key,
+            status: result.status,
+            metrics_written: result.metrics_written,
+            provider_calls_max: result.provider_calls_max,
+            no_publish: true,
+          },
+          error: result.status === 'failed' ? result.error ?? 'snapshot_failed' : undefined,
+        })
+        return null
+      })
+      return result
     },
   )
 }

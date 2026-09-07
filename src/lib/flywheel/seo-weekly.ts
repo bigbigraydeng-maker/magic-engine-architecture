@@ -163,8 +163,9 @@ export async function recentlySnapshotted(
 }
 
 /** 每客户每周一个的事件 id —— 只是 Inngest 那 24 小时去重的键，不是防重复扣费的闸。 */
-export function snapshotEventId(clientId: string, weekKey: string): string {
-  return `flywheel-seo-${weekKey}-${clientId}`
+export function snapshotEventId(clientId: string, weekKey: string, attempt?: string): string {
+  const base = `flywheel-seo-${weekKey}-${clientId}`
+  return attempt ? `${base}-${attempt}` : base
 }
 
 export interface SnapshotDueData {

@@ -222,3 +222,69 @@ describe('键盘批量', () => {
     expect(await screen.findByText('确认不发送')).toBeTruthy()
   })
 })
+
+/**
+ * 邮件深链参数：审计 PR #1467 抓到 conversion_needs_review /
+ * conversion_send_in_doubt 两条 kind 的 href 都带 ?focus= 或 ?status=in_doubt，
+ * 但落地页之前完全忽略这两个 param —— PM 从邮件点进来只看到一个空白页要
+ * 自己找那笔。这里补上跳转/滚动行为。
+ */
+describe('邮件深链 ?focus= 和 ?status= 支持', () => {
+  it('?focus=<outcomeId> 把 cursor 跳到那条待办', async () => {
+    // scrollIntoView 在 jsdom 里没实现，spy 掉别让它抛
+    Element.prototype.scrollIntoView = vi.fn()
+
+    fetchMock = vi.fn().mockImplementation(() => {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          outcomes: [
+            outcome({ id: 'first-o' }),
+            outcome({ id: 'target-o', order_ref: 'TARGET' }),
+            outcome({ id: 'third-o' }),
+          ],
+          count: 3,
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.pushState({}, '', `/dashboard/conversions?client=${CLIENT}&focus=target-o`)
+    render(<ConversionsPage />)
+
+    // 三条都渲染出来
+    await screen.findByText(/单号 TARGET/)
+
+    // cursor 跳到 target-o（第 2 条，index=1）→ 该行会有 focus 蓝框（2px solid #2563eb）
+    // 找到那条卡片 wrapper 并断言它的 style
+    const targetCard = screen.getByText(/单号 TARGET/).closest('div[style*="cursor"]') as HTMLElement | null
+    expect(targetCard).toBeTruthy()
+    expect(targetCard!.getAttribute('style')).toContain('2px solid')
+
+    // scrollIntoView 被调过
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+  })
+
+  it('?focus= 指向不存在的 id → 静默不动，不弹错', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+
+    mountWithFocus('ghost-that-was-processed')
+
+    await screen.findByText(/收到定金/)
+
+    // cursor 保持 0（第一条），不弹错
+    expect(screen.queryByText(/读取出错/)).toBeNull()
+    expect(screen.queryByText(/找不到/)).toBeNull()
+  })
+})
+
+function mountWithFocus(focusId: string) {
+  fetchMock = vi.fn().mockImplementation(() => {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ outcomes: [outcome({ id: 'only-one' })], count: 1 }),
+    })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  window.history.pushState({}, '', `/dashboard/conversions?client=${CLIENT}&focus=${focusId}`)
+  return render(<ConversionsPage />)
+}

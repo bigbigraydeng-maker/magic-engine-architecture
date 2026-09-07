@@ -96,7 +96,9 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   { service: 'factory-order-scheduler', jobName: 'factory-order-scheduler', schedule: '0 20 * * *', logsRuns: true },
   { service: 'factory-publish-sweeper', jobName: 'factory-publish-sweeper', schedule: '25 * * * *', logsRuns: true },
   { service: 'factory-publish-worker', jobName: 'factory-publish-worker', schedule: '5 * * * *', logsRuns: true },
-  { service: 'factory-stock-refill', jobName: 'factory-stock-refill', schedule: '0 19 * * 1', logsRuns: true },
+  // 🔴 已暂停(2026-09-08,PM「停抓图」):抓来的图无人消费(改图那步是死代码),白花 Apify 钱。
+  //    恢复三件套:render.yaml 取消注释 + 本行加回来 + 先把 stock-transform 接进调用链。
+  // { service: 'factory-stock-refill', jobName: 'factory-stock-refill', schedule: '0 19 * * 1', logsRuns: true },
   { service: 'goal-current-value-refresh', jobName: 'goal-current-value-refresh', schedule: '0 3 * * *', logsRuns: true },
   { service: 'google-data-pullback-daily', jobName: 'google-data-pullback-daily', schedule: '0 3 * * *', logsRuns: true },
   { service: 'industry-ai-visibility-daily', jobName: 'industry-ai-visibility-daily', schedule: '30 2 * * *', logsRuns: true },
@@ -127,7 +129,20 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   //    也就是说销售那边的客户需求卡从 8/23 起就没再更新过。
   //    停的原因在 Render 那一侧（本仓 render.yaml 这段自 2026-07-27 起没动过），
   //    从代码这边查不到，已作为单独一件事上报。这里先把它拉回监控范围。
-  { service: 'messenger-hourly', jobName: 'messenger-brief-hourly', schedule: '10 * * * *', logsRuns: true },
+  // 🔴 **不是 render.yaml 里的 cron，是 Inngest 上的事件消费者**（2026-09-07 改）。
+  //    原来它是 messenger-hourly 那条服务里的第二条 curl，用 `&&` 接在私信同步后面 ——
+  //    而 `&&` 守的是「网关有没有在超时前给 curl 响应」，不是「同步跑没跑完」。
+  //    同步 8/17 起每轮约 140 秒、网关约 125 秒掐断返 524，第二条 curl 从 8/23 起一次
+  //    都没执行过，销售的客户需求卡停更 14 天。现在改成同步跑完发一张条子、
+  //    `cloud-messenger-brief-after-sync` 收到就写。
+  //
+  //    schedule 仍写 `10 * * * *`：它由每小时第 10 分的私信同步触发，实际节奏就是每小时
+  //    一次 —— 健康检查按这个间隔判「过期没跑」，跟改造之前一致。
+  //
+  //    🔴 **故意不填 `addedAt`。** 它不是新任务，是一条停了 14 天的老任务改了触发方式。
+  //       填今天的日期会给它约 62 小时宽限期，而这段时间正好会盖住「Inngest 那边忘了
+  //       重新 Sync、它其实还是没跑」—— 那恰恰是这次最该被喊出来的失败形态。
+  { service: 'inngest:cloud-messenger-brief-after-sync', jobName: 'messenger-brief-hourly', schedule: '10 * * * *', logsRuns: true, scheduler: 'inngest' },
   { service: 'meta-leads-hourly', jobName: 'meta-leads-sync', schedule: '25 * * * *', logsRuns: true },
   { service: 'oztop-seo-optimizer', jobName: 'oztop-seo-optimizer', schedule: '0 5 * * 1', logsRuns: true },
   { service: 'pm-daily-todo', jobName: 'pm-daily-todo', schedule: '0 19 * * 0-4', logsRuns: true },
@@ -210,4 +225,9 @@ export const UNSCHEDULED_CRON_ROUTES: Readonly<Record<string, string>> = {
   // 一封都没发出去过）。render.yaml 里那段整段注释掉了，清单里也同步摘掉 ——
   // 留着会天天误报「没跑」。恢复时三件一起做，见 CRON_REGISTRY 里那段注释。
   'email-reply-digest': '2026-09-03 PM 叫停，render.yaml 那段已注释掉，恢复条件写在 CRON_REGISTRY 的注释里',
+
+  // 素材抓取,2026-09-08 PM「停抓图」叫停:抓来的图无人消费(改图那步是死代码),白花 Apify 钱。
+  // render.yaml + CRON_REGISTRY 那行都注释掉了;路由留着并加了 FACTORY_STOCK_REFILL_ENABLED
+  // 开关兜底(默认关)。恢复条件见 CRON_REGISTRY 里那段注释。
+  'factory-stock-refill': '2026-09-08 PM 停抓图,render.yaml/registry 已注释,恢复条件见 CRON_REGISTRY 注释',
 }

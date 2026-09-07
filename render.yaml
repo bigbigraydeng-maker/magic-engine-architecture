@@ -863,24 +863,23 @@ services:
       - key: CRON_SECRET
         sync: false
 
-  # 素材池自动补货 — 治「所有 AI 画面从同一张种子图长出来」。
-  # 没有这条 cron,stock-pipeline 就是零调用方的死代码:素材池永远停在手工灌的那几张,
-  # sourceImagePool 恒空 → worker 每段都退回同一张 seed/cts_source.jpg。
-  # 🔴 花钱路径:抓取按张计费(≈$0.002/张)。护栏在 lib 层且天然收敛 ——
-  #    只给配了 factory_config 的客户抓 · 池子够 24 张就跳过 · 每客户最多 3 词×12 张 ·
-  #    搜索词必须能溯源到 master_brief(拼不出就不抓)。单次全量最坏 $0.2 量级。
-  # 每周一 19:00 UTC ≈ 周二 07:00 NZST,赶在当天 08:00 排产之前把池子补好。
-  - type: cron
-    name: factory-stock-refill
-    env: node
-    schedule: "0 19 * * 1"
-    buildCommand: ""
-    startCommand: |
-      curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/factory-stock-refill
-    envVars:
-      - key: CRON_SECRET
-        sync: false
+  # 🔴 已暂停(2026-09-08,PM 拍板「停抓图」)。原意是给出片补底图,但把抓来的图变成
+  #    可用底图的那一步(transformStockImages / stock-transform)全仓零调用方 = 死代码,
+  #    抓来的原图被 evaluate 的「只收 AI 改过的图」硬闸挡在成片外,谁也不消费。结果这条
+  #    cron 每周花 Apify 的钱抓一堆没人用的 Pinterest 图。停掉止损。路由侧也加了空转兜底。
+  #    恢复时三件一起做:本块取消注释 + registry.ts 那行加回来 + 先把 stock-transform 接进
+  #    调用链(否则恢复了还是白抓)。
+  # - type: cron
+  #   name: factory-stock-refill
+  #   env: node
+  #   schedule: "0 19 * * 1"
+  #   buildCommand: ""
+  #   startCommand: |
+  #     curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" \
+  #       https://app.magicengine.com.au/api/cron/factory-stock-refill
+  #   envVars:
+  #     - key: CRON_SECRET
+  #       sync: false
 
   # 卡死回收:publishing 超 10 分钟(进程被杀/超时)→ 退回 approved 等下轮重领。
   # 没有它,一次崩溃就会让那条工单永远卡在 publishing,没人能再领。
@@ -899,18 +898,37 @@ services:
       - key: CRON_SECRET
         sync: false
 
-  # 客户私信 → 需求卡。PR #652/#653 把这两条接口合进来了,但没有人调用它们,
+  # 客户私信 → CRM。PR #652/#653 把接口合进来了,但没有人调用它们,
   # 「客户消息」页会永远是空的 —— 这里补上调用方。
   #
-  # 一个服务串两步,不是两个:brief 必须在 sync 之后跑(没入库的对话没得总结),
-  # 用 && 串起来顺序天然保证,也省一个 Render cron 服务。
-  # sync 失败时 brief 不会跑 —— 这是想要的:宁可这一轮不出卡,也不要基于半截
-  # 数据写卡给销售看。
+  # 🔴 **写需求卡那一步 2026-09-07 挪走了,别再往这里加第二条 curl。**
+  #    原来这里是 `curl 私信同步 && curl 写需求卡`。意图是对的 ——「同步没跑成就别
+  #    拿半截数据写卡给销售看」—— 但 `&&` 守的是 curl 的退出码,而退出码回答的是
+  #    「网关有没有在超时前把响应给我」,不是「同步有没有跑完」。
+  #    同步的服务端耗时 2026-08-17 起从约 25 秒跳到约 140 秒,网关约 125 秒掐断返 524,
+  #    curl -f 退出码 22 → && 短路 → **写卡那条从 2026-08-23 起一次都没执行过**,
+  #    销售的客户需求卡停更 14 天,而监控上「私信同步每小时正常」。
+  #
+  #    现在:同步跑到最后一行发一张 `me/messenger.sync.completed` 条子,
+  #    Inngest 上的 `cloud-messenger-brief-after-sync` 收到就写卡(还分段跑,每段约 40 秒,
+  #    不再踩网关那条线)。判据从「curl 的退出码」换成「服务端自己的回执」。
+  #    整段来龙去脉见 src/lib/messenger/sync-completed-event.ts。
+  #
+  #    ⚠️ Render 不是 Vercel,Inngest 没有自动同步:改了那个函数之后必须重新 Sync 一次
+  #       `curl -sS -X PUT https://app.magicengine.com.au/api/inngest`(返 modified:true 才算数),
+  #       否则它**安静地不跑**。这条链路已登记进 CRON_REGISTRY,真没跑起来健康检查会喊。
+  #
+  #    `/api/cron/messenger-brief-hourly` 路由保留,用于单独手动补触发。
   #
   # 只同步 clients.facebook_page_id 有值的客户(设置页里选主页才会有值),
   # 所以新增客户不需要动这里。
   # 跑在每小时第 10 分钟,避开整点那一堆日更 cron。
-  # max-time 跟接口的 maxDuration 对齐(sync 600s / brief 800s)再留一点余量。
+  # max-time 跟接口的 maxDuration 对齐(600s)再留一点余量。
+  #
+  # ⚠️ 这条 curl **本来就会超时**(网关约 125 秒掐断返 524,而接口跑约 140 秒),
+  #    Render 的运行日志里会看到 `curl: (22) ... error: 524` / `Exited with status 22`。
+  #    服务端每一轮都跑完了 —— 判据看 cron_run_logs 里 messenger-sync-hourly 那一行,
+  #    不看这条 curl 的退出码。别再往这个退出码上挂任何下游步骤。
   - type: cron
     name: messenger-hourly
     env: node
@@ -918,9 +936,7 @@ services:
     buildCommand: ""
     startCommand: |
       curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/messenger-sync-hourly \
-      && curl -fsS --max-time 820 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/messenger-brief-hourly
+        https://app.magicengine.com.au/api/cron/messenger-sync-hourly
     envVars:
       - key: CRON_SECRET
         sync: false

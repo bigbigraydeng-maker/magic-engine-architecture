@@ -144,6 +144,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const clientId = searchParams.get('client_id')
   const status = searchParams.get('review_status')
+  const focusId = searchParams.get('id')
   const limit = Math.min(Math.max(parseInt(searchParams.get('limit') ?? '50', 10) || 50, 1), 200)
 
   if (!clientId || !UUID_RE.test(clientId)) {
@@ -153,35 +154,57 @@ export async function GET(request: Request) {
   const deniedScope = assertClientScope(admin.user.email ?? null, clientId)
   if (deniedScope) return deniedScope
 
-  let query = supabaseAdmin
-    .from('me_sale_outcomes')
+  const SELECT_COLUMNS =
     // 🔴 不要在这里加 customer_email / customer_phone。列表页会被截图、投屏。
     //    需要看全的走单条详情（尚未实现）。
     //    也不要加已经不存在的列：dispatched_at 随异步队列一起删了，
     //    留在这里会让整个查询报 42703，页面恒空 —— 2026-09-05 魏征实测抓到。
-    .select(
-      'id, outcome_kind, order_ref, amount_minor, currency, occurred_at, ' +
-        'review_status, reject_reason, redacted_at, source_kind, created_at, ' +
-        'me_conversion_writebacks(id, status, last_error, next_attempt_at)',
-    )
+    'id, outcome_kind, order_ref, amount_minor, currency, occurred_at, ' +
+    'review_status, reject_reason, redacted_at, source_kind, created_at, ' +
+    'me_conversion_writebacks(id, status, last_error, next_attempt_at)'
+
+  // 深链目标查询：今日待办邮件里的 ?focus=<id> 指向的记录可能比列表的
+  // limit/排序窗口更老（积压超过 limit 条时会被挤出默认列表）。
+  // 按 id 直查不受 limit/排序影响，保证深链一定能落到该条，而不是靠调高 limit 碰运气
+  // （Codex 复审重提旧评论 2026-09-07：把上限从 50 提到 200 治标不治本）。
+  if (focusId) {
+    if (!UUID_RE.test(focusId)) {
+      return NextResponse.json({ error: 'id 必须是 uuid' }, { status: 400 })
+    }
+    const { data, error } = await supabaseAdmin
+      .from('me_sale_outcomes')
+      .select(SELECT_COLUMNS)
+      .eq('client_id', clientId)
+      .eq('id', focusId)
+      .maybeSingle()
+    if (error) {
+      return NextResponse.json({ error: `查询失败: ${error.message}` }, { status: 500 })
+    }
+    const outcomes = data ? [data] : []
+    return NextResponse.json({ outcomes, count: outcomes.length })
+  }
+
+  const sendStatus = searchParams.get('send_status')
+  const sendStatuses = sendStatus ? sendStatus.split(',').map((s) => s.trim()).filter(Boolean) : []
+
+  let query = supabaseAdmin
+    .from('me_sale_outcomes')
+    // send_status 给了就用 inner join 把过滤条件下推到 SQL 里，
+    // 让 limit 是"筛完之后"的 limit —— 否则待处理的 in_doubt/failed 记录
+    // 会先被"最新 N 条"的窗口挤掉，压根轮不到这一步筛选（同一类问题的另一面）。
+    .select(sendStatuses.length > 0 ? SELECT_COLUMNS.replace('me_conversion_writebacks(', 'me_conversion_writebacks!inner(') : SELECT_COLUMNS)
     .eq('client_id', clientId)
     .order('occurred_at', { ascending: false })
     .limit(limit)
 
   if (status) query = query.eq('review_status', status)
+  if (sendStatuses.length > 0) query = query.in('me_conversion_writebacks.status', sendStatuses)
 
   const { data, error } = await query
   if (error) {
     return NextResponse.json({ error: `查询失败: ${error.message}` }, { status: 500 })
   }
 
-  // 按发送状态筛（页面用来列出"需要你处理"那一组）。
-  // 在应用层筛而不是 SQL：关联表上的条件筛选写法容易把没有发送记录的行一起滤掉。
-  const sendStatus = searchParams.get('send_status')
-  const rows = (data ?? []) as Array<{ me_conversion_writebacks?: Array<{ status: string }> }>
-  const filtered = sendStatus
-    ? rows.filter((r) => (r.me_conversion_writebacks ?? []).some((w) => w.status === sendStatus))
-    : rows
-
-  return NextResponse.json({ outcomes: filtered, count: filtered.length })
+  const outcomes = data ?? []
+  return NextResponse.json({ outcomes, count: outcomes.length })
 }

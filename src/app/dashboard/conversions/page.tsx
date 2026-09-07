@@ -15,7 +15,7 @@
  * 放 /admin 下会是一个不需要登录就能打开的页面。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatMoney } from '@/lib/conversions/money'
 
 /**
@@ -93,9 +93,24 @@ export default function ConversionsPage() {
   const [rejectReason, setRejectReason] = useState<string>('')
   const [rejectNote, setRejectNote] = useState('')
 
+  /**
+   * 深链参数：今日待办邮件里的两条 kind 都会带上：
+   *   · conversion_needs_review → ?client=<id>&focus=<outcomeId>
+   *   · conversion_send_in_doubt → ?client=<id>&status=in_doubt
+   * 这两个是**一次性**动作——加载完数据自动跳到对的位置就消费掉，
+   * 别再影响用户后续手动切换（否则改 URL 或 pushState 一次它又跳一次）。
+   * 2026-09-07 每日待办 href 落地页审计 (PR #1467) 修复项。
+   */
+  const [focusOutcomeId, setFocusOutcomeId] = useState<string | null>(null)
+  const [autoScrollStatus, setAutoScrollStatus] = useState<string | null>(null)
+  const stuckSectionRef = useRef<HTMLDivElement | null>(null)
+  const outcomeRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
   useEffect(() => {
     const p = new URLSearchParams(window.location.search)
     setClientId(p.get('client') ?? '')
+    setFocusOutcomeId(p.get('focus'))
+    setAutoScrollStatus(p.get('status'))
   }, [])
 
   const load = useCallback(async () => {
@@ -104,10 +119,13 @@ export default function ConversionsPage() {
     setError(null)
     setWritebackDisabled(false)
     try {
-      const base = `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}`
-      const [pendingRes, approvedRes] = await Promise.all([
+      const base = `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}&limit=200`
+      // 已批准但没走完的：发出去没下文的、失败可重试的。send_status 交给接口在 SQL
+      // 层筛（不是先按最新 200 条截断再筛）—— 否则堆积超过 200 条时，卡住的老记录
+      // 会先被"最新 N 条"的窗口挤掉，压根轮不到这一步筛选。
+      const [pendingRes, stuckRes] = await Promise.all([
         fetch(`${base}&review_status=pending_review`),
-        fetch(`${base}&review_status=approved`),
+        fetch(`${base}&review_status=approved&send_status=in_doubt,failed`),
       ])
       const pending = await pendingRes.json()
       if (!pendingRes.ok) {
@@ -125,14 +143,16 @@ export default function ConversionsPage() {
       setRows(pending.outcomes ?? [])
       setCursor(0)
 
-      // 已批准但没走完的：发出去没下文的、失败可重试的。
       // 今日待办叫人来点这里的按钮 —— 不列出来就是让人扑空（管道断头）。
-      const approved = await approvedRes.json()
-      const needsHand: Outcome[] = (approved.outcomes ?? []).filter((o: Outcome) => {
-        const st = sendState(o)?.status
-        return st === 'in_doubt' || st === 'failed'
-      })
-      setStuck(needsHand)
+      // 🔴 API 的 send_status filter 只是过滤 outcome，不保证每条一定带
+      //    me_conversion_writebacks —— 万一将来 join 逻辑改了、或测试环境
+      //    只返回 outcome 主表，渲染时 `sendState(o)!` 会 crash 整页。
+      //    再挡一次：stuck 里只放**真有 writeback**的 outcome。
+      const stuckBody = await stuckRes.json()
+      const stuckRows: Outcome[] = (stuckBody.outcomes ?? []).filter(
+        (o: Outcome) => (o.me_conversion_writebacks?.length ?? 0) > 0,
+      )
+      setStuck(stuckRows)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -143,6 +163,81 @@ export default function ConversionsPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  /**
+   * 邮件深链 ?focus=<outcomeId>：数据到手后，把 cursor 跳到那条 + scrollIntoView。
+   * 待核对堆积超过 200 条时，目标可能比默认列表窗口更老、根本不在 `rows` 里
+   * ——这种情况按 id 直查一次（不受 limit/排序影响），把这一条插到列表最前面。
+   * 直查也找不到才是真的没了（可能已经被人处理掉了、或 outcomeId 拼错）——
+   * 静默不动，用户看到普通列表，不弹错。跳完清空 focusOutcomeId，同一 URL 不会二次跳。
+   */
+  useEffect(() => {
+    if (!focusOutcomeId) return
+    // rows / stuck 都还没读回来，等 —— 先返回，等某一边填了再触发本 effect
+    if (rows.length === 0 && stuck.length === 0) return
+    const id = focusOutcomeId
+
+    // 先在两个列表里找
+    const inRowsIdx = rows.findIndex((r) => r.id === id)
+    if (inRowsIdx >= 0) {
+      setCursor(inRowsIdx)
+      setTimeout(() => outcomeRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+      setFocusOutcomeId(null)
+      return
+    }
+    if (stuck.some((s) => s.id === id)) {
+      // stuck 用的是 stuckSectionRef 而不是 outcomeRefs（stuck 卡片没进 outcomeRefs
+      // 池 —— 那是 rows 才注册的），滚到「需要你动手」区块顶就行
+      setTimeout(() => stuckSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+      setFocusOutcomeId(null)
+      return
+    }
+
+    // 两边都没有 —— 按 id 直查一次（可能被 200 条窗口挤掉），拿回来后按
+    // review_status 决定塞 rows 还是 stuck。
+    if (!clientId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}&id=${encodeURIComponent(id)}`,
+        )
+        const body = await res.json()
+        if (cancelled || !res.ok) return
+        const found: Outcome | undefined = (body.outcomes ?? [])[0]
+        if (!found) return
+        if (found.review_status === 'pending_review') {
+          setRows((rs) => (rs.some((r) => r.id === found.id) ? rs : [found, ...rs]))
+          setCursor(0)
+          setTimeout(() => outcomeRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+          return
+        }
+        // approved + 卡在 in_doubt/failed 的 outcome：走 stuck 展示（只当它真有
+        // writeback 时才塞 —— 跟 load() 里的防御过滤同一口径）
+        const wb = found.me_conversion_writebacks?.[0]
+        if (found.review_status === 'approved' && wb && (wb.status === 'in_doubt' || wb.status === 'failed')) {
+          setStuck((s) => (s.some((r) => r.id === found.id) ? s : [found, ...s]))
+          setTimeout(() => stuckSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+        }
+      } finally {
+        if (!cancelled) setFocusOutcomeId(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [focusOutcomeId, rows, stuck, clientId])
+
+  /**
+   * 邮件深链 ?status=in_doubt：数据到手后 scroll 到「需要你动手」区块，
+   * 让 PM 直接看到 doubt 那条卡片。stuck 空的时候啥也不做（可能已经解决完了）。
+   * 跳完清空 autoScrollStatus，别在后续 stuck 变化时重复 scroll。
+   */
+  useEffect(() => {
+    if (autoScrollStatus !== 'in_doubt' || stuck.length === 0) return
+    setTimeout(() => stuckSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+    setAutoScrollStatus(null)
+  }, [autoScrollStatus, stuck])
 
   const current = rows[cursor]
 
@@ -407,7 +502,7 @@ export default function ConversionsPage() {
       )}
 
       {stuck.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
+        <div ref={stuckSectionRef} style={{ marginBottom: 20 }}>
           <h2 style={{ fontSize: 16, margin: '0 0 8px' }}>需要你动手（{stuck.length}）</h2>
           {stuck.map((o) => {
             const wb = sendState(o)!
@@ -482,6 +577,9 @@ export default function ConversionsPage() {
         return (
           <div
             key={o.id}
+            ref={(el) => {
+              outcomeRefs.current[o.id] = el
+            }}
             onClick={() => setCursor(i)}
             style={{
               border: focused ? '2px solid #2563eb' : '1px solid #ddd',

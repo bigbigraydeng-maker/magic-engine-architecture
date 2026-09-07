@@ -79,19 +79,24 @@ function jobNamesInFile(file: string): string[] {
   // 🔴 复审实测：只认裸的 `startCronRun(` 时，`import { startCronRun as begin }` 和
   //    `import * as runLogger` + `runLogger.startCronRun(...)` 两种写法**全绿不报**。
   //    后者是重构的常见产物 —— 也就是说随手改个 import 风格就能让一个任务从对账里消失。
-  const aliases = new Set<string>(['startCronRun'])
+  //
+  // 🔴 `startCronRunId` 也算（2026-09-07 补）。跨步骤跑的任务（Inngest 那批）开记录用的是
+  //    它 —— 只认 `startCronRun` 的话，每周 SEO 快照和私信简报这两条**写着运行记录、
+  //    却扫不出来**，跟「这个任务不存在」长得一模一样，正是这份对账要防的东西。
+  const ORIGINALS = ['startCronRun', 'startCronRunId']
+  const aliases = new Set<string>(ORIGINALS)
   for (const stmt of src.statements) {
     if (!ts.isImportDeclaration(stmt)) continue
     const nb = stmt.importClause?.namedBindings
     if (!nb || !ts.isNamedImports(nb)) continue
     for (const el of nb.elements) {
-      if ((el.propertyName ?? el.name).text === 'startCronRun') aliases.add(el.name.text)
+      if (ORIGINALS.includes((el.propertyName ?? el.name).text)) aliases.add(el.name.text)
     }
   }
 
   const isStartCronRunCall = (node: ts.CallExpression): boolean =>
     (ts.isIdentifier(node.expression) && aliases.has(node.expression.text)) ||
-    (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'startCronRun')
+    (ts.isPropertyAccessExpression(node.expression) && ORIGINALS.includes(node.expression.name.text))
 
   const out: string[] = []
   const visit = (node: ts.Node): void => {
@@ -285,6 +290,34 @@ describe('CRON_REGISTRY 与 render.yaml 对账', () => {
       }
     }
     expect(drift).toEqual([])
+  })
+
+  /**
+   * 🔴 **一条 cron 里不许用 `&&` 把第二件活儿串在第一件后面。**（2026-09-07 加）
+   *
+   * `&&` 守的是 curl 的退出码，而退出码回答的是「网关有没有在超时前把响应给我」，
+   * 不是「这件活儿有没有干完」。本仓已经为此付过一次代价：messenger-hourly 里
+   * `curl 私信同步 && curl 写需求卡`，同步 8/17 起每轮约 140 秒、网关约 125 秒掐断返 524，
+   * 写卡那条从 8/23 起**一次都没执行过**，销售的客户需求卡停更 14 天，而监控全绿。
+   *
+   * 跨步骤接力要走 Inngest（CLAUDE.md 铁律 3）：上一步跑完发事件，下一步作为消费者。
+   *
+   * 只禁「第二件活儿」，不禁 `&& curl hc-ping.com/...` 那种健康检查上报 ——
+   * 它漏掉的方向是「误报没跑」，会响；而漏掉一件活儿的方向是安静地不干，不会响。
+   */
+  it('🔴 startCommand 里不许 && 串第二个 /api/cron/ 调用（判据错在退出码，见 messenger 简报事故）', () => {
+    const chained: string[] = []
+    for (const p of parsed) {
+      // 按 && 切开，第一段是主命令，之后每一段都是「串在后面的」。
+      const [, ...rest] = p.startCommand.split('&&')
+      for (const seg of rest) {
+        if (/\/api\/cron\//.test(seg)) chained.push(`${p.service}: ${seg.trim().slice(0, 80)}`)
+      }
+    }
+    expect(
+      chained,
+      `这些 cron 用 && 把第二件活儿串在后面了，跨步骤接力请走 Inngest：${chained.join(' | ')}`,
+    ).toEqual([])
   })
 
   it('🔴 一条服务串了几个任务，就得登记几条 —— 少登记的那个会隐形（messenger 简报正是这么丢的）', () => {
