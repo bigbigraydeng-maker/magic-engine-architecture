@@ -67,31 +67,47 @@ ME 工厂现有 stock 链（`stock-pipeline.ts` `ingestHarvestedImages` → `sto
 ### 4.2 落库字段（video_clips）
 - `track='b_generated'`、`is_still_image=true`、`is_real_footage=false`（保持"氛围底料、绝不当真拍打真价"的隔离，与现有一致）。
 - **新增 provenance**（存 `source_meta` jsonb，避免 migration；若需大规模按景点查再考虑加列）：
-  `{ origin:'licensed_stock', provider:'wikimedia_commons', license, author, source_url, requires_attribution:bool, city, landmark, orientation }`。
-- `requires_attribution` = license ∈ {CC-BY, CC-BY-SA} → true；{CC0, Public domain} → false。
+  `{ origin:'licensed_stock', provider:'wikimedia_commons', license, license_url, author, source_url, note, requires_attribution:bool, city, landmark, orientation }`。
+  🔴 `license_url`（协议链接）和 `note`（修改说明，如 "resized to 1150px wide, re-encoded JPEG q68"）**必须落库**，不能只存 license 名称——发布闸最终要拼出完整 CC 署名（作者 + 协议 + 协议链接 + 是否修改），少一项署名就不完整。现有 `templates/tailor-made-itinerary/heroes/CREDITS.json` 已经在存这两项，入库时原样带过来，不要再重新调查。
+- **`requires_attribution` 判定必须先规范化再比对，不能直接对原始字符串做集合成员判断**：Wikimedia 实际值带空格和版本号（`CC BY 2.0`、`CC BY-SA 3.0`、`CC BY-SA 4.0`，见上面 CREDITS.json 的真实样本），逐字比 `license ∈ {'CC-BY','CC-BY-SA'}` 会全部判不中导致误判为无需署名，署名闸形同虚设。改为：
+  1. 解析出受控的 `license_family`（`CC-BY` / `CC-BY-SA` / `CC0` / `PUBLIC_DOMAIN`）+ `license_version`，只认白名单模式（如 `/^CC[- ]BY(-SA)?[- ]?\d+(\.\d+)?$/i` 加归一化空格/连字符）；解析失败一律写 `license_family='UNKNOWN'`（不是留空、不是复用某个已知枚举值）；
+  2. `license_family ∈ {CC-BY, CC-BY-SA}` → `requires_attribution=true`；`∈ {CC0, PUBLIC_DOMAIN}` → `false`；
+  3. **无法归一化解析的原始 license 字符串一律 fail-closed**：`license_family='UNKNOWN'`、`requires_attribution=true`，该行禁止进入 4.3 的直用分支，直到人工修正 license 字段为受控值——不允许"未知值默认不需要署名"。
+  4. 🔴 **`license_family` 必须作为独立硬字段贯穿全链，不能被 `requires_attribution` 这一个布尔值代替去做"能不能用"的判断**：`requires_attribution=true` 同时覆盖两种完全不同的情况——①合法解析出的 CC-BY/CC-BY-SA（可以用，但要署名）②`license_family='UNKNOWN'` 的未知/无法解析（禁止使用，等人工修正）。单看 `requires_attribution` 布尔值无法区分这两者。因此 4.3（进池查询）、4.4（发布闸）、第 5 节（分期放宽条件）任何一处要"放行"逻辑，都必须先独立检查 `license_family ∈ {CC-BY, CC-BY-SA, CC0, PUBLIC_DOMAIN}`（即已成功解析且属于受控枚举）作为**不可被后续任何阶段放宽的硬前置条件**；`license_family='UNKNOWN'` 永远不放行——不论 P2/P3 哪个阶段、不论 `requires_attribution` 取值、不论发布闸对 caption 文本内容的检查是否"看起来"通过（协议文本本身可以是编造或误填的，闸只能证明"caption 里有一段像署名的文字"，证明不了"这张图的许可证真的属于允许集合"）。
 - **不碰** scene_tag 白名单：scene_tag 走既有兜底即可；**景点查询靠 source_meta.landmark**（需给 strategist 挑片逻辑加读 source_meta.landmark 的分支，或 evaluate 侧带出）。
 
 ### 4.3 进池（evaluate.ts sourceImagePool）
-- 新增分支：`origin='licensed_stock'` 且 `status='active'` 的行**直接进** sourceImagePool（对标 `client-asset-pool.ts` 的"直用不改写"），**不要求** `is_ai_transformed`。
+- 新增分支：`origin='licensed_stock'` 且 `status='active'` **且 `source_meta.license_family ∈ {CC0, PUBLIC_DOMAIN}`**（P2 阶段等价于 `requires_attribution===false`，但查询条件写的是 `license_family` 白名单成员判断，不是 `requires_attribution` 单一布尔值——原因见 4.2 第 4 点：布尔值分不清"合法直用"和"未知禁止"）的行**直接进** sourceImagePool（对标 `client-asset-pool.ts` 的"直用不改写"），**不要求** `is_ai_transformed`。
+- 🔴 **`license_family` 白名单是查询层硬条件，不是靠人审流程去把关**：只检查 `origin` + `status` 不够——人审只要把一张 CC-BY/CC-BY-SA 图设成 `active`，它就会在 P3 署名闸落地前直接进池，跟第 94 行"P3 通过前一张都不许进池"的边界矛盾。`license_family ∈ {CC-BY, CC-BY-SA}`（含 `UNKNOWN`）的行即使 `status='active'` 也必须被这条查询排除，直到 P3 署名闸上线并验证通过后，才把条件放宽为"`license_family ∈ {CC-BY, CC-BY-SA}` 且闸存在则放行、闸不存在则拦"；`license_family='UNKNOWN'` 不受此放宽影响，任何阶段都排除在外（见 4.2 第 4 点）。
+- 🔴 **sourceImagePool 的每一项必须带 `license_family`，不能只是裸 URL 字符串**：现有 `evaluate.ts` 的 `sourceImagePool: readonly string[]` 只是 URL 列表，`strategist.ts`（约 346-365 行）从池里取图时只拿到 URL，写进 `clip_generation_plan.source_image_url`，`worker.mjs`（约 343-350、667-683 行）再把这个 URL 交给 `muapiGenerate` 做 i2v——整条链路里没有任何环节能看到这张图的 `license_family`。P2/P3 引入需署名素材后，池结构必须改成携带许可证族的条目（如 `{ url, license_family, requires_attribution }`），`clip_generation_plan` 也要透传这个字段，否则 4.4 的 SA 排除规则（不喂 i2v）在下游无从判断，形同虚设。
 - 与 Pinterest 链彻底分开：licensed_stock **永不**进 `transformStockImages`（不重绘、不脱版权，本来就干净）。
 
 ### 4.4 🔴 发布前署名闸（本 spec 的核心新能力）
-- **provenance 传递**：工单要记录它用了哪些 source 图（image_asset → work_order），把 `requires_attribution` 的图的 author/license 汇总带到发布层。
-- **闸**：`publish-worker` 发布前检查——若本片用到任一 `requires_attribution=true` 的图，则**成片 endcard 或首评必须含**对应摄影者+协议 credit；缺 = **fail-closed 拦发**（比照现有红线闸 `scanPublishCaption` 的 fail-closed 写法）。
+- **provenance 传递**：工单要记录它用了哪些 source 图（image_asset → work_order），把 `requires_attribution` 的图的 author/license/license_url/note 汇总带到发布层（4.2 的 `source_meta` 全字段一起带，不能只带 author + license 名称——闸要能拼出完整 CC 署名：作者 + 协议 + 协议链接 + 修改说明）。
+- **闸**：`publish-worker` 发布前检查——若本片用到任一 `requires_attribution=true` 的图，则**成片 caption 或 endcard 文案必须含**对应摄影者 + 协议名 + 协议链接（+ 有修改则注明"modified"）；缺任一项 = **fail-closed 拦发**（比照现有红线闸 `scanPublishCaption` 的 fail-closed 写法，闸校验的是最终署名文本内容，不是"有没有填 credit 字段"）。
+- 🔴 **credit 载体只能是发布前可校验的位置（caption / endcard），本期不做"首评"**：现有 `publish-worker.ts`（`src/lib/factory/publish/publish-worker.ts:254-255`）发布调用只传 `videoUrl` + `caption`，没有首评步骤；首评通常要先拿到已发布帖子 ID 才能创建，等于帖子先公开、评论后补。若评论请求失败，就会留下一条已公开但无署名的内容，不满足 fail-closed。因此本期署名闸**只接受 caption/endcard 这类发布前即可读取校验的字段**；"先建不可见草稿 → 写首评拿到回执 → 再公开"的分阶段发布工作流留作后续能力，需要 provider 支持隐藏发布 + 独立立项评估，本 spec 不含。
 - CC0/PD 图不触发此闸。
-- SA（ShareAlike）注记：i2v 衍生是否触发 SA 的"同协议"义务需法务确认；**保守起见 licensed_stock 一期只走"直用/蒙太奇"，CC-BY-SA 图先不喂 i2v 重构**（重绘=衍生，SA 风险高）。
+- 🔴 **SA（ShareAlike）排除必须有真实代码路径承接，不能只是文字约定**：i2v 衍生是否触发 SA 的"同协议"义务需法务确认；保守起见本期 `license_family='CC-BY-SA'` 的图**禁止**进入 `clip_generation_plan` 的 i2v 生成分支（`strategist.ts` 里 stock 不足时 fallback 生成的那条路径，最终交给 `worker.mjs` 的 `muapiGenerate`）。核查现状：当前 `resolveClips`（`worker.mjs`）里每一条缺库存的 segment 都无条件走 `muapiGenerate`（i2v），代码库里**没有**"直用静态图不重绘"的替代产出路径（不存在所谓"蒙太奇"分支）。因此本期两个选项二选一，不能默认成不存在的第三条路："直用/蒙太奇"：
+  1. 在 4.3 的 `sourceImagePool`/`clip_generation_plan` 构造处，`license_family==='CC-BY-SA'` 的条目直接**不参与 i2v 候选轮换**（`chosenSource` 挑选时跳过），实质是本期 CC-BY-SA 图完全不喂 i2v、也不做任何生成使用，只入库和被人工/未来路径使用；
+  2. 或新建一条真正独立的非 i2v 出片路径（静态图直接切片/裁切，不经 `muapiGenerate`），并在本 spec 范围外单独立项验收。
+  本 spec P3 默认选 ①（零新增代码路径、零 SA 风险），②留作后续能力，不在本期分期交付范围内。
 
 ### 4.5 启用开关 + 隔离
 - 入库默认 `status='quarantined'`（新入库暂不进池），人审后置 `active`（堵魏征"一入库就自动上线"）。
 - 与 task_7c3297ff（Pinterest 清理）对齐：清理判据必须按 `origin`/`provider` 精确匹配，**licensed_stock 不在清理范围**——立项后先跟那个窗口对齐判据再上线。
+- 🔴 **`quarantined → active` 必须有真实的人审入口，不能只是"改个状态位"**：全仓检索 `video_clips` 现有调用方只有入库（stock-pipeline / licensed-stock）、选片（evaluate/strategist）、worker 出片三类路径，**没有任何审核/激活入口**——按现状，唯一能把一行从 `quarantined` 改成 `active` 的方式是有人直接改数据库，这既不是"人审"（没有展示待审素材和 provenance 的界面），也不满足第 7 条铁律"FDE/PM 要填的字段必须连 Settings UI 一起做完"。P1 必须一并交付：
+  1. 一个待审列表（读 `origin='licensed_stock'` 且 `status='quarantined'` 的行），展示缩略图 + `source_meta`（author / license / license_url / city / landmark）；
+  2. 一个激活 / 拒绝动作（`status → active` / `status → rejected`），带操作权限（PM/FDE 角色）和落库回执（谁在什么时间点做的这个决定，存 `source_meta.reviewed_by` / `reviewed_at`）；
+  3. 拒绝态（`rejected`）需与 `quarantined`/`active` 三态并列定义，避免被误判为"待审"重复出现在列表里。
+  没有这三件，P1"入库可查、人审后才进池"这句话在验收时无法闭环——素材会卡在 `quarantined` 出不来。
 
 ---
 
 ## 5. 分期（严格顺序：署名闸必须先于任何 CC-BY 图对外）
 
-- **P1**：入库通路 + provenance 落库 + quarantine 开关 + origin 隔离。产物：图安全进库、可查、**inert（不进池、不发布）**。
-- **P2**：evaluate `licensed_stock` 直用分支 + strategist 按 landmark 挑片。产物：CC0/PD 图可进池喂出片。
-- **P3**：发布前署名闸（fail-closed）。**P3 通过前，CC-BY/CC-BY-SA 图一张都不许进出片池/发布**；只有 CC0/PD 可先用。
+- **P1**：入库通路 + provenance 落库（含 `license_family` 归一化解析，见 4.2）+ quarantine 开关 + origin 隔离 **+ 待审列表与激活/拒绝入口**（见 4.5，缺这个人审无法闭环）。产物：图安全进库、可查、可人审、**inert（不进池、不发布）**。
+- **P2**：evaluate `licensed_stock` 直用分支 + strategist 按 landmark 挑片。查询条件**代码层强制** `license_family ∈ {CC0, PUBLIC_DOMAIN}`（见 4.3），不依赖人审自觉、不单看 `requires_attribution` 布尔值。sourceImagePool 结构改为携带 `license_family` 的条目（见 4.3），为 P3 放宽做准备。产物：CC0/PD 图可进池喂出片；`license_family ∈ {CC-BY, CC-BY-SA, UNKNOWN}` 的行即使 `status='active'` 仍被查询排除，物理上进不了池。
+- **P3**：发布前署名闸（fail-closed）。P3 落地并验证通过后，才把 4.3 的查询条件放宽为"`license_family ∈ {CC-BY, CC-BY-SA}` 且闸存在则按闸结果放行"；`license_family='UNKNOWN'` 任何阶段都不放宽（见 4.2 第 4 点）。**`CC-BY-SA` 图放宽后仍不进入 i2v 生成分支**（见 4.4 SA 排除机制①），只有 `CC-BY` 图在闸验证通过后可进入 i2v。**在此之前，CC-BY/CC-BY-SA/UNKNOWN 图一张都不许进出片池/发布**；只有 CC0/PD 可先用。
 
 ---
 
