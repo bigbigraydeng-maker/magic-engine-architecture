@@ -205,20 +205,31 @@ export async function dropBrokenLinks(
   items: ManualItem[],
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ kept: ManualItem[]; dropped: ManualItem[] }> {
-  // 先把相对路径炸出来 —— 静默 drop 比错误崩溃对 PM 更糟。
-  for (const it of items) assertAbsoluteHref(it)
   const verdicts = await Promise.all(
-    items.map((it) =>
+    items.map((it) => {
+      try {
+        // 相对路径是代码 bug（写死的 href 字符串），要比「这条链接今天恰好
+        // 打不开」响得多 —— 但唯一的生产调用方 daily-todo.ts 在 dropBrokenLinks
+        // 整体失败时会兜底放行 rawManualItems（未过滤），如果这里对着整批
+        // items 同步 throw，一条相对路径就会让所有链接（含真正打不开的）
+        // 原样下发且不留日志，比「静默丢一条」更糟。所以逐条隔离：只有这一条
+        // 按坏链接处理，其余条目照常验证，且用 console.error 而不是
+        // console.warn，跟普通坏链接分开，方便回头当 bug 追。
+        assertAbsoluteHref(it)
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e))
+        return Promise.resolve({ kind: 'broken' as const, status: null })
+      }
       // 🔴 **没有链接 ≠ 链接坏了。**
       //    有些待办本来就没有可点的地方（比如那件事的入口还没上线），
       //    它的价值全在 what / how 上。空 href 交给 verifyActionLink 会走
       //    `new URL('')` / `fetch('')` 抛错 → 判成 broken → 整条被丢掉，
       //    于是「如实告诉人这件事现在做不了」变成了「人什么都看不到」——
       //    发现死在 console.warn 里，正是铁律 3 下半句禁止的那件事。
-      it.href.trim() === ''
+      return it.href.trim() === ''
         ? Promise.resolve({ kind: 'unverifiable' as const })
-        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
-    ),
+        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const }))
+    }),
   )
   const kept: ManualItem[] = []
   const dropped: ManualItem[] = []

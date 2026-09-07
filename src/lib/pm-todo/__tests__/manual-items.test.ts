@@ -994,6 +994,13 @@ describe('email_reply_due — 客人来信没人回', () => {
  * 同一个 bug 早在 `cross_client_leak`（2026-08-05）上治过一次；2026-09-07 的
  * 每日待办 href 审计（PR #1467）又抓到 3 个 kind 犯了同一个 bug。加这道
  * fail-fast 让下次再有人写相对路径时立刻在 build/test 阶段炸出来。
+ *
+ * `assertAbsoluteHref` 本身仍然对单条 throw，给 build/test 直接调用来
+ * fail-fast；但 `dropBrokenLinks` 内部逐条 catch 它，绝不对着整批 items
+ * 同步抛错 —— 唯一的生产调用方 daily-todo.ts 在 dropBrokenLinks 整体失败
+ * 时会兜底放行未过滤的 rawManualItems，一条相对路径同步抛错会把这条 bug
+ * 静默升级成「所有链接（含真正打不开的）原样下发且不留日志」，比原来单条
+ * 静默丢弃更糟（Codex review, PR #1471）。
  */
 describe('assertAbsoluteHref (fail-fast on relative href)', () => {
   const base = (partial: Partial<ManualItem> = {}): ManualItem => ({
@@ -1030,8 +1037,24 @@ describe('assertAbsoluteHref (fail-fast on relative href)', () => {
     )
   })
 
-  it('dropBrokenLinks fails fast on relative href instead of silently dropping', async () => {
-    const items = [base({ href: '/dashboard/conversions?client=x' })]
-    await expect(dropBrokenLinks(items)).rejects.toThrow(/href 必须是绝对网址/)
+  it('dropBrokenLinks drops only the offending relative-href item, and still verifies the rest', async () => {
+    const bad = base({ kind: 'blog_pr_open', href: '/dashboard/conversions?client=x' })
+    const good = base({ kind: 'not_indexed', href: 'https://good.example/ok' })
+    const fetchImpl = (async (url: string) =>
+      ({ ok: url === good.href }) as Response) as unknown as typeof fetch
+
+    const { kept, dropped } = await dropBrokenLinks([bad, good], fetchImpl)
+
+    expect(dropped.map((i) => i.href)).toEqual([bad.href])
+    expect(kept.map((i) => i.href)).toEqual([good.href])
+  })
+
+  it('dropBrokenLinks still ships NEVER_DROP_KINDS items even when their href is relative', async () => {
+    // cross_client_leak 早就在 NEVER_DROP_KINDS 里（2026-08-05 狄仁杰实测 kept=0
+    // 治过）——一个真正打不开的链接不该让红线条目消失，相对路径同样不该。
+    const item = base({ kind: 'cross_client_leak', href: '/dashboard/clients/xxx' })
+    const { kept, dropped } = await dropBrokenLinks([item])
+    expect(dropped).toEqual([])
+    expect(kept.map((i) => i.href)).toEqual([item.href])
   })
 })
