@@ -119,7 +119,9 @@ export default function ConversionsPage() {
     setError(null)
     setWritebackDisabled(false)
     try {
-      const base = `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}`
+      // limit=200（接口上限）—— 待核对堆积超过默认 50 条时，今日待办给的深链
+      // ?focus=<id> 可能指向一条更早的记录，默认 limit 会把它筛没了，害深链白点。
+      const base = `/api/admin/conversions/outcomes?client_id=${encodeURIComponent(clientId)}&limit=200`
       const [pendingRes, approvedRes] = await Promise.all([
         fetch(`${base}&review_status=pending_review`),
         fetch(`${base}&review_status=approved`),
