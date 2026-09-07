@@ -1,0 +1,200 @@
+[
+  {
+    "key": "client_list",
+    "url": "https://app.magicengine.com.au/dashboard/clients",
+    "http_status": 200,
+    "title": "Magic Engine",
+    "h1": "Clients",
+    "final_url": "https://app.magicengine.com.au/dashboard/clients",
+    "controls_sample": ["+ Add client", "All clients 33", "Active 31", "Onboarding 2", "Open brand brief", "View portal"],
+    "notes": "客户列表，33 客户可见，可点击进入每个客户"
+  },
+  {
+    "key": "not_indexed",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/site-audit/pages?filter=not-indexed",
+    "http_status": 200,
+    "title": "Magic Engine",
+    "h1": "页面清单",
+    "controls_sample": ["← 返回", "Start New Audit", "全部", "未收录(4)", "Blog", "Product"],
+    "notes": "未收录页面筛选生效，4 页展示"
+  },
+  {
+    "key": "client_settings",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/settings",
+    "http_status": 200,
+    "h1": "客户配置中心",
+    "controls_sample": ["🔌接通", "🏢客户资料", "👥客人跟进", "📣内容与社媒", "⚙️高级", "保存"],
+    "notes": "有 5 个 tab 和保存按钮，是设置中枢"
+  },
+  {
+    "key": "site_audit",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/site-audit",
+    "http_status": 404,
+    "title": "404: This page could not be found.",
+    "h1": "404",
+    "notes": "🔴 页面不存在。crawl_stale kind 的落地页彻底失效"
+  },
+  {
+    "key": "assets",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/assets",
+    "http_status": 200,
+    "h1": "素材库",
+    "controls_sample": ["48 全部", "47 已分析", "0 队列中", "40 Hook", "6 Middle", "0 CTA"],
+    "notes": "素材筛选存在。price_claim_unbacked 需要点开单张素材去改「来源」——落地页没直接暴露那个按钮，得先筛再点单张，多一步"
+  },
+  {
+    "key": "goal_page",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/goal/{GOAL_ID}",
+    "http_status": 200,
+    "h1": "CTS 2026 Best of China 团报名 · BETA · EXPIRED",
+    "controls_sample": ["← 返回客户主页", "↻", "Submit Verdict", "诸 工作台"],
+    "notes": "目标详情页存在。有 Submit Verdict 按钮"
+  },
+  {
+    "key": "linkedin_content_factory",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{LINKEDIN}/content-factory",
+    "http_status": 200,
+    "h1": "内容工厂",
+    "controls_sample": ["⚙ 进料设置", "一个人 + AI获客系统... 建于 8/25", "怎么用AI给自己搭一支海外获客团队？... 建于 8/25"],
+    "notes": "内容工厂看板可见 draft 列表，PM 可批准/拒绝"
+  },
+  {
+    "key": "linkedin_connectors_publer",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{LINKEDIN}/connectors/publer",
+    "http_status": 200,
+    "final_url": "https://app.magicengine.com.au/dashboard/clients/{LINKEDIN}/settings?tab=connect",
+    "h1": "客户配置中心",
+    "hasPublerField": true,
+    "controls_sample": ["🚀 Publer 发布器 未确认 ▼", "📊 Facebook 主页", "🔵 Google 广告扫描"],
+    "notes": "⚠️ 服务端 redirect 到 /settings?tab=connect —— URL 不同但确实到「Publer 发布器」栏。PM 能找到，但邮件说的「Publer 连接器」页并不是独立页"
+  },
+  {
+    "key": "crm_contact_focused",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/crm/all?contact={CONTACT_ID}",
+    "http_status": 200,
+    "h1": "全部客人",
+    "hasContactName_Moira": true,
+    "hasDncWarning": false,
+    "controls_sample": ["← 返回客户", "今天要联系", "全部客人", "决策清单（只读）", "✉️ moira.mclean@aut.ac.nz", "看更早的 3 条 ↓", "记一笔", "跟进到哪步：还没标"],
+    "notes": "?contact= 生效，页面自动展开到 Moira 联系人；「记一笔」是核心操作按钮。但代码注释里说的「判错了？点这里放回名单」黄条只在 do_not_contact=true 时显示，Moira 现在没这个状态所以不显示——功能设计对的"
+  },
+  {
+    "key": "crm_all",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/crm/all",
+    "h1": "全部客人",
+    "controls_sample": ["今天要联系", "全部客人", "决策清单（只读）"],
+    "notes": "客户 CRM 列表页，可切换 tab"
+  },
+  {
+    "key": "blog_relative",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/blog",
+    "http_status": 200,
+    "h1": "Blog Posts",
+    "controls_sample": ["← CTS Tours NZ", "✍️ Generate Article from Keyword", "🔀 SEO + GEO", "🤖 GEO only", "✨ Generate Blog Post"],
+    "notes": "⚠️ 落地页存在且能生成文章。但源码里的 href 是相对路径 /dashboard/clients/{id}/blog——按 CLAUDE.md 里 cross_client_leak 那条先例，相对路径会被 action-link 判 broken 整条丢掉。要在阶段 4 单独验证 action-link.ts 里的行为"
+  },
+  {
+    "key": "execution",
+    "url": "https://app.magicengine.com.au/dashboard/clients/{CTS}/execution",
+    "http_status": 200,
+    "h1": "CTS Tours NZ",
+    "controls_sample": ["+ 录入工作", "Marketing Plan", "🥊 鲁班", "AI 推荐今天做 3 件", "Key Signals", "全部 44 待处理", "3 进行中", "56 已完成", "详情 (每 Campaign)"],
+    "notes": "✅ 执行看板完整：AI 推荐、Key Signals、5 个 Campaign 上下文、按 GOAL/pillar 筛选、待处理/进行中/已完成分栏。所有 7 个 kind (auto_run_*, kernel_needs_human, diagnostic_findings, prescription_updated, action_unattributable, outcome_rows_orphaned) 都指向这里，落地页真能干活。⚠️ 但 SPA 首次载入需要 5-7 秒，前 3 秒页面近乎空白"
+  },
+  {
+    "key": "factory",
+    "url": "https://app.magicengine.com.au/dashboard/factory",
+    "http_status": 200,
+    "h1": "视频工厂 · 驾驶舱",
+    "controls_sample": ["⚙️ 该客户工厂配置", "刷新", "✓ 通过·待发布"],
+    "notes": "⚠️ 视频工厂驾驶舱可看队列，但 factory_worker_idle 的 how 是「去 Mac 上跑 CLI」——落地页 UI 里没「启动 worker」按钮，本质是查看队列 vs 触发动作错配"
+  },
+  {
+    "key": "conversions_focused",
+    "url": "https://app.magicengine.com.au/dashboard/conversions?client={CTS}&focus={outcomeId}",
+    "http_status": 200,
+    "h1": "成交与咨询 · 待核对",
+    "bodyLen": 557,
+    "inputs": [{"placeholder": "客户 ID", "type": "text"}],
+    "controls_sample": ["刷新", "① 先看人数"],
+    "notes": "🔴 严重错配：`client=` 和 `focus=` query param 完全被忽略。PM 从邮件点进来看到空白页 + 一个「客户 ID」输入框，要自己复制 UUID 到框里再点两个按钮"
+  },
+  {
+    "key": "conversions_in_doubt",
+    "url": "https://app.magicengine.com.au/dashboard/conversions?client={CTS}&status=in_doubt",
+    "h1": "成交与咨询 · 待核对",
+    "bodyLen": 557,
+    "notes": "🔴 同上——`status=in_doubt` 也被忽略，页面跟 bare /dashboard/conversions 完全一致"
+  },
+  {
+    "key": "google_connect",
+    "url": "https://app.magicengine.com.au/api/auth/google/connect?client_id={CTS}",
+    "notes": "🟡 未实测——这条会真启动 Google OAuth flow，禁跑。功能上：点了就开始授权，无 UI 可 audit，属 oauth-start 类。默认 ✅"
+  },
+  {
+    "key": "render_dashboard",
+    "url": "https://dashboard.render.com",
+    "http_status": 200,
+    "title": "Render Dashboard",
+    "h1": "Overview",
+    "notes": "✅ 已登录状态，看到 Overview（服务列表）"
+  },
+  {
+    "key": "inngest",
+    "url": "https://app.inngest.com",
+    "title": "Inngest Dashboard",
+    "notes": "✅ 走对域，SPA 未完全渲染但 title 正确"
+  },
+  {
+    "key": "muapi_topup",
+    "url": "https://muapi.ai/topup",
+    "title": "Billing & Credits — Top Up Your Account | Muapi",
+    "notes": "✅ 直达充值页"
+  },
+  {
+    "key": "dataforseo_dashboard",
+    "url": "https://app.dataforseo.com/",
+    "title": "DataForSEO",
+    "notes": "✅ 走对域"
+  },
+  {
+    "key": "mailchimp_audience",
+    "url": "https://admin.mailchimp.com/audience/contacts/",
+    "final_url": "https://login.mailchimp.com/?referrer=%2Faudience%2Fcontacts%2F",
+    "title": "Login | Mailchimp",
+    "h1": "Log in to Mailchimp",
+    "notes": "⚠️ 因当前 Chrome 未登录 Mailchimp，跳到 login。登录后会自动到 audience/contacts。URL 目的地正确"
+  },
+  {
+    "key": "meta_ads_manager",
+    "url": "https://adsmanager.facebook.com/adsmanager/manage/adsets?act={adAccountId}&selected_adset_ids={adSetId}",
+    "notes": "🟡 未用 fake id 实测（无意义）。按域和类别归类：外部但正确目的地 ✅（等同 graph_explorer / render 等模式）"
+  },
+  {
+    "key": "graph_explorer",
+    "url": "https://developers.facebook.com/tools/explorer/",
+    "title": "图谱 API 探索工具 - Meta 开发者",
+    "notes": "✅ 直达 Graph API Explorer"
+  },
+  {
+    "key": "blog_pr",
+    "url": "https://github.com/bigbigraydeng-maker/chinatravel/pull/121",
+    "title": "[Magic Engine] Blog: How to Plan Your First Trip to China from New Zealand: A Step-by-Step Guide by bigbigraydeng-maker · Pull Request #121",
+    "h1": "[Magic Engine] Blog: How to Plan Your First Trip to China from New Zealand: A Step-by-Step Guide - #121",
+    "notes": "✅ 直达 GitHub PR，Merge 按钮就在 PR 页"
+  },
+  {
+    "key": "platform_registry",
+    "url": "https://github.com/bigbigraydeng-maker/magic-engine/blob/main/docs/registry/platform-candidates.md",
+    "title": "magic-engine/docs/registry/platform-candidates.md at main",
+    "h1": "platform-candidates.md",
+    "notes": "✅ 直达候选登记表 markdown"
+  },
+  {
+    "key": "gh_actions",
+    "url": "https://github.com/bigbigraydeng-maker/magic-engine/actions",
+    "title": "Workflow runs · bigbigraydeng-maker/magic-engine",
+    "h1": "Actions: bigbigraydeng-maker/magic-engine",
+    "notes": "✅ 直达 GitHub Actions workflow 列表"
+  }
+]
