@@ -962,7 +962,7 @@ export async function pushMailchimpExportItems(
       client_id: r.clientId,
       client_name: r.clientName ?? '未知客户',
       what: `这个客户有 ${total} 条 lead 本该进 Mailchimp 邮件名单，但出口坏了没进去：${detail}。不会自己好，客户的邮件名单会一直缺这些人`,
-      how: '打开链接进设置页确认 Mailchimp audience 配置还在；配置没问题的话多半是 MAILCHIMP_API_KEY 失效或被限流了，回我一句我去查',
+      how: '点链接进设置页，看「Meta 广告线索送进哪个 Mailchimp 名单」那一栏 —— 空了就把 Mailchimp 里的 Audience ID 填回去（Mailchimp → Audience → Settings → Audience name and defaults 最下面那串）；那一栏是对的话就不是配置问题，回我一句我去查授权和限流',
       href: `https://app.magicengine.com.au/dashboard/clients/${r.clientId}/settings`,
     })
   }

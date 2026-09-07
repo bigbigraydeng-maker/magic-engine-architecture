@@ -143,3 +143,49 @@ export async function readLeadSourceTag(
   const tag = typeof raw === 'string' && raw.trim() ? raw.trim() : DEFAULT_META_LEAD_SOURCE_TAG
   return { ok: true, tag }
 }
+
+// ── 写 ──────────────────────────────────────────────────────────────────────
+
+/**
+ * 改一个客户的 audience id —— 写到 `readAudienceId` **正在读的那个地方**。
+ *
+ * 必须跟读一一对称，否则会出现最难查的一种坏法：界面显示保存成功，出口却仍然
+ * 读旧值。今天专列还没 apply，值在 `leads_config` 里；专列一旦 apply，读那边就
+ * 只认专列，写也必须跟着搬过去 —— 靠人记得改代码是靠不住的，所以这里跟读用同
+ * 一套探测（42703 = 专列不存在）。
+ *
+ * 空字符串是**合法输入**，语义是「关掉这个客户的出口」（专列写 NULL）。
+ */
+export async function writeAudienceId(
+  clientId: string,
+  audienceId: string,
+): Promise<{ ok: true; storedIn: 'column' | 'leads_config' } | { ok: false; message: string }> {
+  const value = audienceId.trim()
+
+  // 先试专列。列不存在时 PostgREST 整条 42703，不是「写了个寂寞」。
+  const direct = await supabaseAdmin
+    .from('clients')
+    .update({ mailchimp_audience_id: value || null })
+    .eq('id', clientId)
+
+  if (!direct.error) return { ok: true, storedIn: 'column' }
+  if (!isUndefinedColumn(direct.error)) return { ok: false, message: direct.error.message }
+
+  // 专列还没 apply —— 落回 jsonb。**读-改-写**：leads_config 里还有域名规则、
+  // 通知邮箱、付费打标策略，整块覆盖会把它们全抹掉。
+  const cur = await supabaseAdmin
+    .from('clients')
+    .select('leads_config')
+    .eq('id', clientId)
+    .maybeSingle()
+  if (cur.error) return { ok: false, message: cur.error.message }
+
+  const next = {
+    ...((cur.data?.leads_config as Record<string, unknown> | null) ?? {}),
+    mailchimp_audience_id: value,
+  }
+  const upd = await supabaseAdmin.from('clients').update({ leads_config: next }).eq('id', clientId)
+  if (upd.error) return { ok: false, message: upd.error.message }
+
+  return { ok: true, storedIn: 'leads_config' }
+}
