@@ -52,11 +52,10 @@ export function reelPostId(pageId: string, videoId: string): string {
 /** T+N 时刻从 `published_at` 起算，与现有 recordPublishAction.measureAt 同形状。 */
 export function reelMeasureAt(
   publishedAt: string,
-  windows: readonly number[] = REEL_MEASURE_WINDOWS,
 ): { hours: number; at: string }[] {
   const t = new Date(publishedAt).getTime()
   if (!Number.isFinite(t)) throw new Error(`reelMeasureAt: invalid publishedAt ${publishedAt}`)
-  return windows.map((h) => ({ hours: h, at: new Date(t + h * 3600_000).toISOString() }))
+  return REEL_MEASURE_WINDOWS.map((h) => ({ hours: h, at: new Date(t + h * 3600_000).toISOString() }))
 }
 
 // ── 身份重绑 ────────────────────────────────────────────────────────────────
@@ -65,7 +64,7 @@ export type ReelActionRebindResult =
   | { ok: true; permalink: string | null }
   | {
       ok: false
-      reason: 'action_not_found' | 'client_mismatch' | 'page_mismatch' | 'video_mismatch'
+      reason: 'action_not_found' | 'client_mismatch' | 'page_mismatch' | 'video_mismatch' | 'not_published' | 'published_at_mismatch'
     }
 
 /**
@@ -75,7 +74,7 @@ export type ReelActionRebindResult =
  */
 export async function rebindFactoryReelAction(
   supabase: SupabaseClient,
-  claim: { clientId: string; workOrderId: string; pageId: string; videoId: string },
+  claim: { clientId: string; workOrderId: string; pageId: string; videoId: string; publishedAt: string },
 ): Promise<ReelActionRebindResult> {
   const { data, error } = await supabase
     .from('flywheel_actions')
@@ -93,6 +92,14 @@ export async function rebindFactoryReelAction(
   // published_ref 里 `post_id` 就是 bare video_id（PR #1424 语义）；video_id 有时也在。
   const storedVideo = p.video_id ?? p.post_id
   if (storedVideo !== claim.videoId) return { ok: false, reason: 'video_mismatch' }
+  // A factory action also exists for draft uploads. The event's PUBLISHED claim is not proof.
+  if (p.platform !== 'facebook' || p.video_state !== 'PUBLISHED') {
+    return { ok: false, reason: 'not_published' }
+  }
+  if (typeof p.published_at !== 'string' ||
+      Date.parse(p.published_at) !== Date.parse(claim.publishedAt)) {
+    return { ok: false, reason: 'published_at_mismatch' }
+  }
 
   const permalink = typeof p.permalink === 'string' ? p.permalink : null
   return { ok: true, permalink }
@@ -216,12 +223,13 @@ export function createFactoryReelMeasurementAdapter(deps: { supabase: SupabaseCl
       })
       if (!isolation.ok) return { ok: false, reason: isolation.reason }
 
-      const rebind = await step.run('rebind-factory-action', () =>
+      const rebind = await step.run('rebind-factory-action-v2', () =>
         rebindFactoryReelAction(deps.supabase, {
           clientId: d.client_id,
           workOrderId: d.work_order_id,
           pageId: d.page_id,
           videoId: d.video_id,
+          publishedAt: d.published_at,
         }),
       )
       if (!rebind.ok) return { ok: false, reason: rebind.reason }

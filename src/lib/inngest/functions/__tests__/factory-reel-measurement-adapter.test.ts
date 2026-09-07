@@ -139,7 +139,18 @@ function factoryActionRow(over: Record<string, unknown> = {}) {
 }
 
 describe('rebindFactoryReelAction — event 与 action 身份必须一致', () => {
-  const claim = { clientId: CLIENT, workOrderId: WORK_ORDER, pageId: PAGE, videoId: VIDEO }
+  const claim = { clientId: CLIENT, workOrderId: WORK_ORDER, pageId: PAGE, videoId: VIDEO, publishedAt: PUBLISHED_AT }
+
+  it.each(['DRAFT', undefined, 'UPLOADING'])('rejects stored video_state=%s despite a published event', async video_state => {
+    expect(await rebindFactoryReelAction(flywheelDb(factoryActionRow({ video_state })), claim))
+      .toEqual({ ok: false, reason: 'not_published' })
+  })
+
+  it('rejects an event shifting the real publication timestamp', async () => {
+    expect(await rebindFactoryReelAction(flywheelDb(factoryActionRow()), {
+      ...claim, publishedAt: '2026-09-02T04:30:00.000Z',
+    })).toEqual({ ok: false, reason: 'published_at_mismatch' })
+  })
 
   it('匹配 → ok + permalink', async () => {
     const r = await rebindFactoryReelAction(flywheelDb(factoryActionRow()), claim)
