@@ -83,7 +83,7 @@
 | 期 | 内容 | 风险级 | 本方案深度 |
 |---|---|---|---|
 | ① | 出发团库存（`tour_products` / `tour_departures`）+ 容量录入 UI | A | 可实施 |
-| ② | `tour_bookings` 订位台账（原 `contact_deals`，改名理由见 §3.0） | A | 可实施 |
+| ② | `tour_bookings` 订位台账（原 `contact_deals`，改名理由见 §3.0）+ `travel_agents` 最小身份表（见 §2.8，`tour_bookings.agent_id` 的外键目标，②必须一起建） | A | 可实施 |
 | ③ | 员工看板 UI | A | 可实施 |
 | ④ | Agent 门户 | A | **拆出去单独出方案**（见 §5） |
 
@@ -132,14 +132,18 @@ CREATE TABLE tour_products (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  CONSTRAINT tour_products_source_key UNIQUE (client_id, source_kind, source_ref)
+  CONSTRAINT tour_products_source_key UNIQUE (client_id, source_kind, source_ref),
+  -- 复合外键的目标列：让 tour_departures 能把 (client_id, tour_product_id) 一起校验，见下方
+  CONSTRAINT tour_products_client_id_unique UNIQUE (client_id, id)
 );
 
 -- tour_departures —— 可售单元
 CREATE TABLE tour_departures (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id         UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  tour_product_id   UUID NOT NULL REFERENCES tour_products(id) ON DELETE RESTRICT,
+  -- 不用单列 REFERENCES tour_products(id)：那样客户 A 的 client_id 配客户 B 的
+  -- tour_product_id 也能通过约束。必须用下方复合外键把两列一起钉死。
+  tour_product_id   UUID NOT NULL,
 
   departure_date    DATE NOT NULL,
   departure_city    TEXT,                   -- 展示用，人工填，**不进任何键**
@@ -152,8 +156,11 @@ CREATE TABLE tour_departures (
   -- 🔴 可空。NULL = 「容量未设定」，不是 0。见 §2.4
   seats_total       INTEGER CHECK (seats_total IS NULL OR seats_total >= 0),
 
+  -- 'retired' = 源里已经不存在这个出发日期（§2.6 硬约束 4：标 retired，不删行）。
+  -- 不能只有 open/closed/cancelled：同步遇到「产品还在但这个出发日期没了」时，
+  -- 没有能落库的状态可写。
   status            TEXT NOT NULL DEFAULT 'open'
-                      CHECK (status IN ('open', 'closed', 'cancelled')),
+                      CHECK (status IN ('open', 'closed', 'cancelled', 'retired')),
 
   source_date_text  TEXT,                   -- 外部源的原文日期串，供人工对账
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -161,7 +168,13 @@ CREATE TABLE tour_departures (
 
   -- 唯一性直接建在业务字段上，不再引入 departure_code（见 §2.5）
   CONSTRAINT tour_departures_natural_key
-    UNIQUE (client_id, tour_product_id, departure_date)
+    UNIQUE (client_id, tour_product_id, departure_date),
+
+  -- 复合外键：强制这个出发团的 client_id 与它所属产品的 client_id 一致，
+  -- 否则客户 A 的 client_id 搭客户 B 的 tour_product_id 也能建团（2 审 blocker）。
+  CONSTRAINT tour_departures_product_client_fk
+    FOREIGN KEY (client_id, tour_product_id)
+    REFERENCES tour_products (client_id, id) ON DELETE RESTRICT
 );
 
 CREATE INDEX tour_departures_client_date_idx ON tour_departures (client_id, departure_date);
@@ -213,6 +226,34 @@ CREATE POLICY "service_role_full" ON tour_products
 **必须带 `TO service_role`**（铁律 7）。
 
 > **v1 的误报已删**：v1 §2.6 称现有 4 张 CRM 表漏 `TO service_role` 需单独报 PM。**实测生产库（`glbdnayojixmexgofbsd`）这 5 张表的策略 `roles` 全部是 `{service_role}`，RLS 均已开启**，`20260803020000_rls_lock_policies_to_service_role.sql` 早已批量收口，`scripts/db-invariants.sql` 不变量 1 还在 CI 里守着。**没有这个问题，不要报给 PM。**
+
+### 2.8 `travel_agents` —— 最小身份表（②必须建，不是 ④ 的活）
+
+**2 审后发现的顺序问题**：①②③ 被标为可独立实施，§3.2 `tour_bookings.agent_id` 却引用 `travel_agents(id)`，而这张表在 v1/v2 之前的草稿里一直挂在被推迟的 ④（Agent 门户）名下。按当前分期顺序建 ②的 `CREATE TABLE tour_bookings` 会直接报 `relation "travel_agents" does not exist`。
+
+**拆法**：把「代理是谁」的身份台账拆出来，跟着②一起建；「代理怎么登录 / 门户授权」仍然留在 ④。②里员工录代理订位时，从这张表选代理或新建一条，不涉及登录。
+
+```sql
+CREATE TABLE travel_agents (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id      UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  contact_email  TEXT,
+  contact_phone  TEXT,
+  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT travel_agents_name_unique UNIQUE (client_id, name)
+);
+
+ALTER TABLE travel_agents ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "service_role_full" ON travel_agents
+  FOR ALL TO service_role USING (true) WITH CHECK (true);
+```
+
+④ 需要登录关联时，在这张表上加一列（例如 `portal_user_id UUID REFERENCES client_portal_users(id)`），不改这张表已有语义，也不需要重建。
 
 ---
 
@@ -325,10 +366,10 @@ remaining(departure) = seats_total - occupied     -- seats_total 为 NULL 时 re
 1. **方向单一**：booking / 收款 → contact.stage，**永不反向**。员工手改 stage 不回写 booking。
 2. **「最靠前」定义死**：取该联系人**在当前在售出发团上**、未取消的单里，映射阶段 `sort_order` **最大**的那一档（= 漏斗最深）。**历史团不参与**。
    > 这解决了 v1 的二义：老客人去年付清黄山团、今年新报圣诞团，不会被拉回前段当新线索群发。
-3. **UPDATE 必须带条件**，照抄 `stage-infer` 的写法：只在 `stage IS NULL`、或 stage 仍停在「允许被自动推进的档位集」时才写。人一旦动过，命中 0 行。
-4. **取消的收尾必须显式**：一条未取消的单都不剩时，**必须写回一个可营销的阶段**（默认 `contacted`）+ 落 `contact_stage_events` 审计。
+3. **UPDATE 必须带条件，且条件要验证「当前档位是谁写的」，不能只看档位取值落不落在允许集里**：只检查 `stage ∈ 允许被自动推进的档位集` 不够——员工把联系人手工设成 `contacted` / `quoted` 这类本身就在允许集里的档位后，下一次自动派生一样会命中并覆盖人工判断，因为看到的只是「档位取值可推进」，看不出「这个值是人刚填的」。`contact_stage_events.changed_by` 已经区分人工 / 系统变更，UPDATE 的 WHERE 必须把它纳入：只在 (a) `stage IS NULL`，或 (b) 该联系人最近一条 `contact_stage_events` 的 `changed_by = 'system'`（当前档位本身就是上一次自动派生写的，还没被人碰过）时才允许写。只要最近一条是人工改的（`changed_by <> 'system'`，不论改成了允许集里的哪个值），一律命中 0 行。
+4. **取消的收尾必须显式，回退阶位必须来自客户配置，不能硬编码 `contacted`**：一条未取消的单都不剩时，必须写回一个可营销的阶段 + 落 `contact_stage_events` 审计。回退到哪一档，从 `client_pipeline_stages`（或 `clients.leads_config`）读该客户显式配置的「取消回退档位」——CTS 的 9 档种子数据把它配成 `contacted`，但那是 CTS 的配置值，不是代码里的默认值，换一个不用 CTS 九档模型的旅游客户，这个值必须能配成别的档位或者根本没有 `contacted` 这个档。**该客户没配置回退档位，或配置的档位名在 `client_pipeline_stages` 里找不到匹配行 → fail closed**：不写 `stage`，落人工待办说明「客户未配置取消回退档位」，不许套用别的客户的档位名，也不许置回 `NULL`。
    > 两种偷懒写法都会出事：保持 `paid_full` 不动 → 退订的客人被 `marketing_action='won'` 永久 suppress，再没人联系他；置回 `NULL` → `stage-infer` 专挑 `stage IS NULL` 的人读历史邮件（里面写着「定金已付」）→ 又把他填回 `deposit_paid` → 又被 suppress。
-5. **映射表进客户配置，不进代码**：`booking.status + 收款事实 → stage_key` 写在 `clients.leads_config`（已存在的 JSONB 列）或 `client_pipeline_stages` 的一列。阶段档位本来就是按客户可配的（CTS 那 9 档只是 seed），写死在 `src/lib` = 客户语义进 shared runtime（红线 2），也让第二个旅游客户接不进来。
+5. **映射表进客户配置，不进代码**：`booking.status + 收款事实 → stage_key`（含上面第 4 条的取消回退档位）写在 `clients.leads_config`（已存在的 JSONB 列）或 `client_pipeline_stages` 的一列。阶段档位本来就是按客户可配的（CTS 那 9 档只是 seed），写死在 `src/lib` = 客户语义进 shared runtime（红线 2），也让第二个旅游客户接不进来。`contacts.stage` 本身没有外键约束，写入一个客户配置里不存在的档位名不会报错，只会留下一个 `client_pipeline_stages` 匹配不到的孤儿键——所以第 4 条的 fail closed 检查必须在写入前做，不能指望数据库层拦。
 6. **`stage-infer` 要加排除条件**：本人有过 booking 的，不再由邮件推断阶段。
 7. **交互说明**：每次自动派生会产生一条 `changed_by='system'` 的 `contact_stage_events`，`day-list.ts:389-455` 的「今天改过阶段变灰不消失」逻辑会把这些人算成「今天改过」。行为上可接受，但要在 PR 里写明，别让员工困惑。
 
@@ -360,7 +401,7 @@ remaining(departure) = seats_total - occupied     -- seats_total 为 NULL 时 re
 2 审一致判定：**④ 现在深度不够，不具备再审条件**（4 条独立失效路径 + 2 个越权面）。因此本方案只保留三条结论，实施设计另起 `docs/specs/…-travel-agent-portal-spec.md`。
 
 ### 5.1 复用结论（成立但被 v1 夸大了）
-ME 已有邮箱验证码登录（`/api/auth/magic-link` + `/api/auth/verify-otp`）、授权表 `client_portal_users`、分级映射 `src/lib/auth/access-types.ts`。代理可以复用**登录**，加一个 `access_type='agent'` + `travel_agents` 档案表。
+ME 已有邮箱验证码登录（`/api/auth/magic-link` + `/api/auth/verify-otp`）、授权表 `client_portal_users`、分级映射 `src/lib/auth/access-types.ts`。代理可以复用**登录**，加一个 `access_type='agent'`；`travel_agents` 档案表已在②建好（见 §2.8），④只需要给它加登录关联列，不用新建表。
 **但**：「代理只能看自己的客人」是**客户内再按 agent_id 二次收窄**，ME 今天**完全没有**这一层，是全新授权逻辑。v1 说「砍掉了外部账号体系的绝大部分风险面」——砍掉的只是登录，授权层没砍多少。
 
 ### 5.2 ④ 的前置条件（不满足不开工）
@@ -386,7 +427,7 @@ ME 已有邮箱验证码登录（`/api/auth/magic-link` + `/api/auth/verify-otp`
 
 | 步 | 内容 | 验证证据 |
 |---|---|---|
-| 1 | migration：`tour_products` / `tour_departures` / `tour_bookings` | 本机 PG 沙盘真跑 `scripts/db-replay-and-verify.sh`，证明能从零重放 |
+| 1 | migration：`tour_products` / `tour_departures` / `travel_agents` / `tour_bookings`（顺序必须如此——`tour_bookings` 引用 `travel_agents`，见 §2.8） | 本机 PG 沙盘真跑 `scripts/db-replay-and-verify.sh`，证明能从零重放 |
 | 2 | 占用计算 | 边界用例：容量未设(NULL) / 0 座位 / 恰好满 / 超卖 / 已取消不计 / 多人单按 seats 计 / 子查询失败返回 `'unknown'` |
 | 3 | 日期解析纯函数 | 同一输入在 `TZ=UTC` 与 `TZ=Pacific/Auckland` 下结果相等 |
 | 4 | chinatravel 同步 | 真实 `tours.ts` 跑一次：**产品 32 行、出发团 25 行**；圣诞两个 slug 各 1 行；749/962 两处计算展开必须解出日期而不是 0；解析失败落待办 |
