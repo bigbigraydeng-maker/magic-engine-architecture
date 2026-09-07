@@ -24,6 +24,7 @@ import { encryptToken } from '@/lib/platform-oauth/vocabulary'
 import { listGa4Properties } from '@/lib/ga4/admin'
 import { setGa4Property } from '@/lib/ga4/property'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
+import { persistGbpFromTokens, scopeIncludesGbp } from '@/lib/gbp/oauth-persist'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -317,6 +318,31 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
     // properties.length === 0 → customer genuinely has no GA4 account yet,
     // not an error — nothing to write, matches the wizard's skip-and-move-on path.
+  }
+
+  // ── GBP: 若这次授权包含 business.manage，一并把商家页连接落库 ────────────
+  // 铁律 3 落地（2026-09-07）：从前 GBP 和 GSC/GA4 是两条独立 OAuth，每客户要
+  // 点两次；PM 每天早上待办里都躺着三条「要你点一次的连接」，实际上大半是同
+  // 一个 Google 账号只是要跳第二遍。合到一次点后，一次 consent 覆盖商家页 +
+  // GSC + GA4 + Indexing，daily-todo 的 setup 卡片就真的能"以后不再出现"了。
+  //
+  // 非致命：GSC / GA4 已经写好，即使 GBP 这一支失败（用户不在 Test users /
+  // Business API 没启用 / 账号名下没商家页），也不该把整条授权推回错误页 ——
+  // daily-todo 的 GBP 待办明天照旧会浮出来，用户再单独走一次 gbp/start 就行。
+  if (tokens.refresh_token && scopeIncludesGbp(tokens.scope)) {
+    const gbpResult = await persistGbpFromTokens({
+      clientId,
+      accessToken:  tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresInSec: tokens.expires_in,
+      scope:        tokens.scope,
+    }).catch((err) => {
+      console.error('[google/callback] GBP persist threw:', err instanceof Error ? err.message : err)
+      return { ok: false as const }
+    })
+    if (!gbpResult.ok) {
+      console.warn('[google/callback] GBP not persisted this round — daily-todo will re-surface it')
+    }
   }
 
   // Redirect back to where the flow started

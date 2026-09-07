@@ -77,6 +77,10 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   { service: 'blog-stuck-generating-sweeper', jobName: 'blog-stuck-generating-sweeper', schedule: '45 * * * *', logsRuns: true },
   { service: 'blog-weekly', jobName: 'blog-weekly', schedule: '0 3 * * 2', logsRuns: true },
   { service: 'content-factory-intake', jobName: 'content-factory-intake', schedule: '0 22 * * *', logsRuns: true },
+  // 运行记录自己的清理任务。以前是 cron_run_logs 表上的 AFTER INSERT 触发器，
+  // 每天 400~600 次插入就跑 400~600 次全表 DELETE，并发时会死锁 —— 而死锁让插入失败，
+  // 也就是让这套监控自己瞎掉。2026-09-07 改成每天一次的独立任务。
+  { service: 'cron-run-logs-cleanup', jobName: 'cron-run-logs-cleanup', schedule: '50 16 * * *', logsRuns: true, addedAt: '2026-09-07' },
   { service: 'cts-seo-optimizer', jobName: 'cts-seo-optimizer', schedule: '30 5 * * 1', logsRuns: true },
   { service: 'daily-cron-digest', jobName: 'daily-cron-digest', schedule: '0 6 * * *', logsRuns: true },
   { service: 'diagnostic-weekly', jobName: 'diagnostic-weekly', schedule: '0 8 * * 1', logsRuns: true, addedAt: '2026-08-03' },

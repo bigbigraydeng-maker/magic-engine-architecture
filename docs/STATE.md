@@ -57,6 +57,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | **社媒内容矩阵** | ✅ 成熟 | `lib/{brief,content,social,reels,visual,images,publer,scheduling}` · `api/clients/[id]/{brief,campaign}` · `api/content/route-{a,b,c}` · `api/visual` | `master_briefs` `campaign_briefs` `content_posts` `visual_assets` `reels_drafts` |
 | **AI Content Factory** (P21) | 🔄 建设中 | `lib/{factory,ai-factory,winner-reel-sync}` · `api/factory` · `scripts/factory-worker/` | `content_work_orders` `content_work_order_clips` `factory_balance_ledger` `factory_angle_blocklist` |
 | **Ads Intelligence** | 🔄 建设中 | `lib/{meta,google-ads,tiktok-ads,ads-strategy}` · `api/clients/[id]/ad-health` | `ad_daily_insights` `ad_strategy_configs` `ad_health_narratives` |
+| **Leads 营销中心**（多渠道私信 / CRM） | 🔄 建设中 | `lib/{messaging,messenger,whatsapp,crm}` · `api/clients/[id]/{messenger,crm,business-inbox}` · **`api/webhooks/whatsapp`**（对外 endpoint，Meta 推送入口） | `conversations` `conversation_messages` `conversation_briefs` `conversation_outbound_log` `contacts` `contact_identities` `contact_touchpoints` |
 | **策略层**（Goal→Initiative→Action） | ✅ 上线 | `lib/{strategy,marketing-plan,execution,zhuge}` · `api/{goals,initiatives}` | `goals` `initiatives` `marketing_plans` `execution_items` |
 | **飞轮数据闭环** (P12) | ✅ 上线 | `lib/flywheel` · `api/flywheel` | `flywheel_actions` `flywheel_metrics` `flywheel_outcomes` |
 | **诊断 / 数据回流** | ✅ 上线 | `lib/{diagnostic,scoring,ga4,gbp,places,competitors,monthly-report,reports}` | `diagnostic_{runs,findings,narratives}` `ga4_traffic_snapshots` `anomaly_signals` |
@@ -89,7 +90,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 4. 定时任务全表
 
-### 4.1 Render Cron（**47 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
+### 4.1 Render Cron（**48 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
 
 | Cron 名 | 调度 (UTC) | 端点 |
 |---|---|---|
@@ -117,6 +118,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | anomaly-detector-daily | `0 5 * * *` | `/api/cron/anomaly-detector` |
 | daily-cron-digest | `0 6 * * *` | `/api/cron/daily-cron-digest` |
 | winner-reel-sync-daily | `0 15 * * *` | `/api/cron/winner-reel-sync-daily` |
+| cron-run-logs-cleanup | `50 16 * * *` | `/api/cron/cron-run-logs-cleanup` —— 清运行记录自己的旧行（2026-09-07 从表上的触发器搬过来）|
 | proposal-view-digest | `0 19 * * *` | `/api/cron/proposal-view-digest` |
 | factory-order-scheduler | `0 20 * * *` | `/api/cron/factory-order-scheduler` |
 | content-factory-intake | `0 22 * * *` | `/api/cron/content-factory-intake` |

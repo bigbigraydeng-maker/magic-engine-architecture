@@ -180,11 +180,26 @@ export interface ActionIdentity {
   idempotencyKey: string
   postId: string
   pageId: string
+  windowHours: number
+  targetAt: string
 }
 
 export type ActionIdentityCheck =
   | { ok: true }
-  | { ok: false; reason: 'action_not_found' | 'client_mismatch' | 'post_mismatch' | 'page_mismatch' | 'idempotency_mismatch' }
+  | { ok: false; reason: 'action_not_found' | 'client_mismatch' | 'post_mismatch' | 'page_mismatch' | 'idempotency_mismatch' | 'invalid_publish_action' | 'measurement_window_mismatch' }
+
+/** Fixed Check contract, not a configurable polling or billable task policy. */
+export function hasFixedMeasurementWindows(payload: Record<string, unknown>, claim: ActionIdentity): boolean {
+  const windows = payload.measure_at
+  const anchor = payload.scheduled_publish_time ?? payload.published_at
+  if (typeof anchor !== 'string' || !Number.isFinite(Date.parse(anchor))) return false
+  if (!Array.isArray(windows) || windows.length !== 2) return false
+  const valid = [4, 72].every(hours => windows.filter(w =>
+    w && w.hours === hours && typeof w.at === 'string' &&
+    Date.parse(w.at) === Date.parse(anchor) + hours * 3600_000,
+  ).length === 1)
+  return valid && windows.some(w => w.hours === claim.windowHours && Date.parse(w.at) === Date.parse(claim.targetAt))
+}
 
 export async function verifyActionIdentity(
   supabase: SupabaseClient,
@@ -193,19 +208,24 @@ export async function verifyActionIdentity(
 ): Promise<ActionIdentityCheck> {
   const { data, error } = await supabase
     .from('flywheel_actions')
-    .select('client_id, payload')
+    .select('client_id, action_type, payload')
     .eq('id', actionId)
     .maybeSingle()
 
   if (error) throw new Error(`verifyActionIdentity: db error — ${error.message}`)
   if (!data) return { ok: false, reason: 'action_not_found' }
 
-  const row = data as { client_id: string; payload: Record<string, unknown> | null }
+  const row = data as { client_id: string; action_type: string; payload: Record<string, unknown> | null }
   const p = row.payload ?? {}
   if (row.client_id !== claim.clientId) return { ok: false, reason: 'client_mismatch' }
   if (p.idempotency_key !== claim.idempotencyKey) return { ok: false, reason: 'idempotency_mismatch' }
   if (p.post_id !== claim.postId) return { ok: false, reason: 'post_mismatch' }
   if (p.page_id !== claim.pageId) return { ok: false, reason: 'page_mismatch' }
+  if (row.action_type !== SOCIAL_PUBLISH_ACTION_TYPE ||
+      !['daily_plan', 'factory_reel'].includes(String(p.source))) {
+    return { ok: false, reason: 'invalid_publish_action' }
+  }
+  if (!hasFixedMeasurementWindows(p, claim)) return { ok: false, reason: 'measurement_window_mismatch' }
   return { ok: true }
 }
 

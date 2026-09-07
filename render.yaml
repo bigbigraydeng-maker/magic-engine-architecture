@@ -1134,6 +1134,27 @@ services:
     envVars:
       - fromGroup: me-shared-cron-secret
 
+  # 清一次 cron_run_logs 的旧运行记录。
+  #
+  # 🔴 这活儿以前是表上的 AFTER INSERT 触发器干的 —— 每天 400~600 次插入就跑
+  #    400~600 次全表 DELETE，并发插入还会死锁，而死锁会让**插入本身失败**。
+  #    运行记录写不进去恰好是这套监控最不能出的事，所以搬成每天一次的独立任务
+  #    （触发器在 supabase/migrations/20260907000001 里拆掉了）。
+  #
+  # 保留规则一行没改，还是生产上那两条：7 天以上的空记录 + 180 天以上的全部。
+  # 16:50 UTC ≈ NZ 凌晨 04:50，避开整点那批任务的插入高峰。
+  # 密钥走 fromGroup，不留「记得手动 link」这一步。
+  - type: cron
+    name: cron-run-logs-cleanup
+    env: node
+    schedule: "50 16 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 180 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/cron-run-logs-cleanup
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
   # 客人来信没人回 —— 每天早上给销售发一封汇总信（测试期发到 ME 自己的信箱）。
   #
   # 判据 src/lib/crm/email-reply-due.ts（超时 24 小时，PM 2026-09-03 拍板），

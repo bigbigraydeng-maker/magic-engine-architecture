@@ -43,6 +43,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const now = new Date()
   const weekKey = isoWeekKey(now)
+  // A bounded client_id mode is for controlled smoke tests and recovery. The
+  // default remains the full roster for the scheduled/manual weekly run.
+  const requestedClientId = req.nextUrl.searchParams.get('client_id')?.trim() || null
   const base = {
     job: 'flywheel-seo-weekly',
     week_key: weekKey,
@@ -59,13 +62,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     )
   }
 
-  const events = buildSnapshotEvents(roster.entries, weekKey)
+  const entries = requestedClientId
+    ? roster.entries.filter((entry) => entry.clientId === requestedClientId)
+    : roster.entries
+  const events = buildSnapshotEvents(entries, weekKey)
   if (events.length === 0) {
     return NextResponse.json({
       ...base,
       status: 'roster_empty',
       clients_dispatched: 0,
       estimated_provider_calls: 0,
+      ...(requestedClientId ? { client_id: requestedClientId } : {}),
       error: null,
     })
   }
@@ -90,6 +97,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     status: failed.length === events.length ? 'roster_failed' : 'dispatched',
     clients_dispatched: dispatched,
     estimated_provider_calls: dispatched * PROVIDER_CALLS_PER_CLIENT,
+    ...(requestedClientId ? { client_id: requestedClientId } : {}),
     error: failed.length > 0 ? `${failed.length}/${events.length} 条派单没发出去` : null,
     failed,
   }
