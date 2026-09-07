@@ -17,7 +17,9 @@ import { join } from 'path'
 
 const ROOT = process.cwd()
 const MIGRATIONS_DIR = join(ROOT, 'supabase/migrations')
-const MIGRATION_VERSION = '20260905000001'
+// 2026-09-07：原本用 20260905000001，与 social_post_measurement_receipts 撞号。
+// social 那条已在 main（更早落地），本迁移休眠未 apply、无下游依赖，故本迁移让号后移。
+const MIGRATION_VERSION = '20260905000002'
 const MIGRATION_FILE = `${MIGRATION_VERSION}_conversion_writeback_v1.sql`
 
 const RAW = readFileSync(join(MIGRATIONS_DIR, MIGRATION_FILE), 'utf8')
