@@ -110,6 +110,23 @@ export async function GET(req: NextRequest) {
   }
   const mailFailed = mail.filter((m) => m.error || m.stoppedEarly).length
 
+  // ── 接力：告诉写卡那一步「同步跑完了」（理由见文件头）──────────────────
+  //
+  // 🔴 **必须在 run.finish 之前发**（2026-09-07 加观测那次揪出来的）。
+  //    原来放在 finish 之后：handoff 结果只写进 HTTP 响应，而这个响应会被网关
+  //    在 125 秒时掐断 —— 观测数据被扔进了正好看不见的地方，正是这次事故
+  //    自己的失败模式。放进 summary 之后，即便响应被掐，运行记录里也留得下
+  //    「发条子成功了没 / 失败原因是什么」。
+  const handoff = await dispatchBriefHandoff({
+    clients: results.length,
+    conversations,
+    messages,
+    new_contacts: newContacts,
+    failed,
+    mailbox_error: mailError,
+    completed_at: new Date().toISOString(),
+  })
+
   await run.finish({
     processed: results.length + mail.length,
     completed: results.length - failed + (mail.length - mailFailed),
@@ -123,18 +140,10 @@ export async function GET(req: NextRequest) {
         error: mailError,
         results: mail,
       },
+      // 🔴 写卡接力那张条子发出去没 —— 上一次事故就是这一步安静地失败了，
+      //    响应被网关吞掉、监控里看着一切正常。留在 summary 里以后一眼可查。
+      briefHandoff: handoff,
     },
-  })
-
-  // ── 接力：告诉写卡那一步「同步跑完了」（理由见文件头）──────────────────
-  const handoff = await dispatchBriefHandoff({
-    clients: results.length,
-    conversations,
-    messages,
-    new_contacts: newContacts,
-    failed,
-    mailbox_error: mailError,
-    completed_at: new Date().toISOString(),
   })
 
   return NextResponse.json({

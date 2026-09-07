@@ -177,3 +177,41 @@ describe('条子发不出去的时候', () => {
     expect((await res.json()).briefHandoff).toMatchObject({ sent: true, error: null })
   })
 })
+
+describe('🔴 观测 —— handoff 结果必须进 cron_run_logs.summary（响应被网关吞掉时唯一能查的地方）', () => {
+  // 上次事故的失败模式：`&&` 守错信号 + handoff 结果只放响应里 + 响应被网关掐 =
+  // 观测数据消失，监控上看不出「发条子那一步是不是挂了」。这一组测试锁的就是
+  // 「观测数据到底在没在」——不是「同步跑没跑」。
+
+  it('发成功时，run.finish 的 summary.briefHandoff.sent 是 true', async () => {
+    await callRoute()
+    expect(finish).toHaveBeenCalledTimes(1)
+    const summary = (finish.mock.calls[0][0] as { summary: { briefHandoff?: { sent: boolean; error: string | null } } }).summary
+    expect(summary?.briefHandoff).toMatchObject({ sent: true, error: null })
+  })
+
+  it('🔴 发失败时，失败原因也必须进 summary —— 这就是加观测要看到的那一行', async () => {
+    // 生产上真出的错，比如 event key 缺、Inngest 拒收，都会在这里落下。
+    sendInngestEvent.mockRejectedValue(new Error('INNGEST_EVENT_SEND_FAILED:401:invalid event key'))
+    await callRoute()
+    const summary = (finish.mock.calls[0][0] as { summary: { briefHandoff?: { sent: boolean; error: string | null } } }).summary
+    expect(summary?.briefHandoff).toMatchObject({
+      sent: false,
+      error: 'INNGEST_EVENT_SEND_FAILED:401:invalid event key',
+    })
+  })
+
+  it('🔴 handoff 必须发生在 run.finish 之前 —— 反过来 summary 里拿不到值', async () => {
+    // 顺序不对，运行记录就永远缺 briefHandoff 字段，这个观测跟没加一样。
+    const order: string[] = []
+    sendInngestEvent.mockImplementation(async () => {
+      order.push('handoff')
+      return { event_ids: ['evt_1'] }
+    })
+    finish.mockImplementation(async () => {
+      order.push('finish')
+    })
+    await callRoute()
+    expect(order).toEqual(['handoff', 'finish'])
+  })
+})
