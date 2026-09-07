@@ -11,6 +11,7 @@ import {
   daysAgo,
   loadManualItems,
   pushPlatformCandidateReviewItems,
+  pushClientDocManualTaskItems,
   pushDataForSeoCreditsItem,
   pushMailchimpExportItems,
   pushLinkedinProgressItems,
@@ -630,6 +631,31 @@ describe('pushPlatformCandidateReviewItems — 平台候选复查不靠日历记
     expect(() =>
       pushPlatformCandidateReviewItems(items, now, [{ name: '坏日期', reviewDate: 'not-a-date' }]),
     ).not.toThrow()
+    expect(items).toHaveLength(0)
+  })
+})
+
+describe('pushClientDocManualTaskItems — 客户文档里的一次性人工请求必须进今日待办', () => {
+  const task = {
+    clientId: 'c0000000-0000-0000-0000-000000000000',
+    clientName: 'CTS Tours NZ',
+    what: '测试用一次性请求',
+    how: '测试用做法',
+    href: 'https://example.com',
+    expiresAt: '2026-09-08T09:00:00+13:00',
+  }
+
+  it('还没过期 → 下发待办', () => {
+    const items: ManualItem[] = []
+    pushClientDocManualTaskItems(items, new Date('2026-09-07T20:00:00Z'), [task])
+    expect(items).toHaveLength(1)
+    expect(items[0].kind).toBe('client_doc_manual_task')
+    expect(items[0].client_id).toBe(task.clientId)
+  })
+
+  it('已过期 → 不下发（不用回来手动删）', () => {
+    const items: ManualItem[] = []
+    pushClientDocManualTaskItems(items, new Date('2026-09-08T20:00:00Z'), [task])
     expect(items).toHaveLength(0)
   })
 })
