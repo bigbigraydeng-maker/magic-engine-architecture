@@ -204,7 +204,7 @@
 - 顶层 4 条视频广告(明早 FDE 建的)也在这里
 
 **CTStours 账户 `2202695063810470`**:开一条**实验性 Lookalike 广告**
-- 目的:验证「真金付费客户 Lookalike」种子的价值
+- 目的:验证「leads+newsletter 合并名单 Lookalike」(一般潜客种子,未核实付费)的效果
 - 预算:**$20-30/天**(实验预算,别多)
 - 一周后看数据决定要不要 A 迁移(全部搬 CTStours)or C 认账停止
 
@@ -213,7 +213,7 @@
 ## Lookalike 建法(顾问窗口负责,60 分钟匹配率出后自动动)
 
 - 用 `ads_create_custom_audience` API 建 1% NZ Lookalike,种子 = `52549822861673`
-- 命名:`CTS · LAL · list-paid · 1pct · NZ`(遵守命名分区约定)
+- 命名:`CTS · LAL · list-leads · 1pct · NZ`(遵守命名分区约定;不用 "paid"——这份种子没核实过付款状态)
 - 建成后在 CTStours 账户 `2202695063810470` 新开:
   - Campaign objective: OUTCOME_LEADS(或 OUTCOME_TRAFFIC 引流官网)
   - Ad set 受众:该 Lookalike,排除 已提交表单 90d
