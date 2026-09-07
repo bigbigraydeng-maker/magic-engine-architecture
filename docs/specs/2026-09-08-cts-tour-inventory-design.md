@@ -30,7 +30,33 @@
 - `me-travel` 已在 [`docs/registry/product-versions.md`](../registry/product-versions.md) 在册，不需新增版本。
 - **候选登记：PM 2026-09-08 明确回「跳」，本轮不登记。**
 
-**PM 拍板项（挂起，不阻塞团管理模块）**：ME 要不要进代理佣金的资金链路。本方案一律**只记事实不动钱**。
+### PM 拍板项
+
+**① 产品边界冲突 —— 必须书面表态，否则「名额 + 订单」不许进 migration**（Codex round-2 复审发现）
+
+[`ME_PRODUCT_DEFINITION.md`](../strategy/ME_PRODUCT_DEFINITION.md) 是最高优先级文档（CLAUDE.md：冲突时以它为准），其中：
+- §3.2「ME 不直接负责」**逐字列出**「**旅游库存、正式报价、出票和预订后台**」，要求这些系统继续作为 Source of Truth，ME 只通过 Connector 读事实。
+- §3.3「最小保存原则」明令「不应因为『以后也许有用』而复制外部系统的完整……**库存、订单**……数据」。
+
+**冲突的范围没有覆盖全部方案，必须分清**：
+
+| 部分 | 撞不撞边界 | 依据 |
+|---|---|---|
+| 团管理模块的**内容面**：行程 / 图片 / 卖点 / 价格 / 出发时间 | **不撞** | §3.1 明列 ME 负责「Campaign、Offer、内容、创意、页面……的策略与资产生产」。这就是营销资产 |
+| **名额**（`seats_total` + 占用计算） | **撞** §3.2「旅游库存」 | — |
+| **订单台账**（`tour_orders`） | **撞** §3.2「预订后台」+ §3.3「订单数据」 | — |
+
+**PM 2026-09-08「这是旅游行业通用需求」定的是层级归属（L2 而非 CTS 特例），没有、也不等于修改这条产品边界。**
+
+**技术现实（不能替 PM 做决定，但 PM 需要知道）**：已实地核对 chinatravel 仓，那是内容站，**没有座位 / 容量 / 订位数据**——今天**不存在**一个可以当 Connector 源的外部订位系统。这是本方案选择自建台账的真实原因。
+
+PM 必须二选一：
+- **(a) 显式例外**：确认「客户目前没有独立的订位后台，ME 台账本身就是 Source of Truth」，接受这是 §3.2/§3.3 的一次显式例外，并把范围（仅此客户 / 还是 ME Travel 默认）记进 [`docs/DECISIONS.md`](../DECISIONS.md)。
+- **(b) 维持边界**：先接入或搭建一个外部订位系统当 Source of Truth，ME 这边降级成读它的 Connector。
+
+**在 PM 书面答复前，「名额 + 订单」不得进入 migration 实施。团管理模块的内容面不受此条阻塞。**
+
+**② 资金链路**：ME 要不要进代理佣金的资金链路。本方案一律**只记事实不动钱**。
 
 ---
 
@@ -293,7 +319,9 @@ CREATE TABLE tour_orders (
   pax_evidence    JSONB,                    -- AI 判断的依据（邮件 id / 原文片段），可追溯
 
   source_channel  TEXT NOT NULL CHECK (source_channel IN ('direct', 'agent')),
-  agent_id        UUID REFERENCES travel_agents(id) ON DELETE RESTRICT,
+  -- 不用单列 REFERENCES：那样客户 A 的订单能引用客户 B 的代理，
+  -- B 的代理门户就能查到 A 的订单与联系人。必须走下方复合外键。
+  agent_id        UUID,
 
   -- 🔴 名额的开关。收到定金 = 占名额。ME 不经手收付，这只是"客户说收到了"的事实记录。
   deposit_received_at TIMESTAMPTZ,
@@ -310,7 +338,13 @@ CREATE TABLE tour_orders (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   CONSTRAINT tour_orders_agent_requires_id
-    CHECK (source_channel <> 'agent' OR agent_id IS NOT NULL)
+    CHECK (source_channel <> 'agent' OR agent_id IS NOT NULL),
+
+  -- 复合外键：订单的代理必须与订单同一个 client_id。
+  -- agent_id 为空时（直客单）按 Postgres 默认 MATCH SIMPLE 不校验，符合预期。
+  CONSTRAINT tour_orders_agent_client_fk
+    FOREIGN KEY (client_id, agent_id)
+    REFERENCES travel_agents (client_id, id) ON DELETE RESTRICT
 );
 
 CREATE UNIQUE INDEX tour_orders_one_live_per_contact
@@ -331,7 +365,9 @@ CREATE TABLE travel_agents (
   status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT travel_agents_name_unique UNIQUE (client_id, name)
+  CONSTRAINT travel_agents_name_unique UNIQUE (client_id, name),
+  -- 复合外键目标列：让订单能把 (client_id, agent_id) 一起校验
+  CONSTRAINT travel_agents_client_id_unique UNIQUE (client_id, id)
 );
 ALTER TABLE travel_agents ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "service_role_full" ON travel_agents
@@ -361,10 +397,16 @@ remaining = seats_total - occupied           -- seats_total 为 NULL 时 remaini
 ### 5.4 订单与 CRM / 广告的接线
 
 - **CRM**：订单驱动联系人阶段，方向单一（订单 → 联系人，永不反向）。三条硬规则：
-  1. **UPDATE 的条件要验证「当前档位是谁写的」，不能只看档位取值在不在允许集里**。只判取值不够——员工手工把人设成 `contacted` / `quoted` 这类本来就在允许集里的档位后，下一次自动派生照样命中、照样覆盖人工判断。`contact_stage_events.changed_by` 已经区分人工与系统，WHERE 必须用它：只在 (a) `stage IS NULL`，或 (b) 该联系人最近一条阶段事件是 `changed_by='system'`（当前值就是上次自动写的、还没被人碰过）时才允许写。最近一条是人改的，一律命中 0 行。
+  1. **UPDATE 的条件要验证「当前档位是谁写的」，不能只看档位取值在不在允许集里**。只判取值不够——员工手工把人设成 `contacted` / `quoted` 这类本来就在允许集里的档位后，下一次自动派生照样命中、照样覆盖人工判断。`contact_stage_events.changed_by` 已经区分人工与系统，WHERE 必须用它：只在 (a) `stage IS NULL`，或 (b) 该联系人最近一条阶段事件的 `changed_by` **属于「系统 actor 集合」**时才允许写。
+     **不能只比较字面量 `'system'`**——实测现有两个自动写入者都不写这个字面量：`stage-infer.ts` 写 `STAGE_INFER_ACTOR = 'ai:conversation-read'`、`qualified-buyer.ts` 写 `AUTO_TAG_ACTOR = 'system:qualified-buyer'`。只认字面量会把它们的写入误判成人工改动 → 命中 0 行 → 再叠加「有订单的联系人不再由邮件推断阶段」这条排除，真实的定金阶段**永久卡住不更新**。
+     所以要集中定义一个集合（如 `src/lib/crm/system-actors.ts` 导出 `SYSTEM_STAGE_ACTORS`），把现有两个 actor 加上本方案自己的 actor 常量一并枚举；**今后新增任何自动写入者都必须把自己加进去**。最近一条不在集合里（是操作者邮箱 = 真人改的），一律命中 0 行。
   2. **取消最后一单时的回退档位必须从客户配置读，不能硬编码 `contacted`**。CTS 的 9 档种子把它配成 `contacted`，但那是 CTS 的配置值不是代码默认值；换一个不用这套档位模型的旅游客户，它可能根本没有 `contacted` 这一档。**客户没配、或配的档位名在 `client_pipeline_stages` 里找不到 → fail closed**：不写 `stage`，落人工待办说明「客户未配置取消回退档位」，不许套用别的客户的档位名，也不许置回 `NULL`（置 NULL 会被 `stage-infer` 从旧邮件重新填回已付款，又被 suppress）。
   3. **映射表（含回退档位）落 `clients.leads_config`，不写死在代码**（红线 2）。`contacts.stage` 本身没有外键约束，写一个客户配置里不存在的档位名不会报错，只会留下孤儿键——所以第 2 条的检查必须在写入前做，不能指望数据库拦。
-- **广告**：收到定金 = 成交，走**已上线**的 `me_sale_outcomes` + `me_conversion_writebacks`（`20260905000002`），幂等键 `source_kind='api'` + `source_ref='tour_order:<id>:deposit'`。**不再建第二本钱的账**——同一笔定金记两次会发给 Meta 两次，而 CAPI 没有删除端点、撤不回。
+- **广告**：收到定金 = 成交，走**已上线**的 `me_sale_outcomes` + `me_conversion_writebacks`（`20260905000002`）。**不再建第二本钱的账**——同一笔定金记两次会发给 Meta 两次，而 CAPI 没有删除端点、撤不回。
+  - **「已收定金 / 已收尾款」不能是一次点击就写库的按钮**：订单表本身不存金额（钱不在这张表），点击这个动作**没有可落库的输入**——`pax` 和 `departure` 推不出「收了多少、什么时候到账」。必须弹一个小表单收两件事：**实收金额**（默认带出出发团价格但可改，定金往往不等于全款）、**到账日期**（默认今天可改；语义是钱到账日，不是出发日）。
+  - 表单提交**复用既有入账路径** `src/lib/conversions/intake.ts` 的 `buildIntakeRow(input, ctx)`，不手写 insert。`outcomeKind` 传 `'purchase'`（定金）/ `'balance'`（尾款）；邮箱电话从订单关联的联系人读；`sourceKind='api'`、`sourceRef='tour_order:<id>:deposit'`（尾款 `:balance`）——幂等靠已有的唯一索引，连点两次不会双发。
+  - 联系人没有邮箱也没有电话时（`buildIntakeRow` 强制至少要有一个），**在表单上提示「此单收款已留档，但发不出去 Meta」而不是拦掉整个流程**——收款事实要留档，能不能发是下游的事。
+  - `buildIntakeRow` 校验失败（金额非法、日期超期等）直接在表单报错，**不许绕过校验直插库**。
 - **不自造事件名**：冻结契约 `me/crm.deal.closed` 写着「不能改」，若要 emit 必须沿用它，并在契约文档补一句「上游可能是 ME 自己」。
 
 ---
@@ -418,6 +460,8 @@ remaining = seats_total - occupied           -- seats_total 为 NULL 时 remaini
 |---|---|---|
 | 子牙（架构）· 对 v2 | CONDITIONAL PASS · 6 blocker | 全部吸收：钱不重复建账 / 不自造事件名 / 删 departure_code / 5 个鉴权口列为前置 / 阶段派生七条 / 名额连界面一起做 |
 | 魏征（挑刺）· 对 v2 | FAIL · 10 blocker | 全部吸收：单一状态机 / 名额可空 / 取消回退阶段 / 「最靠前」定义死 / 读失败三态 / matcher 不覆盖 API / 函数 REVOKE / 日期时区 / 城市无源 |
+| Codex round-1（自动化） | 5 条 | 复合外键防跨客户拼接 / `retired` 状态 / `travel_agents` 提前建 / 阶段派生看 `changed_by` / 取消回退档位读客户配置且 fail closed —— 全部并入 |
+| Codex round-2（自动化） | 4 条 P1 | **①与 `ME_PRODUCT_DEFINITION.md` §3.2/§3.3 产品边界冲突 → 见 §0 PM 拍板项①，PM 书面表态前「名额+订单」不许进 migration**；②代理跨客户串号 → 复合外键；③收款按钮无可落库输入 → 改成收「实收金额+到账日期」并复用 `buildIntakeRow`；④系统 actor 不能只认字面量 `'system'` → 改枚举常量集合 —— 全部并入 |
 | 事实更正 | 7 处 | §2.6 表格 · 圣诞团理由更正 · §2.8 删掉 RLS 误报 |
 
 **v3 因产品定义变化引入的新面（团管理模块 + 素材管道复用 + 下游统一读取口）尚未过审，需再走一轮子牙 + 魏征。**
