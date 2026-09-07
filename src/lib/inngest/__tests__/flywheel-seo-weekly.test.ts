@@ -212,6 +212,28 @@ describe('干活函数', () => {
     expect(r.metrics_written).toBe(2)
   })
 
+  it('每个客户试跑都写真实的开始/结束运行记录，便于区分未消费与失败', async () => {
+    const fn = createFlywheelSeoSnapshotOneFunction({
+      pullMetrics: async () => [{}, {}],
+      shouldSkip: async () => ({ skip: false, reason: null }),
+    })
+    const harness = fakeStep()
+    const r = (await (fn as unknown as { fn: (a: unknown) => Promise<unknown> }).fn({
+      event: { data: { client_id: CTS, domain: 'ctstours.co.nz', week_key: '2026-W37' } },
+      step: harness.step,
+    })) as Record<string, unknown>
+    expect(r.status).toBe('completed')
+    expect(startCronRunId).toHaveBeenCalledWith('flywheel-seo-weekly')
+    expect(finish).toHaveBeenCalledWith(expect.objectContaining({
+      processed: 1,
+      completed: 1,
+      failed: 0,
+      summary: expect.objectContaining({ client_id: CTS, status: 'completed' }),
+    }))
+    expect(harness.ranStepIds).toContain('snapshot-log-start-2026-W37-' + CTS)
+    expect(harness.ranStepIds).toContain('snapshot-log-finish-2026-W37-' + CTS)
+  })
+
   it('🔴 条子不合法 → 直接退回，不查闸也不花钱', async () => {
     const pullMetrics = vi.fn(async () => [{}])
     const shouldSkip = vi.fn(async () => ({ skip: false, reason: null }))

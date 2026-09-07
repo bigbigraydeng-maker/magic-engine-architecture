@@ -571,8 +571,12 @@ export async function loadManualItems(
       client_id: clientId,
       client_name: nameOf(clientId),
       what: `网站页面数据 ${days} 天没更新了，内链和孤儿页检查还在用旧数据`,
-      how: '打开客户页点一次「重新扫描网站」；如果还是不行说明对方主机挡了我们，回一句我来换通道',
-      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit`,
+      // 🔴 落地路径必须落到 /site-audit/pages —— /site-audit 本身没有 page.tsx，
+      //    Next.js 直接 404（2026-09-07 每日待办 href 落地页审计 PR #1467 实测）。
+      //    /site-audit/pages 是「页面清单」页，右上就有「Start New Audit」按钮，
+      //    功能刚好对上「重新扫描网站」这句 how。
+      how: '打开链接（是「页面清单」页），右上点「Start New Audit」重扫；如果还是不行说明对方主机挡了我们，回一句我来换通道',
+      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit/pages`,
     })
   }
 

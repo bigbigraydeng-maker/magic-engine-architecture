@@ -15,7 +15,7 @@
  * 放 /admin 下会是一个不需要登录就能打开的页面。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatMoney } from '@/lib/conversions/money'
 
 /**
@@ -93,9 +93,24 @@ export default function ConversionsPage() {
   const [rejectReason, setRejectReason] = useState<string>('')
   const [rejectNote, setRejectNote] = useState('')
 
+  /**
+   * 深链参数：今日待办邮件里的两条 kind 都会带上：
+   *   · conversion_needs_review → ?client=<id>&focus=<outcomeId>
+   *   · conversion_send_in_doubt → ?client=<id>&status=in_doubt
+   * 这两个是**一次性**动作——加载完数据自动跳到对的位置就消费掉，
+   * 别再影响用户后续手动切换（否则改 URL 或 pushState 一次它又跳一次）。
+   * 2026-09-07 每日待办 href 落地页审计 (PR #1467) 修复项。
+   */
+  const [focusOutcomeId, setFocusOutcomeId] = useState<string | null>(null)
+  const [autoScrollStatus, setAutoScrollStatus] = useState<string | null>(null)
+  const stuckSectionRef = useRef<HTMLDivElement | null>(null)
+  const outcomeRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
   useEffect(() => {
     const p = new URLSearchParams(window.location.search)
     setClientId(p.get('client') ?? '')
+    setFocusOutcomeId(p.get('focus'))
+    setAutoScrollStatus(p.get('status'))
   }, [])
 
   const load = useCallback(async () => {
@@ -143,6 +158,33 @@ export default function ConversionsPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  /**
+   * 邮件深链 ?focus=<outcomeId>：数据到手后，把 cursor 跳到那条 + scrollIntoView。
+   * 找不到（可能已经被人处理掉了、或 outcomeId 拼错）就静默不动 —— 用户看到普通
+   * 列表，不弹错。跳完清空 focusOutcomeId，同一 URL 不会二次跳。
+   */
+  useEffect(() => {
+    if (!focusOutcomeId || rows.length === 0) return
+    const idx = rows.findIndex((r) => r.id === focusOutcomeId)
+    if (idx >= 0) {
+      setCursor(idx)
+      // ref 可能因为渲染时序还没设上，用 setTimeout 让 React 提交完再 scroll
+      setTimeout(() => outcomeRefs.current[focusOutcomeId]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+    }
+    setFocusOutcomeId(null)
+  }, [focusOutcomeId, rows])
+
+  /**
+   * 邮件深链 ?status=in_doubt：数据到手后 scroll 到「需要你动手」区块，
+   * 让 PM 直接看到 doubt 那条卡片。stuck 空的时候啥也不做（可能已经解决完了）。
+   * 跳完清空 autoScrollStatus，别在后续 stuck 变化时重复 scroll。
+   */
+  useEffect(() => {
+    if (autoScrollStatus !== 'in_doubt' || stuck.length === 0) return
+    setTimeout(() => stuckSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+    setAutoScrollStatus(null)
+  }, [autoScrollStatus, stuck])
 
   const current = rows[cursor]
 
@@ -407,7 +449,7 @@ export default function ConversionsPage() {
       )}
 
       {stuck.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
+        <div ref={stuckSectionRef} style={{ marginBottom: 20 }}>
           <h2 style={{ fontSize: 16, margin: '0 0 8px' }}>需要你动手（{stuck.length}）</h2>
           {stuck.map((o) => {
             const wb = sendState(o)!
@@ -482,6 +524,9 @@ export default function ConversionsPage() {
         return (
           <div
             key={o.id}
+            ref={(el) => {
+              outcomeRefs.current[o.id] = el
+            }}
             onClick={() => setCursor(i)}
             style={{
               border: focused ? '2px solid #2563eb' : '1px solid #ddd',
