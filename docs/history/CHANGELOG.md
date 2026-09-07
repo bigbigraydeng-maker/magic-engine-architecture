@@ -5,6 +5,22 @@
 
 ---
 
+### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
+
+**问题**：`ads-health` 看板给 CTS 显示的每条线索成本比 Meta 官方数字便宜近一倍（看板 $3.9-4.7，Meta 官方 $7.6-11.8）。核对发现 `src/lib/meta/client.ts` 的 `results = leads + messaging_conversations` 违反了同文件 `objective-metrics.ts` 自己写的「NEVER sum across action types」规则：CTS 的 Lead Form 广告开了 Messenger 自动回复，同一个人提交表单会被 Meta 同时计入 `lead` 和 `onsite_conversion.messaging_conversation_started_7d` 两个 action_type，简单相加造成 2× 双算。2026-08-31 实测：CTS Reborn 广告当天 leads=10、messaging=9，是同一批人，不是 19 个人举手。
+
+**修复**：`results` 改为 `Math.max(leads, messaging)` —— 两者重叠时取较大值而非相加；纯表单或纯私信广告仍取到正确的非零值。同步修正 `src/lib/listings/ad-benchmarks.ts` 里同样的相加逻辑。`src/lib/ads-strategy/ad-level-breakdown.ts` 的单位一致性闸注释更新为反映新公式（该模块的「表单/私信混合不可比价」判断本身不受影响，仍然生效）。
+
+**验证**：`campaign-daily-insights.test.ts` / `ad-daily-insights.test.ts` / `ad-benchmarks.test.ts` 新增回归测试锁死「表单+私信重叠时不相加」的行为；18 个测试文件、314 个测试全绿；`ad-level-breakdown.ts` 相关的 13 个测试无需改动（该模块本来就不假设单一单位）。
+
+**影响范围**：`ad_health_narratives` 每日日报、`ads-health` dashboard、地产广告基准对比（`ad-benchmarks.ts`）读的都是同一份被污染的历史数据；本次只修复未来写入的计算逻辑，不回填历史 `ad_daily_insights` 行（过去的行仍然是双算过的，读的人需要知道这一点）。
+
+**风险级 B**（普通业务逻辑修复，无 schema/权限变更）。
+
+**Reuse Statement**：修复位于既有平台层 `src/lib/meta/client.ts`（Meta insights 解析，服务所有客户），不是 CTS 专属代码；`ad-benchmarks.ts` 是地产行业线的复用点，同一个 bug 一并修掉；无新增依赖、无新表、无客户专属逻辑写入 shared runtime。
+
+---
+
 ### 2026-09-07（Gate A 尾声：给测量回执 RPC 钉住 search_path，Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413#issuecomment-5562430183)）
 
 **上线内容**：把 PR [#1414](https://github.com/bigbigraydeng-maker/magic-engine/pull/1414) 已合并、生产未 apply 的加固补丁 `20260905123025_fix_post_measurement_search_path.sql` 应用到 Supabase 生产（`glbdnayojixmexgofbsd`），生产版本号 `20260906215112`。补丁一行：`ALTER FUNCTION public.record_post_measurement_snapshot(...) SET search_path = pg_catalog, pg_temp;` —— 不改数据、不改权限、不改签名。
