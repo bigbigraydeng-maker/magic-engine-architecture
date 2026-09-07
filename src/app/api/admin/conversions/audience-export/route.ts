@@ -79,6 +79,20 @@ async function handleGet(request: Request) {
   const denied = assertClientScope(admin.user.email ?? null, clientId)
   if (denied) return denied
 
+  // source 参数：newsletter/combined 已于 2026-09-07 下线（见下方说明）。
+  // 旧页面/书签/脚本若还带着这两个值来请求，必须明确拒绝，不能悄悄换成
+  // fbleads 的数据回 200 —— 调用方会把语义完全不同、体量也更小的名单
+  // 误当成原来要的那份去用（狄仁杰红线：数据来源被静默替换=数据完整性事故）。
+  const source = (searchParams.get('source') ?? 'fbleads').toLowerCase()
+  if (source !== 'fbleads') {
+    return NextResponse.json(
+      {
+        error: `source=${source} 已下线（2026-09-07）：newsletter/combined 名单不再提供，只保留 fbleads（广告来源，Issue #1397）。请改走「导出 CSV → Meta 后台上传」这条路。`,
+      },
+      { status: 410 },
+    )
+  }
+
   // 读库：跟今日名单同源的三张表 + 客户配置。
   let contacts: ContactRow[]
   let identities: IdentityRow[]
@@ -168,7 +182,7 @@ async function handleGet(request: Request) {
   // 只导「广告来源」名单（fbleads）。
   // newsletter/combined（拉 Mailchimp 合并）2026-09-07 移除：prod 网页请求访问 Mailchimp
   // 会 502（源日志拿不到、未确诊），且实际名单已改由「导出 CSV → Meta 后台上传」这条路做成。
-  // source 参数保留兼容，只认 fbleads。
+  // 非 fbleads 的 source 在上面已经 410 拒绝，走到这里 source 一定是 fbleads。
 
   // ── 只看数字（不含 PII）：让人先看池子够不够 100 门槛 ──────────────────
   if (format !== 'csv') {
