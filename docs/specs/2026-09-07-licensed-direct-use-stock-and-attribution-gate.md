@@ -1,7 +1,7 @@
 # Spec：授权直用素材 + 发布前署名闸（Licensed Direct-Use Stock & Attribution Gate）
 
 - 日期：2026-09-07
-- 状态：**立项草案（待 2 审：子牙架构 / 魏征挑刺；PM 已认方向）**
+- 状态：**⚠️ 2 审已完成，原设计按下重做（见文末「2 审结论与方向调整」）。PM 2026-09-07 拍板：两条线并行、分场景。**
 - 风险级：**A**（碰共享出片池 evaluate.ts + 对外发布合规 + 可能改 schema）
 - 触发：给 CTS 攒了 102 张 Wikimedia CC 授权风景图，要让视频 agent 能调用；双审发现现有工厂 stock 链会**抹掉署名、把合法 CC 图做成违规成片**（见 [[feedback-factory-stock-chain-strips-credit-cc-unsafe]]）。
 
@@ -122,3 +122,25 @@ ME 工厂现有 stock 链（`stock-pipeline.ts` `ingestHarvestedImages` → `sto
 2. 跟 task_7c3297ff 窗口对齐 Pinterest 清理判据。
 3. 法务/PM 确认：i2v 重绘对 CC-BY-SA 的 SA 义务边界（决定 CC-BY-SA 是否允许喂 i2v）。
 4. 走五道 Build Gate → 分期实现（P1→P2→P3）。
+
+---
+
+## 2 审结论与方向调整（2026-09-07，子牙 + 魏征）
+
+**两审一致：原"把授权真图灌进工厂"的设计按现状建不成，且方向本身有个根本问题。**
+
+**根本问题（魏征拿代码坐实，evaluate.ts:181-193 / 228-229 / strategist.ts:346-367）**：工厂里静态图**唯一去处是喂 i2v 生成全新 AI 片**，没有"真图直用"的代码路径。所以把真实地标照片灌进工厂 = 被 i2v 重画成 AI 画面 → ①"真实"卖点蒸发、变成 PM 骂的假/通用画面；②CC-BY 成了衍生作品、CC-BY-SA 的 SA 传染在工厂里躲不掉。§2 G1、§4.3 的"直用不改写"与代码事实冲突。
+
+**建不成的具体阻断（两审共识）**：
+1. **provenance 在入池即死**：sourceImagePool 被拍平成 `readonly string[]`（只剩 URL），license/author 丢失；CTS recipe 路径 `clip_links=[]`（evaluate.ts:376），行级链恒空 → 发布层物理上拿不到"谁拍的" → §4.4 署名闸无法校验。
+2. **署名闸只做闸=死锁**：buildCaption 无 credit 字段、也无注入器；只加"无 credit 就拦"会把每条 CC-BY 片永久 fail-closed 发不出。必须"注入器 + 闸"成对，且 credit 得是可字符串校验的字段（endcard 烧进像素的没法扫）。
+3. **P2/P3 窗口敞口**：§4.3 进池分支没有 `requires_attribution=false` 过滤 → P3 未上线前 CC-BY 会漏进池发布。
+4. **quarantine 是 fail-open**（DB 默认 active，必须显式写 quarantined）；**人审 active 无 UI 入口**（会踩"让 PM 手改库"红线）；**按 landmark 挑片**要把整个池契约从 string[] 改成带 meta 结构（波及 strategist/recipe/types，非小改）。
+5. task_7c3297ff（Pinterest 清理）隔离承诺**本仓无法核对**（代码不在此仓）。
+6. 附带：`video_clips` RLS `FOR ALL USING(true)` 缺 `TO service_role`（铁律 7），另开小 PR 修。
+
+**方向调整（PM 2026-09-07：两条线并行、分场景）**：
+- **真实感片 → 蒙太奇线（make_promo）**：真图加运镜、图不变、人工带署名。这批 102 张授权图归此线（本就读 Dropbox）。自动化 = 把蒙太奇线搬云端（见 `2026-09-02` 云端退役调查：Path A 需把 make_promo + MagicLab_Studio 素材上云 + 定成本模式）。
+- **AI 动感片 → 工厂 i2v 线**：如要用授权 stock 喂 i2v，**只用 CC0/公有领域**（避开 CC-BY 衍生署名死结）；CC-BY/CC-BY-SA 一律不进工厂。需 Muapi 额度 + 本 spec 的"署名闸"仅在确有 CC-BY 进 i2v 时才需要（若锁死只用 CC0/PD，可不建署名闸，大幅简化）。
+
+**本 spec 后续**：不按原 §4 建。若走"工厂只喂 CC0/PD"，本 spec 缩水成"licensed_stock 入库 + origin 隔离 + CC0/PD-only 进池过滤 + quarantine/审核 UI"，砍掉署名闸与 landmark 池改造两大块。待 PM 定两线优先级后重写。
