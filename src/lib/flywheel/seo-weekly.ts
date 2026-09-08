@@ -71,6 +71,7 @@ export async function loadSnapshotRoster(supabase: SupabaseClient): Promise<Rost
     .from('clients')
     .select('id, domain')
     .eq('client_status', 'active')
+    .contains('seo_config', { weekly_blog: true })
     .not('domain', 'is', null)
 
   if (error) return { ok: false, reason: error.message }
