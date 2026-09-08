@@ -1801,13 +1801,14 @@ export async function pushFactoryWorkerItems(
   const latestHbByClient = new Map<string, string>()
   for (const clientId of clientIds) {
     // A busy client's history must not crowd another client's latest heartbeat out of a global limit.
-    const { data: hbRows } = await supabase
+    const { data: hbRows, error: hbError } = await supabase
       .from('content_work_orders')
       .select('heartbeat_at')
       .eq('client_id', clientId)
       .not('heartbeat_at', 'is', null)
       .order('heartbeat_at', { ascending: false })
       .limit(1)
+    if (hbError) throw new Error(`factory heartbeat query failed: ${hbError.message}`)
     const latest = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
     if (latest) latestHbByClient.set(clientId, latest.heartbeat_at)
   }
@@ -1838,8 +1839,8 @@ function pushOneFactoryWorkerItem(
         `${who}${verdict.humanReason}` +
         (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
       how:
-        '工人现在是在线的，所以这不是开机能解决的 —— 先看上面那句报错：' +
-        '写着余额不足（credit / balance）就去充值，充完它会自己被重新领走；' +
+        '工人近期有心跳，这些工单失败过、仍在队列等待重试。先观察下一次重试；如果仍失败，再按上面的报错处理：' +
+        '写着余额不足（credit / balance）就去核对余额；' +
         '写的是别的原因，回我一句「出片工单卡住了」，我去查',
       href: 'https://app.magicengine.com.au/dashboard/factory',
     })

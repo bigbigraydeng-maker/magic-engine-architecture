@@ -9,19 +9,24 @@ const queued = (client_id: string): Order => ({ client_id, status: 'queued', cre
 const heartbeat = (client_id: string, hours: number): Order => ({ ...queued(client_id), status: 'completed', heartbeat_at: ago(hours) })
 
 // Apply filters, ordering and limits in query order against actual rows.
-function database(rows: Order[]) {
+function database(rows: Order[], failedClient?: string) {
   return { from: () => {
     let data = [...rows]
+    let error: { message: string } | null = null
     const query = {
       select: () => query,
-      eq: (key: keyof Order, value: unknown) => { data = data.filter(r => r[key] === value); return query },
+      eq: (key: keyof Order, value: unknown) => {
+        data = data.filter(r => r[key] === value)
+        if (key === 'client_id' && value === failedClient) error = { message: 'connection unavailable' }
+        return query
+      },
       in: (key: keyof Order, values: unknown[]) => { data = data.filter(r => values.includes(r[key])); return query },
       not: (key: keyof Order, _op: string, value: unknown) => { data = data.filter(r => r[key] !== value); return query },
       order: (key: keyof Order, opts: { ascending: boolean }) => {
         data.sort((a, b) => String(a[key]).localeCompare(String(b[key])) * (opts.ascending ? 1 : -1)); return query
       },
       limit: (limit: number) => { data = data.slice(0, limit); return query },
-      then: (resolve: (result: unknown) => unknown) => resolve({ data, error: null }),
+      then: (resolve: (result: unknown) => unknown) => resolve({ data: error ? null : data, error }),
     }
     return query
   } } as unknown as SupabaseClient
@@ -40,6 +45,16 @@ describe('factory worker evidence through todo generation', () => {
     const clientB = items.find(item => item.what.includes('Client B'))!
     expect(clientB.what).toContain('工人在线')
     expect(clientB.how).not.toContain('--loop')
+    expect(clientB.what).toContain('仍可能在后续重试中恢复')
+    expect(clientB.how).toContain('先观察下一次重试')
+  })
+
+  it('does not diagnose a worker as offline when the heartbeat query fails', async () => {
+    const items: ManualItem[] = []
+    await expect(pushFactoryWorkerItems(database([
+      queued('client-a'), queued('client-b'), heartbeat('client-a', 0.1), heartbeat('client-b', 0.2),
+    ], 'client-b'), items, now, names)).rejects.toThrow('factory heartbeat query failed')
+    expect(items).toEqual([])
   })
 
   it.each([null, 30])('does not use client A heartbeats when B has missing/stale evidence (%s)', async hours => {
