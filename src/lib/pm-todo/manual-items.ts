@@ -148,7 +148,7 @@ import { checkCronHealth } from '@/lib/cron/health'
 import { CRON_REGISTRY } from '@/lib/cron/registry'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
-import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
+import { judgeWorkerPresence, judgeQueueByClient } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
@@ -363,7 +363,7 @@ export async function loadManualItems(
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
-  await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
+  await pushFactoryWorkerItems(supabase, items, now, clients).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
   )
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
@@ -1818,42 +1818,105 @@ async function pushLeadsSanityItems(
  * 队列里有活、看板上没动静，而「这周怎么没出片」要等人想起来问才发现。
  * 只在**真的有活在等**时才报（没活时工人没开机完全正常，报了就是噪音）。
  */
-async function pushFactoryWorkerItems(
+export async function pushFactoryWorkerItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   now: Date,
+  /** 客户名查表 —— 待办要说清是哪个客户的活卡了，显示 uuid 等于没显示。 */
+  clientNames: Map<string, { name: string }>,
 ): Promise<void> {
-  // 真实列名（已核实）：status / created_at / heartbeat_at
+  // 真实列名（已核实）：status / created_at / heartbeat_at / reject_reason
+  // 🔴 `reject_reason` 必须一起读：余额不足时 worker 把工单退回 queued 而不是
+  //    标 failed，只数「队列里有几个」会把「失败后卡住的僵尸工单」误当成「等人干的新活」。
   const { data: queuedRows } = await supabase
     .from('content_work_orders')
-    .select('id, created_at')
+    .select('id, client_id, created_at, reject_reason')
     .eq('status', 'queued')
     .order('created_at', { ascending: true })
-  const queued = (queuedRows ?? []) as Array<{ id: string; created_at: string }>
+  const queued = (queuedRows ?? []) as Array<{
+    id: string
+    client_id: string
+    created_at: string
+    reject_reason: string | null
+  }>
   if (queued.length === 0) return
 
-  const { data: hbRows } = await supabase
-    .from('content_work_orders')
-    .select('heartbeat_at')
-    .not('heartbeat_at', 'is', null)
-    .order('heartbeat_at', { ascending: false })
-    .limit(1)
-  const lastHb = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+  // 心跳按客户查 —— 判定层解释了为什么不能用全局最新的（judgeQueueByClient 头注）。
+  const clientIds = Array.from(new Set(queued.map((q) => q.client_id)))
+  const latestHbByClient = new Map<string, string>()
+  for (const clientId of clientIds) {
+    // A busy client's history must not crowd another client's latest heartbeat out of a global limit.
+    const { data: hbRows, error: hbError } = await supabase
+      .from('content_work_orders')
+      .select('heartbeat_at')
+      .eq('client_id', clientId)
+      .not('heartbeat_at', 'is', null)
+      .order('heartbeat_at', { ascending: false })
+      .limit(1)
+    if (hbError) throw new Error(`factory heartbeat query failed: ${hbError.message}`)
+    const latest = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+    if (latest) latestHbByClient.set(clientId, latest.heartbeat_at)
+  }
 
-  const hours = (iso: string) => (now.getTime() - Date.parse(iso)) / 3_600_000
-  const verdict = judgeWorkerPresence({
-    queued: queued.length,
-    oldestQueuedHours: hours(queued[0].created_at),
-    lastHeartbeatHours: lastHb ? hours(lastHb.heartbeat_at) : null,
-  })
-  if (verdict.idle) return
+  // 一个客户一条：不同客户的 worker 在线状态是独立的，合成一条会把两种
+  // 完全不同的处置（这家去开机 / 那家去查报错）搅在一起。
+  for (const { clientId, verdict } of judgeQueueByClient(queued, latestHbByClient, now)) {
+    pushOneFactoryWorkerItem(items, verdict, clientNames.get(clientId)?.name ?? '未知客户')
+  }
+}
 
+/** 把一条工人待办写出来。两种病因两套话术，别混。 */
+function pushOneFactoryWorkerItem(
+  items: ManualItem[],
+  verdict: Exclude<ReturnType<typeof judgeWorkerPresence>, { idle: true }>,
+  clientName: string,
+): void {
+  const who = `【${clientName}】`
+
+  // 两种病因，两套话术。判定层已经保证：`stuck_on_failure` 只在工人**在线**时
+  // 产生（离线一律先报 worker_offline，因为开机是那种情况下无条件正确的第一步）。
+  if (verdict.kind === 'stuck_on_failure') {
+    items.push({
+      kind: 'factory_worker_idle',
+      client_id: 'infra',
+      client_name: 'Magic Engine 后台',
+      what:
+        `${who}${verdict.humanReason}` +
+        (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
+      // 🔴 这里**不能**写成「先观察下一次重试」（Codex P2 复审）。
+      //    `factory/worker/[id]/fail` 把可重试失败直接退回 `queued`，**没有任何
+      //    退避字段**（`next_retry_at` 只存在于 publish-worker，那是另一条线），
+      //    所以失败工单立刻就能被重新领走。工人在线还卡了 6 小时以上，重试早
+      //    该发生了 —— 「在等重试」不是这里的合理解释，确实需要人看一眼。
+      //    话术必须给真动作，否则这条进了「需要你动手」栏却让人干等，等于
+      //    制造一条假待办。
+      how:
+        '工人在线、活却过不去，重试早该发生了（失败退回队列是立刻可重领的，没有等待期）—— ' +
+        '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完它会自己被重新领走；' +
+        '写的是别的原因，回我一句「出片工单卡住了」，我去查',
+      href: 'https://app.magicengine.com.au/dashboard/factory',
+    })
+    return
+  }
+
+  // worker_offline：开机是第一步。这些活如果失败过，把原因一并带上 ——
+  // 开机后还是过不去时，那就是下一步该看的东西（但绝不因此劝阻开机：
+  // 带 reject_reason 的 queued 工单通常还有重试机会，重试恰恰要靠工人上线）。
   items.push({
     kind: 'factory_worker_idle',
     client_id: 'infra',
     client_name: 'Magic Engine 后台',
-    what: `${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做`,
-    how: '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
+    what:
+      `${who}${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做` +
+      (verdict.sampleReason
+        ? `。另外这些工单上次失败过，系统报的原因是：「${verdict.sampleReason}」`
+        : ''),
+    how:
+      '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。' +
+      (verdict.sampleReason
+        ? '开机之后如果这些工单还是过不去，就是上面那条原因（写着余额不足就去充值），回我一句我来查。'
+        : '') +
+      '如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
     href: 'https://app.magicengine.com.au/dashboard/factory',
   })
 }
