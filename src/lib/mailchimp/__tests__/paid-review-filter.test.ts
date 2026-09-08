@@ -9,7 +9,7 @@
  * 付款确认，客人会继续收到营销邮件（2026-09-01 那次 192 人群发就是这么出的事）。
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { dropAlreadyPaidTagged, type PaidReviewCandidate } from '../paid-review-filter'
 import { DEFAULT_PAID_TAG } from '../paid-tagging'
 import { subscriberHash } from '../tags'
@@ -75,6 +75,42 @@ function fakeMailchimp(audience: Record<string, string[]>) {
 const cand = (email: string, clientId = CLIENT_A): PaidReviewCandidate => ({ email, clientId })
 
 describe('dropAlreadyPaidTagged', () => {
+  it('bounds concurrent lookups and keeps every candidate on request timeout', async () => {
+    let active = 0
+    let peak = 0
+    const fetchImpl = async (_url: string, init?: RequestInit): Promise<Response> => {
+      active += 1
+      peak = Math.max(peak, active)
+      try {
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('timeout', 'TimeoutError')), { once: true })
+        })
+      } finally { active -= 1 }
+    }
+    const candidates = Array.from({ length: 6 }, (_, i) => cand(`person${i}@example.com`))
+    const kept = await dropAlreadyPaidTagged(fakeSupabase({ [CLIENT_A]: { audienceId: 'aud1' } }), candidates,
+      { apiKey: 'key-us19', fetchImpl, concurrency: 2, timeoutMs: 5 })
+    expect(kept).toHaveLength(6)
+    expect(peak).toBe(2)
+    expect(active).toBe(0)
+  })
+
+  it('keeps unqueried candidates after the total lookup budget expires', async () => {
+    let clock = 0
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const fetchImpl = vi.fn(async () => {
+      clock = 20
+      return new Response(JSON.stringify({ tags: [{ name: DEFAULT_PAID_TAG }] }))
+    })
+    try {
+      const kept = await dropAlreadyPaidTagged(fakeSupabase({ [CLIENT_A]: { audienceId: 'aud1' } }),
+        [cand('paid@example.com'), cand('unqueried@example.com')],
+        { apiKey: 'key-us19', fetchImpl, concurrency: 1, budgetMs: 10 })
+      expect(kept.map(c => c.email)).toEqual(['unqueried@example.com'])
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+    } finally { now.mockRestore() }
+  })
+
   it('🔴 PM 已经打过 paid_customer → 剔除，不再重复下发', async () => {
     const mc = fakeMailchimp({ 'nikki@example.com': ['fb_lead', DEFAULT_PAID_TAG] })
     const kept = await dropAlreadyPaidTagged(
@@ -134,13 +170,30 @@ describe('dropAlreadyPaidTagged', () => {
 })
 
 describe('dropAlreadyPaidTagged · 🔴 查不出来一律保留（fail-open）', () => {
+  it('does not use an old audience after a non-column configuration error', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ tags: [{ name: DEFAULT_PAID_TAG }] })))
+    let queries = 0
+    const db = { from: () => ({ select: () => ({ in: async () => {
+      queries += 1
+      return queries === 1
+        ? { data: null, error: { code: '42501', message: 'permission denied' } }
+        : { data: [{ id: CLIENT_A, leads_config: { mailchimp_audience_id: 'old-audience' } }], error: null }
+    } }) }) } as never
+    expect(await dropAlreadyPaidTagged(db, [cand('x@example.com')], { apiKey: 'key-us19', fetchImpl })).toHaveLength(1)
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(queries).toBe(1)
+  })
+
   it('没配 MAILCHIMP_API_KEY → 全部保留，不当成「都处理过了」', async () => {
+    const fetchImpl = vi.fn()
     const kept = await dropAlreadyPaidTagged(
-      fakeSupabase({ [CLIENT_A]: { audienceId: 'aud1' } }),
+      fakeSupabase({ [CLIENT_A]: { audienceId: 'aud1', paidTag: 'vip' } }),
       [cand('x@example.com')],
-      { apiKey: '' },
+      { apiKey: '', fetchImpl },
     )
     expect(kept).toHaveLength(1)
+    expect(kept[0].paidTag).toBe('vip')
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('Mailchimp 限流 / 5xx → 保留', async () => {

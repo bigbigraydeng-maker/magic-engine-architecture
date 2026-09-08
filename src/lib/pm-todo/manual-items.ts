@@ -696,8 +696,11 @@ export async function pushPaidSignalReviewItems(
     const list = Array.isArray(run.summary?.needsReview) ? run.summary.needsReview : []
     for (const item of list) {
       const email = typeof (item as { email?: unknown })?.email === 'string' ? (item as { email: string }).email : ''
-      if (!email || seen.has(email.toLowerCase())) continue
-      seen.add(email.toLowerCase())
+      const clientId = typeof (item as { clientId?: unknown })?.clientId === 'string'
+        ? (item as { clientId: string }).clientId : ''
+      const key = `${clientId}::${email.trim().toLowerCase()}`
+      if (!email.trim() || seen.has(key)) continue
+      seen.add(key)
       rows.push(item)
     }
   }
@@ -730,12 +733,14 @@ export async function pushPaidSignalReviewItems(
     allCandidates.filter((c) => c.email && c.clientId),
   ).catch((e) => {
     console.warn('[manual-items] 付款待确认的已处理过滤失败（保留全部，不静默丢）:', e)
-    return allCandidates.filter((c) => c.email && c.clientId)
+    return allCandidates.filter((c) => c.email && c.clientId).map((c) => ({ ...c, paidTag: undefined }))
   })
-  const keepKeys = new Set(keepable.map((c) => `${c.clientId}::${c.email.toLowerCase()}`))
+  const keepKeys = new Map(keepable.map((c) => [
+    `${c.clientId}::${c.email.trim().toLowerCase()}`, c,
+  ]))
   // 没有 clientId 的记录过滤不了（判不出用哪个 audience）—— 一律保留
   const toEmit = allCandidates
-    .filter((c) => !c.clientId || !c.email || keepKeys.has(`${c.clientId}::${c.email.toLowerCase()}`))
+    .filter((c) => !c.clientId || !c.email || keepKeys.has(`${c.clientId}::${c.email.trim().toLowerCase()}`))
     .slice(0, 20)
 
   for (const { raw } of toEmit) {
@@ -754,13 +759,16 @@ export async function pushPaidSignalReviewItems(
     const days = daysAgo(typeof r.receivedAt === 'string' ? r.receivedAt : null, now)
     const when = days === null ? '' : days === 0 ? '今天' : `${days} 天前`
 
+    const paidTag = keepKeys.get(`${typeof r.clientId === 'string' ? r.clientId : ''}::${email.trim().toLowerCase()}`)?.paidTag
+    const tagInstruction = paidTag ? `${paidTag} 标签` : '该客户配置的已付款标签（先在客户设置核对标签名）'
+
     items.push({
       kind: 'paid_signal_needs_review',
       client_id: typeof r.clientId === 'string' ? r.clientId : 'infra',
       client_name: typeof r.clientName === 'string' ? r.clientName : 'Magic Engine 后台',
       // 原话逐字带上 —— 人一眼就知道该不该信，不用回邮箱翻
       what: `${who}${when ? `（${when}）` : ''}像是说他付款了${quote ? `：「${quote}」` : ''} —— 但这是他自己说的，不是我们确认到账，所以系统没敢自动标成已付款客户。不标的话，他还会继续收到招揽邮件`,
-      how: '去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 paid_customer 标签（加完他就自动退出群发名单了）；没到就不用管',
+      how: `去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 ${tagInstruction}（加完他就自动退出群发名单了）；没到就不用管`,
       href: MAILCHIMP_AUDIENCE_URL,
     })
   }

@@ -137,7 +137,7 @@ async function audienceIdsByClient(clientIds: string[]): Promise<Map<string, str
   if (!error) {
     for (const r of (data ?? []) as Array<{ id: string; mailchimp_audience_id: string | null }>) {
       const v = (r.mailchimp_audience_id ?? '').trim()
-      if (v) out.set(r.id, v)
+      out.set(r.id, v)
     }
   }
   return out

@@ -30,12 +30,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { findMemberByEmail, type FetchLike } from './tags'
 import { readPaidTag } from './paid-tagging'
+import { isUndefinedColumn } from './audience-config'
 
 export interface PaidReviewCandidate {
   /** 客人邮箱（大小写不敏感，内部统一小写比较） */
   email: string
   /** 这条记录属于哪个客户 —— audience 和标签名都是按客户配的 */
   clientId: string
+  /** Current configured tag, when configuration was readable. */
+  paidTag?: string
 }
 
 /** 一个客户的 Mailchimp 出口配置。读不出来的客户不参与过滤（fail-open）。 */
@@ -66,6 +69,7 @@ async function readConfigs(
     .in('id', clientIds as string[])
 
   if (withColumn.error) {
+    if (!isUndefinedColumn(withColumn.error)) return out
     const fallback = await supabase
       .from('clients')
       .select('id, leads_config')
@@ -125,12 +129,14 @@ export async function dropAlreadyPaidTagged(
 ): Promise<PaidReviewCandidate[]> {
   const apiKey = opts.apiKey ?? process.env.MAILCHIMP_API_KEY ?? ''
   // 没 key 就没法查 —— 全部保留，绝不因为查不了就当成「都处理过了」
-  if (!apiKey || candidates.length === 0) return [...candidates]
+  if (candidates.length === 0) return []
 
   const configs = await readConfigs(
     supabase,
     Array.from(new Set(candidates.map((c) => c.clientId))),
   )
+  const withTags = candidates.map((c) => ({ ...c, paidTag: configs.get(c.clientId)?.paidTag }))
+  if (!apiKey) return withTags
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_PER_REQUEST_TIMEOUT_MS
   const concurrency = Math.max(1, Math.min(opts.concurrency ?? DEFAULT_CONCURRENCY, candidates.length))
@@ -182,5 +188,5 @@ export async function dropAlreadyPaidTagged(
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()))
 
-  return candidates.filter((_, i) => keep[i])
+  return withTags.filter((_, i) => keep[i])
 }
