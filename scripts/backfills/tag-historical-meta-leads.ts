@@ -206,15 +206,28 @@ async function main() {
     let readFailed = false
     for (let i = 0; i < contactIds.length; i += IN_BATCH_SIZE) {
       const batch = contactIds.slice(i, i + IN_BATCH_SIZE)
-      const { data, error: identitiesErr } = await supabaseAdmin
-        .from('contact_identities')
-        .select('contact_id, value')
-        .eq('client_id', c.id)
-        .eq('kind', 'email')
-        .eq('first_source', 'meta_lead_form')
-        .in('contact_id', batch)
-      if (identitiesErr) {
-        console.log(`⚠ ${c.name}: 读联系人身份失败（${identitiesErr.message}）—— 跳过`)
+      // 也得分页 —— 缩小 `.in(...)` 只压住了请求大小，压不住**返回行**的 1000
+      // 行硬顶：一个人可以有不止一个 Meta 邮箱身份，500 个联系人凑够 1000 行
+      // 完全可能，超出的部分会被 PostgREST 静默截掉，脚本还照样报成功。
+      // 排序键用身份表自己的唯一主键 `id`（`contact_id` 不唯一，分页边界落在
+      // 同一个人的记录组中间会重复或漏页）。
+      let data: { contact_id: string; value: string }[]
+      try {
+        data = await fetchAll((from, to) =>
+          supabaseAdmin
+            .from('contact_identities')
+            .select('contact_id, value')
+            .eq('client_id', c.id)
+            .eq('kind', 'email')
+            .eq('first_source', 'meta_lead_form')
+            .in('contact_id', batch)
+            .order('id', { ascending: true })
+            .range(from, to),
+        )
+      } catch (e) {
+        console.log(
+          `⚠ ${c.name}: 读联系人身份失败（${e instanceof Error ? e.message : String(e)}）—— 跳过`,
+        )
         readFailed = true
         break
       }
@@ -352,11 +365,15 @@ async function main() {
     `\n合计：${LIVE ? '打上' : '会打上'} ${totals.applied} · 本来就有 ${totals.alreadyTagged} · ` +
       `不在名单里 ${totals.notInAudience} · DNC 跳过 ${totals.dncSkipped} · 失败 ${totals.failed}`,
   )
-  writeReceipt({ ts: new Date().toISOString(), event: 'run_end', totals })
+  // 收尾标记也要看写没写进去。这一条恰好写不进去（磁盘刚好满、挂载刚好掉）时
+  // 若忽略返回值，就会留下一份「没有完成标记、却被报成成功」的执行记录 ——
+  // 事后没人分得清它是跑完了还是跑到一半断的。
+  const endRecorded = writeReceipt({ ts: new Date().toISOString(), event: 'run_end', totals })
 
   if (!LIVE) console.log('\n这是预演，一个字都没写。确认没问题加 --live 再跑一遍。')
+  else if (!endRecorded) console.error(`✗ 收尾回执没写进去，${RECEIPT_PATH} 缺完成标记`)
   else console.log(`回执已写到：${RECEIPT_PATH}`)
-  if (totals.failed > 0) process.exit(1)
+  if (totals.failed > 0 || !endRecorded) process.exit(1)
 }
 
 /**
