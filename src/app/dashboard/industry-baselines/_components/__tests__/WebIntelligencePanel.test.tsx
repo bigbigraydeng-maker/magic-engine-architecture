@@ -13,7 +13,7 @@ async function selectClient(id = 'a') {
   await screen.findByRole('option', { name: 'Client A' })
   fireEvent.change(screen.getByLabelText('客户'), { target: { value: id } })
 }
-async function view(name: string) { fireEvent.click(await screen.findByRole('button', { name, exact: true })) }
+async function view(name: string) { fireEvent.click(await screen.findByRole('button', { name })) }
 async function competitor() { await view('监控对象'); fireEvent.click(await screen.findByText('example.com')) }
 afterEach(() => vi.unstubAllGlobals())
 
