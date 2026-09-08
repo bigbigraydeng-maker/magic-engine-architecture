@@ -88,6 +88,7 @@ async function main() {
     const audience = await readAudienceId(c.id)
     if (!audience.ok) {
       console.log(`⚠ ${c.name}: audience 配置读不出来（${audience.message}）—— 跳过，不猜`)
+      totals.failed++
       continue
     }
     if (!audience.audienceId) continue // 这个客户没配出口，正常
@@ -95,6 +96,7 @@ async function main() {
     const tagRead = await readLeadSourceTag(c.id)
     if (!tagRead.ok) {
       console.log(`⚠ ${c.name}: 来源标签配置读不出来（${tagRead.message}）—— 跳过，不拿默认值糊`)
+      totals.failed++
       continue
     }
 
@@ -103,6 +105,11 @@ async function main() {
     // `attr_platform`：官网表单带 Meta UTM 时也会把 attr_platform 写成
     // 'meta'（误伤），而 first-touch 是别的渠道、后来又交过 Meta 表单的人
     // 又会被漏掉（identity.ts 的 first-touch 规则不会覆盖 attr_platform）。
+    //
+    // 排序键必须是触点自己的唯一主键 `id`，不能用 `contact_id` —— 同一个人可以
+    // 交过不止一次 Meta 表单，`contact_id` 不唯一，`fetchAll` 的分页边界一旦落
+    // 在同一联系人的记录组中间就会重复或漏页（supabase-paginate.ts 的稳定排序
+    // 契约）。
     let touches: { contact_id: string }[]
     try {
       touches = await fetchAll((from, to) =>
@@ -111,20 +118,52 @@ async function main() {
           .select('contact_id')
           .eq('client_id', c.id)
           .eq('source', 'meta_lead_form')
-          .order('contact_id', { ascending: true })
+          .order('id', { ascending: true })
           .range(from, to),
       )
     } catch (e) {
       console.log(`⚠ ${c.name}: 读触点失败（${e instanceof Error ? e.message : String(e)}）—— 跳过`)
+      totals.failed++
       continue
     }
     const contactIds = [...new Set(touches.map((t) => t.contact_id))]
     if (!contactIds.length) continue
 
-    const contacts: { id: string; primary_email: string | null }[] = []
-    let contactsFailed = false
+    // 目标邮箱优先取「这次 Meta 表单贡献的那条身份」
+    // （`contact_identities.first_source = 'meta_lead_form'`）—— `resolveContact`
+    // 命中已有联系人（多数是先靠电话建的人）时，只会把新邮箱追加进
+    // `contact_identities`，不会回写 `contacts.primary_email`：电话联系人原本
+    // 没有主邮箱时直接漏掉，已有旧主邮箱时则会给旧地址打标签。只有找不到这条
+    // 身份（说明这次提交的邮箱其实早就是这个人另一渠道来的旧身份，
+    // primary_email 当时就是照它设的）才退回 primary_email 兜底。
+    const emailByContact = new Map<string, string>()
+    let readFailed = false
     for (let i = 0; i < contactIds.length; i += IN_BATCH_SIZE) {
       const batch = contactIds.slice(i, i + IN_BATCH_SIZE)
+      const { data, error: identitiesErr } = await supabaseAdmin
+        .from('contact_identities')
+        .select('contact_id, value')
+        .eq('client_id', c.id)
+        .eq('kind', 'email')
+        .eq('first_source', 'meta_lead_form')
+        .in('contact_id', batch)
+      if (identitiesErr) {
+        console.log(`⚠ ${c.name}: 读联系人身份失败（${identitiesErr.message}）—— 跳过`)
+        readFailed = true
+        break
+      }
+      for (const row of data ?? []) {
+        if (row.value) emailByContact.set(row.contact_id as string, row.value as string)
+      }
+    }
+    if (readFailed) {
+      totals.failed++
+      continue
+    }
+
+    const fallbackIds = contactIds.filter((id) => !emailByContact.has(id))
+    for (let i = 0; i < fallbackIds.length; i += IN_BATCH_SIZE) {
+      const batch = fallbackIds.slice(i, i + IN_BATCH_SIZE)
       const { data, error: contactsErr } = await supabaseAdmin
         .from('contacts')
         .select('id, primary_email')
@@ -132,12 +171,19 @@ async function main() {
         .not('primary_email', 'is', null)
       if (contactsErr) {
         console.log(`⚠ ${c.name}: 读客人失败（${contactsErr.message}）—— 跳过`)
-        contactsFailed = true
+        readFailed = true
         break
       }
-      contacts.push(...(data ?? []))
+      for (const row of data ?? []) {
+        if (row.primary_email) emailByContact.set(row.id, row.primary_email)
+      }
     }
-    if (contactsFailed) continue
+    if (readFailed) {
+      totals.failed++
+      continue
+    }
+
+    const contacts = [...emailByContact.entries()].map(([id, email]) => ({ id, email }))
     if (!contacts.length) continue
 
     console.log(`\n${c.name} —— ${contacts.length} 个 Meta 表单客人，标签 "${tagRead.tag}"`)
@@ -145,7 +191,7 @@ async function main() {
     const per = { applied: 0, alreadyTagged: 0, notInAudience: 0, failed: 0, dncSkipped: 0 }
 
     for (const row of contacts) {
-      const email = String(row.primary_email).trim().toLowerCase()
+      const email = row.email.trim().toLowerCase()
       if (!email) continue
 
       // 复用 meta-lead.ts 正常入口写 Mailchimp 前用的同一份统一 DNC 判据 ——
