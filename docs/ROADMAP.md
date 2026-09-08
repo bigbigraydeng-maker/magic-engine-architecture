@@ -329,6 +329,10 @@ Codex 复审又挖出 6 个「落地页存在，但操作的东西跟待办要�
   ⚠️ **但不能一路并到"同一个 ad set"—— 那会打断现有请求契约**（第四十八轮 Codex P2，已核实。上一版写的是"统一的常驻 campaign/**ad set**"，那半句错了）：`boost-post/route.ts:45-70,101` 每次接受**这一次自己的** `daily_budget_aud` 和 `duration_days`（1–30 天），而 `client.ts:696-698` 的 `boostPagePost` 把 `daily_budget` / `start_time` / `end_time` **设在 ad set 这一层**。所以复用同一个 ad set 会有两个后果：① **新帖子没法有自己的预算和截止日期**；② **改这个组的预算/排期会同时影响之前所有还在跑的帖子**。
   → 正确口径：**campaign 复用（归并的收益主要在这一层）；预算或排期不同的仍然各自一个 ad set**。真要并到单个 ad set，得先把契约改掉 —— 定义共享预算 + 单条广告自己的生命周期（按广告起停而不是按组排期），那是另一件事，不能顺手做
 - [ ] **AD-LINK-1 `creative_ref` 的身份粒度要按 variant 不按素材**：5–8 个角度常共用同一张图，按素材 id 记会让所有角度写同一个 `creative_ref`，角度归因归零。需 variant 稳定 id + 素材关系另存 + `adId → variantId` 绑定；配套 migration（`ad_creative_links.post_id` 放开 NOT NULL、`creative_source` 加 variant 层）**待 PM `go apply`**
+- [ ] 🔴 **[P0] AD-CRON-1 `google-data-pullback-daily` 对至少 4 个客户连续 10+ 天抓取失败，PM 看到的每日广告健康报告一直是"数据积累中"**（2026-09-09 发现，`按 §11：频率 高 / IMPACT 高 / 收入 高 → P0`）：`cron_run_logs` 里 `google-data-pullback-daily` 从 2026-08-30 到 2026-09-08 每天都失败，报错固定是 `getAdAccountInsights returned null — check META_SYSTEM_USER_TOKEN and ad account ID`，命中客户至少 4 个：CTS Tours NZ（`c0000000-...`）、Roman HU、30 Kiteroa Rothesay Bay、New Asian Logistics。
+  **已确认根因**：这 4 个客户的 `clients.meta_ad_account_id` 指向的广告账户，不是共享的 `META_SYSTEM_USER_TOKEN`（系统用户令牌）能访问的账户——比如 CTS 配的是 `act_2775766642787274`（"个人号"账户，只认对应的主页令牌，系统令牌对它没有权限）。`src/lib/meta/client.ts` 的 `getAdAccountInsights` 遇到 Meta 返回的权限错误统一收敛成 `null`，`google-data-pullback-daily/route.ts:592` 把这类"根本没有权限"的失败一律写成"检查令牌是否过期"，掩盖了真实原因——**令牌没过期，是从一开始就配错了要用哪把钥匙**。
+  修法方向：这条 cron 要按客户实际持有的令牌类型取数（参考 `src/lib/meta/capi/config.ts` 里 `resolveCapiConfig` 已经在用的按客户解析令牌的模式），而不是所有客户一律用同一把系统令牌；也要把"没权限"和"令牌过期"两种失败分开报错，不能再合并成一句话误导排查方向。
+  下一步：另开分支修复（不与本仓其它进行中分支混），子牙+魏征复审后开 PR，PM `合` 后上线。
 
 ### Onboarding / 第三方对接页面简化（2026-08-11，方案见 [specs/2026-08-11-onboarding-integrations-unify-v1.md](./specs/2026-08-11-onboarding-integrations-unify-v1.md)）
 
