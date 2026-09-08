@@ -1773,7 +1773,7 @@ async function pushLeadsSanityItems(
  * 队列里有活、看板上没动静，而「这周怎么没出片」要等人想起来问才发现。
  * 只在**真的有活在等**时才报（没活时工人没开机完全正常，报了就是噪音）。
  */
-async function pushFactoryWorkerItems(
+export async function pushFactoryWorkerItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   now: Date,
@@ -1798,17 +1798,18 @@ async function pushFactoryWorkerItems(
 
   // 心跳按客户查 —— 判定层解释了为什么不能用全局最新的（judgeQueueByClient 头注）。
   const clientIds = Array.from(new Set(queued.map((q) => q.client_id)))
-  const { data: hbRows } = await supabase
-    .from('content_work_orders')
-    .select('client_id, heartbeat_at')
-    .in('client_id', clientIds)
-    .not('heartbeat_at', 'is', null)
-    .order('heartbeat_at', { ascending: false })
-    .limit(500)
   const latestHbByClient = new Map<string, string>()
-  for (const r of (hbRows ?? []) as Array<{ client_id: string; heartbeat_at: string }>) {
-    // 已按 heartbeat_at 倒序，每个客户第一次见到的就是最新的
-    if (!latestHbByClient.has(r.client_id)) latestHbByClient.set(r.client_id, r.heartbeat_at)
+  for (const clientId of clientIds) {
+    // A busy client's history must not crowd another client's latest heartbeat out of a global limit.
+    const { data: hbRows } = await supabase
+      .from('content_work_orders')
+      .select('heartbeat_at')
+      .eq('client_id', clientId)
+      .not('heartbeat_at', 'is', null)
+      .order('heartbeat_at', { ascending: false })
+      .limit(1)
+    const latest = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+    if (latest) latestHbByClient.set(clientId, latest.heartbeat_at)
   }
 
   // 一个客户一条：不同客户的 worker 在线状态是独立的，合成一条会把两种
