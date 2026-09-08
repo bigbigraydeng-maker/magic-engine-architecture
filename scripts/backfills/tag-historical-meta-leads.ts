@@ -26,13 +26,27 @@
  * `applyMemberTags` 先查后改，标签已经对了就不发写请求。跑第二遍是安全的、
  * 而且便宜（只有查询，没有写入）。
  *
+ * ## 执行回执（`--live` 强制要求）
+ *
+ * 真跑会改 Mailchimp —— 那是对外副作用，只打印到控制台不算数：终端一关，
+ * 「哪一批来源记录、在哪次授权下、被改成了什么」就再也查不到了。所以 `--live`
+ * **必须**带 `--receipt=<路径>`，逐条追加 JSONL：时间、客户、来源记录 id、
+ * 邮箱的 Mailchimp subscriber hash（不落明文邮箱）、标签、provider 结果。
+ *
+ * **为什么不走 Inngest**（CLAUDE.md 铁律 3 允许写明例外）：这是操作者手动跑的
+ * 一次性回填，不是跨步骤异步接力，没有事件接力和重试语义可言；套 Inngest 只会
+ * 把「跑一条命令」变成「部署一个函数」。替代回执就是这个 JSONL 文件。
+ * **恢复条件**：脚本幂等（`applyMemberTags` 先查后改，标签已对就不发写请求），
+ * 中断后原样重跑即可，重跑会往同一个回执文件继续追加。
+ *
  * 用法：
  *   npx tsx scripts/backfills/tag-historical-meta-leads.ts                 # 预演，零写入
- *   npx tsx scripts/backfills/tag-historical-meta-leads.ts --live          # 真的打
+ *   npx tsx scripts/backfills/tag-historical-meta-leads.ts --live --receipt=./backfill-YYYYMMDD.jsonl
  *   npx tsx scripts/backfills/tag-historical-meta-leads.ts --client-id=<uuid>
  */
 
-import { readFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 
 for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
   const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/)
@@ -40,6 +54,8 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
 }
 
 const LIVE = process.argv.includes('--live')
+const receiptArg = process.argv.find((a) => a.startsWith('--receipt='))
+const RECEIPT_PATH = receiptArg ? receiptArg.slice('--receipt='.length).trim() : ''
 const clientIdArg = process.argv.find((a) => a.startsWith('--client-id='))
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 let ONLY_CLIENT_ID: string | null = null
@@ -70,6 +86,32 @@ async function main() {
   if (!apiKey.trim()) {
     console.error('缺 MAILCHIMP_API_KEY，停手')
     process.exit(1)
+  }
+
+  // 对外副作用必须留下可追查的回执。没有落脚点就不许开跑 —— 事后补不回来。
+  if (LIVE && !RECEIPT_PATH) {
+    console.error('--live 必须同时给 --receipt=<路径>：改 Mailchimp 这种对外动作，')
+    console.error('只打印到控制台等于没有回执，终端一关就再也查不到改过谁。')
+    process.exit(1)
+  }
+  if (LIVE) {
+    // 立刻验证这个路径真的写得进去 —— 跑到一半才发现目录不存在，前面改掉的
+    // 那些人就没有任何记录了。
+    try {
+      appendFileSync(
+        RECEIPT_PATH,
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          event: 'run_start',
+          argv: process.argv.slice(2),
+          clientScope: ONLY_CLIENT_ID ?? 'all',
+        }) + '\n',
+      )
+    } catch (e) {
+      console.error(`回执文件写不进去（${e instanceof Error ? e.message : String(e)}），停手`)
+      process.exit(1)
+    }
+    console.log(`回执写到：${RECEIPT_PATH}`)
   }
 
   console.log(LIVE ? '模式：真的打标签\n' : '模式：预演（零写入）\n')
@@ -136,7 +178,11 @@ async function main() {
     // 没有主邮箱时直接漏掉，已有旧主邮箱时则会给旧地址打标签。只有找不到这条
     // 身份（说明这次提交的邮箱其实早就是这个人另一渠道来的旧身份，
     // primary_email 当时就是照它设的）才退回 primary_email 兜底。
-    const emailByContact = new Map<string, string>()
+    //
+    // 一个人可以用不同邮箱交过两次 Meta 表单，所以这里存**集合**不是单值：
+    // 压成一个的话只有返回顺序里碰巧最后那个会被打上，另一个永远漏掉，而正常
+    // 同步是按每次提交的邮箱各操作一次的。
+    const emailsByContact = new Map<string, Set<string>>()
     let readFailed = false
     for (let i = 0; i < contactIds.length; i += IN_BATCH_SIZE) {
       const batch = contactIds.slice(i, i + IN_BATCH_SIZE)
@@ -153,7 +199,11 @@ async function main() {
         break
       }
       for (const row of data ?? []) {
-        if (row.value) emailByContact.set(row.contact_id as string, row.value as string)
+        if (!row.value) continue
+        const id = row.contact_id as string
+        const set = emailsByContact.get(id) ?? new Set<string>()
+        set.add(String(row.value).trim().toLowerCase())
+        emailsByContact.set(id, set)
       }
     }
     if (readFailed) {
@@ -161,7 +211,7 @@ async function main() {
       continue
     }
 
-    const fallbackIds = contactIds.filter((id) => !emailByContact.has(id))
+    const fallbackIds = contactIds.filter((id) => !emailsByContact.has(id))
     for (let i = 0; i < fallbackIds.length; i += IN_BATCH_SIZE) {
       const batch = fallbackIds.slice(i, i + IN_BATCH_SIZE)
       const { data, error: contactsErr } = await supabaseAdmin
@@ -175,7 +225,8 @@ async function main() {
         break
       }
       for (const row of data ?? []) {
-        if (row.primary_email) emailByContact.set(row.id, row.primary_email)
+        if (!row.primary_email) continue
+        emailsByContact.set(row.id, new Set([String(row.primary_email).trim().toLowerCase()]))
       }
     }
     if (readFailed) {
@@ -183,28 +234,57 @@ async function main() {
       continue
     }
 
-    const contacts = [...emailByContact.entries()].map(([id, email]) => ({ id, email }))
-    if (!contacts.length) continue
+    // 摊平成「每个邮箱一条待办」—— 同一个人的两个邮箱是 Mailchimp 里两个会员，
+    // 各自都要打上标签。
+    const targets = [...emailsByContact.entries()].flatMap(([id, emails]) =>
+      [...emails].filter(Boolean).map((email) => ({ id, email })),
+    )
+    if (!targets.length) continue
 
-    console.log(`\n${c.name} —— ${contacts.length} 个 Meta 表单客人，标签 "${tagRead.tag}"`)
+    console.log(
+      `\n${c.name} —— ${emailsByContact.size} 个 Meta 表单客人 / ${targets.length} 个邮箱，标签 "${tagRead.tag}"`,
+    )
     const cfg = { apiKey, audienceId: audience.audienceId }
     const per = { applied: 0, alreadyTagged: 0, notInAudience: 0, failed: 0, dncSkipped: 0 }
 
-    for (const row of contacts) {
-      const email = row.email.trim().toLowerCase()
-      if (!email) continue
+    for (const row of targets) {
+      const email = row.email
 
       // 复用 meta-lead.ts 正常入口写 Mailchimp 前用的同一份统一 DNC 判据 ——
       // 拒联或查询失败（fail closed）一律不打标签，避免把已拒联的人重新
       // 拉进 `fb_lead` 分段，被后续按标签群发再次触达。
       const dnc = await evaluateDnc(row.id)
-      if (dnc !== 'ok') {
+      if (dnc === 'blocked') {
+        // 真的拒联 —— 这是**正确结果**，不是故障。不计入 failed。
         per.dncSkipped++
-        console.log(`  ⛔ 跳过（${dnc === 'blocked' ? '拒联' : 'DNC 查询失败'}）: ${mask(email)}`)
+        console.log(`  ⛔ 跳过（拒联）: ${mask(email)}`)
+        continue
+      }
+      if (dnc === 'unknown') {
+        // 查询失败。跳过是对的（fail closed），但**必须计入 failed** —— 否则
+        // 数据库抖一下导致整批人全被跳过，脚本还是退出码 0，跑的人会当成
+        // 「补完了」。跟真拒联共用一个计数器 = 把故障伪装成正常。
+        per.failed++
+        console.log(`  ✗ DNC 查询失败，保守跳过: ${mask(email)}`)
         continue
       }
 
       const r = await applyMemberTags(cfg, email, { add: [tagRead.tag] }, { dryRun: !LIVE })
+
+      // 逐条落回执 —— 只在真跑时写。记的是 subscriber hash 不是明文邮箱：
+      // 它既是 Mailchimp 里认人的那把钥匙（查得回去），又不是一份 PII 明文清单。
+      writeReceipt({
+        ts: new Date().toISOString(),
+        event: 'tag_write',
+        clientId: c.id,
+        clientName: c.name,
+        sourceContactId: row.id,
+        audienceId: audience.audienceId,
+        subscriberHash: createHash('md5').update(email).digest('hex'),
+        tag: tagRead.tag,
+        result: r.status,
+        reason: 'reason' in r ? r.reason : null,
+      })
 
       if (r.status === 'applied') {
         per.applied++
@@ -235,8 +315,26 @@ async function main() {
     `\n合计：${LIVE ? '打上' : '会打上'} ${totals.applied} · 本来就有 ${totals.alreadyTagged} · ` +
       `不在名单里 ${totals.notInAudience} · DNC 跳过 ${totals.dncSkipped} · 失败 ${totals.failed}`,
   )
+  writeReceipt({ ts: new Date().toISOString(), event: 'run_end', totals })
+
   if (!LIVE) console.log('\n这是预演，一个字都没写。确认没问题加 --live 再跑一遍。')
+  else console.log(`回执已写到：${RECEIPT_PATH}`)
   if (totals.failed > 0) process.exit(1)
+}
+
+/**
+ * 追加一条回执。预演时不写（预演没有副作用，没什么好追查的）。
+ *
+ * 写失败**不**掀翻整批：这一刻 Mailchimp 那边可能已经改了，中途 throw 只会让
+ * 后面本该记下的更多条也一起丢掉。如实喊一嗓子，继续跑。
+ */
+function writeReceipt(entry: Record<string, unknown>): void {
+  if (!LIVE || !RECEIPT_PATH) return
+  try {
+    appendFileSync(RECEIPT_PATH, JSON.stringify(entry) + '\n')
+  } catch (e) {
+    console.error(`⚠ 回执写入失败（${e instanceof Error ? e.message : String(e)}）—— 这条没记上`)
+  }
 }
 
 /** 日志里不回显完整邮箱。 */
