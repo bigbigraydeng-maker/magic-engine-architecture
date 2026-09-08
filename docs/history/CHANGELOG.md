@@ -5,6 +5,50 @@
 
 ---
 
+### 2026-09-08（修复：每日待办的两条「自动闭环」缺陷——重复骚扰 + 误诊）
+
+起因是接着 href 落地页审计往下查另一个维度：**PM 处理完一条待办之后，它会不会自动消失**。查出两条，都已修复上线。
+
+**一、`paid_signal_needs_review` 处理完还天天重复报**（[#1487](https://github.com/bigbigraydeng-maker/magic-engine/pull/1487)）
+
+PM 去 Mailchimp 手动打上 `paid_customer` 标签后，系统完全不记得——判定只看邮件内容本身（「客人自称付款」这种语义），跟 Mailchimp 当前标签毫无关系。同一个人天天被重新报出来。
+
+修法要**两侧都改**，缺一不可：写入侧（`runPaidTagging`）归入 `needsReview` 前先反查当前标签；读取侧（新增 `paid-review-filter.ts`）在生成待办那一刻按真实标签再过滤一次——因为今日待办读的是**最近 7 天所有**运行记录，光修写入侧的话，PM 处理完昨天的摘要里还有他。那个 7 天窗口不能砍（cron 只回溯 3 天，砍了会漏发）。
+
+判据跟 Mailchimp 真实状态同源，不新增状态表。三处加固来自复审：本轮已确认的邮箱一并排除（`dry-run` 下标签没真写入，反查必然查不到）、反查预算按整次运行共享（原本每邮箱 15 秒，串行累加会顶爆路由 600 秒上限）、标签名解析收敛成一份 `readPaidTag`（写入侧和读取侧认不同标签名的话过滤永远不命中，且完全静默）。
+
+**fail-open 是刻意的**：没 API key / 限流 / 网络抛错 / 客户没配 audience —— 一律保留这个人。多提醒一次只是烦；漏掉一条真的付款确认，客人会继续收到营销邮件（2026-09-01 那次 192 人群发就是这么出的事）。
+
+**二、`factory_worker_idle` 把「余额不足」谎报成「工人没开机」**（[#1488](https://github.com/bigbigraydeng-maker/magic-engine/pull/1488)）
+
+生产实测：Oztop 一条 8-03 建的工单卡在队列 **36 天**，`reject_reason` 写着 `muapi submit: Insufficient credit balance`。恰好赶上工人离线 8 天，判定就报「工人没开机」，让 PM 去 Mac 上跑 CLI——**他就算开机跑了也没用，病因是余额**。而真病因没人报得出来：`video_credits_out` 只查最近 3 天，这条早滚出窗口了。
+
+根因：判定只看三个数（排队数 / 最老等待 / 最后心跳），不看这些工单**为什么**在队列里。余额不足时 worker 把工单退回 `queued` 而不是标 `failed`，于是失败工单跟等人干的新活长得一模一样。
+
+三轮复审改出的最终判据 —— **工人离线时「去开机」永远是无条件正确的第一步**：
+
+| 情况 | 判定 | 话术 |
+|---|---|---|
+| 工人离线（不管活失败没失败） | `worker_offline` | 去开机；失败原因附带给出但不劝阻开机 |
+| 这个客户的工人在线 + 活全过不去 | `stuck_on_failure` | 开机没用，去看报错（多半充值） |
+| 工人在线 + 还有没失败过的新活 | 不报 | 产能问题 |
+
+每一轮堵的洞：① 不能因为「失败过」就劝阻开机——带 `reject_reason` 的 queued 工单通常只失败过一次、还有重试机会（`max_attempts` 默认 2，真没救的进 `dead_letter`），劝阻会让网络抖动后的重试永远不发生；② 心跳必须**按客户**算——worker 可按 `client_id` 限定认领范围，全局心跳会让 CTS 的 worker 盖掉 Oztop 的离线（按客户算会偏保守多报一次开机，方向刻意选的：说「在线别开机」而实际离线会让出片一直卡着）；③ 话术必须给真动作——`fail` 路由退回队列**没有退避字段**（`next_retry_at` 只在 publish-worker 那条线），所以「等重试」对这张表不成立，而这条 kind 进「需要你动手」栏还让人干等就是假待办。
+
+判定层抽出纯函数 `judgeQueueByClient()`，分组逻辑可单测。
+
+**顺带**：那条 36 天的僵尸工单已归档（标 `archived` 终态，不物理删，保留失败原因作证据），队列归零。
+
+**验证**：两个 PR 合计 1163 个测试全绿；新增覆盖跨客户串台（Codex 举的 CTS/Oztop 场景）、500 条心跳上限、话术不许漂回「先观察」、五种 fail-open 路径、42703 兜底。
+
+**风险级 B**（判定逻辑 + 读路径，不动数据库，不碰对外副作用）。
+
+**Reuse Statement**：两处修复都在平台层（`src/lib/mailchimp/`、`src/lib/factory/`、`src/lib/pm-todo/`），服务所有客户，非客户专属；CTS / Oztop 只作为发现问题的现场证据，没有客户名或客户判断进 shared runtime；付费标签名、audience id 仍按客户配置读（平台化红线 2）；无新表、无新依赖。
+
+**过程教训**：这一轮被 Codex 连抓四次、被 `fix-scope` 闸门拦一次，全部是真问题——包括我自己在 #1484 里声称「实现了闭环」但只修了写入侧。闸门拦的那次是分支前缀用错：`claude/*` 是自动修的窄车道（800 行上限），人有意为之的大改动要走 `fix/` 这类可见可复审的前缀。
+
+---
+
 ### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
 
 **问题**：`ads-health` 看板给 CTS 显示的每条线索成本比 Meta 官方数字便宜近一倍（看板 $3.9-4.7，Meta 官方 $7.6-11.8）。核对发现 `src/lib/meta/client.ts` 的 `results = leads + messaging_conversations` 违反了同文件 `objective-metrics.ts` 自己写的「NEVER sum across action types」规则：CTS 的 Lead Form 广告开了 Messenger 自动回复，同一个人提交表单会被 Meta 同时计入 `lead` 和 `onsite_conversion.messaging_conversation_started_7d` 两个 action_type，简单相加造成 2× 双算。2026-08-31 实测：CTS Reborn 广告当天 leads=10、messaging=9，是同一批人，不是 19 个人举手。

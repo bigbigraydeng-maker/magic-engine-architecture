@@ -116,12 +116,25 @@
 
 Codex 复审又挖出 6 个「落地页存在，但操作的东西跟待办要修的不是一回事」的问题，按 [ENGINEERING_QUALITY_GATES.md §11](./ENGINEERING_QUALITY_GATES.md#11-资源优先级判断pm-2026-09-07-拍板) 三维打分排了优先级（PM 2026-09-07 拍板顺序）：
 
-- [ ] 🔴 **[P0] `price_claim_unbacked` 落地页读写错了表**（`src/lib/pm-todo/manual-items.ts` `pushPriceGateItems`）：这条待办检查的是 `visual_assets` 表按 `post_id` 关联的配图，但 href 指向的 `/dashboard/clients/{id}/assets` 素材库页读写的是 `client_assets` 表——两张不同的表，PM 点进去根本找不到要改来源的那张图。要么把 href 改到能操作 `visual_assets` 的地方，要么把这条检查也接到 `client_assets`。客户投诉风险直接（配错图客户按图下单对不上）。
-- [ ] 🔴 **[P0] `factory_worker_idle` 落地页无法远程启动 worker**（`src/lib/pm-todo/manual-items.ts` `pushFactoryWorkerItems` + `/dashboard/factory`）：待办的 how 要求「在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`」，但 `/dashboard/factory` 页面只能看 worker 心跳状态，没有任何远程启动/连接控制。要么加一个能远程触发 worker 的入口，要么把 worker 迁到不依赖单台 Mac 开机的执行环境（长期更优，但改动更大，先讨论方案）。
-- [ ] **[P2] `kernel_needs_human` 三处分支生成空 href**（`src/lib/kernel/handoff.ts` 91/103/112 行）：这几类交接待办的 `href: ''`，PM 点开邮件根本没有入口可点，只能靠 how 里的文字描述摸索。是「管道不许断头」这条铁律的安全网本身在这几个分支失效。要给这几类交接补上真实入口（哪怕是执行看板的一个筛选视图）。
+- [ ] **[P1]（2026-09-08 用生产数据改判，原 P0）`price_claim_unbacked` 落地页读写错了表**（`src/lib/pm-todo/manual-items.ts` `pushPriceGateItems`）：这条待办检查的是 `visual_assets` 表按 `post_id` 关联的配图，但 href 指向的 `/dashboard/clients/{id}/assets` 素材库页读写的是 `client_assets` 表——两张不同的表，PM 点进去根本找不到要改来源的那张图。要么把 href 改到能操作 `visual_assets` 的地方，要么把这条检查也接到 `client_assets`。客户投诉风险直接（配错图客户按图下单对不上）。
+      ⚠️ **优先级从 P0 降到 P1**：生产实测 8 条 `approved` 帖子**一条带价格的都没有**，其中 7 条连配图都没有（代码里没配图直接跳过）——这条待办当前触发数为 0。原判「频率高（内容审核天天过）」是拍脑袋，不是数据。按 §11 重算：频率低 / IMPACT 高 / 收入高 → 高高低 → P1。
+- [ ] **[P2]（2026-09-08 复查修正）`kernel_needs_human` 依赖 14 天巡检窗口，可能悄悄掩盖未处理死信**（`src/lib/kernel/handoff.ts` `HANDOFF_WINDOW_DAYS`）：⚠️ **之前这里写的「要补 href」是误判，已撤回**——那三处 `href: ''` 是刻意设计（文件头注释明写「给一个打得开但看不到这件事的链接，跟给一个 404 一样是假的三件套」，且有守卫测试盯着不许出现假链接）。这条待办的性质本来就是「通知开发者有死信/待审批/被拒的动作，PM 看到也做不了任何事」，不是要 PM 操作的任务。真正的风险在于它只查最近 14 天的 `action_runs`（`listDeadLetterRuns`）——开发者没及时处理，超过窗口就不再出现，问题被时间盖住，PM 会误以为「没再提醒 = 已解决」。要么给开发者侧一个不设时间窗口的死信清单，要么把处理动作接上 Inngest 事件通知，不靠巡检轮询。
 - [ ] **[P2] `leads_metric_untrusted` 落地页没有修复入口**（`src/lib/pm-todo/manual-items.ts` `pushLeadsSanityItems` + `/goal/{goalId}`）：待办要求 PM 去客户网站统计后台收窄「产生线索」触发条件，但目标页是纯展示、没有任何外部统计后台的链接。要么加一条到客户 GA4/GTM 后台的直达链接（如果连接器里存了 property id），要么在 how 里明确「这一步要联系客户或自己去 GA4 后台改」而不是暗示落地页能做。
 - [ ] **[P2] `meta_stuck` 落地页跟需要做的事不对应**（`src/lib/pm-todo/manual-items.ts` 515-520 行 + `/dashboard/clients/{id}/settings`）：待办要求登录**客户自己的** WordPress 后台启用 Magic Engine 插件，但 `/settings` 页是我们自己的连接器配置（API 密钥、SEO 字段探测），不是客户 WP 后台，也没给客户后台的直达链接。要在 CmsPanel 里补上客户 WP 后台的地址（如果连接时存了站点 URL）。
-- [ ] **[P2] `goal_baseline_mismatch` 目标起点数字改不了**（`/goal/{goalId}` 页 + `src/app/api/goals/[goalId]/route.ts` 只有 GET/DELETE）：待办要求把错误的起点改成重算值，但目标详情页只读展示 `baseline_value`，也没有对应的 PATCH/PUT 接口。要新增一个编辑 baseline 的入口（前端表单 + 后端接口），同时要考虑这个字段被改动后要不要留痕（谁在什么时候把起点从 A 改成了 B）。
+- [ ] **[P2] `goal_baseline_mismatch` 目标起点数字改不了**（`/goal/{goalId}` 页 + `src/app/api/goals/[goalId]/route.ts` 只有 GET/DELETE）：待办要求把错误的起点改成重算值，但目标详情页只读展示 `baseline_value`，也没有对应的 PATCH/PUT 接口。⚠️ 比「缺编辑 UI」更严重：`baseline_value` 在整个代码库里**没有任何写入路径**（除了建目标时一次性填入），所以这条一旦触发**会永久卡在每日待办里、天天出现、不会自愈**，直到工程师直接写 SQL 改库。要新增一个编辑 baseline 的入口（前端表单 + 后端接口），同时要考虑这个字段被改动后要不要留痕（谁在什么时候把起点从 A 改成了 B）。
+
+## 每日待办「自动闭环」审计（2026-09-08）
+
+**查的是另一个维度**：不是「链接点不点得开」，而是**PM 处理完一条待办之后，它会不会自动消失**。
+
+已修复上线（见 [history/CHANGELOG.md](./history/CHANGELOG.md)）：`paid_signal_needs_review` 重复骚扰、`factory_worker_idle` 误诊。
+
+**健康设计的对照组**（其他 kind 该向它们看齐）：`dm_maybe_stop` / `dnc_maybe_wrong` 要求处理时**必须写一笔记录**才会消失（Codex 2026-08-17 复审后加固）；`not_indexed` / `crawl_stale` / `cross_client_leak` / `conversion_needs_review` 直接查当前状态字段，处理后状态一变、下次查询自然不再命中。
+
+**待跟进的系统性风险**：
+
+- [ ] **[P2] 「时间窗口」类待办的假消失**：多个 kind 靠「最近 N 天」窗口做检测（`diagnostic_findings` 8 天、`kernel_needs_human` 14 天、`video_credits_out` / `dataforseo_credits_out` 3 天、`mailchimp_export_broken` 6 小时）。要分清两类：**通知类**（`diagnostic_findings` / `prescription_updated` 本来就不要求处理，过期消失合理）和**处理类**（没人处理时超窗口就静默消失，制造「已解决」的假象）。后者需要逐条确认是不是该改成真实状态判据。
+- [ ] **[P3] 充值类待办有滞后**：`video_credits_out` / `dataforseo_credits_out` 判据是「最近 3 天有没有因余额失败的记录」，所以 PM 充完值当天这条不会消失，最多要等 3 天旧记录滚出窗口。不是 bug，但体验上像「我明明充了它还在催」。
 
 ### ME 产品动态自动发 LinkedIn（2026-08-20 建成，默认关闭）
 
