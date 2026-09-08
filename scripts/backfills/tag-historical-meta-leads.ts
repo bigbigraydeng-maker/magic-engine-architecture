@@ -41,7 +41,18 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
 
 const LIVE = process.argv.includes('--live')
 const clientIdArg = process.argv.find((a) => a.startsWith('--client-id='))
-const ONLY_CLIENT_ID = clientIdArg ? clientIdArg.split('=')[1] : null
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+let ONLY_CLIENT_ID: string | null = null
+if (clientIdArg) {
+  const value = clientIdArg.slice('--client-id='.length).trim()
+  if (!UUID_RE.test(value)) {
+    // 空值或写错的 UUID 绝不能悄悄退化成「不过滤」—— 那会让一次本该只打
+    // 一个客户的回填，误伤所有配了 Mailchimp 出口的客户。
+    console.error(`--client-id 不是合法 UUID（收到 "${value}"），停手`)
+    process.exit(1)
+  }
+  ONLY_CLIENT_ID = value
+}
 
 async function main() {
   // 动态引，等上面把 .env.local 灌进 process.env 之后再加载这些模块 ——
@@ -49,6 +60,7 @@ async function main() {
   const { supabaseAdmin } = await import('../../src/lib/supabase')
   const { readAudienceId, readLeadSourceTag } = await import('../../src/lib/mailchimp/audience-config')
   const { applyMemberTags } = await import('../../src/lib/mailchimp/tags')
+  const { evaluateDnc } = await import('../../src/lib/crm/meta-lead')
 
   const apiKey = process.env.MAILCHIMP_API_KEY ?? ''
   if (!apiKey.trim()) {
@@ -66,7 +78,7 @@ async function main() {
     process.exit(1)
   }
 
-  const totals = { applied: 0, alreadyTagged: 0, notInAudience: 0, failed: 0 }
+  const totals = { applied: 0, alreadyTagged: 0, notInAudience: 0, failed: 0, dncSkipped: 0 }
 
   for (const c of clients ?? []) {
     const audience = await readAudienceId(c.id)
@@ -82,13 +94,27 @@ async function main() {
       continue
     }
 
-    // 只挑「广告归因来自 Meta、且有邮箱」的人。没有邮箱的在 Mailchimp 里根本
-    // 找不到，不该算进任何一栏。
+    // 目标集合必须从「真的提交过 Meta Lead Form」这件事派生 —— 触点表
+    // `contact_touchpoints.source = 'meta_lead_form'`，不能用联系人级的
+    // `attr_platform`：官网表单带 Meta UTM 时也会把 attr_platform 写成
+    // 'meta'（误伤），而 first-touch 是别的渠道、后来又交过 Meta 表单的人
+    // 又会被漏掉（identity.ts 的 first-touch 规则不会覆盖 attr_platform）。
+    const { data: touches, error: touchesErr } = await supabaseAdmin
+      .from('contact_touchpoints')
+      .select('contact_id')
+      .eq('client_id', c.id)
+      .eq('source', 'meta_lead_form')
+    if (touchesErr) {
+      console.log(`⚠ ${c.name}: 读触点失败（${touchesErr.message}）—— 跳过`)
+      continue
+    }
+    const contactIds = [...new Set((touches ?? []).map((t) => t.contact_id))]
+    if (!contactIds.length) continue
+
     const { data: contacts, error: contactsErr } = await supabaseAdmin
       .from('contacts')
-      .select('primary_email')
-      .eq('client_id', c.id)
-      .eq('attr_platform', 'meta')
+      .select('id, primary_email')
+      .in('id', contactIds)
       .not('primary_email', 'is', null)
     if (contactsErr) {
       console.log(`⚠ ${c.name}: 读客人失败（${contactsErr.message}）—— 跳过`)
@@ -96,13 +122,24 @@ async function main() {
     }
     if (!contacts?.length) continue
 
-    console.log(`\n${c.name} —— ${contacts.length} 个 Meta 归因客人，标签 "${tagRead.tag}"`)
+    console.log(`\n${c.name} —— ${contacts.length} 个 Meta 表单客人，标签 "${tagRead.tag}"`)
     const cfg = { apiKey, audienceId: audience.audienceId }
-    const per = { applied: 0, alreadyTagged: 0, notInAudience: 0, failed: 0 }
+    const per = { applied: 0, alreadyTagged: 0, notInAudience: 0, failed: 0, dncSkipped: 0 }
 
     for (const row of contacts) {
       const email = String(row.primary_email).trim().toLowerCase()
       if (!email) continue
+
+      // 复用 meta-lead.ts 正常入口写 Mailchimp 前用的同一份统一 DNC 判据 ——
+      // 拒联或查询失败（fail closed）一律不打标签，避免把已拒联的人重新
+      // 拉进 `fb_lead` 分段，被后续按标签群发再次触达。
+      const dnc = await evaluateDnc(row.id)
+      if (dnc !== 'ok') {
+        per.dncSkipped++
+        console.log(`  ⛔ 跳过（${dnc === 'blocked' ? '拒联' : 'DNC 查询失败'}）: ${mask(email)}`)
+        continue
+      }
+
       const r = await applyMemberTags(cfg, email, { add: [tagRead.tag] }, { dryRun: !LIVE })
 
       if (r.status === 'applied') {
@@ -121,17 +158,18 @@ async function main() {
 
     console.log(
       `  小计：${LIVE ? '打上' : '会打上'} ${per.applied} · 本来就有 ${per.alreadyTagged} · ` +
-        `不在名单里 ${per.notInAudience} · 失败 ${per.failed}`,
+        `不在名单里 ${per.notInAudience} · DNC 跳过 ${per.dncSkipped} · 失败 ${per.failed}`,
     )
     totals.applied += per.applied
     totals.alreadyTagged += per.alreadyTagged
     totals.notInAudience += per.notInAudience
+    totals.dncSkipped += per.dncSkipped
     totals.failed += per.failed
   }
 
   console.log(
     `\n合计：${LIVE ? '打上' : '会打上'} ${totals.applied} · 本来就有 ${totals.alreadyTagged} · ` +
-      `不在名单里 ${totals.notInAudience} · 失败 ${totals.failed}`,
+      `不在名单里 ${totals.notInAudience} · DNC 跳过 ${totals.dncSkipped} · 失败 ${totals.failed}`,
   )
   if (!LIVE) console.log('\n这是预演，一个字都没写。确认没问题加 --live 再跑一遍。')
   if (totals.failed > 0) process.exit(1)
