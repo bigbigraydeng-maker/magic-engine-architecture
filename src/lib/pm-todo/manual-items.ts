@@ -1778,13 +1778,19 @@ async function pushFactoryWorkerItems(
   items: ManualItem[],
   now: Date,
 ): Promise<void> {
-  // 真实列名（已核实）：status / created_at / heartbeat_at
+  // 真实列名（已核实）：status / created_at / heartbeat_at / reject_reason
+  // 🔴 `reject_reason` 必须一起读：余额不足时 worker 把工单退回 queued 而不是
+  //    标 failed，只数「队列里有几个」会把「反复失败的僵尸工单」误当成「等人干的新活」。
   const { data: queuedRows } = await supabase
     .from('content_work_orders')
-    .select('id, created_at')
+    .select('id, created_at, reject_reason')
     .eq('status', 'queued')
     .order('created_at', { ascending: true })
-  const queued = (queuedRows ?? []) as Array<{ id: string; created_at: string }>
+  const queued = (queuedRows ?? []) as Array<{
+    id: string
+    created_at: string
+    reject_reason: string | null
+  }>
   if (queued.length === 0) return
 
   const { data: hbRows } = await supabase
@@ -1796,12 +1802,34 @@ async function pushFactoryWorkerItems(
   const lastHb = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
 
   const hours = (iso: string) => (now.getTime() - Date.parse(iso)) / 3_600_000
+  const stuck = queued.filter((q) => (q.reject_reason ?? '').trim().length > 0)
   const verdict = judgeWorkerPresence({
     queued: queued.length,
     oldestQueuedHours: hours(queued[0].created_at),
     lastHeartbeatHours: lastHb ? hours(lastHb.heartbeat_at) : null,
+    queuedStuckOnFailure: stuck.length,
+    stuckSampleReason: stuck[0]?.reject_reason?.trim().slice(0, 160) ?? null,
   })
   if (verdict.idle) return
+
+  // 两种病因，两套话术 —— 混成一条会让人做错的事：
+  // 「没人干活」要去把工人跑起来；「每轮都失败」开机一百次也没用。
+  if (verdict.kind === 'stuck_on_failure') {
+    items.push({
+      kind: 'factory_worker_idle',
+      client_id: 'infra',
+      client_name: 'Magic Engine 后台',
+      what:
+        `${verdict.humanReason}` +
+        (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
+      how:
+        '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完这些工单下一轮会自己跑掉；' +
+        '写的是别的原因，回我一句「出片工单卡住了」，我去查。' +
+        '这条**不是**工人没开机 —— 去开机跑命令解决不了它',
+      href: 'https://app.magicengine.com.au/dashboard/factory',
+    })
+    return
+  }
 
   items.push({
     kind: 'factory_worker_idle',
