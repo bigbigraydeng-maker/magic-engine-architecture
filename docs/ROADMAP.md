@@ -127,7 +127,7 @@ Codex 复审又挖出 6 个「落地页存在，但操作的东西跟待办要�
 
 **背景**：href 审计只查了"点得开点不开"，这次查另一件事——**PM 处理完一条待办之后，它会不会自动消失，还是会一直重复骚扰**。健康设计的对照组：`dm_maybe_stop` / `dnc_maybe_wrong` 要求处理时必须写一笔记录才会消失（Codex 2026-08-17 复审后加固过），`not_indexed` / `crawl_stale` / `cross_client_leak` / `conversion_needs_review` 都是直接查当前状态字段，处理后状态改变、下次查询自然不再命中。
 
-- [ ] 🔴 **[P0] `paid_signal_needs_review` 没有处理确认机制，PM 会被同一条待办重复骚扰**（`src/lib/mailchimp/paid-tagging.ts` `runPaidTagging` 的 `needs_review` 分支 + `src/lib/pm-todo/manual-items.ts` `pushPaidSignalReviewItems`）：PM 今天去 Mailchimp 把这个人手动打上 `paid_customer` 标签后，系统完全不记得这件事处理过——判定条件只看邮件内容本身（"客人自称付款"这种语义），跟 Mailchimp 当前有没有这个标签毫无关系（对比同文件里"自动打标签"那个分支，那里有 `alreadyTagged` 幂等短路检查，但 `needs_review` 分支没有）。只要这封邮件还在扫描窗口（`lookbackDays`）内，明天巡检会把同一个人重新报一遍。**修法**：改判定逻辑，在归入 `needs_review` 之前先去 Mailchimp 反查这个人当前有没有 `paid_customer` 标签，有就跳过——不新增状态表，判据跟 Mailchimp 真实标签状态同源，处理完自然不再命中（同 `price_claim_unbacked` 那条注释推崇的模式：「判定条件跟闸本身同源，改好就自己消失」）。B 级改动，不动数据库。
+- [x]（PR 待合并）**[P0] `paid_signal_needs_review` 没有处理确认机制，PM 会被同一条待办重复骚扰**（`src/lib/mailchimp/paid-tagging.ts` `runPaidTagging` 的 `needs_review` 分支）：判定条件只看邮件内容本身，跟 Mailchimp 当前有没有 `paid_customer` 标签毫无关系，PM 处理完还会被同一封邮件重复骚扰。已改判定逻辑，归入 `needs_review` 前先反查 Mailchimp 当前标签，有就跳过；4 个新增回归测试覆盖（已处理不再报 / 未处理照常报 / 同邮件幂等查一次 / 查询出错时 fail-open 不静默丢）。合并后从本文件删除、追加到 CHANGELOG.md。
 
 ### ME 产品动态自动发 LinkedIn（2026-08-20 建成，默认关闭）
 

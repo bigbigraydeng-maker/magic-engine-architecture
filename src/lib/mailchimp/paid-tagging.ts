@@ -36,7 +36,7 @@ import {
   looksLikeCustomerAddress,
   isForwardedSubject,
 } from './paid-signal'
-import { applyMemberTags, type MailchimpTagsConfig } from './tags'
+import { applyMemberTags, findMemberByEmail, type MailchimpTagsConfig } from './tags'
 
 /** 一封待判定的邮件。字段刻意只取 `microsoft/mail-graph` 已经给的那些。 */
 export interface CandidateMail {
@@ -125,6 +125,11 @@ export async function runPaidTagging(
 ): Promise<PaidTaggingResult> {
   const out = emptyResult()
   const alreadyTagged = new Set<string>()
+  // 本轮已确认在 Mailchimp 上有 paidTag 的人 —— 避免同一个人多封信重复查询。
+  const alreadyConfirmedPaid = new Set<string>()
+  // 本轮已经查过一次 needs_review 确认闸的人（不管查到的结果是不是已打标签）——
+  // 没打标签的也不必为第二封信再查一次，第一次查到的结论在同一轮里不会变。
+  const checkedForPaidTag = new Set<string>()
 
   for (const mail of mails) {
     out.scanned += 1
@@ -156,6 +161,23 @@ export async function runPaidTagging(
     if (!evidenceIsVerbatim(verdict.evidence, text)) continue
 
     if (verdict.kind === 'needs_review') {
+      // 🔴 处理确认闸（2026-09-08，每日待办自动闭环审计发现）：PM 昨天已经去
+      // Mailchimp 手动打过 paidTag，这封邮件不该再冒出来——判定条件只看邮件
+      // 内容本身，跟 Mailchimp 当前标签状态无关，所以同一个人会被天天重新报。
+      // 这里在归入 needsReview 前先反查一次真实标签状态：已经打过了就跳过，
+      // 不新增状态表，判据跟 Mailchimp 真实标签同源，PM 处理完自然不再命中
+      // （同 price_claim_unbacked 那条注释推崇的模式）。
+      // 查不到 / 查出错都按"还没处理"算——宁可多提醒一次，不能因为查询失败
+      // 就让一条真待处理的信静默消失。
+      if (!checkedForPaidTag.has(email)) {
+        checkedForPaidTag.add(email)
+        const found = await findMemberByEmail(cfg, email)
+        if (found.status === 'found' && found.member.tags.includes(policy.paidTag)) {
+          alreadyConfirmedPaid.add(email)
+        }
+      }
+      if (alreadyConfirmedPaid.has(email)) continue
+
       out.needsReview.push({
         email,
         name: mail.counterparty?.name ?? null,
