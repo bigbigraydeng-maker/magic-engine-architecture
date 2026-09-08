@@ -157,6 +157,7 @@ import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
+import { dropAlreadyPaidTagged } from '@/lib/mailchimp/paid-review-filter'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import {
@@ -701,7 +702,39 @@ export async function pushPaidSignalReviewItems(
     }
   }
 
-  for (const raw of rows.slice(0, 20)) {
+  /**
+   * 🔴 按 Mailchimp **当前**标签再过滤一次（Codex P1 复审 PR #1484）。
+   *
+   * 上面那 7 天窗口是有原因的（见本函数头注的三个漏法），不能砍。但它带来一个
+   * 后果：PM 今天处理完，今天的 summary 里确实没他了，**昨天的 summary 里还在**，
+   * 于是同一条待办天天重新冒出来，直到旧日志滚出窗口 —— 写入侧那道过滤
+   * （`runPaidTagging`）管不到已经落库的历史摘要。
+   *
+   * 所以在生成待办的这一刻，按真实标签状态再判一次。查不到 / 出错一律保留
+   * （fail-open）—— 漏掉一条真待处理的付款确认，客人会继续收到营销邮件。
+   */
+  const candidates = rows.slice(0, 20).map((raw) => {
+    const r = raw as { email?: unknown; clientId?: unknown }
+    return {
+      email: typeof r.email === 'string' ? r.email : '',
+      clientId: typeof r.clientId === 'string' ? r.clientId : '',
+      raw,
+    }
+  })
+  const keepable = await dropAlreadyPaidTagged(
+    supabase,
+    candidates.filter((c) => c.email && c.clientId),
+  ).catch((e) => {
+    console.warn('[manual-items] 付款待确认的已处理过滤失败（保留全部，不静默丢）:', e)
+    return candidates.filter((c) => c.email && c.clientId)
+  })
+  const keepKeys = new Set(keepable.map((c) => `${c.clientId}::${c.email.toLowerCase()}`))
+  // 没有 clientId 的记录过滤不了（判不出用哪个 audience）—— 一律保留
+  const toEmit = candidates.filter(
+    (c) => !c.clientId || !c.email || keepKeys.has(`${c.clientId}::${c.email.toLowerCase()}`),
+  )
+
+  for (const { raw } of toEmit) {
     const r = raw as {
       email?: unknown
       name?: unknown

@@ -48,7 +48,7 @@ import { ownDomainsOf } from '@/lib/microsoft/mail-ingest'
 import { CONNECTION_STATUS } from '@/lib/platform-oauth/vocabulary'
 import {
   runPaidTagging,
-  DEFAULT_PAID_TAG,
+  readPaidTag,
   type CandidateMail,
   type PaidTaggingPolicy,
 } from '@/lib/mailchimp/paid-tagging'
@@ -69,11 +69,12 @@ const MAX_LOOKBACK_DAYS = 400
  */
 function readPolicy(leadsConfig: unknown, ownDomains: readonly string[]): PaidTaggingPolicy {
   const cfg = (leadsConfig ?? {}) as {
-    paid_tagging?: { paid_tag?: unknown; lead_tags_to_remove?: unknown }
+    paid_tagging?: { lead_tags_to_remove?: unknown }
   }
   const raw = cfg.paid_tagging ?? {}
-  const paidTag =
-    typeof raw.paid_tag === 'string' && raw.paid_tag.trim() ? raw.paid_tag.trim() : DEFAULT_PAID_TAG
+  // 🔴 标签名走 paid-tagging.ts 那一份，别在这里再解析一遍 —— 写入侧和今日待办
+  //    的已处理过滤必须认同一个标签名，两份规则一漂移，过滤就永远不命中。
+  const paidTag = readPaidTag(leadsConfig)
   const leadTagsToRemove = Array.isArray(raw.lead_tags_to_remove)
     ? raw.lead_tags_to_remove.filter((t): t is string => typeof t === 'string' && !!t.trim())
     : []

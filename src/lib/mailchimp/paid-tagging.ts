@@ -76,6 +76,20 @@ export interface PaidTaggingPolicy {
 
 export const DEFAULT_PAID_TAG = 'paid_customer'
 
+/**
+ * 从 `clients.leads_config` 里读这个客户的付费标签名。
+ *
+ * 🔴 单一来源：写入侧（cron 的 `readPolicy`）和读取侧（今日待办的已处理过滤）
+ * 必须用**同一个**标签名，否则一边打 `paid_customer`、另一边查 `vip`，
+ * 过滤永远不命中，待办会一直重复冒出来 —— 而且这种不一致完全静默。
+ * 本仓已经因为「两份解析规则各写一套」栽过跟头（见 `tags.ts` 头注）。
+ */
+export function readPaidTag(leadsConfig: unknown): string {
+  const cfg = (leadsConfig ?? {}) as { paid_tagging?: { paid_tag?: unknown } }
+  const raw = cfg.paid_tagging?.paid_tag
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : DEFAULT_PAID_TAG
+}
+
 export interface PaidTaggingResult {
   scanned: number
   /** 自动打上标签的人（含摘掉的线索标签）。 */
