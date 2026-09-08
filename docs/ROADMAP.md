@@ -477,6 +477,29 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 
 - [ ] **P8.S.8** — `batchKeywordOverview`（`phrase_these`）→ `keywords_data/google_ads/search_volume/live` + `bulk_keyword_difficulty`（两次 task 合并）
 
+## Social IMPACT — Check → Tune 闭环（Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413)，CTS Customer Zero）🔄 Gate A + Gate B 步骤 1-3 已上线，Gate B/4 待授权
+
+Gate A（激活 Check，让 Daily Plan Post 的 Facebook 发布真的能被自动测量回来）与 Gate B 步骤 1-3
+（evaluator 纯函数 [#1451](https://github.com/bigbigraydeng-maker/magic-engine/pull/1451) + cohort loader
+[#1452](https://github.com/bigbigraydeng-maker/magic-engine/pull/1452) + Daily Plan 页面显示效果建议
+[#1453](https://github.com/bigbigraydeng-maker/magic-engine/pull/1453)）已合入 main，详见
+[CHANGELOG 2026-09-08](./history/CHANGELOG.md)。CTS 因为只有一条未撤回的 Daily Plan Post，样本量凑不齐
+Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说话」占位——这是规则的正确表现，不是 bug。
+
+- [ ] **Gate B/4（A 级 · 需 PM 单独授权）** —— 保存下一份 Daily Plan 时，记录本次采纳/拒绝了哪条 Tune 建议
+      + source action ids，形成 lineage。这一步会动 Kernel 保存路径，是整条 Gate B 里唯一真正「写」的一环，
+      按 Issue #1413 冻结的 Scope 走：人工审批保留，无自动发布 / 排期 / provider write / 广告花费。
+- [ ] **evaluator cohort 全 0 时的 caveat 缺口**（魏征复审 #2，PR #1453 review）—— cohort 全部 `ok/partial`
+      但 likes=0（新账号 / 权限不足未落 unmeasurable 的边界情形）时，target 只要 > 0 就判 REPEAT +
+      `deltaPct: Infinity`，语义上可能鼓励重复"没人看的内容形态"。至少加一条 `cohort_all_zero` caveat。
+- [ ] **阈值比较未走 roundTo 的浮点边界**（魏征复审 #3）—— `social-post-evaluator.ts` 的
+      `>= repeatDeltaPct` / `<= stopDeltaPct` 判断走原始 `deltaPct`，不像展示层那样先 `roundTo(1)`。
+      实数输入（如 13.7 / 10.53）可能在边界附近漂移到另一侧决策，现有测试只锁了整数边界。
+- [ ] **`normalizeStatus` 三处复制**（魏征复审 #6）—— `social-post-cohort.ts` 与
+      `campaign-tune-suggestions.ts` 各自定义了同样的 `normalizeStatus` / `parseNumberMap` /
+      `parseStringMap`。未来 receipt status 定义变更（例如加 `'timeout'`）三处都要改，属「假件与 SQL 同步」
+      同类事故模式，建议下沉到 `src/lib/flywheel/tune/` 下的共享 helper。
+
 ## Phase 24 — Execution Loop Closure（执行闭环修复）📋 已登记，2026-06-06 启动
 
 - [ ] P24.A.1 migration: `20260606000001_execution_items_zhuge_source.sql`
