@@ -1,0 +1,91 @@
+// @vitest-environment node
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+const mocks = vi.hoisted(() => ({ start: vi.fn(), get: vi.fn(), claim: vi.fn(), read: vi.fn(), update: vi.fn(), reserve: vi.fn(), settle: vi.fn(), input: vi.fn(), signal: vi.fn(), rpc: vi.fn(), eligible: vi.fn(), dns: vi.fn(), interpret: vi.fn(), validate: vi.fn() }))
+vi.mock('@/lib/apify/website', () => ({ startWebsiteCapture: mocks.start, getWebsiteCapture: mocks.get }))
+vi.mock('@/lib/apify/client', () => ({ abortRun: vi.fn() }))
+vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { rpc: mocks.rpc } }))
+vi.mock('../targets', () => ({ assertEligibleTarget: mocks.eligible, validatePublicTarget: mocks.dns }))
+vi.mock('../store', () => ({ claim: mocks.claim, readRun: mocks.read, updateRun: mocks.update, reserve: mocks.reserve, settle: mocks.settle, loadInterpretationInput: mocks.input, updateSignal: mocks.signal }))
+vi.mock('../interpret', () => ({ interpretChange: mocks.interpret, validateInterpretation: mocks.validate, interpretationPrompt: vi.fn(), MODEL_SONNET: 'test', PROMPT_VERSION: 'v1' }))
+import { authorize, startCapture, collectCapture, understand, normaliseContent } from '../runner'
+import type { Run, CaptureRequest } from '../contracts'
+const id = '00000000-0000-4000-8000-000000000001'
+const run = { id, client_id: id, domain: 'example.com', url: 'https://example.com/', actor_build: '1.2.3', capture_limit_usd: 0.1, provider_run_id: null } as Run
+const req = { client_id: id, request_id: id, domain: run.domain, url: run.url } as CaptureRequest
+beforeEach(() => {
+  vi.resetAllMocks(); vi.stubEnv('WEB_INTELLIGENCE_ALLOWED_CLIENT_IDS', id)
+  mocks.read.mockResolvedValue(run); mocks.claim.mockResolvedValue(true); mocks.rpc.mockResolvedValue({ error: null, data: {} })
+  mocks.start.mockResolvedValue({ id: 'provider1', defaultDatasetId: 'dataset1', status: 'RUNNING' })
+})
+describe('durable provider boundaries', () => {
+  it('refuses unapproved clients before DNS, reserve or provider calls', async () => {
+    vi.stubEnv('WEB_INTELLIGENCE_ALLOWED_CLIENT_IDS', '')
+    await expect(authorize(req)).rejects.toThrow('rollout')
+    expect(mocks.reserve).not.toHaveBeenCalled(); expect(mocks.dns).not.toHaveBeenCalled(); expect(mocks.start).not.toHaveBeenCalled()
+  })
+  it('refuses a removed or archived identity before reserving budget', async () => {
+    mocks.eligible.mockRejectedValue(new Error('target_not_eligible'))
+    await expect(authorize(req)).rejects.toThrow(); expect(mocks.reserve).not.toHaveBeenCalled()
+  })
+  it('resumes a persisted provider run without starting another', async () => {
+    mocks.read.mockResolvedValue({ ...run, provider_run_id: 'existing' })
+    expect(await startCapture(run)).toBe('existing'); expect(mocks.start).not.toHaveBeenCalled()
+  })
+  it('holds uncertainty when a claimed start has no run receipt', async () => {
+    mocks.claim.mockResolvedValue(false)
+    expect(await startCapture(run)).toBeNull(); expect(mocks.start).not.toHaveBeenCalled()
+    expect(mocks.update).toHaveBeenCalledWith(id, id, expect.objectContaining({ status: 'reconciliation' }))
+  })
+  it('does not start a paid request after settings were disabled', async () => {
+    mocks.claim.mockRejectedValue(new Error('execution_disabled'))
+    expect(await startCapture(run)).toBeNull(); expect(mocks.start).not.toHaveBeenCalled()
+    expect(mocks.update).toHaveBeenCalledWith(id, id, expect.objectContaining({ capture_cost_usd: 0, interpretation_cost_usd: 0, error_code: 'execution_disabled' }))
+  })
+  it('does not interpret after entitlement was revoked', async () => {
+    mocks.input.mockResolvedValue({ signal: { id: 's', interpretation_status: 'pending' }, evidence: [], context: '' })
+    mocks.claim.mockRejectedValue(new Error('execution_disabled'))
+    await understand(run); expect(mocks.interpret).not.toHaveBeenCalled()
+    expect(mocks.update).toHaveBeenCalledWith(id, id, expect.objectContaining({ interpretation_cost_usd: 0 }))
+  })
+  it('does not retry a transport-ambiguous paid start', async () => {
+    mocks.start.mockRejectedValue(new Error('timeout'))
+    expect(await startCapture(run)).toBeNull(); expect(mocks.start).toHaveBeenCalledTimes(1); expect(mocks.settle).not.toHaveBeenCalled()
+  })
+  it('does not refund a run whose receipt could not be persisted', async () => {
+    mocks.update.mockRejectedValueOnce(new Error('db failure')).mockResolvedValue(undefined)
+    expect(await startCapture(run)).toBeNull(); expect(mocks.settle).not.toHaveBeenCalled()
+  })
+  it('does not create snapshots from rejected captures', async () => {
+    mocks.get.mockResolvedValue({ status: 'failed', run: { status: 'SUCCEEDED', defaultDatasetId: 'd', usageTotalUsd: 0.03 } })
+    expect(await collectCapture(run, 'p')).toBe('failed'); expect(mocks.rpc).not.toHaveBeenCalled()
+  })
+  it('keeps unknown capture cost null, never zero', async () => {
+    mocks.get.mockResolvedValue({ status: 'failed', run: { status: 'FAILED' } })
+    await collectCapture(run, 'p')
+    expect(mocks.update).toHaveBeenCalledWith(id, id, { capture_cost_usd: null })
+  })
+  it('stores a valid snapshot before interpreting, using a stable content hash', async () => {
+    mocks.get.mockResolvedValue({ status: 'complete', run: { status: 'SUCCEEDED', usageTotalUsd: 0.01 }, page: { url: run.url, title: 'Prices', text: 'Valid page content '.repeat(20) } })
+    expect(await collectCapture(run, 'p')).toBe('captured')
+    expect(mocks.rpc).toHaveBeenCalledWith('web_intelligence_record_snapshot', expect.objectContaining({ p_id: id, p_client_id: id, p_hash: expect.stringMatching(/^[a-f0-9]{64}$/) }))
+  })
+  it('baseline and unchanged captures incur no interpretation call', async () => {
+    mocks.input.mockResolvedValue({ signal: null, evidence: [], context: '' }); await understand(run)
+    expect(mocks.interpret).not.toHaveBeenCalled(); expect(mocks.update).toHaveBeenCalledWith(id, id, { interpretation_cost_usd: 0 })
+  })
+  it('an uncertain interpretation attempt does not create another paid call', async () => {
+    mocks.input.mockResolvedValue({ signal: { id: 's', interpretation_status: 'pending' }, evidence: [], context: '' }); mocks.claim.mockResolvedValue(false)
+    await understand(run); expect(mocks.interpret).not.toHaveBeenCalled()
+  })
+  it('retains a known LLM charge when JSON validation fails', async () => {
+    mocks.input.mockResolvedValue({ signal: { id: 's', interpretation_status: 'pending' }, evidence: [], context: '' })
+    mocks.interpret.mockResolvedValue({ text: 'invalid', cost_usd: 0.02 }); mocks.validate.mockImplementation(() => { throw new Error('invalid') })
+    await understand(run)
+    expect(mocks.update).toHaveBeenCalledWith(id, id, { interpretation_cost_usd: 0.02 })
+    expect(mocks.signal).toHaveBeenCalledWith('s', id, { interpretation_status: 'failed' })
+  })
+  it('normalises layout whitespace without removing content changes', () => {
+    expect(normaliseContent(' price   $5\r\n\n offer ')).toBe('price $5\noffer')
+    expect(normaliseContent('price $6')).not.toBe(normaliseContent('price $5'))
+  })
+})
