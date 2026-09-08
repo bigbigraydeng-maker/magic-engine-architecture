@@ -157,6 +157,7 @@ import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
+import { dropAlreadyPaidTagged } from '@/lib/mailchimp/paid-review-filter'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import {
@@ -695,13 +696,54 @@ export async function pushPaidSignalReviewItems(
     const list = Array.isArray(run.summary?.needsReview) ? run.summary.needsReview : []
     for (const item of list) {
       const email = typeof (item as { email?: unknown })?.email === 'string' ? (item as { email: string }).email : ''
-      if (!email || seen.has(email.toLowerCase())) continue
-      seen.add(email.toLowerCase())
+      const clientId = typeof (item as { clientId?: unknown })?.clientId === 'string'
+        ? (item as { clientId: string }).clientId : ''
+      const key = `${clientId}::${email.trim().toLowerCase()}`
+      if (!email.trim() || seen.has(key)) continue
+      seen.add(key)
       rows.push(item)
     }
   }
 
-  for (const raw of rows.slice(0, 20)) {
+  /**
+   * 🔴 按 Mailchimp **当前**标签再过滤一次（Codex P1 复审 PR #1484）。
+   *
+   * 上面那 7 天窗口是有原因的（见本函数头注的三个漏法），不能砍。但它带来一个
+   * 后果：PM 今天处理完，今天的 summary 里确实没他了，**昨天的 summary 里还在**，
+   * 于是同一条待办天天重新冒出来，直到旧日志滚出窗口 —— 写入侧那道过滤
+   * （`runPaidTagging`）管不到已经落库的历史摘要。
+   *
+   * 所以在生成待办的这一刻，按真实标签状态再判一次。查不到 / 出错一律保留
+   * （fail-open）—— 漏掉一条真待处理的付款确认，客人会继续收到营销邮件。
+   */
+  // 🔴 必须先过滤再截取 20 条（Codex P1 复审 PR #1484）。
+  // 之前是先 slice(0, 20) 再过滤已处理：如果最近 7 天去重后超过 20 个候选人，
+  // 且排在前 20 个的历史候选恰好已经被 PM 打过标签，这里会把它们连着这次机会
+  // 一起删掉，却从不去看第 21 条之后仍未处理的人 —— 那些人就再也不会被下发。
+  const allCandidates = rows.map((raw) => {
+    const r = raw as { email?: unknown; clientId?: unknown }
+    return {
+      email: typeof r.email === 'string' ? r.email : '',
+      clientId: typeof r.clientId === 'string' ? r.clientId : '',
+      raw,
+    }
+  })
+  const keepable = await dropAlreadyPaidTagged(
+    supabase,
+    allCandidates.filter((c) => c.email && c.clientId),
+  ).catch((e) => {
+    console.warn('[manual-items] 付款待确认的已处理过滤失败（保留全部，不静默丢）:', e)
+    return allCandidates.filter((c) => c.email && c.clientId).map((c) => ({ ...c, paidTag: undefined }))
+  })
+  const keepKeys = new Map(keepable.map((c) => [
+    `${c.clientId}::${c.email.trim().toLowerCase()}`, c,
+  ]))
+  // 没有 clientId 的记录过滤不了（判不出用哪个 audience）—— 一律保留
+  const toEmit = allCandidates
+    .filter((c) => !c.clientId || !c.email || keepKeys.has(`${c.clientId}::${c.email.trim().toLowerCase()}`))
+    .slice(0, 20)
+
+  for (const { raw } of toEmit) {
     const r = raw as {
       email?: unknown
       name?: unknown
@@ -717,13 +759,16 @@ export async function pushPaidSignalReviewItems(
     const days = daysAgo(typeof r.receivedAt === 'string' ? r.receivedAt : null, now)
     const when = days === null ? '' : days === 0 ? '今天' : `${days} 天前`
 
+    const paidTag = keepKeys.get(`${typeof r.clientId === 'string' ? r.clientId : ''}::${email.trim().toLowerCase()}`)?.paidTag
+    const tagInstruction = paidTag ? `${paidTag} 标签` : '该客户配置的已付款标签（先在客户设置核对标签名）'
+
     items.push({
       kind: 'paid_signal_needs_review',
       client_id: typeof r.clientId === 'string' ? r.clientId : 'infra',
       client_name: typeof r.clientName === 'string' ? r.clientName : 'Magic Engine 后台',
       // 原话逐字带上 —— 人一眼就知道该不该信，不用回邮箱翻
       what: `${who}${when ? `（${when}）` : ''}像是说他付款了${quote ? `：「${quote}」` : ''} —— 但这是他自己说的，不是我们确认到账，所以系统没敢自动标成已付款客户。不标的话，他还会继续收到招揽邮件`,
-      how: '去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 paid_customer 标签（加完他就自动退出群发名单了）；没到就不用管',
+      how: `去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 ${tagInstruction}（加完他就自动退出群发名单了）；没到就不用管`,
       href: MAILCHIMP_AUDIENCE_URL,
     })
   }
