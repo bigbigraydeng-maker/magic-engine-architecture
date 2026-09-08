@@ -1,7 +1,7 @@
 # ME Web Intelligence v0.1 — implementation and rollout receipt
 
 Remote fetched at 2026-09-08T15:36:18Z; exact main SHA `1ded986725f1ccd02352bcb346a6e32bc92bf4c7`.
-Contract: [#1497](https://github.com/bigbigraydeng-maker/magic-engine/issues/1497), PM GO BUILD comment 5587778033. Risk A. This document supersedes the pre-build audit. Status: implemented locally, pending Draft PR review and a separately governed deployment / CTS live canary.
+Contract: [#1497](https://github.com/bigbigraydeng-maker/magic-engine/issues/1497), PM GO BUILD comment 5587778033. Risk A. This document supersedes the pre-build audit. Status: PR #1500 merged; production migration and CTS-only pilot explicitly approved and enabled on 2026-09-09 NZ time. Compatibility fixes #1506/#1507 merged and live (bb19965f1a7ad5f132478d5c2080e13a08589d51).
 
 ## Scope and reuse
 
@@ -9,7 +9,7 @@ Existing competitor resolver + `clients.competitor_domains` + the client's Indus
 
 Shared runtime: Apify website adapter, snapshots/evidence/signals, bounded interpretation, client-scoped budget ledger and Inngest workflows. Existing Industry Baselines gets a Web intelligence tab. Industry meaning comes from the existing baseline cohort and configured context; client IDs, URLs, entitlement, FX and schedules are configuration. No CTS name, ID, private facts or travel rules enter shared runtime. Reuses existing Apify, Anthropic, paid-client/admin authorization and Inngest infrastructure. No alternate provider, custom worker or action execution is added.
 
-Website pipeline: reserve → durably claim paid capture → Apify run receipt → validate dataset → immutable snapshot/full evidence → content diff → bounded LLM interpretation with owned evidence citations → threat/opportunity/ignore + recommended action → actual cost settlement. First snapshot is baseline; unchanged snapshots skip LLM. Outputs are recommendations only. Six service-only tables and five restricted RPCs are additive; no client/baseline seed or production write is included.
+Website pipeline: reserve → durably claim paid capture → Apify run receipt → validate dataset → immutable snapshot/full evidence → content diff → bounded LLM interpretation with owned evidence citations → threat/opportunity/ignore + recommended action → actual cost settlement. First snapshot is baseline; unchanged snapshots skip LLM. Outputs are recommendations only. Six service-only tables and five restricted RPCs are additive; the migration contains no client/baseline seeds; authorized activation writes are recorded below.
 
 ## Controls and limitations
 
@@ -29,9 +29,18 @@ Apify version is pinned by configuration. One approved same-domain HTTPS URL per
 
 ## CTS evidence and remaining gate
 
-Production was queried read-only. CTS `ctstours.co.nz` has 17 existing competitor domains. Its `outbound_tour_operator_nz` baseline cohort adds `rdtravel.co.nz`; the known union is 18 domains, before any additional brief evidence. No duplicate identity table was seeded. Apify and model credentials were absent from this execution environment; no live capture, real historical change or real LLM recommendation is claimed. Production migration was not applied, no settings were enabled and no production data was changed.
+CTS uses its existing competitor identities plus its Industry Baseline cohort; no duplicate identity list was seeded. After the PM explicitly approved production database updates and pilot activation, `web_intelligence_v01` was applied. All six tables have RLS enabled and RPC permissions remain restricted. The production allowlist contains CTS only. Existing provider/model/Inngest configuration is reused without exporting credentials. Inngest synchronization returned Successfully registered.
 
-After separate migration/deployment authorization: apply the migration; supply existing provider credentials; set `WEB_INTELLIGENCE_ALLOWED_CLIENT_IDS` to the approved CTS ID only; pin a verified actor build; configure fresh FX, entitlement currency and approved URLs in the existing UI; enable CTS; synchronize the two Inngest functions. Run one existing competitor URL for a baseline, then repeat to verify unchanged behavior. Observe an actual later change to verify evidence-backed interpretation (never fabricate a change and call it live evidence). Record run/dataset IDs, timestamps, before/after evidence, classification, recommendation and actual provider/model cost; verify a second client remains blocked. Disable settings and empty the allowlist to stop new paid work; reconcile already claimed runs before releasing reservations.
+CTS settings: enabled/entitled; reserved membership 499 NZD/month (no billing subscription created), target NZ$30/hard stop NZ$50, USD/NZD 1.706 dated 2026-09-08, collector build 0.3.97, capture cap US$0.10 and NZ$0.02 overhead/run. Only existing `wendywutours.co.nz` is configured for collection: core/active/manual, cts-pilot tag, homepage, 24h interval. Daily due-work evaluation runs at 06:00 Pacific/Auckland. Other clients remain excluded by the production allowlist.
+
+Production baseline requested through Industry Baselines → Web Intelligence:
+- request `e7b5e805-e56f-45b5-9814-7ca9708f1f00`, Apify `X60junDpOkJqCAOig`, provider SUCCEEDED and ledger complete.
+- snapshot `efb3fd1d-5cab-4b01-9acd-fcdec05ef3f6`, captured 2026-09-08T17:20:00.217352Z, 19,393 characters, SHA256 `66fadcf98e7fbd949dfa822bbfc00a42b8d95d924c2d9e91061e02f7170bc872`.
+- provider US$0.0009246625809520484, model US$0, accounted NZ$0.0215774743631041945704 including overhead. Initial baseline correctly skips interpretation.
+
+Two activation-only compatibility fixes were needed: client GUID validation (#1506), and enabling the official Actor's required proxy (#1507). The latter input was validated against official build 0.3.97 (old input HTTP400, corrected input HTTP200). Rejected attempt `9bb6f20f-5992-4c4b-a04f-839cf2bb93a1` created no provider run (verified Actor run listing), so it was marked failed and settled at US$0 provider/model plus NZ$0.02 overhead. No unknown charge was blindly retried.
+
+Second capture `828b0c7a-6f08-42c7-9f30-90c6ab0800ee` / Apify `3TbpMV1i1xp7qa630` also succeeded and produced a real content-change signal. Its model result failed validation/persistence, with the old generic error code; raw response was not retained, so the precise cause is not known. Provider US$0.0060086445602112355 plus model US$0.01974 settled at NZ$0.06392718761972037. A free count of the exact prompt returned 4,660 input tokens; this is inconsistent with a 1,000-output-token truncation given the recorded charge. A valid real LLM classification/recommendation receipt is still required. Never fabricate a change for that claim. The PM accepted three P2s for this pilot: stale settings drafts after UI refresh, missing claim-time reconciliation recheck for a previously reserved different URL, and normalized-content-limit failures not settling automatically. Keep this pilot single-URL and serial; inspect unresolved runs before adding targets. Disable the client setting to stop new paid work; reconcile already claimed work before releasing held costs.
 
 ## Planning estimate (not measured CTS costs)
 

@@ -5,6 +5,14 @@
 
 ---
 
+### 2026-09-09（CTS Web Intelligence 生产试点启用）
+
+PR #1500 已上线；用户明确批准生产数据库更新后应用 6 张隔离表及受限 RPC，仅允许 CTS 启用。复用原竞品名单及 Industry Baselines 后台、Apify 和 Inngest，Wendy Wu 首页按 24 小时间隔检查；只检测、理解、建议，无自动营销动作。预算目标 NZ$30 / hard stop NZ$50，499 NZD/月仅预留 entitlement 字段。
+
+实际验收：生产 run `e7b5e805-e56f-45b5-9814-7ca9708f1f00` 经后台提交完成，Apify `X60junDpOkJqCAOig` SUCCEEDED，快照 `efb3fd1d-5cab-4b01-9acd-fcdec05ef3f6` 含 19,393 字符，基准跳过模型。供应商 US$0.0009246626，含间接成本记账 NZ$0.0215774744。启用暴露的既有客户 GUID / Actor 必需代理兼容问题已通过最小补丁 #1506/#1507 修复；后者 88 项相关测试、lint、远端构建及双人复审通过。
+
+真实变化的模型建议仍待独立回执。复用边界：共享 adapter / evidence / budget / workflow；CTS ID、网址、市场语境仅配置，无客户语义写入共享运行时代码，无行业/全局学习晋升。详细记录见 [rollout receipt](../specs/2026-09-09-web-intelligence-v01.md)。
+
 ### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
 
 **问题**：`ads-health` 看板给 CTS 显示的每条线索成本比 Meta 官方数字便宜近一倍（看板 $3.9-4.7，Meta 官方 $7.6-11.8）。核对发现 `src/lib/meta/client.ts` 的 `results = leads + messaging_conversations` 违反了同文件 `objective-metrics.ts` 自己写的「NEVER sum across action types」规则：CTS 的 Lead Form 广告开了 Messenger 自动回复，同一个人提交表单会被 Meta 同时计入 `lead` 和 `onsite_conversion.messaging_conversation_started_7d` 两个 action_type，简单相加造成 2× 双算。2026-08-31 实测：CTS Reborn 广告当天 leads=10、messaging=9，是同一批人，不是 19 个人举手。

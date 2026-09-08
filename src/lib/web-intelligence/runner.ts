@@ -79,15 +79,19 @@ export async function understand(run: Run): Promise<void> {
 }
 async function invokeInterpretation(run: Run, input: Awaited<ReturnType<typeof loadInterpretationInput>>): Promise<void> {
   const signal = input.signal!
+  let failureCode = 'interpretation_failed'
   try {
     const result = await interpretChange(signal, input.evidence, input.context)
     await updateRun(run.id, run.client_id, { interpretation_cost_usd: knownCost(result.cost_usd) })
-    if (result.stop_reason === 'max_tokens') throw new Error('truncated_interpretation')
+    failureCode = 'interpretation_truncated'
+    if (result.stop_reason === 'max_tokens') throw new Error(failureCode)
+    failureCode = 'interpretation_invalid_result'
     const interpretation = validateInterpretation(result.text, signal)
+    failureCode = 'interpretation_persist_failed'
     await updateSignal(signal.id, run.client_id, { interpretation_status: 'complete', classification: interpretation.classification, interpretation: { ...interpretation, input_tokens: result.input_tokens, output_tokens: result.output_tokens }, recommended_action: interpretation.recommended_action, model: MODEL_SONNET, prompt_version: PROMPT_VERSION })
   } catch {
     await updateSignal(signal.id, run.client_id, { interpretation_status: 'failed' })
-    await updateRun(run.id, run.client_id, { status: 'failed', error_code: 'interpretation_failed' })
+    await updateRun(run.id, run.client_id, { status: 'failed', error_code: failureCode })
   }
 }
 async function claimPaid(run: Run, stage: 'capture_claimed' | 'interpretation_claimed'): Promise<'claimed' | 'unknown' | 'disabled'> {

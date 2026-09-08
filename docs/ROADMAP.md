@@ -23,7 +23,8 @@
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
-- [ ] Draft implementation: Apify-first Website → snapshots/evidence → market signals → recommendations in Industry Baselines; reuse existing competitor identities. Local risk-A checks complete. Pending PR review, separately authorized migration/deployment and real CTS provider/LLM acceptance. Default disabled; no automatic action. [Implementation / rollout receipt](./specs/2026-09-09-web-intelligence-v01.md).
+- [x] Implementation merged (#1500); production migration and CTS-only pilot explicitly approved and enabled. Existing Industry Baselines UI → Inngest → Apify → immutable snapshot/evidence → actual cost settlement verified on Wendy Wu homepage. Compatibility fixes #1506/#1507 deployed. [Implementation / rollout receipt](./specs/2026-09-09-web-intelligence-v01.md).
+- [ ] Verify an actual later website change through LLM classification/recommendation; do not manufacture live evidence. Keep the three PM-accepted P2 findings deferred (UI draft refresh, queued-run reconciliation recheck, content-limit failure settlement). Hiring/People/Partnership/Reviews/Technology remain future extensions. No automatic action.
 
 ## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）
 

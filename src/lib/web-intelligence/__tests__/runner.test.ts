@@ -84,6 +84,18 @@ describe('durable provider boundaries', () => {
     expect(mocks.update).toHaveBeenCalledWith(id, id, { interpretation_cost_usd: 0.02 })
     expect(mocks.signal).toHaveBeenCalledWith('s', id, { interpretation_status: 'failed' })
   })
+  it.each(['truncated', 'invalid_result', 'persist_failed'] as const)('identifies %s without refunding or retrying the paid model call', async reason => {
+    mocks.input.mockResolvedValue({ signal: { id: 's', interpretation_status: 'pending' }, evidence: [], context: '' })
+    mocks.interpret.mockResolvedValue({ text: '{}', cost_usd: 0.02, stop_reason: reason === 'truncated' ? 'max_tokens' : 'end_turn' })
+    mocks.validate.mockReturnValue({ classification: 'ignore', recommended_action: 'No action recommended.' })
+    if (reason === 'invalid_result') mocks.validate.mockImplementation(() => { throw new Error('private response text') })
+    if (reason === 'persist_failed') mocks.signal.mockRejectedValueOnce(new Error('db failure'))
+    await understand(run)
+    expect(mocks.interpret).toHaveBeenCalledTimes(1)
+    expect(mocks.update).toHaveBeenCalledWith(id, id, { interpretation_cost_usd: 0.02 })
+    expect(mocks.update).toHaveBeenCalledWith(id, id, { status: 'failed', error_code: `interpretation_${reason}` })
+    expect(mocks.settle).not.toHaveBeenCalled()
+  })
   it('normalises layout whitespace without removing content changes', () => {
     expect(normaliseContent(' price   $5\r\n\n offer ')).toBe('price $5\noffer')
     expect(normaliseContent('price $6')).not.toBe(normaliseContent('price $5'))
