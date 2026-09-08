@@ -43,10 +43,10 @@ describe('factory worker evidence through todo generation', () => {
     ]), items, now, names)
     expect(items).toHaveLength(2)
     const clientB = items.find(item => item.what.includes('Client B'))!
+    // 这组测的是「B 的心跳没被 A 的 500 条挤掉」，判据是 B 被判成**在线**而不是离线。
+    // 断言挑不随文案漂移的两条：在线才会说「工人在线」，离线才会给 --loop 开机指引。
     expect(clientB.what).toContain('工人在线')
     expect(clientB.how).not.toContain('--loop')
-    expect(clientB.what).toContain('仍可能在后续重试中恢复')
-    expect(clientB.how).toContain('先观察下一次重试')
   })
 
   it('does not diagnose a worker as offline when the heartbeat query fails', async () => {
@@ -67,5 +67,34 @@ describe('factory worker evidence through todo generation', () => {
     expect(clientB.how).toContain('--loop')
     expect(clientB.what).toContain('temporary error')
     expect(clientB.what).not.toContain('工人在线')
+  })
+})
+
+/**
+ * 🔴 「工人在线但活过不去」这条必须给真动作，不能写成「先观察下一次重试」。
+ *
+ * 事实依据：`factory/worker/[id]/fail` 把可重试失败**直接退回 queued，没有任何
+ * 退避字段**（`next_retry_at` 只在 publish-worker 那条线上）。失败工单立刻就能
+ * 被重新领走，所以「工人在线 + 卡了 6 小时以上」时，重试早该发生了 ——
+ * 「在等重试」不成立。
+ *
+ * 而这条 kind 会进「需要你动手」栏并计入 totalItems（daily-todo.ts），话术却让
+ * 人干等的话，就是在制造假待办（Codex P2 复审 PR #1485）。
+ */
+describe('stuck_on_failure 的话术必须可执行', () => {
+  it('🔴 不许出现「先观察」这类干等指引', async () => {
+    const items: ManualItem[] = []
+    await pushFactoryWorkerItems(
+      database([queued('client-a'), heartbeat('client-a', 0.1)]),
+      items,
+      now,
+      names,
+    )
+    const it0 = items.find((i) => i.kind === 'factory_worker_idle')
+    expect(it0, '工人在线 + 活都失败过 → 应该出一条').toBeTruthy()
+    expect(it0!.how).not.toContain('先观察')
+    expect(it0!.how).not.toContain('等待重试')
+    // 必须指向真动作：要么去充值，要么回一句让开发查
+    expect(it0!.how).toMatch(/充值|回我一句/)
   })
 })

@@ -123,7 +123,7 @@ export function judgeWorkerPresence(snap: QueueSnapshot): WorkerPresence {
       kind: 'stuck_on_failure',
       humanReason:
         `工人在线，但排队的 ${snap.queued} 个出片工单${many ? '都' : ''}失败过、还没过去，` +
-        `最老的已经等了 ${waited} 小时；仍可能在后续重试中恢复`,
+        `最老的已经等了 ${waited} 小时`,
       ...(snap.stuckSampleReason ? { sampleReason: snap.stuckSampleReason } : {}),
     }
   }

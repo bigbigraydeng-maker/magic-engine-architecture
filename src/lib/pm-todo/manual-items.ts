@@ -1838,9 +1838,16 @@ function pushOneFactoryWorkerItem(
       what:
         `${who}${verdict.humanReason}` +
         (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
+      // 🔴 这里**不能**写成「先观察下一次重试」（Codex P2 复审）。
+      //    `factory/worker/[id]/fail` 把可重试失败直接退回 `queued`，**没有任何
+      //    退避字段**（`next_retry_at` 只存在于 publish-worker，那是另一条线），
+      //    所以失败工单立刻就能被重新领走。工人在线还卡了 6 小时以上，重试早
+      //    该发生了 —— 「在等重试」不是这里的合理解释，确实需要人看一眼。
+      //    话术必须给真动作，否则这条进了「需要你动手」栏却让人干等，等于
+      //    制造一条假待办。
       how:
-        '工人近期有心跳，这些工单失败过、仍在队列等待重试。先观察下一次重试；如果仍失败，再按上面的报错处理：' +
-        '写着余额不足（credit / balance）就去核对余额；' +
+        '工人在线、活却过不去，重试早该发生了（失败退回队列是立刻可重领的，没有等待期）—— ' +
+        '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完它会自己被重新领走；' +
         '写的是别的原因，回我一句「出片工单卡住了」，我去查',
       href: 'https://app.magicengine.com.au/dashboard/factory',
     })
