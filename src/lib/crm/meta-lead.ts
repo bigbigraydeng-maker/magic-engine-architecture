@@ -615,10 +615,14 @@ async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMember
  *
  * 触点 select 跟 `messenger-stop-signal.ts` 那份保持同款字段
  * (`metadata`, `occurred_at`)，判据入口是全仓唯一的 `isDoNotContact`。
+ *
+ * 导出给一次性回填脚本复用（例如 `scripts/backfills/tag-historical-meta-leads.ts`）——
+ * 任何要在写 Mailchimp 之前判断「这个人能不能联系」的地方，都必须走这一份，
+ * 不许各自拼一份查询。
  */
-type DncCheck = 'blocked' | 'ok' | 'unknown'
+export type DncCheck = 'blocked' | 'ok' | 'unknown'
 
-async function evaluateDnc(contactId: string): Promise<DncCheck> {
+export async function evaluateDnc(contactId: string): Promise<DncCheck> {
   const [contactRes, touchesRes] = await Promise.all([
     supabaseAdmin.from('contacts').select('do_not_contact').eq('id', contactId).maybeSingle(),
     supabaseAdmin
