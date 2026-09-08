@@ -57,6 +57,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | **社媒内容矩阵** | ✅ 成熟 | `lib/{brief,content,social,reels,visual,images,publer,scheduling}` · `api/clients/[id]/{brief,campaign}` · `api/content/route-{a,b,c}` · `api/visual` | `master_briefs` `campaign_briefs` `content_posts` `visual_assets` `reels_drafts` |
 | **AI Content Factory** (P21) | 🔄 建设中 | `lib/{factory,ai-factory,winner-reel-sync}` · `api/factory` · `scripts/factory-worker/` | `content_work_orders` `content_work_order_clips` `factory_balance_ledger` `factory_angle_blocklist` |
 | **Ads Intelligence** | 🔄 建设中 | `lib/{meta,google-ads,tiktok-ads,ads-strategy}` · `api/clients/[id]/ad-health` | `ad_daily_insights` `ad_strategy_configs` `ad_health_narratives` |
+| **Leads 营销中心**（多渠道私信 / CRM） | 🔄 建设中 | `lib/{messaging,messenger,whatsapp,crm}` · `api/clients/[id]/{messenger,crm,business-inbox}` · **`api/webhooks/whatsapp`**（对外 endpoint，Meta 推送入口） | `conversations` `conversation_messages` `conversation_briefs` `conversation_outbound_log` `contacts` `contact_identities` `contact_touchpoints` |
 | **策略层**（Goal→Initiative→Action） | ✅ 上线 | `lib/{strategy,marketing-plan,execution,zhuge}` · `api/{goals,initiatives}` | `goals` `initiatives` `marketing_plans` `execution_items` |
 | **飞轮数据闭环** (P12) | ✅ 上线 | `lib/flywheel` · `api/flywheel` | `flywheel_actions` `flywheel_metrics` `flywheel_outcomes` |
 | **诊断 / 数据回流** | ✅ 上线 | `lib/{diagnostic,scoring,ga4,gbp,places,competitors,monthly-report,reports}` | `diagnostic_{runs,findings,narratives}` `ga4_traffic_snapshots` `anomaly_signals` |
@@ -89,7 +90,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 4. 定时任务全表
 
-### 4.1 Render Cron（**47 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
+### 4.1 Render Cron（**47 个在跑 + 1 个已暂停 factory-stock-refill**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
 
 | Cron 名 | 调度 (UTC) | 端点 |
 |---|---|---|
@@ -117,6 +118,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | anomaly-detector-daily | `0 5 * * *` | `/api/cron/anomaly-detector` |
 | daily-cron-digest | `0 6 * * *` | `/api/cron/daily-cron-digest` |
 | winner-reel-sync-daily | `0 15 * * *` | `/api/cron/winner-reel-sync-daily` |
+| cron-run-logs-cleanup | `50 16 * * *` | `/api/cron/cron-run-logs-cleanup` —— 清运行记录自己的旧行（2026-09-07 从表上的触发器搬过来）|
 | proposal-view-digest | `0 19 * * *` | `/api/cron/proposal-view-digest` |
 | factory-order-scheduler | `0 20 * * *` | `/api/cron/factory-order-scheduler` |
 | content-factory-intake | `0 22 * * *` | `/api/cron/content-factory-intake` |
@@ -132,7 +134,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | oztop-seo-optimizer | `0 5 * * 1` | `/api/cron/oztop-seo-optimizer?max=8` |
 | cts-seo-optimizer | `30 5 * * 1` | `/api/cron/cts-seo-optimizer` |
 | agent-learning-rollup | `0 7 * * 1` | `/api/cron/agent-learning-rollup` |
-| factory-stock-refill | `0 19 * * 1` | `/api/cron/factory-stock-refill` |
+| ~~factory-stock-refill~~ | ~~`0 19 * * 1`~~ | **已暂停 2026-09-08**（PM 停抓图：抓来的图无人消费，白花 Apify 钱；render.yaml/registry 已注释） |
 | blog-weekly | `0 3 * * 2` | `/api/cron/blog-weekly` |
 
 **2026-08-12 补录 —— `render.yaml` 里有、本表此前漏了的 7 条**：
@@ -163,7 +165,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | 端点 | 判断 |
 |---|---|
 | `admin-key-expiry` | ❓ 需确认是有意停用还是漏配 |
-| `flywheel-seo-weekly` | ❓ 同上（Phase 12.I 建的，ROADMAP 标已完成） |
+| `flywheel-seo-weekly` | ✅ **2026-09-07 上线**（PM 拍板开）。调度改由 Inngest 自带定时器：每周一 05:15 NZ 派单，一个客户一单跑。`/api/cron/flywheel-seo-weekly` 保留为手动补触发（只发事件、不自己干活）。⚠️ 新增 / 改 Inngest 函数后要去 Inngest 后台对 `/api/inngest` 手动 Sync 一次，否则安静地不跑 |
 | `memory-extractor` | ❓ 同上（Phase 23 Memory Layer）。⚠️ 注意：**它没被调度 ≠ 从没跑过** —— `client_learned_lessons` 里已有 21 行，是别的路径写进去的 |
 | `factory-review-sweeper` | ✅ **有意退役** —— 审核已搬到 `/dashboard/factory`（PR #581），Airtable 停用后该端点必 500 |
 
@@ -248,7 +250,7 @@ bash scripts/doctor.sh --md     # 输出 Markdown，可直接粘回本文件 §8
 ✅  已被调度           44 个 (render.yaml + .github/workflows)
 ❌  admin-key-expiry           有路由但没有任何调度器 → 永远不会自动跑
 ❌  benchmark-accumulator      有路由但没有任何调度器 → 永远不会自动跑
-❌  flywheel-seo-weekly        有路由但没有任何调度器 → 永远不会自动跑
+✅  flywheel-seo-weekly        2026-09-07 上线：Inngest 定时器每周一 05:15 NZ（PM 拍板开）
 ❌  kpi-backfill               有路由但没有任何调度器 → 永远不会自动跑
 ❌  memory-extractor           有路由但没有任何调度器 → 永远不会自动跑
 ⚠️  factory-review-sweeper     无调度 — 已知有意退役（Airtable 停用）

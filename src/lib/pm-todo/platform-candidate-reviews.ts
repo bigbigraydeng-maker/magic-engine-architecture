@@ -108,4 +108,24 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '三层漏斗广告打法剧本（认知→线索→再营销→回传闭环 · 骨架通用 + 分行业配方）',
     reviewDate: '2026-10-06',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '内容发布→广告草稿直链（Daily Plan 发布完成 → 自动建暂停态广告进指定广告组 · me_ad_launch）',
+    reviewDate: '2026-10-06',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'Meta 广告数据地基健康诊断（pixel/CAPI 分浏览器端 vs 服务端回传 · 修前基线→修后验证标准）',
+    reviewDate: '2026-10-06',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '转化真相回流能力（Conversion Truth Uplink · 从 CRM 成交事件 → 多平台广告 API：Meta CAPI 先做，Google/TikTok 预留接口）',
+    reviewDate: '2026-10-07',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'ME 「基于产品事实的 Meta 广告方案生成」能力(拉官网真行程/价 + 现有受众池水位 + 客户历史广告成本基线 → 出三层漏斗 A/B/C 三版文案 + 受众种子选择 + 预算分配 + 激活闲置类似人群 · 全程官网 grounding 不编造)',
+    reviewDate: '2026-10-07',
+  },
 ]

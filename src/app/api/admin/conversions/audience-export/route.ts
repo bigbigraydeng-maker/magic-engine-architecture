@@ -22,16 +22,10 @@ import { requireAdmin } from '@/lib/auth/require-admin'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { isDoNotContact } from '@/lib/crm/dnc'
 import { contactKindOf, readDomainRules } from '@/lib/crm/contact-kind'
-import { audienceFromLeadsConfig } from '@/lib/mailchimp/audience-config'
-import { fetchSubscribedMembers } from '@/lib/mailchimp/audience-members'
 import {
   audienceToCsv,
   buildMetaAudienceA,
-  buildNewsletterAudience,
-  mergeAudiences,
   type AudienceContact,
-  type AudienceRow,
-  type NewsletterContact,
 } from '@/lib/conversions/audience-export'
 
 export const dynamic = 'force-dynamic'
@@ -84,6 +78,20 @@ async function handleGet(request: Request) {
   }
   const denied = assertClientScope(admin.user.email ?? null, clientId)
   if (denied) return denied
+
+  // source 参数：newsletter/combined 已于 2026-09-07 下线（见下方说明）。
+  // 旧页面/书签/脚本若还带着这两个值来请求，必须明确拒绝，不能悄悄换成
+  // fbleads 的数据回 200 —— 调用方会把语义完全不同、体量也更小的名单
+  // 误当成原来要的那份去用（狄仁杰红线：数据来源被静默替换=数据完整性事故）。
+  const source = (searchParams.get('source') ?? 'fbleads').toLowerCase()
+  if (source !== 'fbleads') {
+    return NextResponse.json(
+      {
+        error: `source=${source} 已下线（2026-09-07）：newsletter/combined 名单不再提供，只保留 fbleads（广告来源，Issue #1397）。请改走「导出 CSV → Meta 后台上传」这条路。`,
+      },
+      { status: 410 },
+    )
+  }
 
   // 读库：跟今日名单同源的三张表 + 客户配置。
   let contacts: ContactRow[]
@@ -171,73 +179,18 @@ async function handleGet(request: Request) {
   const phoneCountry = clientRow?.default_phone_country ?? null
   const fbleads = buildMetaAudienceA(audienceContacts, phoneCountry)
 
-  // source: fbleads（广告，默认）| newsletter（Mailchimp 订阅）| combined（去重合并）
-  const source = (searchParams.get('source') ?? 'fbleads').toLowerCase()
-
-  // ME 侧拒联的邮箱集 —— newsletter 成员即使还在订阅，只要 CTS 说过别联系，也剔掉。
-  const dncEmails = new Set<string>()
-  for (const c of audienceContacts) {
-    if (c.doNotContact && c.email) dncEmails.add(c.email.trim().toLowerCase())
-  }
-
-  async function newsletterRows(): Promise<{ rows: AudienceRow[]; stats: ReturnType<typeof buildNewsletterAudience>['stats'] } | { error: string }> {
-    // 🔴 整段套 try —— 拉取之后的处理（datacenterFromKey/kind 分类/组装）任何一步抛，
-    //    都要变成 JSON error，绝不能漏成没人接的 500 HTML 页
-    //    （2026-09-06 线上：只套了 fetch，拉取后抛就成了 <!DOCTYPE，前端 json() 炸）。
-    try {
-      const apiKey = process.env.MAILCHIMP_API_KEY ?? ''
-      const audienceId = audienceFromLeadsConfig(clientRow?.leads_config)
-      if (!apiKey) return { error: '没配 Mailchimp 钥匙（MAILCHIMP_API_KEY）' }
-      if (!audienceId) return { error: '这个客户没配 Mailchimp 名单（leads_config.mailchimp_audience_id）' }
-      const members = await fetchSubscribedMembers({ apiKey, audienceId })
-      const nl: NewsletterContact[] = members.map((m) => ({
-        email: m.email,
-        phone: m.phone,
-        firstName: m.firstName,
-        lastName: m.lastName,
-        kind: contactKindOf([m.email], rules),
-        doNotContact: dncEmails.has(m.email.trim().toLowerCase()),
-      }))
-      return buildNewsletterAudience(nl, phoneCountry)
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e) }
-    }
-  }
+  // 只导「广告来源」名单（fbleads）。非 fbleads 的 source 在上面已 410 拒绝，走到这里必是 fbleads。
+  // newsletter/combined（拉 Mailchimp 合并）2026-09-07 移除：prod 网页请求访问 Mailchimp
+  // 会 502（源日志拿不到、未确诊），且实际名单已改由「导出 CSV → Meta 后台上传」这条路做成。
 
   // ── 只看数字（不含 PII）：让人先看池子够不够 100 门槛 ──────────────────
   if (format !== 'csv') {
-    if (source === 'fbleads') {
-      return NextResponse.json({ source, ...fbleads.stats, lookalike_threshold: 100, note: thresholdNote(fbleads.stats.kept) })
-    }
-    const nl = await newsletterRows()
-    if ('error' in nl) return NextResponse.json({ source, error: nl.error }, { status: 502 })
-    if (source === 'newsletter') {
-      return NextResponse.json({ source, ...nl.stats, lookalike_threshold: 100, note: thresholdNote(nl.stats.kept) })
-    }
-    // combined
-    const merged = mergeAudiences(fbleads.rows, nl.rows)
     return NextResponse.json({
-      source: 'combined',
-      total: fbleads.stats.total + nl.stats.total,
-      kept: merged.length,
-      fbleads_kept: fbleads.stats.kept,
-      newsletter_kept: nl.stats.kept,
-      overlap_removed: fbleads.stats.kept + nl.stats.kept - merged.length,
+      source: 'fbleads',
+      ...fbleads.stats,
       lookalike_threshold: 100,
-      note: thresholdNote(merged.length),
+      note: thresholdNote(fbleads.stats.kept),
     })
-  }
-
-  // ── 下载 CSV：按 source 决定 rows ──────────────────────────────────
-  let rows: AudienceRow[]
-  if (source === 'fbleads') {
-    rows = fbleads.rows
-  } else {
-    const nl = await newsletterRows()
-    if ('error' in nl) {
-      return NextResponse.json({ error: `拉 newsletter 名单失败：${nl.error}` }, { status: 502 })
-    }
-    rows = source === 'newsletter' ? nl.rows : mergeAudiences(fbleads.rows, nl.rows)
   }
 
   // 🔴 谁导出了这份 PII，必须留痕（狄仁杰红线：对外交客户联系方式却无审计=硬伤）。
@@ -247,24 +200,24 @@ async function handleGet(request: Request) {
     '[audience-export]',
     JSON.stringify({
       action: 'download_csv',
-      source,
+      source: 'fbleads',
       client_id: clientId,
       actor: admin.user.email ?? null,
       ip: fwd.split(',')[0]?.trim() || null,
       ua: request.headers.get('user-agent') || null,
-      kept: rows.length,
+      kept: fbleads.rows.length,
       at: new Date().toISOString(),
     }),
   )
 
   // 真下载：明文 CSV，直接进浏览器，不落地服务器。
-  const csv = audienceToCsv(rows)
+  const csv = audienceToCsv(fbleads.rows)
   const today = new Date().toISOString().slice(0, 10)
   return new NextResponse(csv, {
     status: 200,
     headers: {
       'content-type': 'text/csv; charset=utf-8',
-      'content-disposition': `attachment; filename="meta-audience-${source}-${today}.csv"`,
+      'content-disposition': `attachment; filename="meta-audience-fbleads-${today}.csv"`,
       // 别让浏览器/CDN 缓存这份 PII。
       'cache-control': 'no-store',
     },

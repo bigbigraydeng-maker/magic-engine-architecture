@@ -14,12 +14,6 @@
  * 就是死的：以后新遇到一家同行，FDE 加不进去，只能来找开发 —— 而「要 FDE 填的
  * 字段必须连界面一起做完」是铁律，不是建议。
  *
- * `mailchimpAudienceId` 2026-09-03 补上：`mailchimp-paid-tagging` cron 靠它
- * 找到这个客户在 Mailchimp 的名单，但那条 cron 优先读的专列
- * `clients.mailchimp_audience_id` 至今没在生产 apply（见该 cron 文件里的
- * 注释），回退读的 `leads_config.mailchimp_audience_id` 在这次补之前完全没有
- * 写入口 —— 新客户只能直接改数据库，否则永远走 `no_audience_id` 跳过打标签。
- *
  * Responses: 200 { config } / 400 / 401 / 403 / 404 / 500
  */
 
@@ -28,6 +22,7 @@ import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { parseDomainList, readDomainRules } from '@/lib/crm/contact-kind'
 import { parseEmailList } from '@/lib/leads/parse-email-list'
+import { readAudienceId, writeAudienceId } from '@/lib/mailchimp/audience-config'
 
 export interface LeadsConfig {
   /** 开了才会把邮件打开/点击同步进这个客户的 CRM。 */
@@ -38,8 +33,14 @@ export interface LeadsConfig {
   tradeDomains: string[]
   /** 网站表单每来一条新客资，best-effort 邮件通知的收件人清单。 */
   notifyEmails: string[]
-  /** 这个客户在 Mailchimp 的 audience id —— 专列没 apply 时的唯一落脚点。 */
-  mailchimpAudienceId: string
+  /**
+   * Meta 广告线索往哪个 Mailchimp 名单里送。空 = 不送（出口关闭）。
+   *
+   * 2026-09-06 补上界面。在此之前这个值只能改数据库 —— 而「Mailchimp 出口坏了」
+   * 那条今日待办正是让 FDE「打开设置页确认 audience 配置」，点进去却什么都改不了，
+   * 是条断头的管道。`undefined` = 这次没读（PATCH 的返回体不重读）。
+   */
+  mailchimpAudienceId?: string
 }
 
 function readConfig(raw: unknown): LeadsConfig {
@@ -53,7 +54,6 @@ function readConfig(raw: unknown): LeadsConfig {
     ownEmailDomains: rules.own,
     tradeDomains: rules.trade,
     notifyEmails,
-    mailchimpAudienceId: typeof o.mailchimp_audience_id === 'string' ? o.mailchimp_audience_id.trim() : '',
   }
 }
 
@@ -76,15 +76,24 @@ export async function GET(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!data) return NextResponse.json({ error: '客户不存在' }, { status: 404 })
 
-  return NextResponse.json({ config: readConfig(data.leads_config) })
+  // audience id 不直接从 leads_config 掏 —— 专列 apply 之后权威值在专列上，
+  // 让 readAudienceId 去决定读哪边，界面才不会显示一个出口早就不看的旧值。
+  const audience = await readAudienceId(clientId)
+  if (!audience.ok) {
+    return NextResponse.json({ error: `读 audience 配置失败: ${audience.message}` }, { status: 500 })
+  }
+
+  return NextResponse.json({
+    config: { ...readConfig(data.leads_config), mailchimpAudienceId: audience.audienceId },
+  })
 }
 
 interface PatchBody {
   mailchimpEnabled?: unknown
+  mailchimpAudienceId?: unknown
   ownEmailDomains?: unknown
   tradeDomains?: unknown
   notifyEmails?: unknown
-  mailchimpAudienceId?: unknown
 }
 
 export async function PATCH(
@@ -139,15 +148,47 @@ export async function PATCH(
     rejected.push(...parsed.rejected)
   }
 
+  // audience id 单独走 —— 它不一定住在 leads_config 里（专列 apply 之后就在专列
+  // 上），所以不能混进下面那次 jsonb 读-改-写，得让 writeAudienceId 决定写哪边。
+  let audienceWritten: string | undefined
   if (body.mailchimpAudienceId !== undefined) {
     if (typeof body.mailchimpAudienceId !== 'string') {
-      return NextResponse.json({ error: 'mailchimpAudienceId 必须是文字' }, { status: 400 })
+      return NextResponse.json({ error: 'mailchimpAudienceId 必须是一段文字' }, { status: 400 })
     }
-    // 空字符串是合法的「清空」——不强制必填，客户还没连 Mailchimp 时留空。
-    patch.mailchimp_audience_id = body.mailchimpAudienceId.trim()
+    const value = body.mailchimpAudienceId.trim()
+    // Mailchimp 的 audience id 是 10 位十六进制。挡一下明显填错的（整段 URL、
+    // 带空格的名字），省得出口每小时静默 404 而没人知道填错了。空串合法 = 关出口。
+    if (value && !/^[0-9a-f]{6,20}$/i.test(value)) {
+      return NextResponse.json(
+        { error: 'audience id 看着不对：应该是一串字母数字（例如 dda97b7e61），不是名单名字或网址' },
+        { status: 400 },
+      )
+    }
+    const w = await writeAudienceId(clientId, value)
+    if (!w.ok) {
+      return NextResponse.json({ error: `保存 audience 失败: ${w.message}` }, { status: 500 })
+    }
+    audienceWritten = value
   }
 
   if (Object.keys(patch).length === 0) {
+    if (audienceWritten !== undefined) {
+      // 只改了 audience —— 其余几项要**照实回读**再回给界面。
+      // 拿 readConfig(null) 顶替会把「这次没读」变成「全都是关的」，界面照单
+      // 全收就等于凭空把开关显示成关闭。这正是这条链路刚修完的那类坑。
+      const { data: row, error: readErr } = await supabaseAdmin
+        .from('clients')
+        .select('leads_config')
+        .eq('id', clientId)
+        .maybeSingle()
+      if (readErr) {
+        return NextResponse.json({ error: `保存成功但回读失败: ${readErr.message}` }, { status: 500 })
+      }
+      return NextResponse.json({
+        config: { ...readConfig(row?.leads_config), mailchimpAudienceId: audienceWritten },
+        rejected: [],
+      })
+    }
     return NextResponse.json({ error: '没有要改的项' }, { status: 400 })
   }
 
@@ -173,7 +214,7 @@ export async function PATCH(
   }
 
   return NextResponse.json({
-    config: readConfig(next),
+    config: { ...readConfig(next), ...(audienceWritten !== undefined && { mailchimpAudienceId: audienceWritten }) },
     // 能存的都存了，认不出来的单独说 —— 不因为几条填错就整次拒绝，
     // 那会让人把已经填对的十条一起丢掉。
     rejected: Array.from(new Set(rejected)),

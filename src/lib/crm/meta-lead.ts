@@ -19,8 +19,13 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { buildIdentities, resolveContact } from '@/lib/crm/identity'
 import { attributionColumns, attributionFromMetaLeadRow } from '@/lib/crm/attribution'
 import { lookupCreativeRefByAdId } from '@/lib/ads/creative-link'
-import { subscribeMember, type SubscribeMemberResult } from '@/lib/mailchimp/client'
-import { isUndefinedColumn, readAudienceId } from '@/lib/mailchimp/audience-config'
+import { type SubscribeMemberResult } from '@/lib/mailchimp/client'
+import { subscribeMemberEnsuringTag } from '@/lib/mailchimp/tags'
+import {
+  isUndefinedColumn,
+  readAudienceId,
+  readLeadSourceTag,
+} from '@/lib/mailchimp/audience-config'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import type { MetaLead, MetaLeadAnswer } from '@/lib/meta/lead-forms'
 
@@ -568,19 +573,32 @@ async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMember
     return { status: 'skipped', reason: 'contact_dnc' }
   }
 
-  // 7. 打出去
+  // 7. 来源标签名 —— 从客户配置读，不写死在共享代码里（平台化红线 2）。
+  //    读失败不拿默认值糊过去：那等于把「读不到」伪装成「客户就要默认」。
+  const tagRead = await readLeadSourceTag(input.clientId)
+  if (!tagRead.ok) {
+    console.error(
+      `[meta-lead] client ${input.clientId} 来源标签配置读取失败，本条不发: ${tagRead.message}`,
+    )
+    return { status: 'skipped', reason: 'source_tag_read_failed' }
+  }
+
+  // 8. 打出去
   try {
-    return await subscribeMember({
+    return await subscribeMemberEnsuringTag({
       apiKey,
       audienceId,
       email,
       firstName: input.parsed.firstName,
       lastName: input.parsed.lastName,
-      // SOURCE merge field + tag —— Mailchimp 后台分组用。**精确字符串**
-      // `facebook_leadgen`，跟原 #1188 合同里客户自动化 / 分组条款硬绑；两处
-      // 都不许再改（改动 = 打断客户 audience 自动化 segment）。
+      // SOURCE merge field 保持 `facebook_leadgen` 不动 —— 它是 Mailchimp 里
+      // 一个 text 字段的值，跟 #1188 合同措辞绑着，且确实写进去了。
       source: 'facebook_leadgen',
-      tag: 'facebook_leadgen',
+      // 标签则相反：原来写死的 `facebook_leadgen` 在 CTS 名单里**从来没出现
+      // 过**（2026-09-06 实测，分段根本不存在）—— 因为人已在名单里时那次请求
+      // 整个不生效。既然没有任何自动化能绑在一个不存在的标签上，就改成从配置
+      // 读，CTS 沿用他们真正在用的 `fb_lead`。
+      tag: tagRead.tag,
     })
   } catch {
     // subscribeMember 应该永远不 throw，兜底防御。

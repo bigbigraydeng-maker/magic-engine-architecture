@@ -56,6 +56,8 @@ export type ManualItemKind =
   | 'dataforseo_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
+  /** 自动任务跑到一半卡死（状态永远停在 running，路由的 catch 没机会执行） */
+  | 'cron_stuck'
   | 'goal_baseline_mismatch'
   | 'diagnostic_findings'
   | 'prescription_updated'
@@ -75,6 +77,8 @@ export type ManualItemKind =
   | 'dm_maybe_stop'
   /** 平台候选（docs/registry/platform-candidates.md）到了复查日期 —— 见 me-platform-tier-gate skill */
   | 'platform_candidate_review_due'
+  /** 客户方案文档里写了一次性人工动作（如"明早 09:00 前扫一眼 xx"），只登记在文档里等于没下发 */
+  | 'client_doc_manual_task'
   /** 客人像是说他付款了，但不是我们自己确认的 —— 只有人能核对到账，不许机器自己打 paid 标签 */
   | 'paid_signal_needs_review'
   | CommentScopeTodoKind
@@ -141,9 +145,10 @@ export function gscInspectUrl(siteUrl: string, pageUrl: string): string {
 import { verifyActionLink } from './action-link'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { checkCronHealth } from '@/lib/cron/health'
+import { CRON_REGISTRY } from '@/lib/cron/registry'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
-import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
+import { judgeWorkerPresence, judgeQueueByClient } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
@@ -152,6 +157,7 @@ import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
+import { dropAlreadyPaidTagged } from '@/lib/mailchimp/paid-review-filter'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import {
@@ -159,6 +165,7 @@ import {
   PLATFORM_CANDIDATE_REGISTRY_URL,
   type PlatformCandidateReview,
 } from './platform-candidate-reviews'
+import { CLIENT_DOC_MANUAL_TASKS, type ClientDocManualTask } from './client-doc-manual-tasks'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
   if (!iso) return null
@@ -176,22 +183,57 @@ export function daysAgo(iso: string | null, now: Date): number | null {
  *
  * 单条验证失败不拖累其他条目;整体超时也只是少过滤,不阻断待办。
  */
+/**
+ * 相对路径 href 会被 `verifyActionLink` 里的 `new URL()` 抛成 broken，
+ * 于是**整条待办被 dropBrokenLinks 静默丢掉**，只留一行 console.warn ——
+ * PM 邮件里根本看不到，正是「发现死在日志里」。同一个坑早在
+ * `cross_client_leak`（2026-08-05 狄仁杰实测 kept=0）上治过一次，那次的修法
+ * 是「必须绝对网址」＋加进 NEVER_DROP_KINDS。这次审计（2026-09-07 PR #1467）
+ * 又抓到 3 个 kind 犯了同一个 bug：blog_draft_waiting、conversion_needs_review、
+ * conversion_send_in_doubt。
+ *
+ * 光靠人眼审 code review 显然不够 —— 加一道 fail-fast，让下次再有人写相对
+ * 路径时立刻在 build/test 阶段炸出来，而不是等到线上静默丢一个月才发现。
+ */
+export function assertAbsoluteHref(item: ManualItem): void {
+  const href = item.href
+  if (href === '') return // 空 href 允许（有些待办本来就没有入口，见 dropBrokenLinks 头注）
+  if (!/^https?:\/\//.test(href)) {
+    throw new Error(
+      `[manual-items] href 必须是绝对网址（相对路径会被链接闸静默丢掉）：kind=${item.kind} href=${JSON.stringify(href)}`,
+    )
+  }
+}
+
 export async function dropBrokenLinks(
   items: ManualItem[],
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ kept: ManualItem[]; dropped: ManualItem[] }> {
   const verdicts = await Promise.all(
-    items.map((it) =>
+    items.map((it) => {
+      try {
+        // 相对路径是代码 bug（写死的 href 字符串），要比「这条链接今天恰好
+        // 打不开」响得多 —— 但唯一的生产调用方 daily-todo.ts 在 dropBrokenLinks
+        // 整体失败时会兜底放行 rawManualItems（未过滤），如果这里对着整批
+        // items 同步 throw，一条相对路径就会让所有链接（含真正打不开的）
+        // 原样下发且不留日志，比「静默丢一条」更糟。所以逐条隔离：只有这一条
+        // 按坏链接处理，其余条目照常验证，且用 console.error 而不是
+        // console.warn，跟普通坏链接分开，方便回头当 bug 追。
+        assertAbsoluteHref(it)
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : String(e))
+        return Promise.resolve({ kind: 'broken' as const, status: null })
+      }
       // 🔴 **没有链接 ≠ 链接坏了。**
       //    有些待办本来就没有可点的地方（比如那件事的入口还没上线），
       //    它的价值全在 what / how 上。空 href 交给 verifyActionLink 会走
       //    `new URL('')` / `fetch('')` 抛错 → 判成 broken → 整条被丢掉，
       //    于是「如实告诉人这件事现在做不了」变成了「人什么都看不到」——
       //    发现死在 console.warn 里，正是铁律 3 下半句禁止的那件事。
-      it.href.trim() === ''
+      return it.href.trim() === ''
         ? Promise.resolve({ kind: 'unverifiable' as const })
-        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
-    ),
+        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const }))
+    }),
   )
   const kept: ManualItem[] = []
   const dropped: ManualItem[] = []
@@ -312,6 +354,8 @@ export async function loadManualItems(
   await pushCronHealthItems(supabase, items, now)
   // 平台候选到了复查日期 —— 不落库、不查表，纯本地日期判断
   pushPlatformCandidateReviewItems(items, now)
+  // 客户方案文档里写的一次性人工动作 —— 同样不落库、纯本地日期判断，过期自动消失
+  pushClientDocManualTaskItems(items, now)
   // 成交/咨询等着人核对要不要告诉广告平台 —— 撤不回的动作，只能人点（#1397）
   await pushConversionReviewItems(supabase, items, clients, now).catch((e) =>
     console.warn('[manual-items] 成交待核对读取失败（不阻塞其他待办）:', e),
@@ -319,7 +363,7 @@ export async function loadManualItems(
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
-  await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
+  await pushFactoryWorkerItems(supabase, items, now, clients).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
   )
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
@@ -533,8 +577,12 @@ export async function loadManualItems(
       client_id: clientId,
       client_name: nameOf(clientId),
       what: `网站页面数据 ${days} 天没更新了，内链和孤儿页检查还在用旧数据`,
-      how: '打开客户页点一次「重新扫描网站」；如果还是不行说明对方主机挡了我们，回一句我来换通道',
-      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit`,
+      // 🔴 落地路径必须落到 /site-audit/pages —— /site-audit 本身没有 page.tsx，
+      //    Next.js 直接 404（2026-09-07 每日待办 href 落地页审计 PR #1467 实测）。
+      //    /site-audit/pages 是「页面清单」页，右上就有「Start New Audit」按钮，
+      //    功能刚好对上「重新扫描网站」这句 how。
+      how: '打开链接（是「页面清单」页），右上点「Start New Audit」重扫；如果还是不行说明对方主机挡了我们，回一句我来换通道',
+      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/site-audit/pages`,
     })
   }
 
@@ -648,13 +696,54 @@ export async function pushPaidSignalReviewItems(
     const list = Array.isArray(run.summary?.needsReview) ? run.summary.needsReview : []
     for (const item of list) {
       const email = typeof (item as { email?: unknown })?.email === 'string' ? (item as { email: string }).email : ''
-      if (!email || seen.has(email.toLowerCase())) continue
-      seen.add(email.toLowerCase())
+      const clientId = typeof (item as { clientId?: unknown })?.clientId === 'string'
+        ? (item as { clientId: string }).clientId : ''
+      const key = `${clientId}::${email.trim().toLowerCase()}`
+      if (!email.trim() || seen.has(key)) continue
+      seen.add(key)
       rows.push(item)
     }
   }
 
-  for (const raw of rows.slice(0, 20)) {
+  /**
+   * 🔴 按 Mailchimp **当前**标签再过滤一次（Codex P1 复审 PR #1484）。
+   *
+   * 上面那 7 天窗口是有原因的（见本函数头注的三个漏法），不能砍。但它带来一个
+   * 后果：PM 今天处理完，今天的 summary 里确实没他了，**昨天的 summary 里还在**，
+   * 于是同一条待办天天重新冒出来，直到旧日志滚出窗口 —— 写入侧那道过滤
+   * （`runPaidTagging`）管不到已经落库的历史摘要。
+   *
+   * 所以在生成待办的这一刻，按真实标签状态再判一次。查不到 / 出错一律保留
+   * （fail-open）—— 漏掉一条真待处理的付款确认，客人会继续收到营销邮件。
+   */
+  // 🔴 必须先过滤再截取 20 条（Codex P1 复审 PR #1484）。
+  // 之前是先 slice(0, 20) 再过滤已处理：如果最近 7 天去重后超过 20 个候选人，
+  // 且排在前 20 个的历史候选恰好已经被 PM 打过标签，这里会把它们连着这次机会
+  // 一起删掉，却从不去看第 21 条之后仍未处理的人 —— 那些人就再也不会被下发。
+  const allCandidates = rows.map((raw) => {
+    const r = raw as { email?: unknown; clientId?: unknown }
+    return {
+      email: typeof r.email === 'string' ? r.email : '',
+      clientId: typeof r.clientId === 'string' ? r.clientId : '',
+      raw,
+    }
+  })
+  const keepable = await dropAlreadyPaidTagged(
+    supabase,
+    allCandidates.filter((c) => c.email && c.clientId),
+  ).catch((e) => {
+    console.warn('[manual-items] 付款待确认的已处理过滤失败（保留全部，不静默丢）:', e)
+    return allCandidates.filter((c) => c.email && c.clientId).map((c) => ({ ...c, paidTag: undefined }))
+  })
+  const keepKeys = new Map(keepable.map((c) => [
+    `${c.clientId}::${c.email.trim().toLowerCase()}`, c,
+  ]))
+  // 没有 clientId 的记录过滤不了（判不出用哪个 audience）—— 一律保留
+  const toEmit = allCandidates
+    .filter((c) => !c.clientId || !c.email || keepKeys.has(`${c.clientId}::${c.email.trim().toLowerCase()}`))
+    .slice(0, 20)
+
+  for (const { raw } of toEmit) {
     const r = raw as {
       email?: unknown
       name?: unknown
@@ -670,13 +759,16 @@ export async function pushPaidSignalReviewItems(
     const days = daysAgo(typeof r.receivedAt === 'string' ? r.receivedAt : null, now)
     const when = days === null ? '' : days === 0 ? '今天' : `${days} 天前`
 
+    const paidTag = keepKeys.get(`${typeof r.clientId === 'string' ? r.clientId : ''}::${email.trim().toLowerCase()}`)?.paidTag
+    const tagInstruction = paidTag ? `${paidTag} 标签` : '该客户配置的已付款标签（先在客户设置核对标签名）'
+
     items.push({
       kind: 'paid_signal_needs_review',
       client_id: typeof r.clientId === 'string' ? r.clientId : 'infra',
       client_name: typeof r.clientName === 'string' ? r.clientName : 'Magic Engine 后台',
       // 原话逐字带上 —— 人一眼就知道该不该信，不用回邮箱翻
       what: `${who}${when ? `（${when}）` : ''}像是说他付款了${quote ? `：「${quote}」` : ''} —— 但这是他自己说的，不是我们确认到账，所以系统没敢自动标成已付款客户。不标的话，他还会继续收到招揽邮件`,
-      how: '去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 paid_customer 标签（加完他就自动退出群发名单了）；没到就不用管',
+      how: `去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 ${tagInstruction}（加完他就自动退出群发名单了）；没到就不用管`,
       href: MAILCHIMP_AUDIENCE_URL,
     })
   }
@@ -715,6 +807,31 @@ export async function pushDataForSeoCreditsItem(
 const RENDER_DASHBOARD_URL = 'https://dashboard.render.com'
 
 /**
+ * 「任务该跑没跑」按调度方给不同的动手指引。
+ *
+ * 三件套里的 how / href 必须**对得上真实系统**：让人去 Render 找一个由 GitHub 或
+ * Inngest 调度的任务，他会翻半天再回来问 —— 等于这条待办没下发好。
+ */
+const CRON_STOPPED_GUIDE = {
+  render: {
+    how: '打开链接 → 找到这几个服务 → 看 Events 里最后一次运行是什么结果。多半是 Environment 里没关联 me-shared-cron-secret，勾上再选「Link and apply on next run」即可',
+    href: RENDER_DASHBOARD_URL,
+  },
+  'github-actions': {
+    how: '打开链接 → Actions 页找到同名的工作流 → 看最近几次是不是被跳过或报错。GitHub 的免费定时任务经常延迟几小时，但连着几天没有记录就是真停了；可以先点 Run workflow 手动跑一次确认',
+    href: 'https://github.com/bigbigraydeng-maker/magic-engine/actions',
+  },
+  inngest: {
+    how: '打开链接 → 进 Production 环境 → Apps → 找到 magic-engine-web，点 Sync 一次（地址是 https://app.magicengine.com.au/api/inngest）。新增函数或改了触发时间之后必须手动同步一次，否则它安静地不跑；同步完在 Functions 里能看到就对了',
+    href: 'https://app.inngest.com',
+  },
+  external: {
+    how: '这几个的定时器**不在我们代码仓库里**，是有人在 Render 后台手工建的 —— 打开链接 → 在服务列表里按名字找 → 看它还在不在、Events 里最后一次跑成什么样。如果整条被删了，回我一句我把它接回代码里管',
+    href: RENDER_DASHBOARD_URL,
+  },
+} as const
+
+/**
  * 自动任务该跑没跑 → 下发。
  *
  * 现有 daily-cron-digest 只报「跑了但失败」。**「压根没跑」没有任何记录**，
@@ -733,13 +850,43 @@ async function pushCronHealthItems(
 
   const stopped = [...r.neverRan, ...r.overdue]
   if (stopped.length > 0) {
-    const names = stopped.map((h) => h.service).join('、')
+    // 🔴 按**谁在调度它**分组下发。原来一律写「打开 Render → 找到这几个服务」，
+    //    但清单里已经有不是 Render 调度的任务（GitHub Actions / Render 后台手工建 /
+    //    Inngest 自带定时器）—— 照着那条指引去 Render 找一个根本不存在的服务，
+    //    等于把人支到错的系统里，正是 CLAUDE.md 说的「下发了但没法照做」。
+    const bySvc = new Map(CRON_REGISTRY.map((e) => [e.service, e.scheduler ?? 'render']))
+    const groups = new Map<string, string[]>()
+    for (const h of stopped) {
+      const who = bySvc.get(h.service) ?? 'render'
+      groups.set(who, [...(groups.get(who) ?? []), h.service])
+    }
+    for (const [who, names] of groups) {
+      const guide = CRON_STOPPED_GUIDE[who as keyof typeof CRON_STOPPED_GUIDE] ?? CRON_STOPPED_GUIDE.render
+      items.push({
+        kind: 'cron_not_running',
+        client_id: 'infra',
+        client_name: 'Magic Engine 后台',
+        what: `${names.length} 个自动任务该跑没跑：${names.join('、')} —— 它们负责的活儿现在没人干，而且不会自己好`,
+        how: guide.how,
+        href: guide.href,
+      })
+    }
+  }
+
+  // 卡死跟「该跑没跑」是两件事，不能合成一条：那边是**没开始**（多半是 Render 侧配置），
+  // 这边是**开始了没结束**（进程被杀 / 卡在某个外部调用上），下一步动作完全不同。
+  // 两边都接不住它：failing 只认 status='failed'，可容器被杀时路由的 catch 根本没机会跑；
+  // overdue 看 started_at，而卡死的任务开跑记录是有的。所以跑死的任务在体检里等于健康。
+  if (r.stuck.length > 0) {
+    const names = r.stuck
+      .map((s) => `${s.service}（已卡 ${s.minutesRunning >= 120 ? Math.round(s.minutesRunning / 60) + ' 小时' : s.minutesRunning + ' 分钟'}）`)
+      .join('、')
     items.push({
-      kind: 'cron_not_running',
+      kind: 'cron_stuck',
       client_id: 'infra',
       client_name: 'Magic Engine 后台',
-      what: `${stopped.length} 个自动任务该跑没跑：${names} —— 它们负责的活儿现在没人干，而且不会自己好`,
-      how: '打开链接 → 找到这几个服务 → 看 Events 里最后一次运行是什么结果。多半是 Environment 里没关联 me-shared-cron-secret，勾上再选「Link and apply on next run」即可',
+      what: `${r.stuck.length} 个自动任务开跑了但一直没结束：${names} —— 这类不会报错，它就那么挂着，那一轮该干的活儿等于没干`,
+      how: '打开链接 → 找到这几个服务 → Logs 看最后停在哪一步。常见是卡在某个外部接口没有超时保护。确认死了就手动重跑一次，并把那段调用加上超时',
       href: RENDER_DASHBOARD_URL,
     })
   }
@@ -832,7 +979,14 @@ const MAILCHIMP_EXPORT_STALE_HOURS = 6
 
 /** 只挑「非预期」失败：配置读不出来 / API key 失效 / audience 找不到 / 限流 / provider 5xx。 */
 function isMailchimpExportFailureKey(key: string): boolean {
-  return key.startsWith('failed:') || key === 'skipped:client_config_read_failed'
+  return (
+    key.startsWith('failed:') ||
+    key === 'skipped:client_config_read_failed' ||
+    key === 'skipped:source_tag_read_failed' ||
+    // 人进了名单但来源标签没补上 —— 会员关系是真的，广告归因证据却没落地。
+    // 不报的话，这一整类失败又只剩「看起来一切正常」。
+    key.startsWith('already_member:tag_failed:')
+  )
 }
 
 /**
@@ -897,7 +1051,7 @@ export async function pushMailchimpExportItems(
       client_id: r.clientId,
       client_name: r.clientName ?? '未知客户',
       what: `这个客户有 ${total} 条 lead 本该进 Mailchimp 邮件名单，但出口坏了没进去：${detail}。不会自己好，客户的邮件名单会一直缺这些人`,
-      how: '打开链接进设置页确认 Mailchimp audience 配置还在；配置没问题的话多半是 MAILCHIMP_API_KEY 失效或被限流了，回我一句我去查',
+      how: '点链接进设置页，看「Meta 广告线索送进哪个 Mailchimp 名单」那一栏 —— 空了就把 Mailchimp 里的 Audience ID 填回去（Mailchimp → Audience → Settings → Audience name and defaults 最下面那串）；那一栏是对的话就不是配置问题，回我一句我去查授权和限流',
       href: `https://app.magicengine.com.au/dashboard/clients/${r.clientId}/settings`,
     })
   }
@@ -1018,6 +1172,35 @@ export function pushPlatformCandidateReviewItems(
       what: `平台候选「${c.name}」到了复查日期（${c.reviewDate}），该扫一遍有没有新客户/新行业的硬证据了`,
       how: '打开候选登记表，看这条候选的「硬证据进度」列要不要更新；凑齐晋升判据就走 2 审提案，没有就把「复查日」列往后推一个月（同时更新 platform-candidate-reviews.ts 里的日期，否则这条提醒下次不会再出现）',
       href: PLATFORM_CANDIDATE_REGISTRY_URL,
+    })
+  }
+}
+
+/**
+ * 一次性 client ops 请求（写在客户方案文档里、只对某个日期有效）——
+ * 只登记在文档里等于没下发（CLAUDE.md 铁律 3 下半：管道不许断头）。
+ *
+ * 与 PLATFORM_CANDIDATE_REVIEWS 同样是"纯本地日期判断，不落库"，但语义不同：
+ * 那边是"到期该做"，这里是"过期就不用再提醒"——用 `expiresAt` 而不是 `dueDate`。
+ * 过了 `expiresAt` 不用回来删这一行，判据本身会让它自然消失。
+ *
+ * 任务清单本身在 `client-doc-manual-tasks.ts`（同 platform-candidate-reviews.ts
+ * 的分离方式）：这里只留通用加载逻辑，客户特例数据不进这份共享运行时文件。
+ */
+export function pushClientDocManualTaskItems(
+  items: ManualItem[],
+  now: Date,
+  tasks: ClientDocManualTask[] = CLIENT_DOC_MANUAL_TASKS,
+): void {
+  for (const t of tasks) {
+    if (now.getTime() > Date.parse(t.expiresAt)) continue
+    items.push({
+      kind: 'client_doc_manual_task',
+      client_id: t.clientId,
+      client_name: t.clientName,
+      what: t.what,
+      how: t.how,
+      href: t.href,
     })
   }
 }
@@ -1635,42 +1818,105 @@ async function pushLeadsSanityItems(
  * 队列里有活、看板上没动静，而「这周怎么没出片」要等人想起来问才发现。
  * 只在**真的有活在等**时才报（没活时工人没开机完全正常，报了就是噪音）。
  */
-async function pushFactoryWorkerItems(
+export async function pushFactoryWorkerItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   now: Date,
+  /** 客户名查表 —— 待办要说清是哪个客户的活卡了，显示 uuid 等于没显示。 */
+  clientNames: Map<string, { name: string }>,
 ): Promise<void> {
-  // 真实列名（已核实）：status / created_at / heartbeat_at
+  // 真实列名（已核实）：status / created_at / heartbeat_at / reject_reason
+  // 🔴 `reject_reason` 必须一起读：余额不足时 worker 把工单退回 queued 而不是
+  //    标 failed，只数「队列里有几个」会把「失败后卡住的僵尸工单」误当成「等人干的新活」。
   const { data: queuedRows } = await supabase
     .from('content_work_orders')
-    .select('id, created_at')
+    .select('id, client_id, created_at, reject_reason')
     .eq('status', 'queued')
     .order('created_at', { ascending: true })
-  const queued = (queuedRows ?? []) as Array<{ id: string; created_at: string }>
+  const queued = (queuedRows ?? []) as Array<{
+    id: string
+    client_id: string
+    created_at: string
+    reject_reason: string | null
+  }>
   if (queued.length === 0) return
 
-  const { data: hbRows } = await supabase
-    .from('content_work_orders')
-    .select('heartbeat_at')
-    .not('heartbeat_at', 'is', null)
-    .order('heartbeat_at', { ascending: false })
-    .limit(1)
-  const lastHb = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+  // 心跳按客户查 —— 判定层解释了为什么不能用全局最新的（judgeQueueByClient 头注）。
+  const clientIds = Array.from(new Set(queued.map((q) => q.client_id)))
+  const latestHbByClient = new Map<string, string>()
+  for (const clientId of clientIds) {
+    // A busy client's history must not crowd another client's latest heartbeat out of a global limit.
+    const { data: hbRows, error: hbError } = await supabase
+      .from('content_work_orders')
+      .select('heartbeat_at')
+      .eq('client_id', clientId)
+      .not('heartbeat_at', 'is', null)
+      .order('heartbeat_at', { ascending: false })
+      .limit(1)
+    if (hbError) throw new Error(`factory heartbeat query failed: ${hbError.message}`)
+    const latest = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+    if (latest) latestHbByClient.set(clientId, latest.heartbeat_at)
+  }
 
-  const hours = (iso: string) => (now.getTime() - Date.parse(iso)) / 3_600_000
-  const verdict = judgeWorkerPresence({
-    queued: queued.length,
-    oldestQueuedHours: hours(queued[0].created_at),
-    lastHeartbeatHours: lastHb ? hours(lastHb.heartbeat_at) : null,
-  })
-  if (verdict.idle) return
+  // 一个客户一条：不同客户的 worker 在线状态是独立的，合成一条会把两种
+  // 完全不同的处置（这家去开机 / 那家去查报错）搅在一起。
+  for (const { clientId, verdict } of judgeQueueByClient(queued, latestHbByClient, now)) {
+    pushOneFactoryWorkerItem(items, verdict, clientNames.get(clientId)?.name ?? '未知客户')
+  }
+}
 
+/** 把一条工人待办写出来。两种病因两套话术，别混。 */
+function pushOneFactoryWorkerItem(
+  items: ManualItem[],
+  verdict: Exclude<ReturnType<typeof judgeWorkerPresence>, { idle: true }>,
+  clientName: string,
+): void {
+  const who = `【${clientName}】`
+
+  // 两种病因，两套话术。判定层已经保证：`stuck_on_failure` 只在工人**在线**时
+  // 产生（离线一律先报 worker_offline，因为开机是那种情况下无条件正确的第一步）。
+  if (verdict.kind === 'stuck_on_failure') {
+    items.push({
+      kind: 'factory_worker_idle',
+      client_id: 'infra',
+      client_name: 'Magic Engine 后台',
+      what:
+        `${who}${verdict.humanReason}` +
+        (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
+      // 🔴 这里**不能**写成「先观察下一次重试」（Codex P2 复审）。
+      //    `factory/worker/[id]/fail` 把可重试失败直接退回 `queued`，**没有任何
+      //    退避字段**（`next_retry_at` 只存在于 publish-worker，那是另一条线），
+      //    所以失败工单立刻就能被重新领走。工人在线还卡了 6 小时以上，重试早
+      //    该发生了 —— 「在等重试」不是这里的合理解释，确实需要人看一眼。
+      //    话术必须给真动作，否则这条进了「需要你动手」栏却让人干等，等于
+      //    制造一条假待办。
+      how:
+        '工人在线、活却过不去，重试早该发生了（失败退回队列是立刻可重领的，没有等待期）—— ' +
+        '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完它会自己被重新领走；' +
+        '写的是别的原因，回我一句「出片工单卡住了」，我去查',
+      href: 'https://app.magicengine.com.au/dashboard/factory',
+    })
+    return
+  }
+
+  // worker_offline：开机是第一步。这些活如果失败过，把原因一并带上 ——
+  // 开机后还是过不去时，那就是下一步该看的东西（但绝不因此劝阻开机：
+  // 带 reject_reason 的 queued 工单通常还有重试机会，重试恰恰要靠工人上线）。
   items.push({
     kind: 'factory_worker_idle',
     client_id: 'infra',
     client_name: 'Magic Engine 后台',
-    what: `${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做`,
-    how: '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
+    what:
+      `${who}${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做` +
+      (verdict.sampleReason
+        ? `。另外这些工单上次失败过，系统报的原因是：「${verdict.sampleReason}」`
+        : ''),
+    how:
+      '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。' +
+      (verdict.sampleReason
+        ? '开机之后如果这些工单还是过不去，就是上面那条原因（写着余额不足就去充值），回我一句我来查。'
+        : '') +
+      '如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
     href: 'https://app.magicengine.com.au/dashboard/factory',
   })
 }

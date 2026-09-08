@@ -12,7 +12,8 @@
  *    T+72 重试又会重放已成功的 T+4。拆开后：T+4 失败不挡 T+72、T+72 失败不删
  *    T+4、一条帖子不影响别的帖子、重放靠事件 id + 数据库唯一约束双层挡住。
  *
- * measure 不知道 4 和 72 是什么 —— 只读事件带来的 `window_hours` / `target_at`。
+ * measure 只允许 T+4/T+72，并将事件时间重新绑定到已登记发布 action。
+ * Measurement is non-billable: no customer credit, quota or paid task execution.
  * 本期不做 Tune：动作行 `expected_metric` 为 NULL，通用归因不加载它。
  *
  * ## Codex #1399 复审修正
@@ -49,14 +50,16 @@ import {
 /** 云端专属内部事件 —— 本机 worker 不监听（见 client.ts WORKER_OWNED_EVENTS）。 */
 export const DAILY_PLAN_POST_MEASURE_EVENT = 'daily_plan.post.measure_due'
 
-const MeasureDueSchema = z.object({
+export const MeasureDueSchema = z.object({
   client_id: z.string().min(1),
   action_id: z.string().min(1),
   idempotency_key: z.string().min(1),
   post_id: z.string().min(1),
   page_id: z.string().min(1),
-  window_hours: z.number().int().positive(),
+  window_hours: z.number().int().refine((hours): boolean => hours === 4 || hours === 72, 'unsupported measurement window'),
   target_at: z.string().datetime(),
+  // Existing durable events omit this field; omission retains the same non-billable contract.
+  billing_mode: z.literal('non_billable').optional(),
 })
 export type MeasureDueData = z.infer<typeof MeasureDueSchema>
 
@@ -236,6 +239,11 @@ export function createMeasureFunction(deps: {
         const parsed = MeasureDueSchema.safeParse(original)
         if (!parsed.success) return
         const d = parsed.data
+        const identity = await verifyActionIdentity(deps.supabase, d.action_id, {
+          clientId: d.client_id, idempotencyKey: d.idempotency_key,
+          postId: d.post_id, pageId: d.page_id, windowHours: d.window_hours, targetAt: d.target_at,
+        })
+        if (!identity.ok) return
         await recordSnapshot(deps.supabase, {
           clientId: d.client_id,
           actionId: d.action_id,
@@ -259,19 +267,20 @@ export function createMeasureFunction(deps: {
       const d = parsed.data
 
       // 到点再干活。已过的时刻立即返回 —— 迟测仍测，回执上看得出迟了。
-      await step.sleepUntil(`wait-${d.window_hours}h`, new Date(d.target_at))
-
       // 🔴 P4：访问 Meta 前必须从 DB 读 action 核对身份。事件里带的 client/post/page
       // 全部只是"声称"，DB 里那条 action 才是权威。任何不一致 → 拒，不读、不写。
-      const identity = await step.run('verify-action-identity', () =>
+      const identity = await step.run('verify-measurement-contract-v1', () =>
         verifyActionIdentity(deps.supabase, d.action_id, {
           clientId: d.client_id,
           idempotencyKey: d.idempotency_key,
           postId: d.post_id,
           pageId: d.page_id,
+          windowHours: d.window_hours,
+          targetAt: d.target_at,
         }),
       )
       if (!identity.ok) return { ok: false, reason: identity.reason }
+      await step.sleepUntil(`wait-${d.window_hours}h`, new Date(d.target_at))
 
       // 🔴 P3：把 Graph 读取做成独立的持久 step —— 成功后被 Inngest 记忆化，
       // 后续同一 run 的重试都复用同一份数字，不再重新问 Graph、不再产生 hash 漂移。

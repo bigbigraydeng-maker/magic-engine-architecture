@@ -11,10 +11,13 @@ import {
   daysAgo,
   loadManualItems,
   pushPlatformCandidateReviewItems,
+  pushClientDocManualTaskItems,
   pushDataForSeoCreditsItem,
   pushMailchimpExportItems,
   pushLinkedinProgressItems,
   buildNotIndexedItems,
+  assertAbsoluteHref,
+  dropBrokenLinks,
   type NotIndexedRow,
   type ManualItem,
 } from '../manual-items'
@@ -125,6 +128,43 @@ describe('pushMailchimpExportItems', () => {
     const supabase = fakeLastRun({
       finished_at: '2026-09-03T00:00:00Z',
       summary: { results: [{ clientId: 'c-broken', clientName: 'CTS', mailchimp: { 'failed:auth': 1 } }] },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toEqual([])
+  })
+
+  it('人在名单里但来源标签没补上 → 也要报（归因证据没落地，跟发失败一样严重）', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: NOW.toISOString(),
+      summary: {
+        results: [
+          {
+            clientId: 'c-broken',
+            clientName: 'CTS Tours NZ',
+            mailchimp: { 'already_member:tag_failed:http_429': 4, already_member: 6 },
+          },
+        ],
+      },
+    })
+
+    await pushMailchimpExportItems(supabase, items, NOW)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'mailchimp_export_broken', client_id: 'c-broken' })
+    // 只数坏的那 4 条，正常的 6 条不许算进去
+    expect(items[0].what).toContain('4 条')
+  })
+
+  it('标签都打上了的正常 already_member → 一条都不报，别天天骚扰', async () => {
+    const items: ManualItem[] = []
+    const supabase = fakeLastRun({
+      finished_at: NOW.toISOString(),
+      summary: {
+        results: [{ clientId: 'c-ok', clientName: 'CTS', mailchimp: { already_member: 10 } }],
+      },
     })
 
     await pushMailchimpExportItems(supabase, items, NOW)
@@ -595,6 +635,31 @@ describe('pushPlatformCandidateReviewItems — 平台候选复查不靠日历记
   })
 })
 
+describe('pushClientDocManualTaskItems — 客户文档里的一次性人工请求必须进今日待办', () => {
+  const task = {
+    clientId: 'c0000000-0000-0000-0000-000000000000',
+    clientName: 'CTS Tours NZ',
+    what: '测试用一次性请求',
+    how: '测试用做法',
+    href: 'https://example.com',
+    expiresAt: '2026-09-08T09:00:00+13:00',
+  }
+
+  it('还没过期 → 下发待办', () => {
+    const items: ManualItem[] = []
+    pushClientDocManualTaskItems(items, new Date('2026-09-07T20:00:00Z'), [task])
+    expect(items).toHaveLength(1)
+    expect(items[0].kind).toBe('client_doc_manual_task')
+    expect(items[0].client_id).toBe(task.clientId)
+  })
+
+  it('已过期 → 不下发（不用回来手动删）', () => {
+    const items: ManualItem[] = []
+    pushClientDocManualTaskItems(items, new Date('2026-09-08T20:00:00Z'), [task])
+    expect(items).toHaveLength(0)
+  })
+})
+
 describe('daysAgo → 文案年龄', () => {
   it('day 0 不该渲染成「已 0 天」（首日实测的文案瑕疵）', () => {
     const now = new Date('2026-08-01T13:00:00Z')
@@ -946,5 +1011,76 @@ describe('email_reply_due — 客人来信没人回', () => {
     expect(extra.what).toContain('还有 3 封')
     expect(extra.client_name).toBe('CTS Tours NZ')
     expect(extra.href).toBe(`https://app.magicengine.com.au/dashboard/clients/${CLIENT}/crm/all`)
+  })
+})
+
+/**
+ * href 必须绝对 —— 相对路径会被 `verifyActionLink` 里的 `new URL()` 抛错，
+ * 判成 broken，整条被 `dropBrokenLinks` 静默丢掉（=PM 邮件里根本看不到）。
+ * 同一个 bug 早在 `cross_client_leak`（2026-08-05）上治过一次；2026-09-07 的
+ * 每日待办 href 审计（PR #1467）又抓到 3 个 kind 犯了同一个 bug。加这道
+ * fail-fast 让下次再有人写相对路径时立刻在 build/test 阶段炸出来。
+ *
+ * `assertAbsoluteHref` 本身仍然对单条 throw，给 build/test 直接调用来
+ * fail-fast；但 `dropBrokenLinks` 内部逐条 catch 它，绝不对着整批 items
+ * 同步抛错 —— 唯一的生产调用方 daily-todo.ts 在 dropBrokenLinks 整体失败
+ * 时会兜底放行未过滤的 rawManualItems，一条相对路径同步抛错会把这条 bug
+ * 静默升级成「所有链接（含真正打不开的）原样下发且不留日志」，比原来单条
+ * 静默丢弃更糟（Codex review, PR #1471）。
+ */
+describe('assertAbsoluteHref (fail-fast on relative href)', () => {
+  const base = (partial: Partial<ManualItem> = {}): ManualItem => ({
+    kind: 'not_indexed' as ManualItem['kind'],
+    client_id: 'c0000000-0000-0000-0000-000000000000',
+    client_name: 'CTS',
+    what: 'x',
+    how: 'y',
+    href: 'https://app.magicengine.com.au/dashboard/x',
+    ...partial,
+  })
+
+  it('accepts absolute https URLs', () => {
+    expect(() => assertAbsoluteHref(base())).not.toThrow()
+  })
+
+  it('accepts http URLs (external legacy)', () => {
+    expect(() => assertAbsoluteHref(base({ href: 'http://internal.example/x' }))).not.toThrow()
+  })
+
+  it('accepts empty href (some items intentionally have no entry point)', () => {
+    expect(() => assertAbsoluteHref(base({ href: '' }))).not.toThrow()
+  })
+
+  it('rejects relative paths starting with /', () => {
+    expect(() => assertAbsoluteHref(base({ href: '/dashboard/clients/xxx/blog' }))).toThrow(
+      /href 必须是绝对网址/,
+    )
+  })
+
+  it('rejects protocol-relative //host paths (would break new URL() the same way)', () => {
+    expect(() => assertAbsoluteHref(base({ href: '//app.magicengine.com.au/x' }))).toThrow(
+      /href 必须是绝对网址/,
+    )
+  })
+
+  it('dropBrokenLinks drops only the offending relative-href item, and still verifies the rest', async () => {
+    const bad = base({ kind: 'blog_pr_open', href: '/dashboard/conversions?client=x' })
+    const good = base({ kind: 'not_indexed', href: 'https://good.example/ok' })
+    const fetchImpl = (async (url: string) =>
+      ({ ok: url === good.href }) as Response) as unknown as typeof fetch
+
+    const { kept, dropped } = await dropBrokenLinks([bad, good], fetchImpl)
+
+    expect(dropped.map((i) => i.href)).toEqual([bad.href])
+    expect(kept.map((i) => i.href)).toEqual([good.href])
+  })
+
+  it('dropBrokenLinks still ships NEVER_DROP_KINDS items even when their href is relative', async () => {
+    // cross_client_leak 早就在 NEVER_DROP_KINDS 里（2026-08-05 狄仁杰实测 kept=0
+    // 治过）——一个真正打不开的链接不该让红线条目消失，相对路径同样不该。
+    const item = base({ kind: 'cross_client_leak', href: '/dashboard/clients/xxx' })
+    const { kept, dropped } = await dropBrokenLinks([item])
+    expect(dropped).toEqual([])
+    expect(kept.map((i) => i.href)).toEqual([item.href])
   })
 })
