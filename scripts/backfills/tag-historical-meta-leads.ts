@@ -54,6 +54,9 @@ if (clientIdArg) {
   ONLY_CLIENT_ID = value
 }
 
+/** .in(...) 一次带太多 id 同样会顶到 PostgREST 上限，分批查。 */
+const IN_BATCH_SIZE = 500
+
 async function main() {
   // 动态引，等上面把 .env.local 灌进 process.env 之后再加载这些模块 ——
   // supabase 客户端在模块顶层就读 env。
@@ -61,6 +64,7 @@ async function main() {
   const { readAudienceId, readLeadSourceTag } = await import('../../src/lib/mailchimp/audience-config')
   const { applyMemberTags } = await import('../../src/lib/mailchimp/tags')
   const { evaluateDnc } = await import('../../src/lib/crm/meta-lead')
+  const { fetchAll } = await import('../../src/lib/supabase-paginate')
 
   const apiKey = process.env.MAILCHIMP_API_KEY ?? ''
   if (!apiKey.trim()) {
@@ -99,28 +103,42 @@ async function main() {
     // `attr_platform`：官网表单带 Meta UTM 时也会把 attr_platform 写成
     // 'meta'（误伤），而 first-touch 是别的渠道、后来又交过 Meta 表单的人
     // 又会被漏掉（identity.ts 的 first-touch 规则不会覆盖 attr_platform）。
-    const { data: touches, error: touchesErr } = await supabaseAdmin
-      .from('contact_touchpoints')
-      .select('contact_id')
-      .eq('client_id', c.id)
-      .eq('source', 'meta_lead_form')
-    if (touchesErr) {
-      console.log(`⚠ ${c.name}: 读触点失败（${touchesErr.message}）—— 跳过`)
+    let touches: { contact_id: string }[]
+    try {
+      touches = await fetchAll((from, to) =>
+        supabaseAdmin
+          .from('contact_touchpoints')
+          .select('contact_id')
+          .eq('client_id', c.id)
+          .eq('source', 'meta_lead_form')
+          .order('contact_id', { ascending: true })
+          .range(from, to),
+      )
+    } catch (e) {
+      console.log(`⚠ ${c.name}: 读触点失败（${e instanceof Error ? e.message : String(e)}）—— 跳过`)
       continue
     }
-    const contactIds = [...new Set((touches ?? []).map((t) => t.contact_id))]
+    const contactIds = [...new Set(touches.map((t) => t.contact_id))]
     if (!contactIds.length) continue
 
-    const { data: contacts, error: contactsErr } = await supabaseAdmin
-      .from('contacts')
-      .select('id, primary_email')
-      .in('id', contactIds)
-      .not('primary_email', 'is', null)
-    if (contactsErr) {
-      console.log(`⚠ ${c.name}: 读客人失败（${contactsErr.message}）—— 跳过`)
-      continue
+    const contacts: { id: string; primary_email: string | null }[] = []
+    let contactsFailed = false
+    for (let i = 0; i < contactIds.length; i += IN_BATCH_SIZE) {
+      const batch = contactIds.slice(i, i + IN_BATCH_SIZE)
+      const { data, error: contactsErr } = await supabaseAdmin
+        .from('contacts')
+        .select('id, primary_email')
+        .in('id', batch)
+        .not('primary_email', 'is', null)
+      if (contactsErr) {
+        console.log(`⚠ ${c.name}: 读客人失败（${contactsErr.message}）—— 跳过`)
+        contactsFailed = true
+        break
+      }
+      contacts.push(...(data ?? []))
     }
-    if (!contacts?.length) continue
+    if (contactsFailed) continue
+    if (!contacts.length) continue
 
     console.log(`\n${c.name} —— ${contacts.length} 个 Meta 表单客人，标签 "${tagRead.tag}"`)
     const cfg = { apiKey, audienceId: audience.audienceId }
