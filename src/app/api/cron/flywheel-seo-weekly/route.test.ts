@@ -19,9 +19,11 @@ const mockClientsQuery = vi.fn()
 vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: {
     from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({ not: mockClientsQuery })),
-      })),
+    select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          contains: vi.fn(() => ({ not: mockClientsQuery })),
+        })),
+    })),
     })),
   },
 }))

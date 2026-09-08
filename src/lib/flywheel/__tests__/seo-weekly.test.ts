@@ -50,14 +50,24 @@ function fakeSupabase(tables: Record<string, { data: Row[] | null; error: { mess
       const result = tables[table] ?? { data: [], error: null }
       const apply = () => {
         if (result.error) return { data: null, error: result.error }
-        const rows = (result.data ?? []).filter((r) =>
-          filters[table].every(([col, val]) => r[col] === val),
-        )
+        const rows = (result.data ?? []).filter((r) => filters[table].every(([col, val]) => {
+          if (col === 'seo_config' && val && typeof val === 'object') {
+            const cfg = r[col] as Record<string, unknown> | undefined
+            // Legacy fixtures omit the new config; treat them as enabled so
+            // existing roster tests remain focused on their stated invariant.
+            return cfg === undefined || Object.entries(val as Record<string, unknown>).every(([k, v]) => cfg[k] === v)
+          }
+          return r[col] === val
+        }))
         return { data: rows, error: null }
       }
       const chain: Record<string, unknown> = {
         select: () => chain,
         eq: (col: string, val: unknown) => {
+          filters[table].push([col, val])
+          return chain
+        },
+        contains: (col: string, val: unknown) => {
           filters[table].push([col, val])
           return chain
         },
