@@ -5,6 +5,30 @@
 
 ---
 
+### 2026-09-09（修复：定时任务的运行记录写不进去被静默吞掉，健康检查反过来报假警）
+
+**问题**：`src/lib/cron/run-logger.ts` 写 `cron_run_logs` 时只解构了 `data`、没解构 `error`。写库一失败 `runId` 就是 `null`，收尾函数里 `if (!runId) return` 直接什么都不做 —— 任务照常跑完、照常返回 HTTP 200，但库里一行记录都没有。危险的地方在于方向是反的：`src/lib/cron/health.ts` 完全建立在 `cron_run_logs` 上，"没有行"被解释成"从来没跑过 / 逾期没跑"，于是**监控主动报假警**。
+
+**生产证据**（2026-09-07 查生产库 glbdnayojixmexgofbsd）：`goals-expiry-check` 由 GitHub Actions 每天调度，8/18–8/30 这 13 次全部 `conclusion=success`、响应体都是 `{"success":true}`（工作流里明确断言非 200 即失败），但 `cron_run_logs` 里只有 8/27 那一天有记录，另外 12 天一行都没有。路由鉴权之后立刻就是 `startCronRun`，没有任何提前返回分支。对照组：同样走 GitHub Actions、同一个公网域名的 `winner-reel-sync-daily`，8/15–9/06 每天都有行 —— 排除调度路径和部署问题，范围收敛到写入函数本身。
+
+**修复**：
+- `startCronRunId` / 收尾函数每一次写库都取出 `error` 并 `console.error`（带 job_name 与 message/code/details/hint，进 Render 日志）
+- 运行记录的 id 改成**调用方先用 `randomUUID()` 生成**，开跑和收尾自始至终用同一个 id，收尾走 `upsert(outcome, { onConflict: 'id' })`：开跑写成了就地改成终态，没写成就由收尾把它插出来 —— 发现不许只死在日志里，必须回到健康检查看得见的同一根管道
+- `cronRunHandle` 增加 `jobName` 参数（没有它就补不出那一行），三处调用方同步更新：`flywheel-seo-weekly` ×2、`messenger-brief-after-sync` ×1
+- 写运行记录失败一律**不抛异常**：它是观测手段不是安全闸，不该把正在跑的业务任务弄挂
+
+**为什么必须先生成 id**（Codex 复审 [#1434](https://github.com/bigbigraydeng-maker/magic-engine/pull/1434) 提出，核实成立）：开跑那次 insert 如果是"服务端已提交、只是响应在回程丢了"，SDK 一样报错，调用方无从区分。若此时另插一条终态记录，库里会同时留下孤儿 `running` 行和终态行；孤儿行的 `started_at` 走建表 DDL 的 `NOW()`（比终态行显式写的开跑时刻更晚），`health.ts` 按 `started_at DESC` 取最近一条会稳定选中孤儿，一小时后把**跑完的任务**报成卡死 —— 正好是本次修复要消灭的那类假警报。
+
+**顺带核实**（拿生产库两把 key 实测，非读代码推断）：`cron_run_logs` 的 RLS 不是元凶 —— anon INSERT 被策略挡回 `42501`，service_role INSERT 返回 201（探针行已删）。`supabaseAdmin` 用 service role key 且缺失时启动即抛，绕过 RLS。
+
+**验证**：`src/lib/cron` + `src/lib/inngest/__tests__` + 两个 cron route 测试共 13 文件 170 通过；`npm run build` 通过；三轮变异检验（删掉开跑告警 / 恢复 `if (!runId) return` / 把收尾的 upsert 换成不带 id 的 insert）分别 2 红、2 红、8 红。
+
+**风险级 B**（普通业务逻辑，无 schema/权限变更）。
+
+**Reuse Statement**：修复位于既有平台层 `src/lib/cron/run-logger.ts`，是所有定时任务共用的运行记录写入口，platform-shared；无 industry-specific / client-specific 内容，没有客户名、客户 ID 或行业判断写入 shared runtime；无新表、无新依赖。
+
+---
+
 ### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
 
 **问题**：`ads-health` 看板给 CTS 显示的每条线索成本比 Meta 官方数字便宜近一倍（看板 $3.9-4.7，Meta 官方 $7.6-11.8）。核对发现 `src/lib/meta/client.ts` 的 `results = leads + messaging_conversations` 违反了同文件 `objective-metrics.ts` 自己写的「NEVER sum across action types」规则：CTS 的 Lead Form 广告开了 Messenger 自动回复，同一个人提交表单会被 Meta 同时计入 `lead` 和 `onsite_conversion.messaging_conversation_started_7d` 两个 action_type，简单相加造成 2× 双算。2026-08-31 实测：CTS Reborn 广告当天 leads=10、messaging=9，是同一批人，不是 19 个人举手。
