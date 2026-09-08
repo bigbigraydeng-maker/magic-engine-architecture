@@ -1,10 +1,17 @@
 /**
- * cron_run_logs 写失败必须喊出来（#1428 的下一层问题）。
+ * cron_run_logs 写失败必须喊出来（#1428 的下一层问题），且不能靠「插不进去就再插一条」
+ * 来兜底（#1434 review round 1 的下一层问题）。
  *
- * 背景：首版 `startCronRun` 只取 `data` 不取 `error`。insert 一失败 runId 就是 null，
+ * 背景一：首版 `startCronRun` 只取 `data` 不取 `error`。insert 一失败 runId 就是 null，
  * `finish()` 里 `if (!runId) return` 直接什么都不干 —— 任务照常跑完、HTTP 200，
  * 但 cron_run_logs 里一行都没有，健康检查反过来把它判成「从来没跑过」。
  * 生产实测：goals-expiry-check 在 GitHub Actions 里天天 success，运行记录却大面积缺失。
+ *
+ * 背景二：修完背景一之后，`finish()` 靠「runId 是不是 null」决定补插一条新记录 ——
+ * 但 insert 报错既可能是真没插进去，也可能是插成功了、响应在回来的路上丢了。
+ * 后一种情况下补插会跟第一次真正落库的那行**各自独立**，`started_at` 更早的孤儿行
+ * 永远停在 running，一小时后被健康检查误报成卡死。现在改成 id 本地先生成、
+ * 开跑收尾自始至终用同一个 id upsert，两种真实结果都收敛成一行。
  *
  * 假 Supabase 按**表**建模（含 job_name NOT NULL 与 status CHECK 两条真约束），
  * 不按调用次序建模 —— 按次序录制的假客户端只能证明「代码调了这些方法」，
@@ -20,8 +27,6 @@ const state = vi.hoisted(() => ({
   failInsert: null as PgError | null,
   failUpdate: null as PgError | null,
   failUpsert: null as PgError | null,
-  /** insert 在「库里」提交成功、但响应丢在路上 —— 调用方看到的是错误 + 没有 id。 */
-  insertCommitsThenFails: null as PgError | null,
   insertAttempts: 0,
   updateAttempts: 0,
   upsertAttempts: 0,
@@ -37,22 +42,19 @@ vi.mock('@/lib/supabase', () => {
     let payload: Row = {}
     const eqs: Array<[string, unknown]> = []
     const hits = () => state.rows.filter((r) => eqs.every(([c, v]) => r[c] === v))
+    // 真表上的两条约束 —— 少写 job_name 或写错 status，库里是会拒的。insert 和 upsert 都要过这一关。
+    function checkConstraints(row: Row): PgError | null {
+      if (!row.job_name) return { message: 'null value in column "job_name"', code: '23502' }
+      if (!STATUSES.includes(String(row.status))) {
+        return { message: 'violates check constraint "cron_run_logs_status_check"', code: '23514' }
+      }
+      return null
+    }
 
     function run(): { data: Row[] | null; error: PgError | null } {
-      if (mode === 'insert' || mode === 'upsert') {
-        if (mode === 'upsert') {
-          state.upsertAttempts++
-          if (state.failUpsert) return { data: null, error: state.failUpsert }
-          // upsert = insert ... on conflict (主键 id) do update
-          const existing = state.rows.find((r) => r.id === payload.id)
-          if (existing) {
-            Object.assign(existing, payload)
-            return { data: [{ ...existing }], error: null }
-          }
-        } else {
-          state.insertAttempts++
-          if (state.failInsert) return { data: null, error: state.failInsert }
-        }
+      if (mode === 'insert') {
+        state.insertAttempts++
+        if (state.failInsert) return { data: null, error: state.failInsert }
         // 默认值照 20260606000011_cron_run_logs.sql 的建表 DDL。
         const row: Row = {
           id: `run-${++state.seq}`,
@@ -67,18 +69,9 @@ vi.mock('@/lib/supabase', () => {
           error_message: null,
           ...payload,
         }
-        // 真表上的两条约束 —— 少写 job_name 或写错 status，库里是会拒的。
-        if (!row.job_name) {
-          return { data: null, error: { message: 'null value in column "job_name"', code: '23502' } }
-        }
-        if (!STATUSES.includes(String(row.status))) {
-          return { data: null, error: { message: 'violates check constraint "cron_run_logs_status_check"', code: '23514' } }
-        }
+        const constraintError = checkConstraints(row)
+        if (constraintError) return { data: null, error: constraintError }
         state.rows.push(row)
-        // 「提交成功但响应丢了」：行已经在库里，调用方却只拿到错误。
-        if (mode === 'insert' && state.insertCommitsThenFails) {
-          return { data: null, error: state.insertCommitsThenFails }
-        }
         return { data: [{ ...row }], error: null }
       }
 
@@ -90,14 +83,28 @@ vi.mock('@/lib/supabase', () => {
         return { data: found.map((r) => ({ ...r })), error: null }
       }
 
+      if (mode === 'upsert') {
+        state.upsertAttempts++
+        if (state.failUpsert) return { data: null, error: state.failUpsert }
+        const constraintError = checkConstraints(payload)
+        if (constraintError) return { data: null, error: constraintError }
+        const existing = state.rows.find((r) => r.id === payload.id)
+        if (existing) {
+          Object.assign(existing, payload)
+          return { data: [{ ...existing }], error: null }
+        }
+        state.rows.push({ ...payload })
+        return { data: [{ ...payload }], error: null }
+      }
+
       return { data: hits().map((r) => ({ ...r })), error: null }
     }
 
     const builder: Record<string, unknown> = {
       select() { return builder },
       insert(p: Row) { mode = 'insert'; payload = p; return builder },
-      upsert(p: Row) { mode = 'upsert'; payload = p; return builder },
       update(p: Row) { mode = 'update'; payload = p; return builder },
+      upsert(p: Row, _opts?: { onConflict?: string }) { mode = 'upsert'; payload = p; return builder },
       eq(col: string, val: unknown) { eqs.push([col, val]); return builder },
       single() { const { data, error } = run(); return Promise.resolve({ data: data?.[0] ?? null, error }) },
       then(resolve: (r: { data: Row[] | null; error: PgError | null }) => void) { resolve(run()) },
@@ -120,7 +127,6 @@ beforeEach(() => {
   state.failInsert = null
   state.failUpdate = null
   state.failUpsert = null
-  state.insertCommitsThenFails = null
   state.insertAttempts = 0
   state.updateAttempts = 0
   state.upsertAttempts = 0
@@ -139,7 +145,7 @@ describe('startCronRun', () => {
 
     await run.finish({ processed: 3, completed: 2, failed: 1 })
 
-    expect(state.rows).toHaveLength(1)                     // 收尾是对同一行 upsert，不是再插一行
+    expect(state.rows).toHaveLength(1)                     // 收尾是 update，不是再插一行
     expect(state.rows[0].status).toBe('completed')
     expect(state.rows[0].processed).toBe(3)
     expect(state.rows[0].completed_count).toBe(2)
@@ -170,14 +176,13 @@ describe('startCronRun', () => {
     expect(text).toContain('42501')
   })
 
-  it('🔴 开跑记录写不进去：finish() 必须补插一条终态记录，发现不许只死在日志里', async () => {
+  it('🔴 开跑记录写不进去：finish() 必须用同一个 id 把终态记录落地，发现不许只死在日志里', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     state.failInsert = { message: 'timeout', code: '57014' }
 
     const run = await startCronRun('goals-expiry-check')
     expect(state.rows).toHaveLength(0)
 
-    state.failInsert = null                                // 收尾时数据库恢复了
     await run.finish({ processed: 7, completed: 7 })
 
     expect(state.rows).toHaveLength(1)
@@ -188,7 +193,7 @@ describe('startCronRun', () => {
     expect(state.rows[0].finished_at).toEqual(expect.any(String))
   })
 
-  it('补插也失败：再喊一次，并且绝不把正在跑的任务弄挂', async () => {
+  it('开跑和收尾都插不进去：再喊一次，并且绝不把正在跑的任务弄挂', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     state.failInsert = { message: 'permission denied for table cron_run_logs', code: '42501' }
     state.failUpsert = { message: 'permission denied for table cron_run_logs', code: '42501' }
@@ -196,14 +201,14 @@ describe('startCronRun', () => {
     const run = await startCronRun('goals-expiry-check')
     await expect(run.finish({ processed: 1 })).resolves.toBeUndefined()
 
-    expect(state.insertAttempts).toBe(1)
-    expect(state.upsertAttempts).toBe(1)                   // 开跑一次 + 收尾一次，都被拒
+    expect(state.insertAttempts).toBe(1)                   // 开跑一次
+    expect(state.upsertAttempts).toBe(1)                   // 收尾一次
     expect(state.rows).toHaveLength(0)
     expect(spy.mock.calls.length).toBeGreaterThanOrEqual(2)
-    expect(said(spy)).toContain('没有痕迹')
+    expect(said(spy)).toContain('彻底没有痕迹')
   })
 
-  it('🔴 收尾写不进去：必须喊，并点明这行会停在 running', async () => {
+  it('🔴 收尾写不进去：必须喊，并点明这行可能停在 running', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const run = await startCronRun('demo-job')
@@ -217,51 +222,64 @@ describe('startCronRun', () => {
     expect(text).toContain('running')
     expect(text).toContain('could not serialize access due to concurrent update')
   })
-
-  it('🔴 开跑那条其实提交成功了、只是响应丢了：收尾不许另插一行，否则会留下孤儿 running 行', async () => {
-    // Codex 复审 #1434 指出的坑。孤儿行的 started_at 比补插行晚，
-    // health.ts 按 started_at DESC 取最近一条会永远选中孤儿，
-    // 于是把**跑完的任务**报成卡死 —— 正是这个 PR 要消灭的那类假警报。
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    state.insertCommitsThenFails = { message: 'fetch failed', code: 'ECONNRESET' }
-
-    const run = await startCronRun('goals-expiry-check')
-    expect(state.rows).toHaveLength(1)                     // 锚点：行确实已经落库了
-    expect(state.rows[0].status).toBe('running')
-    expect(said(spy)).toContain('goals-expiry-check')      // 调用方以为写失败了，喊了
-
-    state.insertCommitsThenFails = null
-    await run.finish({ processed: 9, completed: 9 })
-
-    expect(state.rows).toHaveLength(1)                     // ← 关键：没有第二行
-    expect(state.rows[0].status).toBe('completed')         // 那条 running 被就地改成终态
-    expect(state.rows[0].processed).toBe(9)
-  })
 })
 
 describe('cronRunHandle（工作流跨步骤用的那条路）', () => {
-  it('🔴 开跑那步没写成：收尾一样要补插终态记录，不能因为走的是 Inngest 就漏掉', async () => {
+  it('🔴 开跑那步真的没写成：收尾一样要把终态记录落地，不能因为走的是 Inngest 就漏掉', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     state.failInsert = { message: 'timeout', code: '57014' }
 
     // 模拟工作流里「一个步骤开记录拿 id，另一个步骤按 id 收尾」
     const runId = await startCronRunId('flywheel-seo-weekly')
-    expect(runId).toEqual(expect.any(String))     // 写没写成都要给出 id，收尾才好 upsert 同一行
-    expect(state.rows).toHaveLength(0)            // 这次是真没写进去
+    expect(runId).toEqual(expect.any(String))     // id 本地生成，插没插成都拿得到
     expect(state.insertAttempts).toBe(1)          // 锚点：真去写了
+    expect(state.rows).toHaveLength(0)             // 而且这次是真没插进去
 
-    state.failInsert = null
     await cronRunHandle('flywheel-seo-weekly', runId, Date.now()).finish({ processed: 2 })
 
     expect(state.rows).toHaveLength(1)
+    expect(state.rows[0].id).toBe(runId)           // 落地用的是开跑时那个 id
     expect(state.rows[0].job_name).toBe('flywheel-seo-weekly')
     expect(state.rows[0].status).toBe('completed')
     expect(state.rows[0].processed).toBe(2)
   })
 
-  it('开跑那步写成了：收尾走更新，不会多插一行', async () => {
+  it('🔴 开跑那步其实提交成功、只是响应丢了：收尾用同一个 id upsert，不会多出一条孤儿记录', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    state.failInsert = { message: 'ECONNRESET', code: 'network' }
+
+    const runId = await startCronRunId('flywheel-seo-weekly')
+    expect(state.rows).toHaveLength(0)             // 假件里这次 insert 判定为失败……
+
+    // ……但真实场景里，插入很可能已经在数据库提交、只是响应在回来的路上丢了。
+    // 手工把「本该在」的那一行放回假库，且 started_at 比收尾晚发生的 startedAtIso 更早，
+    // 复刻生产上「health.ts 按 started_at DESC 挑中孤儿行」的排序关系。
+    state.rows.push({
+      id: runId,
+      job_name: 'flywheel-seo-weekly',
+      status: 'running',
+      started_at: '2020-01-01T00:00:00.000Z',
+      finished_at: null,
+      duration_ms: null,
+      processed: 0,
+      completed_count: 0,
+      failed_count: 0,
+      summary: null,
+      error_message: null,
+    })
+
+    await cronRunHandle('flywheel-seo-weekly', runId, Date.now()).finish({ processed: 9 })
+
+    expect(state.rows).toHaveLength(1)             // 没有变成两行 —— 不会再留孤儿记录
+    expect(state.rows[0].id).toBe(runId)
+    expect(state.rows[0].status).toBe('completed') // 那条「已提交」的行被收敛成了终态
+    expect(state.rows[0].processed).toBe(9)
+  })
+
+  it('开跑那步写成了：收尾走 upsert 收敛到同一行，不会多插一行', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const runId = await startCronRunId('flywheel-seo-weekly')
+    expect(runId).toEqual(expect.any(String))
     expect(state.rows).toHaveLength(1)
 
     await cronRunHandle('flywheel-seo-weekly', runId, Date.now()).finish({ processed: 4 })
