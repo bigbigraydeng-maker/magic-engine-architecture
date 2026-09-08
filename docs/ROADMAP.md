@@ -21,6 +21,10 @@
 
 ---
 
+## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
+
+- [ ] Draft implementation: Apify-first Website → snapshots/evidence → market signals → recommendations in Industry Baselines; reuse existing competitor identities. Local risk-A checks complete. Pending PR review, separately authorized migration/deployment and real CTS provider/LLM acceptance. Default disabled; no automatic action. [Implementation / rollout receipt](./specs/2026-09-09-web-intelligence-v01.md).
+
 ## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）
 
 > **新窗口开工前必读**：[WP00 契约冻结 v1.0](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)。

@@ -248,6 +248,21 @@
 
 **Reuse Statement**：复用既有 `pm-todo` 人工车道、其「一客户/一类只出一条」去重纪律与分页读全设施 `fetchAll`；未新增能力线 / 表 / endpoint / 依赖 / 客户专属 runtime。遗留 follow-up：未收录清单做成带本地分类（thin/declined/unknown）的站内可操作视图（需前端改动，已单独登记为任务）。
 
+### 2026-09-04（内容工厂视频线四件套：配方对账 + 图生视频入口 + 分镜自检 + 两道确定性闸）
+
+**上线内容**：给「客户对外视频」这条线补齐四层护栏，从代码到规则各一次。全部来自 CTS 圣诞团 + Golden China 出片时踩到的真实事故，每条都变成 ME 里跨客户共享的能力，不是一次性修补。
+
+- **配方对账规则**（[PR #1351](https://github.com/bigbigraydeng-maker/magic-engine/pull/1351)）：CLAUDE.md §8 新增条目——写视频模板 / 调生图·生视频 API / 拼片出成片前，必须先查 `viral_reference_library` 拿配方并输出对账表。触发绑动作不绑任务名，防止「我以为我在做 X 所以那条不适用我」失效。
+- **`imageToClip()` 入口 + Muapi 单价修正**（[PR #1360](https://github.com/bigbigraydeng-maker/magic-engine/pull/1360)）：`src/lib/factory/broll-clip.ts` 抽出 `imageToClip(imageUrl, motionPrompt) → {clipUrl, costUsd}`；`generateBrollClip()` 委托给它，行为不变。同时修正 i2v 单价：实测 $0.30/条（旧注释写的 $0.15 是错的）；并在 doc comment 里写明 i2v 逐帧重画的题材禁忌（密集人脸/密集小字/复杂地标）。
+- **分镜自检规则**（[PR #1367](https://github.com/bigbigraydeng-maker/magic-engine/pull/1367)）：PITFALLS 新增 D5——对外成片交付前必先出 9 宫格分镜自检表，禁止「先渲一版给 PM 看 → PM 挑错 → 重渲」循环。判断类检查也必须留下产出物。
+- **两道确定性闸**（[PR #1373](https://github.com/bigbigraydeng-maker/magic-engine/pull/1373)）：`src/lib/factory/shot-guards.ts` 新增 `verifyPlaceProvenance`（地点来源核验，避免把「悉尼唐人街」当「China」）+ `classifyRenderMode`（自动判 i2v 还是真实像素，避免糊人脸/糊字）。跨行业跨客户通用。17 个测试全绿，经子牙+魏征两轮复审，高危项全修。
+
+**验证**：全部 4 个 PR merged into main（1351/1360/1367/1373 均由 PM 手动 merge）。首次真上手用在 Golden China 11 月团 reel：`classifyRenderMode` 自动挑出 3 张必须走真实像素的镜头（人物/招牌/兵马俑），配方对账表逐项对照跑通，成片零糊字零糊脸。
+
+**Reuse Statement**：全部 platform-shared，无客户/行业硬编码。复用了既有 `runMuapi()` / `uploadFromUrl()` / `viral_reference_library`。CTS 只作为事故举例出现在注释和 PITFALLS 里，运行时不含客户判断逻辑。相关未完事项已登记 [`docs/registry/platform-candidates.md`](../registry/platform-candidates.md)「分档 AI 视频配额闸」（依赖 Creatomate Connector 大任务落地时接线，10-04 复查）。
+
+---
+
 ### 2026-09-05（Articles 首页编辑式视觉重做，PR [#1389](https://github.com/bigbigraydeng-maker/magic-engine/pull/1389)）
 
 **上线内容**：将 `/blog/` 从大面积留白加两张同权重白卡片，重做为 Magic Engine 黑金米白的编辑式入口：首页使用 Field Notes 刊头和真实文章数量版面，明确区分 Articles 实操指南与 Magic Insight 研究简报；两篇现有文章改为一篇主打流程视觉、一篇横向最新指南，形成清楚的阅读层级。未改文章正文、URL、canonical、结构化数据、分析脚本或转化路径。

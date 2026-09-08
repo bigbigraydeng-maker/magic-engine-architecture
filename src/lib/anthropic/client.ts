@@ -182,6 +182,8 @@ export async function callClaudeWithDocs(params: {
 export async function callClaudeChat(params: {
   systemPrompt: string
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  /** Budgeted workflows: no gateway, SDK retry, or fallback duplicate charge. */
+  singleAttempt?: boolean
   maxOutputTokens?: number
 }): Promise<ClaudeCallResult> {
   const { systemPrompt, messages, maxOutputTokens = 4096 } = params
@@ -195,8 +197,11 @@ export async function callClaudeChat(params: {
 
   let message: Anthropic.Message
   try {
-    message = await getAnthropicClient().messages.create(body)
+    message = params.singleAttempt
+      ? await getAnthropicClientDirect().messages.create(body, { maxRetries: 0, timeout: 60000 })
+      : await getAnthropicClient().messages.create(body)
   } catch (sdkErr) {
+    if (params.singleAttempt) throw sdkErr
     // SDK 兜底:@anthropic-ai/sdk 0.32.1(2024 年版)在 Node 24 上会
     // `Invalid response body ... Premature close` —— 同样的请求 curl/fetch 直连是通的,
     // 纯粹是老 SDK 的 HTTP 层与新版 Node 打架。2026-07-25 本机实测复现 100%。

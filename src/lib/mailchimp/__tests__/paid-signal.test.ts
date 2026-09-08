@@ -151,6 +151,41 @@ describe('readPaidSignal · 拿不准就交给人', () => {
   })
 })
 
+/**
+ * 🔴 客人报付款用的是**短句**，不是完整主谓。
+ *
+ * 真实语料（info@ 2026-08-10，Isaac Brown）：「Invoice paid thanks Isaac.」
+ * —— 首版的 `paid the (deposit|balance|invoice)` 匹配不到它。
+ *
+ * 更糟的是这类句子里常常带着「payment link」（客人在回我们发去的付款链接），
+ * 于是会被催款判据抢走判成 chasing =「我们在催他」，一个**已经付了钱的客人
+ * 永远进不了人工核对名单**，继续收招揽邮件。
+ */
+describe('readPaidSignal · 🔴 客人的短句付款声明（真实语料）', () => {
+  const MUST_REVIEW = [
+    'Invoice paid thanks Isaac.',
+    'Payment done via the payment link you sent.',
+    'Payment made, please confirm.',
+    'Transfer done today, invoice attached.',
+    'Just paid using the payment link.',
+    'I have made the payment using the payment link below. Thanks',
+  ]
+  for (const text of MUST_REVIEW) {
+    it(`🔴 「${text.slice(0, 34)}…」→ needs_review，不能被当成催款`, () => {
+      expect(readPaidSignal({ text, direction: 'inbound' }).kind).toBe('needs_review')
+    })
+  }
+
+  it('🔴 回归：我们自己发的催款信仍然是 chasing（别把催款也放进来）', () => {
+    expect(
+      readPaidSignal({
+        text: 'Dear Lorraine, Please find the credit card payment link below: https://x',
+        direction: 'outbound',
+      }).kind,
+    ).toBe('chasing')
+  })
+})
+
 describe('readPaidSignal · 客人自己说付了 → 只到 needs_review', () => {
   it('真实语料：客人主题「Payment confirmation」→ needs_review，不自动打标签', () => {
     const v = readPaidSignal({ text: REAL_INBOUND, direction: 'inbound' })
@@ -170,6 +205,15 @@ describe('readPaidSignal · 客人自己说付了 → 只到 needs_review', () =
   it('🔴 客人说付了，但方向标成 outbound → 也不能 confirmed', () => {
     const v = readPaidSignal({ text: 'I have paid the deposit', direction: 'outbound' })
     expect(v.kind).not.toBe('confirmed')
+  })
+
+  it('🔴 「I have made the payment using the payment link below」→ needs_review，不能被 payment link 抢成 chasing', () => {
+    const v = readPaidSignal({
+      text: 'Hi, I have made the payment using the payment link below. Thanks!',
+      direction: 'inbound',
+    })
+    expect(v.kind).toBe('needs_review')
+    if (v.kind === 'needs_review') expect(v.reason).toBe('inbound_claim')
   })
 })
 
@@ -201,6 +245,22 @@ describe('readPaidSignal · 🔴 条件式收款句不能当成 confirmed', () =
   it('真实确认句不受影响：「Your payment has been received in full」仍是 confirmed', () => {
     const v = readPaidSignal({ text: REAL_CONFIRM, direction: 'outbound' })
     expect(v.kind).toBe('confirmed')
+  })
+
+  it('🔴 「Until your payment is received, ...」→ 不是 confirmed（钱还没到）', () => {
+    const v = readPaidSignal({
+      text: 'Until your payment is received, we are unable to confirm your seats.',
+      direction: 'outbound',
+    })
+    expect(v.kind).not.toBe('confirmed')
+  })
+
+  it('🔴 「Before the payment is received, ...」→ 不是 confirmed（钱还没到）', () => {
+    const v = readPaidSignal({
+      text: 'Before the payment is received, please do not book your flights.',
+      direction: 'outbound',
+    })
+    expect(v.kind).not.toBe('confirmed')
   })
 })
 

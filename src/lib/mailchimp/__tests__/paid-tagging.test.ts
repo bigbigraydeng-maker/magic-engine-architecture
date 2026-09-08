@@ -193,6 +193,43 @@ describe('runPaidTagging · 🔴 铁律 8：说不出原话就不算数', () => 
   })
 })
 
+describe('runPaidTagging · 🔴 处理过的人不再问', () => {
+  /**
+   * 2026-09-06 生产实测：待确认名单上 4 个人**全部**已经有 paid_customer 了。
+   * Baker 每天打开待办看到的是同一批已处理的名字 —— 处理完也不消失，
+   * 这种待办栏人很快就不看了，铁律 3 下半的人工车道等于白建。
+   */
+  it('🔴 客人说付了，但他已经有 paid_customer → 不再进待办', async () => {
+    const { cfg } = fakeMailchimp({ 'enrkay@gmail.com': ['paid_customer'] })
+    const r = await runPaidTagging(
+      [mail({ direction: 'inbound', subject: 'Payment confirmation', preview: 'Thank you Lisa' })],
+      cfg,
+      POLICY,
+    )
+    expect(r.needsReview).toHaveLength(0)
+  })
+
+  it('还没打标签的人 → 照常进待办（证明上一条不是因为别的原因空的）', async () => {
+    const { cfg } = fakeMailchimp({ 'enrkay@gmail.com': ['fb_lead'] })
+    const r = await runPaidTagging(
+      [mail({ direction: 'inbound', subject: 'Payment confirmation', preview: 'Thank you Lisa' })],
+      cfg,
+      POLICY,
+    )
+    expect(r.needsReview).toHaveLength(1)
+  })
+
+  it('🔴 查不到这个人（网络/404）→ 照常问，宁可多问一次也不漏', async () => {
+    const { cfg } = fakeMailchimp({})
+    const r = await runPaidTagging(
+      [mail({ direction: 'inbound', subject: 'Payment confirmation', preview: 'Thank you Lisa' })],
+      cfg,
+      POLICY,
+    )
+    expect(r.needsReview).toHaveLength(1)
+  })
+})
+
 describe('runPaidTagging · 转发信降级', () => {
   it('🔴 Fw: 开头的确认信 → needs_review，不自动打（收件人可能是代理/同事）', async () => {
     const { cfg, writes } = fakeMailchimp({ 'agent@housesoftravel.co.nz': ['fb_lead'] })
