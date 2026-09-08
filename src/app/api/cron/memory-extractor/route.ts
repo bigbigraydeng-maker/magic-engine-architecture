@@ -51,13 +51,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       console.log(
         `[memory-extractor/cron] client=${clientId} outcomes=${result.outcomes_processed} ` +
         `patterns+${result.patterns_added} experiments+${result.experiments_added} ` +
-        `preferences+${result.preferences_added} decisions+${result.decisions_updated} ` +
+        `preferences+${result.preferences_added} stale_skipped=${result.outcomes_stale_skipped} ` +
         `errors=${result.errors.length}`,
       )
       await cronRun.finish({
         processed: result.outcomes_processed,
         completed: result.outcomes_processed - result.errors.length,
         failed: result.errors.length,
+        // 「有多少证据因为太久没重算被挡在门外」必须落进运行记录 ——
+        // 只挡不报等于把一次静默丢弃换成了另一次。
+        summary: { outcomes_stale_skipped: result.outcomes_stale_skipped },
       })
       return NextResponse.json({
         ok: true,
@@ -79,13 +82,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     console.log(
       `[memory-extractor/cron] all clients_processed=${batch.clients_processed} ` +
       `patterns+${batch.aggregate.patterns_added} experiments+${batch.aggregate.experiments_added} ` +
-      `preferences+${batch.aggregate.preferences_added} decisions+${batch.aggregate.decisions_updated} ` +
+      `preferences+${batch.aggregate.preferences_added} stale_skipped=${batch.aggregate.outcomes_stale_skipped} ` +
       `client_errors=${batch.per_client_errors.length}`,
     )
     await cronRun.finish({
       processed: batch.clients_processed,
       completed: batch.clients_processed - batch.per_client_errors.length,
       failed: batch.per_client_errors.length,
+      summary: { outcomes_stale_skipped: batch.aggregate.outcomes_stale_skipped },
     })
     return NextResponse.json({
       ok: true,

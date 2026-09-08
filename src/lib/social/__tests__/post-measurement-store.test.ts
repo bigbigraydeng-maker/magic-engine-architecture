@@ -225,11 +225,17 @@ describe('recordPublishAction —— 字段合规', () => {
 describe('P4: verifyActionIdentity —— 消费测量事件前必须核对', () => {
   const baseAction = {
     client_id: CLIENT,
-    payload: { post_id: POST, page_id: PAGE, idempotency_key: KEY },
+    action_type: 'social.publish_post',
+    payload: { post_id: POST, page_id: PAGE, idempotency_key: KEY,
+      source: 'factory_reel', published_at: '2026-09-03T06:00:00.000Z',
+      measure_at: [{ hours: 4, at: '2026-09-03T10:00:00.000Z' }, { hours: 72, at: '2026-09-06T06:00:00.000Z' }],
+    },
   }
+  const windowClaim = { windowHours: 4, targetAt: '2026-09-03T10:00:00.000Z' }
 
   it('全部一致 → ok', async () => {
     const r = await verifyActionIdentity(fakeDb({ actionRow: baseAction }), ACTION, {
+      ...windowClaim,
       clientId: CLIENT, idempotencyKey: KEY, postId: POST, pageId: PAGE,
     })
     expect(r.ok).toBe(true)
@@ -237,6 +243,7 @@ describe('P4: verifyActionIdentity —— 消费测量事件前必须核对', ()
 
   it('🔴 event 声称的 client_id 与 action.client_id 不同 → client_mismatch，阻止跨客户串台', async () => {
     const r = await verifyActionIdentity(fakeDb({ actionRow: baseAction }), ACTION, {
+      ...windowClaim,
       clientId: OTHER_CLIENT, idempotencyKey: KEY, postId: POST, pageId: PAGE,
     })
     expect(r.ok).toBe(false)
@@ -245,6 +252,7 @@ describe('P4: verifyActionIdentity —— 消费测量事件前必须核对', ()
 
   it('🔴 event 声称的 post_id 与 action.payload.post_id 不同 → post_mismatch', async () => {
     const r = await verifyActionIdentity(fakeDb({ actionRow: baseAction }), ACTION, {
+      ...windowClaim,
       clientId: CLIENT, idempotencyKey: KEY, postId: `${PAGE}_9999`, pageId: PAGE,
     })
     expect(r.ok).toBe(false)
@@ -253,6 +261,7 @@ describe('P4: verifyActionIdentity —— 消费测量事件前必须核对', ()
 
   it('🔴 event 声称的 page_id 与 action.payload.page_id 不同 → page_mismatch', async () => {
     const r = await verifyActionIdentity(fakeDb({ actionRow: baseAction }), ACTION, {
+      ...windowClaim,
       clientId: CLIENT, idempotencyKey: KEY, postId: POST, pageId: '9999',
     })
     expect(r.ok).toBe(false)
@@ -261,6 +270,7 @@ describe('P4: verifyActionIdentity —— 消费测量事件前必须核对', ()
 
   it('idempotency_key 与 action.payload 不同 → idempotency_mismatch', async () => {
     const r = await verifyActionIdentity(fakeDb({ actionRow: baseAction }), ACTION, {
+      ...windowClaim,
       clientId: CLIENT, idempotencyKey: 'other', postId: POST, pageId: PAGE,
     })
     expect(r.ok).toBe(false)
@@ -269,6 +279,7 @@ describe('P4: verifyActionIdentity —— 消费测量事件前必须核对', ()
 
   it('action 不存在 → action_not_found', async () => {
     const r = await verifyActionIdentity(fakeDb({ actionRow: null }), ACTION, {
+      ...windowClaim,
       clientId: CLIENT, idempotencyKey: KEY, postId: POST, pageId: PAGE,
     })
     expect(r.ok).toBe(false)
@@ -278,6 +289,7 @@ describe('P4: verifyActionIdentity —— 消费测量事件前必须核对', ()
   it('🔴 DB 错误必须抛出，不能塌成 action_not_found（P1 同类原理）', async () => {
     await expect(
       verifyActionIdentity(fakeDb({ actionError: { message: 'boom' } }), ACTION, {
+        ...windowClaim,
         clientId: CLIENT, idempotencyKey: KEY, postId: POST, pageId: PAGE,
       }),
     ).rejects.toThrow(/db error/)

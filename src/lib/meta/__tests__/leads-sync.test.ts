@@ -244,6 +244,34 @@ describe('Mailchimp 出口结果记账（防第二层静默）', () => {
     expect(res.mailchimp).toEqual({ 'failed:provider_5xx': 3 })
   })
 
+  it('人在名单里但来源标签没补上 → 单独一个 key，不跟正常的 already_member 混一起', async () => {
+    // 混在一起的后果就是 2026-09 那一个月：tally 上全是 already_member，
+    // 看起来一切正常，实际广告归因证据一条都没落地。
+    mock(ingestMetaLead).mockResolvedValue({
+      contactId: 'c1',
+      createdContact: false,
+      skipped: null,
+      mailchimp: { status: 'already_member', tagRepair: 'failed:http_429' },
+    })
+
+    const res = await syncClientMetaLeads(CLIENT)
+
+    expect(res.mailchimp).toEqual({ 'already_member:tag_failed:http_429': 3 })
+  })
+
+  it('标签补打成功 / 本来就有 → 还是普通 already_member，不制造假警报', async () => {
+    mock(ingestMetaLead).mockResolvedValue({
+      contactId: 'c1',
+      createdContact: false,
+      skipped: null,
+      mailchimp: { status: 'already_member', tagRepair: 'applied' },
+    })
+
+    const res = await syncClientMetaLeads(CLIENT)
+
+    expect(res.mailchimp).toEqual({ already_member: 3 })
+  })
+
   it('没有 lead 走到出口时是空对象，不是缺字段', async () => {
     mock(fetchFormLeads).mockResolvedValue({ rows: [], error: null })
 

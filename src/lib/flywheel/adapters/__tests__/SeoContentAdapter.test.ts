@@ -204,4 +204,14 @@ describe('SeoContentAdapter', () => {
     expect(result[0].metricKey).toBe(SEO_METRIC_KEY.PUBLISHED_POSTS)
     expect(result[0].metricValue).toBe(4)
   })
+
+  it('fails the snapshot when metric rows cannot be persisted', async () => {
+    mockClientSingle.mockResolvedValueOnce({ data: { domain: 'cts.com.au' }, error: null })
+    mockCountResolve.mockResolvedValueOnce({ count: 4, error: null })
+    mockInsertMetricsResult.mockResolvedValueOnce({ error: { message: 'database unavailable' } })
+
+    const { SeoContentAdapter } = await import('../SeoContentAdapter')
+    await expect(new SeoContentAdapter().pullMetrics('client-cts'))
+      .rejects.toThrow('metrics insert error: database unavailable')
+  })
 })

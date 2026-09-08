@@ -88,7 +88,7 @@ vi.mock('@/lib/supabase', () => {
   return { supabaseAdmin: { from } }
 })
 
-const { startCronRun } = await import('../run-logger')
+const { startCronRun, startCronRunId, cronRunHandle } = await import('../run-logger')
 
 /** 把这次测试里 console.error 说过的所有话拼成一段，方便断言「喊了什么」。 */
 function said(spy: ReturnType<typeof vi.spyOn>): string {
@@ -191,5 +191,38 @@ describe('startCronRun', () => {
     expect(text).toContain('demo-job')
     expect(text).toContain('running')
     expect(text).toContain('could not serialize access due to concurrent update')
+  })
+})
+
+describe('cronRunHandle（工作流跨步骤用的那条路）', () => {
+  it('🔴 开跑那步没写成：收尾一样要补插终态记录，不能因为走的是 Inngest 就漏掉', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    state.failInsert = { message: 'timeout', code: '57014' }
+
+    // 模拟工作流里「一个步骤开记录拿 id，另一个步骤按 id 收尾」
+    const runId = await startCronRunId('flywheel-seo-weekly')
+    expect(runId).toBeNull()
+    expect(state.insertAttempts).toBe(1)          // 锚点：真去写了
+
+    state.failInsert = null
+    await cronRunHandle('flywheel-seo-weekly', runId, Date.now()).finish({ processed: 2 })
+
+    expect(state.rows).toHaveLength(1)
+    expect(state.rows[0].job_name).toBe('flywheel-seo-weekly')
+    expect(state.rows[0].status).toBe('completed')
+    expect(state.rows[0].processed).toBe(2)
+  })
+
+  it('开跑那步写成了：收尾走更新，不会多插一行', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runId = await startCronRunId('flywheel-seo-weekly')
+    expect(runId).not.toBeNull()
+
+    await cronRunHandle('flywheel-seo-weekly', runId, Date.now()).finish({ processed: 4 })
+
+    expect(state.rows).toHaveLength(1)
+    expect(state.rows[0].status).toBe('completed')
+    expect(state.rows[0].processed).toBe(4)
+    expect(spy).not.toHaveBeenCalled()
   })
 })

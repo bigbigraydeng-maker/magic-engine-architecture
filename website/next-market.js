@@ -15,6 +15,26 @@
   const submitButton = form.querySelector('button[type="submit"]');
   const status = form.querySelector('[data-form-status]');
 
+  function showWelcome(payload) {
+    const welcome = document.querySelector('[data-welcome]');
+    if (!welcome) return;
+    for (const field of ['name', 'company', 'country']) {
+      welcome.querySelector(`[data-welcome-${field}]`).textContent = payload[field].trim();
+    }
+    welcome.querySelector('[data-welcome-target]').textContent = payload.targetMarket.trim();
+    for (const section of document.querySelectorAll('main > section')) {
+      section.hidden = section !== welcome;
+    }
+    for (const link of document.querySelectorAll('a[href="#apply"]')) {
+      link.href = '/insights/';
+      link.textContent = 'Explore insights';
+    }
+    document.title = 'Application received — Magic Engine';
+    // Keep submitted details in this page only, never in the URL or storage.
+    document.getElementById('welcome-title').focus({ preventScroll: true });
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     status.textContent = '';
@@ -61,6 +81,7 @@
       status.dataset.state = 'success';
       status.textContent = 'Thank you. Your application is in — we will review it and contact you directly if there is a strong fit.';
       submitButton.textContent = 'Application received';
+      showWelcome(payload);
     } catch (error) {
       status.dataset.state = 'error';
       status.textContent = error.message || 'We could not submit your application. Please try again or email hello@magicengine.cloud.';

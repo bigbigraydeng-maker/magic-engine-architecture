@@ -96,6 +96,22 @@ export interface BuildReelPublishedEventInput {
 }
 
 /**
+ * Graph 返回的 Reel `permalink_url` 是**相对路径**(如 `/reel/123/`),不是完整网址。
+ * schema 的 `.url()` 会拒相对路径 —— 2026-09-07 首发实测:一条真发出去的 Reel 因此
+ * 让整个发布信号发不出(且会让补发对账每轮重撞同一个 schema 错)。这里补全成绝对网址,
+ * 相对路径拼 facebook.com,已是绝对的原样返回,拼不出合法网址就丢弃(permalink 非关键)。
+ */
+function normalisePermalink(raw?: string): string | undefined {
+  if (!raw) return undefined
+  const candidate = raw.startsWith('/') ? `https://www.facebook.com${raw}` : raw
+  try {
+    return new URL(candidate).toString()
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Pure builder — returns the exact `{ id, name, data }` shape sendInngestEvent
  * expects. Throws if the assembled payload fails its own schema, so a malformed
  * event can never be sent (fail-closed at the boundary, not by a caller's `if`).
@@ -115,7 +131,10 @@ export function buildReelPublishedEvent(input: BuildReelPublishedEventInput): {
     video_id: input.videoId,
     post_id: input.videoId,
     media_type: 'reel',
-    ...(input.permalink ? { permalink: input.permalink } : {}),
+    ...((): { permalink?: string } => {
+      const p = normalisePermalink(input.permalink)
+      return p ? { permalink: p } : {}
+    })(),
     published_at: input.publishedAt,
     status: 'PUBLISHED',
     no_publish: false,

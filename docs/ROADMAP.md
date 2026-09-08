@@ -108,7 +108,20 @@
 - [ ] 次要（魏征复审发现，非阻塞）：`discovery_leads` 表建表起没有任何 migration 显式 `enable row level security`/加 policy，虽然 service-role 调用不受 RLS 影响、暂无实际泄露，但应补一条独立 RLS migration 让它符合"新表必须 service-role 模板"的红线并消除账本漂移
 - [ ] 次要：`website/_headers` 对 `/api/*` 声明 `Access-Control-Allow-Origin: https://magicengine.com.au`，而各 Function 自己又各设 `Access-Control-Allow-Origin: *`——未验证 Cloudflare Pages 对两者如何合并，换一个 origin（如 `www` 子域名/`*.pages.dev` 预览域）访问不排除请求直接被 CORS 拦掉
 
+---
 
+## 每日待办 href 落地页 action-gap（2026-09-07 审计发现，PR #1467 未合并）
+
+**背景**：审计了 `src/lib/pm-todo/**` 下发给 PM 的所有 `href`，逐条实测「点开链接是不是真能办成那件事」。4 个「链接完全打不开 / 静默丢失」的问题已经修复并合并（`crawl_stale` 404、`blog_draft_waiting` 与两条 `conversion_*` 相对路径被链接闸丢弃）——见 [history/CHANGELOG.md](./history/CHANGELOG.md) 对应条目。
+
+Codex 复审又挖出 6 个「落地页存在，但操作的东西跟待办要修的不是一回事」的问题，按 [ENGINEERING_QUALITY_GATES.md §11](./ENGINEERING_QUALITY_GATES.md#11-资源优先级判断pm-2026-09-07-拍板) 三维打分排了优先级（PM 2026-09-07 拍板顺序）：
+
+- [ ] 🔴 **[P0] `price_claim_unbacked` 落地页读写错了表**（`src/lib/pm-todo/manual-items.ts` `pushPriceGateItems`）：这条待办检查的是 `visual_assets` 表按 `post_id` 关联的配图，但 href 指向的 `/dashboard/clients/{id}/assets` 素材库页读写的是 `client_assets` 表——两张不同的表，PM 点进去根本找不到要改来源的那张图。要么把 href 改到能操作 `visual_assets` 的地方，要么把这条检查也接到 `client_assets`。客户投诉风险直接（配错图客户按图下单对不上）。
+- [ ] 🔴 **[P0] `factory_worker_idle` 落地页无法远程启动 worker**（`src/lib/pm-todo/manual-items.ts` `pushFactoryWorkerItems` + `/dashboard/factory`）：待办的 how 要求「在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`」，但 `/dashboard/factory` 页面只能看 worker 心跳状态，没有任何远程启动/连接控制。要么加一个能远程触发 worker 的入口，要么把 worker 迁到不依赖单台 Mac 开机的执行环境（长期更优，但改动更大，先讨论方案）。
+- [ ] **[P2] `kernel_needs_human` 三处分支生成空 href**（`src/lib/kernel/handoff.ts` 91/103/112 行）：这几类交接待办的 `href: ''`，PM 点开邮件根本没有入口可点，只能靠 how 里的文字描述摸索。是「管道不许断头」这条铁律的安全网本身在这几个分支失效。要给这几类交接补上真实入口（哪怕是执行看板的一个筛选视图）。
+- [ ] **[P2] `leads_metric_untrusted` 落地页没有修复入口**（`src/lib/pm-todo/manual-items.ts` `pushLeadsSanityItems` + `/goal/{goalId}`）：待办要求 PM 去客户网站统计后台收窄「产生线索」触发条件，但目标页是纯展示、没有任何外部统计后台的链接。要么加一条到客户 GA4/GTM 后台的直达链接（如果连接器里存了 property id），要么在 how 里明确「这一步要联系客户或自己去 GA4 后台改」而不是暗示落地页能做。
+- [ ] **[P2] `meta_stuck` 落地页跟需要做的事不对应**（`src/lib/pm-todo/manual-items.ts` 515-520 行 + `/dashboard/clients/{id}/settings`）：待办要求登录**客户自己的** WordPress 后台启用 Magic Engine 插件，但 `/settings` 页是我们自己的连接器配置（API 密钥、SEO 字段探测），不是客户 WP 后台，也没给客户后台的直达链接。要在 CmsPanel 里补上客户 WP 后台的地址（如果连接时存了站点 URL）。
+- [ ] **[P2] `goal_baseline_mismatch` 目标起点数字改不了**（`/goal/{goalId}` 页 + `src/app/api/goals/[goalId]/route.ts` 只有 GET/DELETE）：待办要求把错误的起点改成重算值，但目标详情页只读展示 `baseline_value`，也没有对应的 PATCH/PUT 接口。要新增一个编辑 baseline 的入口（前端表单 + 后端接口），同时要考虑这个字段被改动后要不要留痕（谁在什么时候把起点从 A 改成了 B）。
 
 ### ME 产品动态自动发 LinkedIn（2026-08-20 建成，默认关闭）
 
@@ -436,6 +449,9 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **TD.4** 缺少 Supabase Row Level Security 规则
 - [ ] **TD.5** 视觉生成队列在客户端 localStorage（需迁移到服务端）
 - [ ] **TD.6** 第三方真实名在部分 UI 文案中暴露（需扫描 + 替换为封装名）
+- [ ] **TD.12** `SeoContentAdapter.pullMetrics` 入库失败只 `console.error` 不抛 —— 回执会报「写了 4 行」而库里 0 行。2026-09-07 每周 SEO 快照上线时发现，属适配器旧账，未在那条链路的 PR 范围内修（[#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440) 复审记录）
+- [ ] **TD.13** `getDomainMetrics` 两层 `Promise.allSettled` 把 provider 故障写成 0 值 —— DataForSEO 故障那一周，全体客户的 SEO 指标会被记成 0 并写进 `flywheel_metrics`，Check / Tune 读到的是假数据。同 [#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440)，链路开跑后它从「潜在」变成「每周可能发生」
+- [ ] **TD.14** 「谁买了 SEO」这个商业事实被编码成「填没填网址」这个技术字段 —— `flywheel-seo-weekly` / `keyword-snapshots-weekly` 等 5 条链路共用 `client_status='active' AND domain IS NOT NULL` 判据，随手给不买 SEO 的客户填个占位网址就会把他拉进每周付费扫描（PITFALLS 已记）。服务范围应由 client-level 配置决定，不由字段有没有值决定
 - [ ] **TD.10** Git 本地分支堆积（20+ 个 `claude/*` 和 `feat/*` 废弃分支）
 - [ ] **TD.11** `agitated-mahavira-be6d17` 等 worktree 物理目录占用磁盘空间
 - [ ] **TD.7** 收集器模块（6 个）缺少错误重试机制
@@ -460,6 +476,29 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 ## Phase 12 — 飞轮数据闭环 ⭐⭐⭐（活跃，2026-05-17 启动）
 
 - [ ] **P8.S.8** — `batchKeywordOverview`（`phrase_these`）→ `keywords_data/google_ads/search_volume/live` + `bulk_keyword_difficulty`（两次 task 合并）
+
+## Social IMPACT — Check → Tune 闭环（Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413)，CTS Customer Zero）🔄 Gate A + Gate B 步骤 1-3 已上线，Gate B/4 待授权
+
+Gate A（激活 Check，让 Daily Plan Post 的 Facebook 发布真的能被自动测量回来）与 Gate B 步骤 1-3
+（evaluator 纯函数 [#1451](https://github.com/bigbigraydeng-maker/magic-engine/pull/1451) + cohort loader
+[#1452](https://github.com/bigbigraydeng-maker/magic-engine/pull/1452) + Daily Plan 页面显示效果建议
+[#1453](https://github.com/bigbigraydeng-maker/magic-engine/pull/1453)）已合入 main，详见
+[CHANGELOG 2026-09-08](./history/CHANGELOG.md)。CTS 因为只有一条未撤回的 Daily Plan Post，样本量凑不齐
+Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说话」占位——这是规则的正确表现，不是 bug。
+
+- [ ] **Gate B/4（A 级 · 需 PM 单独授权）** —— 保存下一份 Daily Plan 时，记录本次采纳/拒绝了哪条 Tune 建议
+      + source action ids，形成 lineage。这一步会动 Kernel 保存路径，是整条 Gate B 里唯一真正「写」的一环，
+      按 Issue #1413 冻结的 Scope 走：人工审批保留，无自动发布 / 排期 / provider write / 广告花费。
+- [ ] **evaluator cohort 全 0 时的 caveat 缺口**（魏征复审 #2，PR #1453 review）—— cohort 全部 `ok/partial`
+      但 likes=0（新账号 / 权限不足未落 unmeasurable 的边界情形）时，target 只要 > 0 就判 REPEAT +
+      `deltaPct: Infinity`，语义上可能鼓励重复"没人看的内容形态"。至少加一条 `cohort_all_zero` caveat。
+- [ ] **阈值比较未走 roundTo 的浮点边界**（魏征复审 #3）—— `social-post-evaluator.ts` 的
+      `>= repeatDeltaPct` / `<= stopDeltaPct` 判断走原始 `deltaPct`，不像展示层那样先 `roundTo(1)`。
+      实数输入（如 13.7 / 10.53）可能在边界附近漂移到另一侧决策，现有测试只锁了整数边界。
+- [ ] **`normalizeStatus` 三处复制**（魏征复审 #6）—— `social-post-cohort.ts` 与
+      `campaign-tune-suggestions.ts` 各自定义了同样的 `normalizeStatus` / `parseNumberMap` /
+      `parseStringMap`。未来 receipt status 定义变更（例如加 `'timeout'`）三处都要改，属「假件与 SQL 同步」
+      同类事故模式，建议下沉到 `src/lib/flywheel/tune/` 下的共享 helper。
 
 ## Phase 24 — Execution Loop Closure（执行闭环修复）📋 已登记，2026-06-06 启动
 

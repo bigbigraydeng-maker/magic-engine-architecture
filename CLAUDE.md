@@ -137,6 +137,14 @@ PM **不**决策：分支策略 · 修复走 A 还是 B · 字段命名 · 测�
 
 **禁止一刀切最高强度，也禁止高风险降级。** 只实现当前调用方需要的最小契约；完整 mutation 只在 A 级冻结 head 上跑一次。Review 轮次严格遵守 [#964](https://github.com/bigbigraydeng-maker/magic-engine/issues/964)：普通最多两轮，机器人新评论不自动授权继续修。
 
+#### 资源优先级判断（强制，PM 2026-09-07 拍板）
+
+同时有 ≥2 件待做的事要决定先做哪个时，**必须先按 [ENGINEERING_QUALITY_GATES.md §11](./docs/ENGINEERING_QUALITY_GATES.md#11-资源优先级判断pm-2026-09-07-拍板) 三维打分排序，再动手**——这道闸跟上面的 A/B/C 风险分级并列，都是开工前必答项，判的是不同的事：风险级别决定「做的时候多小心」，这道闸决定「资源先给谁」。
+
+三个维度：**频率**（天天撞上 vs 偶发）、**IMPACT 闭环关键度**（卡在 Act/给错误信号的 Measure = 高）、**收入关联度**（直接影响客户投诉/续费 = 高）。判定顺序不许跳步，先看低的个数、再看高的个数：只要三个维度里有两个或以上是低，一律 P3 记入 ROADMAP 待认领，不因剩下那个维度是高而例外；否则若恰好一个低——两个高 → P1，其余 → P2；否则（零低）——两个以上高 → P0，其余 → P2。完整穷尽表见 [§11](./docs/ENGINEERING_QUALITY_GATES.md#11-资源优先级判断pm-2026-09-07-拍板)。
+
+**必须把打分过程亮出来，不能只给结论**（PM 2026-09-07 拍板）：回复里要显式写「按 §11：频率 X / IMPACT Y / 收入 Z → P几」，逐项都要出现，不许只丢一个 P0/P1 的结论。这不是为了好看——文档写的规则不会自己生效，唯一能让 PM 不用追问就看出「这次是不是真的跑了这道判断」的办法，是让判断过程本身可见：漏判了，从回复里"没有这句话"就能一眼看出来，不用去猜、去翻代码、去问。
+
 ### 5. Codex 协作
 
 Claude Code 主导，Codex 辅助，**PM 不亲自给 Codex 派活**。
@@ -202,7 +210,7 @@ Claude Code 干：大范围重构 · 跨模块长链路 · 复杂调试 · 架�
 | [docs/ENV.md](./docs/ENV.md) | 环境变量总表（113 个，含哪些没登记） |
 | [docs/DECISIONS.md](./docs/DECISIONS.md) | 为什么是现在这样 / 哪些老决策已作废 |
 | [docs/PITFALLS.md](./docs/PITFALLS.md) | **动手前扫一眼** — 真实事故清单 |
-| [docs/ENGINEERING_QUALITY_GATES.md](./docs/ENGINEERING_QUALITY_GATES.md) | **每个 Issue / PR 开工前** — A/B/C 风险级别、对应验证强度、review 停止条件 |
+| [docs/ENGINEERING_QUALITY_GATES.md](./docs/ENGINEERING_QUALITY_GATES.md) | **每个 Issue / PR 开工前** — A/B/C 风险级别、对应验证强度、review 停止条件；≥2 件事排先后时看 §11 资源优先级三维打分 |
 | [docs/roadmap/2026-08-19-me2-platformization-principle.md](./docs/roadmap/2026-08-19-me2-platformization-principle.md) | **所有开发窗口必读** — Reuse First、垂直版本共享底层、五道 Build Gate、Memory 泛化边界 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) · [docs/PRODUCT.md](./docs/PRODUCT.md) | 数据模型 / API 分域 · 产品愿景与商业模式 |
 | [docs/specs/](./docs/specs/) · [docs/sops/](./docs/sops/) | 单功能设计文档 · 可复用操作手册 |

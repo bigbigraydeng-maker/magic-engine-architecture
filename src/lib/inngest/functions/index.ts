@@ -4,6 +4,8 @@ import { probePing } from './probe'
 import { geoRemeasureOne } from './geo-remeasure'
 import { dailyPlanPostFanOut, dailyPlanPostMeasure } from './daily-plan-post-measurement'
 import { factoryReelMeasurementAdapter } from './factory-reel-measurement-adapter'
+import { flywheelSeoWeeklyFanOut, flywheelSeoSnapshotOne } from './flywheel-seo-weekly'
+import { messengerBriefAfterSync } from './messenger-brief-after-sync'
 
 export const cloudFunctions = [
   probePing,
@@ -11,6 +13,9 @@ export const cloudFunctions = [
   dailyPlanPostFanOut,
   dailyPlanPostMeasure,
   factoryReelMeasurementAdapter,
+  flywheelSeoWeeklyFanOut,
+  flywheelSeoSnapshotOne,
+  messengerBriefAfterSync,
 ]
 
 /** 命名空间自检：所有注册函数 id 必须以 cloud- 开头（契约测试 + 运行期双保险）。 */

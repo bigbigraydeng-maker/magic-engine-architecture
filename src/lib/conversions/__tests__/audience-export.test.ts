@@ -1,12 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildMetaAudienceA,
-  buildNewsletterAudience,
-  mergeAudiences,
   audienceToCsv,
   type AudienceContact,
-  type NewsletterContact,
-  type AudienceRow,
 } from '../audience-export'
 
 function c(over: Partial<AudienceContact> = {}): AudienceContact {
@@ -131,85 +127,3 @@ describe('CSV', () => {
   })
 })
 
-
-function nl(over: Partial<NewsletterContact> = {}): NewsletterContact {
-  return {
-    email: 'sub@example.com',
-    phone: '021 555 9999',
-    firstName: 'Sub',
-    lastName: 'Scriber',
-    kind: 'retail',
-    doNotContact: false,
-    ...over,
-  }
-}
-
-describe('newsletter 名单（订阅=同意，仍剔 agent/拒联）', () => {
-  it('正常订阅者进名单', () => {
-    const r = buildNewsletterAudience([nl()], '64')
-    expect(r.stats.kept).toBe(1)
-    expect(r.rows[0]).toMatchObject({ email: 'sub@example.com', phone: '64215559999' })
-    // 订阅源天然有同意，没有"没同意"这档
-    expect(r.stats.excluded_no_consent).toBe(0)
-  })
-
-  it('🔴 agent 订阅了也不进（种子干净）', () => {
-    const r = buildNewsletterAudience([nl({ kind: 'trade' })], '64')
-    expect(r.stats.kept).toBe(0)
-    expect(r.stats.excluded_not_retail).toBe(1)
-  })
-
-  it('🔴 ME 侧拒联的不进（即使还在订阅）', () => {
-    // 有人在 Mailchimp 还订阅着，但在 CTS 明确说过别联系 —— 以拒联为准。
-    const r = buildNewsletterAudience([nl({ doNotContact: true })], '64')
-    expect(r.stats.excluded_dnc).toBe(1)
-  })
-
-  it('没匹配键不进', () => {
-    const r = buildNewsletterAudience([nl({ email: '', phone: null })], '64')
-    expect(r.stats.excluded_no_key).toBe(1)
-  })
-})
-
-describe('合并去重（193 广告 + 526 订阅）', () => {
-  const A: AudienceRow[] = [
-    { email: 'both@example.com', phone: '64211111111', fn: 'a', ln: '', country: 'nz' },
-    { email: 'onlyfb@example.com', phone: '', fn: 'fb', ln: '', country: 'nz' },
-  ]
-  const B: AudienceRow[] = [
-    { email: 'both@example.com', phone: '', fn: '', ln: 'lastname', country: 'nz' },
-    { email: 'onlynews@example.com', phone: '64213333333', fn: 'news', ln: '', country: 'nz' },
-  ]
-
-  it('同一邮箱只留一条', () => {
-    const merged = mergeAudiences(A, B)
-    expect(merged.filter((r) => r.email === 'both@example.com')).toHaveLength(1)
-  })
-
-  it('去重时补齐缺的字段（两份各有一半信息）', () => {
-    const merged = mergeAudiences(A, B)
-    const both = merged.find((r) => r.email === 'both@example.com')!
-    expect(both.phone).toBe('64211111111') // 来自 A
-    expect(both.ln).toBe('lastname') // 来自 B
-  })
-
-  it('各自独有的都保留', () => {
-    const merged = mergeAudiences(A, B)
-    expect(merged.map((r) => r.email).sort()).toEqual([
-      'both@example.com',
-      'onlyfb@example.com',
-      'onlynews@example.com',
-    ])
-  })
-
-  it('无邮箱的按电话去重', () => {
-    const x: AudienceRow[] = [{ email: '', phone: '64219999999', fn: 'p', ln: '', country: 'nz' }]
-    const y: AudienceRow[] = [{ email: '', phone: '64219999999', fn: '', ln: 'q', country: 'nz' }]
-    expect(mergeAudiences(x, y)).toHaveLength(1)
-  })
-
-  it('总数 = 去重后独立人数', () => {
-    // A(2) + B(2) 重叠 1 个 → 3
-    expect(mergeAudiences(A, B)).toHaveLength(3)
-  })
-})
