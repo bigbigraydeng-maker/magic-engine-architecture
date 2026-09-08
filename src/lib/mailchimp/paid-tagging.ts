@@ -108,6 +108,52 @@ function emptyResult(): PaidTaggingResult {
   return { scanned: 0, tagged: [], needsReview: [], notInAudience: [], chasing: [], errors: [] }
 }
 
+/**
+ * needs_review 确认闸的并发与总预算 —— 跟 `paid-review-filter.ts` 读取侧同一条
+ * 纪律（Codex P1 复审 PR #1484 round 2）：一次扫描可能命中几十个不同邮箱，
+ * 串行 `findMemberByEmail` 按默认 20s 超时等下去，会在写完 `needsReview` 前
+ * 就被调用方的整体时限（`render.yaml` 的 curl `--max-time 620` / 路由
+ * `maxDuration 600`，且一次运行还要跑多个客户邮箱）杀掉。
+ *
+ * 预算到点后不再发起新查询，没来得及查的候选人一律保留在 needsReview 里
+ * （fail-open —— 宁可多提醒一次，不能让一条真待处理的确认静默消失）。
+ */
+const REVIEW_CHECK_CONCURRENCY = 5
+const REVIEW_CHECK_TIMEOUT_MS = 5_000
+const REVIEW_CHECK_BUDGET_MS = 15_000
+
+/** 有界并发反查一批邮箱，返回其中已经打过 paidTag 的那些。 */
+async function findAlreadyPaidEmails(
+  cfg: MailchimpTagsConfig,
+  paidTag: string,
+  emails: readonly string[],
+): Promise<Set<string>> {
+  const confirmed = new Set<string>()
+  if (emails.length === 0) return confirmed
+
+  const lookupCfg = { ...cfg, timeoutMs: cfg.timeoutMs ?? REVIEW_CHECK_TIMEOUT_MS }
+  const concurrency = Math.max(1, Math.min(REVIEW_CHECK_CONCURRENCY, emails.length))
+  const deadline = Date.now() + REVIEW_CHECK_BUDGET_MS
+  let nextIndex = 0
+
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = nextIndex++
+      if (i >= emails.length) return
+      // 预算用完 —— 不再发起新查询，剩下的候选人保持默认「还没确认」。
+      if (Date.now() >= deadline) return
+
+      const found = await findMemberByEmail(lookupCfg, emails[i])
+      if (found.status === 'found' && found.member.tags.includes(paidTag)) {
+        confirmed.add(emails[i])
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()))
+  return confirmed
+}
+
 /** 主题 + 摘要拼成可搜文本 —— 确认句可能只出现在其中一处。 */
 function searchableText(mail: CandidateMail): string {
   return [mail.subject ?? '', mail.preview ?? ''].join(' ').trim()
@@ -139,11 +185,10 @@ export async function runPaidTagging(
 ): Promise<PaidTaggingResult> {
   const out = emptyResult()
   const alreadyTagged = new Set<string>()
-  // 本轮已确认在 Mailchimp 上有 paidTag 的人 —— 避免同一个人多封信重复查询。
-  const alreadyConfirmedPaid = new Set<string>()
-  // 本轮已经查过一次 needs_review 确认闸的人（不管查到的结果是不是已打标签）——
-  // 没打标签的也不必为第二封信再查一次，第一次查到的结论在同一轮里不会变。
-  const checkedForPaidTag = new Set<string>()
+  // needs_review 候选先攒起来，反查 Mailchimp 挪到循环结束后统一做有界并发批量
+  // 查询（见 `findAlreadyPaidEmails`），不在这里逐个 await——避免几十个不同
+  // 邮箱串行等 20s 默认超时，累计吃满调用方的整体时限。
+  const pendingReview: PaidTaggingResult['needsReview'] = []
 
   for (const mail of mails) {
     out.scanned += 1
@@ -178,21 +223,9 @@ export async function runPaidTagging(
       // 🔴 处理确认闸（2026-09-08，每日待办自动闭环审计发现）：PM 昨天已经去
       // Mailchimp 手动打过 paidTag，这封邮件不该再冒出来——判定条件只看邮件
       // 内容本身，跟 Mailchimp 当前标签状态无关，所以同一个人会被天天重新报。
-      // 这里在归入 needsReview 前先反查一次真实标签状态：已经打过了就跳过，
-      // 不新增状态表，判据跟 Mailchimp 真实标签同源，PM 处理完自然不再命中
-      // （同 price_claim_unbacked 那条注释推崇的模式）。
-      // 查不到 / 查出错都按"还没处理"算——宁可多提醒一次，不能因为查询失败
-      // 就让一条真待处理的信静默消失。
-      if (!checkedForPaidTag.has(email)) {
-        checkedForPaidTag.add(email)
-        const found = await findMemberByEmail(cfg, email)
-        if (found.status === 'found' && found.member.tags.includes(policy.paidTag)) {
-          alreadyConfirmedPaid.add(email)
-        }
-      }
-      if (alreadyConfirmedPaid.has(email)) continue
-
-      out.needsReview.push({
+      // 真正的反查挪到循环结束后批量做（见 `findAlreadyPaidEmails`），这里只
+      // 攒候选人，不在主循环里逐个 await 网络请求。
+      pendingReview.push({
         email,
         name: mail.counterparty?.name ?? null,
         evidence: verdict.evidence,
@@ -219,6 +252,17 @@ export async function runPaidTagging(
     } else {
       out.errors.push({ email, reason: applied.reason, retryable: applied.retryable })
     }
+  }
+
+  // 查不到 / 查出错 / 预算用完没来得及查的一律按"还没处理"算——宁可多提醒
+  // 一次，不能因为查询失败就让一条真待处理的信静默消失（fail-open）。
+  const confirmedPaid = await findAlreadyPaidEmails(
+    cfg,
+    policy.paidTag,
+    Array.from(new Set(pendingReview.map((r) => r.email))),
+  )
+  for (const review of pendingReview) {
+    if (!confirmedPaid.has(review.email)) out.needsReview.push(review)
   }
 
   return out
