@@ -639,6 +639,31 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 > ✅ 原第五条「第一条入站消息没有『主语是我』这层保护」**已修**（2026-08-17）——
 > 没有问候语时的门槛由两条标准字段提到**三条全齐**，见 CHANGELOG 同日条目。
 
+## Marketing Plan 接入 Newsletter 邮件渠道（2026-09-08 登记，🔄 阶段 1 PR 待复审合并）
+
+> CTS 过去两月 newsletter 回顾时发现一封邮件正文没放链接、点击率必然为 0（内容问题非技术
+> 故障）。PM 提出要有"策划下一封发什么/何时发"的能力，经 me-platform-tier-gate（张良）判定：
+> 不是新 L1，是补齐已有策略层骨架（`marketing_plans`/`execution_items`）欠的邮件渠道，
+> 候选登记见 [platform-candidates.md](./registry/platform-candidates.md)（PR #1480）。
+> 设计已过子牙（架构）+ 魏征（挑刺）复审。**跟 Phase 24.M 里"newsletter 优先级靠后"
+> 那条 PM 拍板不冲突** —— 那条说的是 CRM 多渠道实时沟通总线的渠道排期，这条是
+> Marketing Plan 策略层的内容规划能力，是两回事。
+
+- [x] 阶段 1：策划——`MarketingPlanData` 新增可选 `email` 维度，AI 读 Mailchimp 历史表现
+      （复用 `listSentCampaigns`，未新增 API 封装）自动建议下一封主题 + 发送时间；
+      `requires_link` 强制校验环节写进 prompt + UI（"中国免签"事故教训编码进流程，
+      不再只指望人记得）；没有邮件渠道的客户（Roman/Oztop）该字段天然是空壳。
+      PR [#1482](https://github.com/bigbigraydeng-maker/magic-engine/pull/1482)，**待复审合并**
+- [ ] 阶段 1 验收：合并后需实际对 CTS 跑一次 `/api/clients/[id]/marketing-plan/generate`，
+      人工核对 AI 生成的邮件主题/时间建议是否合理，`requires_link` 判断是否准确
+- [ ] 阶段 2（明确排除在阶段 1 之外，需要独立立项）：Mailchimp"建 campaign + 真发送"的
+      API 写路径——现在只有只读封装 + `subscribeMember` 一条写路径。这是新的、不可逆的
+      对外发布能力（邮件一发出去收不回），需要类似 Governed Reply Agent 的 fail-closed
+      授权机制 + Inngest 异步接力设计，不能顺手跟阶段 1 一起做
+- [ ] 自动欢迎序列碰撞检测目前是粗粒度的（只统计过去 7 天触达人数，不是精确逐联系人
+      排期）——现有系统没有"某联系人当前处于欢迎序列第几步"的读取路径，如实标注
+      口径不精确，需要更精确的方案时再补
+
 ## Phase 25 — Self-Serve Portal ⚠️ 已并入 Phase 20.0
 
 - [ ] **P25.A.1** Migration：`public_scan_jobs` 加 `client_id` 可空 FK
