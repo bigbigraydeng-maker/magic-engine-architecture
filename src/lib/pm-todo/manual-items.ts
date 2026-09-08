@@ -148,7 +148,7 @@ import { checkCronHealth } from '@/lib/cron/health'
 import { CRON_REGISTRY } from '@/lib/cron/registry'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
-import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
+import { judgeWorkerPresence, QUEUE_STALE_HOURS } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
@@ -1803,10 +1803,11 @@ async function pushFactoryWorkerItems(
 
   const hours = (iso: string) => (now.getTime() - Date.parse(iso)) / 3_600_000
   const stuck = queued.filter((q) => (q.reject_reason ?? '').trim().length > 0)
+  const hbHours = lastHb ? hours(lastHb.heartbeat_at) : null
   const verdict = judgeWorkerPresence({
     queued: queued.length,
     oldestQueuedHours: hours(queued[0].created_at),
-    lastHeartbeatHours: lastHb ? hours(lastHb.heartbeat_at) : null,
+    lastHeartbeatHours: hbHours,
     queuedStuckOnFailure: stuck.length,
     stuckSampleReason: stuck[0]?.reject_reason?.trim().slice(0, 160) ?? null,
   })
@@ -1815,6 +1816,11 @@ async function pushFactoryWorkerItems(
   // 两种病因，两套话术 —— 混成一条会让人做错的事：
   // 「没人干活」要去把工人跑起来；「每轮都失败」开机一百次也没用。
   if (verdict.kind === 'stuck_on_failure') {
+    // 🔴 2026-09-08 Codex round 2：queuedStuckOnFailure 只看 reject_reason
+    // 是否非空，一次可重试失败也会带着原因退回 queued（见 fail/route.ts）——
+    // 不能证明「每轮都失败」。worker 真的离线时，重试恰恰要靠它上线才能跑，
+    // 绝不能像旧文案那样断言「开机解决不了它」，那会拦下本该有效的重试。
+    const workerLikelyOffline = hbHours === null || hbHours >= QUEUE_STALE_HOURS
     items.push({
       kind: 'factory_worker_idle',
       client_id: 'infra',
@@ -1825,7 +1831,10 @@ async function pushFactoryWorkerItems(
       how:
         '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完这些工单下一轮会自己跑掉；' +
         '写的是别的原因，回我一句「出片工单卡住了」，我去查。' +
-        '这条**不是**工人没开机 —— 去开机跑命令解决不了它',
+        (workerLikelyOffline
+          ? `顺带看一眼那台 Mac ——${hbHours === null ? '从来没有工人连上来过' : `已经 ${hbHours.toFixed(0)} 小时没心跳了`}，` +
+            '这些工单还有重试机会，工人不开机就没法重试，两件事都要处理，别只顾着查错误原因'
+          : '工人现在在线，光开机跑不动它，得先处理上面那条错误原因'),
       href: 'https://app.magicengine.com.au/dashboard/factory',
     })
     return
