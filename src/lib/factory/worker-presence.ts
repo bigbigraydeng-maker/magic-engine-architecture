@@ -76,45 +76,58 @@ export function judgeWorkerPresence(snap: QueueSnapshot): WorkerPresence {
   }
 
   const waited = snap.oldestQueuedHours.toFixed(0)
+  const hb = snap.lastHeartbeatHours
+  const workerOffline = hb === null || hb >= QUEUE_STALE_HOURS
 
   /**
-   * 🔴 先判「这些活是不是都失败过」，再判「有没有人干活」。
+   * 🔴 工人离线时，**永远先报「去把工人跑起来」**，不管这些活失败过没有。
    *
-   * 顺序不能反：队列里全是失败后退回来的工单时，**不管工人在不在线**都该报，
-   * 而且报的是失败原因，不是「去开机」。放在心跳判断之后会有两个漏洞：
-   *   ① 工人在线时整条被判 idle → 失败卡住的工单永远没人知道（漏报）；
-   *   ② 工人恰好离线时被误诊成「没人干活」→ 人照着做也解决不了（误诊，
-   *      2026-09-08 Oztop 那条 36 天僵尸工单就是这么被报错的）。
+   * 为什么顺序是这个（Codex P1 复审 PR #1485，两条独立证据）：
    *
-   * 判据要求**全部**排队工单都带失败原因才算这一类：还有新活在等的时候，
-   * 「工人没开机」仍然是那个更要紧、更该先说的问题。
+   *   带 `reject_reason` 的 queued 工单**不等于「没救了」**——`fail` 路由把
+   *   可重试失败原样退回 queued 并留下原因，而 `max_attempts` 默认是 2，
+   *   所以队列里带原因的工单通常**只失败过一次、还有一次机会**；真正没救的
+   *   会进 `dead_letter` 终态，压根不在 queued 里。
+   *
+   *   于是「有原因就判卡住、并告诉 PM 别开机」会造成一个死结：网络抖动这种
+   *   暂时错误失败一次后，只要工人恰好离线，重试就**永远不会发生**——因为
+   *   待办把唯一能触发重试的动作（开机）劝阻掉了。
+   *
+   * 开机是离线状态下**无条件正确**的第一步，所以它优先。失败原因不丢——
+   * 作为附加信息一起带上，开机后还是过不去时那就是下一步要查的东西。
+   */
+  if (workerOffline) {
+    const since =
+      hb === null ? '从来没有工人连上来过' : `已经 ${hb.toFixed(0)} 小时没有工人动过`
+    return {
+      idle: false,
+      kind: 'worker_offline',
+      humanReason: `${snap.queued} 个出片工单在排队，最老的等了 ${waited} 小时，${since}`,
+      // 这些活失败过的话，把原因带上：开机后如果还是过不去，就是它。
+      ...(snap.queuedStuckOnFailure > 0 && snap.stuckSampleReason
+        ? { sampleReason: snap.stuckSampleReason }
+        : {}),
+    }
+  }
+
+  /**
+   * 工人在线，但排队的活**全部**失败过 —— 这才是真正的「有人干、就是过不去」。
+   *
+   * 这一支堵的是旧逻辑的漏报：以前只要心跳新鲜就整条判 idle，于是「工人在跑、
+   * 但这批活每次都失败」永远没人知道。
    */
   if (snap.queuedStuckOnFailure >= snap.queued) {
     const many = snap.queued > 1
     return {
       idle: false,
       kind: 'stuck_on_failure',
-      // 只说能证实的：这些工单失败过、还躺在队列里、等了多久。
-      // **不说**「每轮都在重试」—— 重试频率取决于工人在不在线，这里看不到。
       humanReason:
-        `${snap.queued} 个出片工单${many ? '都' : ''}失败过、还卡在队列里，` +
+        `工人在线，但排队的 ${snap.queued} 个出片工单${many ? '都' : ''}失败过、还没过去，` +
         `最老的已经等了 ${waited} 小时 —— 失败的原因不解决，它们不会自己好`,
       ...(snap.stuckSampleReason ? { sampleReason: snap.stuckSampleReason } : {}),
     }
   }
 
-  // 有活、等久了、也不是失败卡住的，再看有没有人在干
-  const hb = snap.lastHeartbeatHours
-  if (hb !== null && hb < QUEUE_STALE_HOURS) {
-    // 有工人在动，只是这单还没轮到 —— 那是产能问题，不是「没人干活」
-    return { idle: true }
-  }
-
-  const since =
-    hb === null ? '从来没有工人连上来过' : `已经 ${hb.toFixed(0)} 小时没有工人动过`
-  return {
-    idle: false,
-    kind: 'worker_offline',
-    humanReason: `${snap.queued} 个出片工单在排队，最老的等了 ${waited} 小时，${since}`,
-  }
+  // 工人在线、还有没失败过的新活在等 —— 那是产能问题，不是「没人干活」
+  return { idle: true }
 }

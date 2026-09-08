@@ -1813,14 +1813,9 @@ async function pushFactoryWorkerItems(
   })
   if (verdict.idle) return
 
-  // 两种病因，两套话术 —— 混成一条会让人做错的事：
-  // 「没人干活」要去把工人跑起来；「失败后卡住」开机一百次也没用。
+  // 两种病因，两套话术。判定层已经保证：`stuck_on_failure` 只在工人**在线**时
+  // 产生（离线一律先报 worker_offline，因为开机是那种情况下无条件正确的第一步）。
   if (verdict.kind === 'stuck_on_failure') {
-    // 🔴 2026-09-08 Codex round 2：queuedStuckOnFailure 只看 reject_reason
-    // 是否非空，一次可重试失败也会带着原因退回 queued（见 fail/route.ts）——
-    // 不能证明「每轮都失败」。worker 真的离线时，重试恰恰要靠它上线才能跑，
-    // 绝不能像旧文案那样断言「开机解决不了它」，那会拦下本该有效的重试。
-    const workerLikelyOffline = hbHours === null || hbHours >= QUEUE_STALE_HOURS
     items.push({
       kind: 'factory_worker_idle',
       client_id: 'infra',
@@ -1829,23 +1824,32 @@ async function pushFactoryWorkerItems(
         `${verdict.humanReason}` +
         (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
       how:
-        '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完之后工人下次上线会把它重新领走；' +
-        '写的是别的原因，回我一句「出片工单卡住了」，我去查。' +
-        (workerLikelyOffline
-          ? `顺带看一眼那台 Mac ——${hbHours === null ? '从来没有工人连上来过' : `已经 ${hbHours.toFixed(0)} 小时没心跳了`}，` +
-            '这些工单还有重试机会，工人不开机就没法重试，两件事都要处理，别只顾着查错误原因'
-          : '工人现在在线，光开机跑不动它，得先处理上面那条错误原因'),
+        '工人现在是在线的，所以这不是开机能解决的 —— 先看上面那句报错：' +
+        '写着余额不足（credit / balance）就去充值，充完它会自己被重新领走；' +
+        '写的是别的原因，回我一句「出片工单卡住了」，我去查',
       href: 'https://app.magicengine.com.au/dashboard/factory',
     })
     return
   }
 
+  // worker_offline：开机是第一步。这些活如果失败过，把原因一并带上 ——
+  // 开机后还是过不去时，那就是下一步该看的东西（但绝不因此劝阻开机：
+  // 带 reject_reason 的 queued 工单通常还有重试机会，重试恰恰要靠工人上线）。
   items.push({
     kind: 'factory_worker_idle',
     client_id: 'infra',
     client_name: 'Magic Engine 后台',
-    what: `${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做`,
-    how: '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
+    what:
+      `${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做` +
+      (verdict.sampleReason
+        ? `。另外这些工单上次失败过，系统报的原因是：「${verdict.sampleReason}」`
+        : ''),
+    how:
+      '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。' +
+      (verdict.sampleReason
+        ? '开机之后如果这些工单还是过不去，就是上面那条原因（写着余额不足就去充值），回我一句我来查。'
+        : '') +
+      '如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
     href: 'https://app.magicengine.com.au/dashboard/factory',
   })
 }

@@ -60,16 +60,23 @@ describe('judgeWorkerPresence —— 队列里有活但没人干', () => {
 })
 
 /**
- * 🔴 误诊防线（2026-09-08 生产实测）。
+ * 🔴 误诊防线（2026-09-08 生产实测 + Codex P1 复审两轮）。
  *
- * Oztop 一条 8-03 的工单因 `Insufficient credit balance` 卡了 36 天：余额不足时
- * worker 把工单**退回 queued** 而不是标 failed，于是失败过的工单跟「等人干的新活」
- * 在队列里长得一模一样（那条 attempt_count=1，失败后就没再被碰过）。恰好赶上工人
- * 离线，就被判成「工人没开机」，待办让 PM 去开机跑 CLI —— 他就算开机跑了也没用，
- * 病因根本不是工人不在。
+ * 第一轮修的是：Oztop 一条 8-03 的工单因 `Insufficient credit balance` 失败后退回
+ * 队列，一躺 36 天（`attempt_count=1`，失败后就没再被碰过）。恰好赶上工人离线，被
+ * 判成「工人没开机」，待办让 PM 去开机跑 CLI —— 他就算开机跑了也没用。
+ *
+ * 第二轮把优先级改回来了，因为第一版矫枉过正：带 `reject_reason` 的 queued 工单
+ * **不等于「没救了」**。`fail` 路由把可重试失败原样退回 queued 并留下原因，而
+ * `max_attempts` 默认是 2，所以队列里带原因的工单通常**只失败过一次、还有一次机会**；
+ * 真正没救的进 `dead_letter`，压根不在 queued 里。
+ *
+ * 于是「有原因就判卡住 + 劝阻开机」会造成死结：网络抖动失败一次后，只要工人恰好
+ * 离线，重试就永远不会发生。**开机是离线状态下无条件正确的第一步**，所以它优先；
+ * 失败原因作为附加信息一起带上，不丢。
  */
-describe('judgeWorkerPresence —— 🔴 区分「没人干活」和「失败后卡住」', () => {
-  it('🔴 排队的全是带失败原因的工单 → 报 stuck_on_failure，不报「没人干活」', () => {
+describe('judgeWorkerPresence —— 🔴 「没人干活」优先于「失败后卡住」', () => {
+  it('🔴 工人离线 + 排队的全失败过（Oztop 真实场景）→ 报 worker_offline，但把失败原因带上', () => {
     const v = judgeWorkerPresence(
       snap({
         queued: 1,
@@ -81,15 +88,15 @@ describe('judgeWorkerPresence —— 🔴 区分「没人干活」和「失败�
     )
     expect(v.idle).toBe(false)
     if (!v.idle) {
-      expect(v.kind).toBe('stuck_on_failure')
-      expect(v.humanReason).toContain('失败过')
+      // 开机是离线时无条件正确的第一步 —— 绝不能因为「失败过」就劝阻它，
+      // 那会让本该有效的重试永远跑不了。
+      expect(v.kind).toBe('worker_offline')
+      // 但失败原因不能丢：开机后还是过不去时，那就是下一步。
       expect(v.sampleReason).toContain('Insufficient credit balance')
-      // 绝不能再说「没人干活」那套 —— 那会把人支去开机
-      expect(v.humanReason).not.toContain('没有工人')
     }
   })
 
-  it('🔴 工人在线但排队的活都失败过 → 照样报（旧逻辑这里会静默判 idle，属于漏报）', () => {
+  it('🔴 工人在线 + 排队的全失败过 → 这才是 stuck_on_failure（旧逻辑这里静默判 idle，属于漏报）', () => {
     const v = judgeWorkerPresence(
       snap({
         queued: 2,
@@ -100,10 +107,28 @@ describe('judgeWorkerPresence —— 🔴 区分「没人干活」和「失败�
       }),
     )
     expect(v.idle).toBe(false)
-    if (!v.idle) expect(v.kind).toBe('stuck_on_failure')
+    if (!v.idle) {
+      expect(v.kind).toBe('stuck_on_failure')
+      expect(v.humanReason).toContain('工人在线')
+      expect(v.sampleReason).toContain('scene_tag')
+    }
   })
 
-  it('🔴 只有一部分是失败工单、还有新活在等 → 仍报「没人干活」（那个更要紧）', () => {
+  it('🔴 工人在线 + 还有没失败过的新活在等 → 不报（那是产能问题）', () => {
+    expect(
+      judgeWorkerPresence(
+        snap({
+          queued: 3,
+          oldestQueuedHours: 40,
+          lastHeartbeatHours: 0.2,
+          queuedStuckOnFailure: 1,
+          stuckSampleReason: 'muapi submit: Insufficient credit balance',
+        }),
+      ).idle,
+    ).toBe(true)
+  })
+
+  it('工人离线 + 只有一部分失败过 → 报 worker_offline，照样把原因带上', () => {
     const v = judgeWorkerPresence(
       snap({
         queued: 3,
@@ -115,6 +140,17 @@ describe('judgeWorkerPresence —— 🔴 区分「没人干活」和「失败�
     )
     expect(v.idle).toBe(false)
     if (!v.idle) expect(v.kind).toBe('worker_offline')
+  })
+
+  it('工人离线 + 一个都没失败过 → worker_offline 且不带 sampleReason（没有就不硬编一句）', () => {
+    const v = judgeWorkerPresence(
+      snap({ queued: 2, oldestQueuedHours: 40, lastHeartbeatHours: 30, queuedStuckOnFailure: 0 }),
+    )
+    expect(v.idle).toBe(false)
+    if (!v.idle) {
+      expect(v.kind).toBe('worker_offline')
+      expect(v.sampleReason).toBeUndefined()
+    }
   })
 
   it('失败工单还没等够久 → 不报（跟新活同一个门槛，不给失败单开小灶）', () => {
@@ -130,11 +166,12 @@ describe('judgeWorkerPresence —— 🔴 区分「没人干活」和「失败�
     ).toBe(true)
   })
 
-  it('拿不到失败原因原文时不硬编一句 —— sampleReason 缺省就不带这个字段', () => {
+  it('工人在线、拿不到失败原因原文 → stuck_on_failure 但不硬编一句', () => {
     const v = judgeWorkerPresence(
       snap({
         queued: 1,
         oldestQueuedHours: 100,
+        lastHeartbeatHours: 0.1,
         queuedStuckOnFailure: 1,
         stuckSampleReason: null,
       }),
