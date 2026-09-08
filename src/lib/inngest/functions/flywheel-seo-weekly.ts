@@ -101,7 +101,7 @@ export function createFlywheelSeoFanOutFunction(deps: {
         weekKey: isoWeekKey(new Date()),
         createdAt: new Date().toISOString(),
       }))
-      const run = cronRunHandle(started.runId, started.startedAt)
+      const run = cronRunHandle(FLYWHEEL_SEO_WEEKLY_JOB, started.runId, started.startedAt)
       const base = {
         job: FLYWHEEL_SEO_WEEKLY_JOB,
         week_key: started.weekKey,
@@ -180,7 +180,7 @@ export function createFlywheelSeoSnapshotOneFunction(deps: {
         runId: await startCronRunId(FLYWHEEL_SEO_WEEKLY_JOB),
         startedAt: Date.now(),
       }))
-      const run = cronRunHandle(started.runId, started.startedAt)
+      const run = cronRunHandle(FLYWHEEL_SEO_WEEKLY_JOB, started.runId, started.startedAt)
       const result = await step.run(`snapshot-${due.week_key}-${due.client_id}`, async () =>
         snapshotOneClient(due, deps.pullMetrics, deps.shouldSkip),
       )

@@ -95,7 +95,7 @@ export function createMessengerBriefAfterSyncFunction(deps: {
         startedAt: Date.now(),
         nowIso: new Date().toISOString(),
       }))
-      const run = cronRunHandle(started.runId, started.startedAt)
+      const run = cronRunHandle(MESSENGER_BRIEF_JOB, started.runId, started.startedAt)
       const now = new Date(started.nowIso)
       const base = { job: MESSENGER_BRIEF_JOB, created_at: started.nowIso }
 
