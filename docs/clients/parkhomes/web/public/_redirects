@@ -1,0 +1,4 @@
+# Legacy URLs from before the current site (pre-dates this repo, no known
+# mapping) — send them to a real page instead of leaving them as dead 404s
+# that Google Search Console keeps flagging.
+/copy-of-bridgeside-park /projects 301
