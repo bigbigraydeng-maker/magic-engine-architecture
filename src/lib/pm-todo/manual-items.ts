@@ -713,7 +713,11 @@ export async function pushPaidSignalReviewItems(
    * 所以在生成待办的这一刻，按真实标签状态再判一次。查不到 / 出错一律保留
    * （fail-open）—— 漏掉一条真待处理的付款确认，客人会继续收到营销邮件。
    */
-  const candidates = rows.slice(0, 20).map((raw) => {
+  // 🔴 必须先过滤再截取 20 条（Codex P1 复审 PR #1484）。
+  // 之前是先 slice(0, 20) 再过滤已处理：如果最近 7 天去重后超过 20 个候选人，
+  // 且排在前 20 个的历史候选恰好已经被 PM 打过标签，这里会把它们连着这次机会
+  // 一起删掉，却从不去看第 21 条之后仍未处理的人 —— 那些人就再也不会被下发。
+  const allCandidates = rows.map((raw) => {
     const r = raw as { email?: unknown; clientId?: unknown }
     return {
       email: typeof r.email === 'string' ? r.email : '',
@@ -723,16 +727,16 @@ export async function pushPaidSignalReviewItems(
   })
   const keepable = await dropAlreadyPaidTagged(
     supabase,
-    candidates.filter((c) => c.email && c.clientId),
+    allCandidates.filter((c) => c.email && c.clientId),
   ).catch((e) => {
     console.warn('[manual-items] 付款待确认的已处理过滤失败（保留全部，不静默丢）:', e)
-    return candidates.filter((c) => c.email && c.clientId)
+    return allCandidates.filter((c) => c.email && c.clientId)
   })
   const keepKeys = new Set(keepable.map((c) => `${c.clientId}::${c.email.toLowerCase()}`))
   // 没有 clientId 的记录过滤不了（判不出用哪个 audience）—— 一律保留
-  const toEmit = candidates.filter(
-    (c) => !c.clientId || !c.email || keepKeys.has(`${c.clientId}::${c.email.toLowerCase()}`),
-  )
+  const toEmit = allCandidates
+    .filter((c) => !c.clientId || !c.email || keepKeys.has(`${c.clientId}::${c.email.toLowerCase()}`))
+    .slice(0, 20)
 
   for (const { raw } of toEmit) {
     const r = raw as {

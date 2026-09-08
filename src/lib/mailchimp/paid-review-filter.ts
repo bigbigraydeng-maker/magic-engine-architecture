@@ -92,15 +92,36 @@ async function readConfigs(
   return out
 }
 
+/** 同时反查几个邮箱 —— 串行会让 N 个候选人乘上单次超时，轻松吃满调用方的整体时限。 */
+const DEFAULT_CONCURRENCY = 5
+/** 单次反查给多少时间 —— 比 tags.ts 的 20s 默认短得多，配合并发把整批控制在总预算内。 */
+const DEFAULT_PER_REQUEST_TIMEOUT_MS = 5_000
+/**
+ * 整批反查的总预算 —— 必须**远小于**调用方 `pm-daily-todo`（`render.yaml`）
+ * 的 120s curl `--max-time`，因为这批查询只是那次运行里的一步，不能独占整个时限
+ * （Codex P1 复审 PR #1484：6 个以上候选人时串行反查会累计超过 120s，
+ * 连带把同一次运行里其他待办邮件一起杀掉）。
+ *
+ * 预算到点后**停止再发起新请求**，剩下没查到的候选人一律保留（fail-open，
+ * 跟查不到 / 出错时同一条纪律 —— 见文件头「fail-open，不是 fail-closed」）。
+ */
+const DEFAULT_BUDGET_MS = 15_000
+
 /**
  * 剔除「PM 已经在 Mailchimp 打过付费标签」的候选人。
  *
- * 返回**应该继续下发**的那些。查不到 / 出错的一律保留。
+ * 返回**应该继续下发**的那些。查不到 / 出错 / 预算用完没来得及查的一律保留。
  */
 export async function dropAlreadyPaidTagged(
   supabase: SupabaseClient,
   candidates: readonly PaidReviewCandidate[],
-  opts: { apiKey?: string; fetchImpl?: FetchLike } = {},
+  opts: {
+    apiKey?: string
+    fetchImpl?: FetchLike
+    timeoutMs?: number
+    concurrency?: number
+    budgetMs?: number
+  } = {},
 ): Promise<PaidReviewCandidate[]> {
   const apiKey = opts.apiKey ?? process.env.MAILCHIMP_API_KEY ?? ''
   // 没 key 就没法查 —— 全部保留，绝不因为查不了就当成「都处理过了」
@@ -111,39 +132,55 @@ export async function dropAlreadyPaidTagged(
     Array.from(new Set(candidates.map((c) => c.clientId))),
   )
 
-  const kept: PaidReviewCandidate[] = []
-  // 同一个邮箱在同一个客户下只查一次（同一批里可能有重复）
-  const decided = new Map<string, boolean>()
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_PER_REQUEST_TIMEOUT_MS
+  const concurrency = Math.max(1, Math.min(opts.concurrency ?? DEFAULT_CONCURRENCY, candidates.length))
+  const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS)
 
-  for (const c of candidates) {
-    const cfg = configs.get(c.clientId)
-    // 这个客户读不出 Mailchimp 配置 → 没法判断 → 保留
-    if (!cfg) {
-      kept.push(c)
-      continue
-    }
+  // 每个候选人默认保留（fail-open）；worker 只在查出「确实已打标签」时才翻成 false。
+  const keep = new Array<boolean>(candidates.length).fill(true)
+  // 同一个邮箱在同一个客户下只查一次（同一批里可能有重复）—— 存 Promise 而不是
+  // 查完的结果，让并发 worker 撞上同一个 key 时也能共享同一次在途请求，
+  // 不然并发下两个 worker 会在对方查完前都以为「还没查过」而各发一次。
+  const inFlight = new Map<string, Promise<boolean>>()
 
-    const cacheKey = `${c.clientId}::${c.email.trim().toLowerCase()}`
-    if (decided.has(cacheKey)) {
-      if (!decided.get(cacheKey)) kept.push(c)
-      continue
-    }
-
-    let alreadyTagged = false
-    try {
-      const found = await findMemberByEmail(
-        { apiKey, audienceId: cfg.audienceId, fetchImpl: opts.fetchImpl },
-        c.email,
-      )
-      alreadyTagged = found.status === 'found' && found.member.tags.includes(cfg.paidTag)
-    } catch {
-      // 网络炸了也按「还没处理」算
-      alreadyTagged = false
-    }
-
-    decided.set(cacheKey, alreadyTagged)
-    if (!alreadyTagged) kept.push(c)
+  function lookup(cfg: ClientMailchimpConfig, email: string, cacheKey: string): Promise<boolean> {
+    const existing = inFlight.get(cacheKey)
+    if (existing) return existing
+    const p = (async () => {
+      try {
+        const found = await findMemberByEmail(
+          { apiKey, audienceId: cfg.audienceId, fetchImpl: opts.fetchImpl, timeoutMs },
+          email,
+        )
+        return found.status === 'found' && found.member.tags.includes(cfg.paidTag)
+      } catch {
+        // 网络炸了也按「还没处理」算
+        return false
+      }
+    })()
+    inFlight.set(cacheKey, p)
+    return p
   }
 
-  return kept
+  let nextIndex = 0
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = nextIndex++
+      if (i >= candidates.length) return
+      // 预算用完 —— 不再发起新的反查，这个及之后没轮到的候选人保持默认的「保留」。
+      if (Date.now() >= deadline) return
+
+      const c = candidates[i]
+      const cfg = configs.get(c.clientId)
+      if (!cfg) continue // 这个客户读不出 Mailchimp 配置 → 没法判断 → 保留（keep[i] 已是 true）
+
+      const cacheKey = `${c.clientId}::${c.email.trim().toLowerCase()}`
+      const alreadyTagged = await lookup(cfg, c.email, cacheKey)
+      keep[i] = !alreadyTagged
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()))
+
+  return candidates.filter((_, i) => keep[i])
 }
