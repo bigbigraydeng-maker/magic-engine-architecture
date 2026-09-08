@@ -7,6 +7,23 @@
 
 ---
 
+## 2026-09-09 · CTS CRM 选型：GoHighLevel（推翻 Freshsales 试点）
+
+**决策**：CTS 的 CRM 方向从"评估 Freshsales 试点"正式作废，改为采用第三方 CRM **GoHighLevel**。PM 2026-09-09 拍板批准。
+
+**为什么**：GoHighLevel 全渠道能力（邮件双向同步、WhatsApp、Facebook Messenger、Instagram DM、VoIP 电话、SMS）全部原生内置，不需要像 Freshsales 那样为社媒渠道外挂第三方工具，直接匹配 CTS 的核心痛点（客户联系记录分散在多个渠道）。白牌能力比 Freshworks 彻底（最高档可完全隐藏第三方品牌，换成 ME 自己的域名/UI），Partner 分佣阶梯 40%/45%/50% 持续性，优于 Freshworks 的分佣结构。
+
+**已知硬风险（必须配套解决，非单独批准）**：GoHighLevel 自带原生"Facebook Conversion API"自动化动作，客户账号只要有 Integrations 权限，几分钟内就能自己把成交数据直接发给 Meta，完全绕开 ME 的转化真相回流管道（`me/crm.deal.closed` 事件契约见 `docs/specs/2026-09-07-crm-deal-closed-event-contract.md`）。**"只显示已批准的应用"这个 agency 开关锁不住这个风险**——它只管第三方插件市场，管不了 GoHighLevel 自己原生的 Facebook/Instagram 集成功能，这是一个已验证的认知陷阱，不要以为开了那个开关就安全。
+
+**批准的强制配套措施**（PM 2026-09-09 一并批准，不是可选项）：
+1. 给 CTS 类客户开 GoHighLevel 账号一律用"普通用户"角色，去掉 Integrations 权限——账号层面就看不到"连接 Facebook"的入口
+2. 书面告知 CTS：Meta 广告账号与 CRM 的连接配置只能 ME 操作，客户不要自己点
+3. **自动巡检任务**（[Issue #1492](https://github.com/bigbigraydeng-maker/magic-engine/issues/1492)）：每周检查一次 CTS 的 GoHighLevel 账号 Facebook 集成绑定对象有没有被改动，一旦变化立刻报警进 ME 待办看板——这条不能只靠人工偶尔查看
+
+**跟现有 CAPI 设计的关系**：`docs/specs/2026-09-07-me-conversion-truth-uplink-spec.md` 里"CRM 团队"这个提法目前没有对应的实际团队/任务在跑（此前有跨窗口转发消息误传"CRM 团队开发 1-2 周"，已核实无此 issue/PR，属于文档里的预估时间表被误当成真实进度转述）。GoHighLevel 即扮演该文档里"CRM"这个角色的具体落地，但它发给 ME 的 webhook 是**明文 PII**（GoHighLevel 不做预哈希），这跟 `crm-deal-closed-event-contract.md` 里"CRM 侧先 hash，永远不发明文"这条硬红线**不匹配**——**接 GoHighLevel webhook → 加密 → 转发 CAPI 的消费者组件目前尚未实现**，需要新建，可复用已合并的 `src/lib/pii/hasher.ts`（PR #1407）和 `src/lib/meta/capi/writer.ts`，工作量不大但不是"已经写了一半"。
+
+**影响**：2026-09-08 已为 CTS 建立的 Freshsales 演示环境与账号邀请作废，不再推进；Lisa（CTS 老板）的 Freshworks 账号先 hold 不停用（PM 2026-09-09）。实现本决策涉及新增对外集成 + 影响已上线的广告归因逻辑，按 CLAUDE.md 大任务门槛，动手前需过子牙（架构）+ 魏征（挑刺）复审。
+
 ## 2026-08-22 · 产品定位与 IMPACT v1.0 冻结：Digital Marketing Growth Intelligence System
 
 **决策**：Magic Engine 的正式产品类别冻结为 **Digital Marketing Growth Intelligence System（数字营销增长智能系统）**。唯一端到端产品闭环冻结为 **IMPACT = Inspect → Measure → Prescribe → Act → Check → Tune**。DAPE 保留为内部工作方法，主要服务 IMPACT 前四段，不能与 IMPACT 互换，也不能用执行完成代替 Check、Outcome 与 Tune。
