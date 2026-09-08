@@ -172,7 +172,7 @@ describe('blockerSummary', () => {
       adSetsChecked: 1, blockers: 1, warns: 0,
       adSets: [{
         adSetId: 'as1', adSetName: '暖池重定向', hasBlocker: true, buyerWillSee: [],
-        findings: [{ code: 'retargeting_relaxed', severity: 'blocker', message: '名单形同虚设' }],
+        findings: [{ code: 'retargeting_relaxed', severity: 'blocker', message: '名单形同虚设', learnedFrom: '2026-08-04 暖池名单被放宽事故' }],
       }],
     })
     expect(s).toContain('暖池重定向')

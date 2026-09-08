@@ -36,11 +36,26 @@ export const GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly'
  */
 export const INDEXING_SCOPE = 'https://www.googleapis.com/auth/indexing'
 
-/** Combined scopes for the recommended "connect Google" flow — grants GSC + GA4 + Indexing in one consent. */
+/**
+ * Google Business Profile 管理权限（读写商家档案 / 发帖）。
+ * 合到 COMBINED_GOOGLE_SCOPES：客户老板一次点完覆盖商家页 + GSC + GA4 + Indexing，
+ * 不用再来第二次；`/api/auth/google/callback` 检查 token.scope 是否包含这个，
+ * 是就顺手把 platform_oauth_connections.google_gbp + client_connectors.gbp
+ * 一起写好（见 lib/gbp/oauth-persist.ts）。老的 `/api/auth/google/gbp/start`
+ * 单独入口保留兼容，走的是同一个 helper。
+ */
+export const GBP_SCOPE = 'https://www.googleapis.com/auth/business.manage'
+
+/**
+ * Combined scopes for the recommended "connect Google" flow —
+ * grants GBP + GSC + GA4 + Indexing in one consent (2026-09-07 铁律 3
+ * "遇卡点必自动化"：从两次 OAuth 点击合并成一次，见 PR grant-permissions-fix).
+ */
 export const COMBINED_GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/webmasters.readonly',
   'https://www.googleapis.com/auth/analytics.readonly',
   INDEXING_SCOPE,
+  GBP_SCOPE,
   'email',
 ]
 

@@ -1,0 +1,64 @@
+import { randomUUID } from 'node:crypto'
+import { inngest, CLOUD_FN_PREFIX } from '../client'
+import { supabaseAdmin as db } from '@/lib/supabase'
+import { allowedClient, requestSchema } from '@/lib/web-intelligence/contracts'
+import { readRun } from '@/lib/web-intelligence/store'
+import { loadCompetitors } from '@/lib/web-intelligence/targets'
+import { authorize, startCapture, collectCapture, stopUnfinishedCapture, understand, settle } from '@/lib/web-intelligence/runner'
+
+export const WEB_CAPTURE_EVENT = 'web_intelligence.website.capture.requested'
+export const webIntelligenceCapture = inngest.createFunction({
+  id: `${CLOUD_FN_PREFIX}web-intelligence-capture`, retries: 2,
+  concurrency: { limit: 1, key: 'event.data.client_id' },
+}, { event: WEB_CAPTURE_EVENT }, async ({ event, step }) => {
+  const req = requestSchema.parse(event.data)
+  const run = await step.run('authorize-and-reserve', () => authorize(req))
+  if (['complete', 'failed'].includes(run.status)) return { request_id: run.id, status: run.status, no_execute: true }
+  const providerId = await step.run('start-or-resume-capture', () => startCapture(run))
+  if (!providerId) return { request_id: run.id, status: (await step.run('start-status', () => readRun(run.id, run.client_id))).status, no_execute: true }
+  for (let i = 0; i < 12; i++) {
+    const state = await step.run(`collect-${i}`, () => collectCapture(run, providerId))
+    if (state === 'failed') return { request_id: run.id, status: (await step.run('capture-status', () => readRun(run.id, run.client_id))).status, no_execute: true }
+    if (state === 'captured') {
+      await step.run('understand-and-recommend', () => understand(run))
+      const receipt = await step.run('settle-known-costs', () => settle(run.id, run.client_id))
+      return { request_id: run.id, status: receipt.status, no_execute: true }
+    }
+    await step.sleep(`wait-${i}`, '20s')
+  }
+  await step.run('stop-and-reconcile', () => stopUnfinishedCapture(run, providerId))
+  return { request_id: run.id, status: 'reconciliation', no_execute: true }
+})
+
+/** Existing Inngest owns the schedule. Unconfigured clients produce no work. */
+export const webIntelligenceDue = inngest.createFunction({
+  id: `${CLOUD_FN_PREFIX}web-intelligence-due`, retries: 1,
+}, { cron: 'TZ=Pacific/Auckland 0 6 * * *' }, async ({ step }) => {
+  const clients = await step.run('enabled-clients', async () => {
+    if (!process.env.WEB_INTELLIGENCE_ALLOWED_CLIENT_IDS) return []
+    const r = await db.from('web_intelligence_settings').select('client_id').eq('enabled', true).eq('entitled', true)
+    if (r.error) throw new Error('settings_read_failed')
+    return r.data.map(row => row.client_id as string).filter(allowedClient)
+  })
+  for (const clientId of clients) {
+    const due = await step.run(`due-${clientId}`, () => dueTargets(clientId))
+    if (due.length) await step.sendEvent(`dispatch-${clientId}`, due.map(target => ({ id: target.id, name: WEB_CAPTURE_EVENT, data: { client_id: clientId, request_id: target.id, domain: target.domain, url: target.url } })))
+  }
+  return { clients_checked: clients.length, no_execute: true }
+})
+async function dueTargets(clientId: string) {
+  const competitors = await loadCompetitors(clientId)
+  const due: Array<{ id: string; domain: string; url: string }> = []
+  for (const competitor of competitors.filter(c => c.status !== 'archive' && c.urls.length).sort((a, b) => Number(b.tier === 'core') - Number(a.tier === 'core'))) {
+    for (const url of competitor.urls) {
+      const last = await db.from('web_intelligence_runs').select('id,created_at,status,capture_claimed').eq('client_id', clientId).eq('domain', competitor.domain).eq('url', url).order('created_at', { ascending: false }).limit(1).maybeSingle()
+      if (last.error) throw new Error('run_read_failed')
+      if (last.data?.status === 'reserved' && !last.data.capture_claimed) {
+        due.push({ id: last.data.id, domain: competitor.domain, url }); continue
+      }
+      if (last.data && (!['complete', 'failed'].includes(last.data.status) || Date.now() - Date.parse(last.data.created_at) < competitor.interval_hours * 3600000)) continue
+      due.push({ id: randomUUID(), domain: competitor.domain, url })
+    }
+  }
+  return due
+}

@@ -4,10 +4,13 @@
 //   published_ref 硬事务(先落回执再三落库,三落库尽力而为可后补)。
 // P0.1a 只实现 FacebookReelAdapter(Oztop);加 CTS = 多注册个 PublerAdapter,主体不改。
 
+import { randomUUID } from 'node:crypto'
 import { supabaseAdmin } from '@/lib/supabase'
 import type { PublishAdapter, PublishTarget, PublishedRef } from '../types'
 import { scanRedlineHits } from '../worker-guard'
 import { facebookReelAdapter } from './facebook-reel-adapter'
+import { buildReelPublishedEvent } from './reel-published-event'
+import { sendInngestEvent } from '@/lib/workflows/inngest-event'
 
 const MAX_PUBLISH_ATTEMPTS = 3
 const RETRY_BACKOFF_MIN = 10 // 失败退避基数(分钟)· 指数
@@ -271,6 +274,9 @@ async function processOne(wo: Record<string, unknown>, opts: PublishOptions): Pr
 
   // 硬事务:先落 published_ref + status(幂等锚,最优先)→ 再三落库(尽力,可后补)
   await recordPublished(id, ref, clientId, brief)
+  // 发布信号(me/factory.reel.published):发完喊一声给下游自动建广告。
+  // 只在真·PUBLISHED 的 facebook Reel 上喊(草稿不可 promote 成广告,绝不喊)。best-effort,不阻塞返回。
+  await emitReelPublishedEvent(id, ref, clientId)
   return { order_id: id, result: 'published', detail: ref.permalink ?? ref.post_id }
 }
 
@@ -359,7 +365,81 @@ async function writeThreeBooks(
   }
 }
 
-/** cron 入口:一轮领 + 发一条(FB 视频上传慢,一次 1 条防超时)。返回本轮结果。 */
+// ── 发布信号(me/factory.reel.published):发完喊一声给下游自动建广告 ──────────────
+//
+// 落点约束(魏征 B 复审):
+//  - 只在真·PUBLISHED 的 facebook Reel 上 emit —— 草稿不可 promote 成广告,绝不通知下游。
+//    靠 published_ref.video_state 戳区分(adapter 发布时盖),而不是 status='published'
+//    (草稿也会走到 status='published')。
+//  - best-effort:片已发出,事件失败绝不回滚(回滚会致重发)。失败留待 reconcile 补发。
+//  - 幂等 id 固定(work_order+video):正常路径与补发路径撞车,Inngest 只算一次。
+//  - 恢复/补记路径(findExisting)video_state=undefined → 不喊(来路不明,宁可不喊)。
+async function emitReelPublishedEvent(
+  workOrderId: string,
+  ref: PublishedRef,
+  clientId: string,
+): Promise<void> {
+  if (ref.platform !== 'facebook' || ref.video_state !== 'PUBLISHED') return
+  if (!ref.video_id || !ref.page_id) return
+  if (ref.event_ids && ref.event_ids.length > 0) return // 已喊过,幂等短路
+
+  try {
+    const nowIso = new Date().toISOString()
+    const event = buildReelPublishedEvent({
+      workOrderId,
+      clientId,
+      pageId: ref.page_id,
+      videoId: ref.video_id,
+      permalink: ref.permalink,
+      publishedAt: ref.published_at,
+      requestId: randomUUID(),
+      createdAt: nowIso,
+    })
+    const sent = await sendInngestEvent<Record<string, unknown>>(event)
+    // 回执落回 published_ref.event_ids —— 补发对账靠它判断"喊过没"
+    const nextRef: PublishedRef = { ...ref, event_ids: sent.event_ids }
+    await supabaseAdmin
+      .from('content_work_orders')
+      .update({ published_ref: nextRef, updated_at: nowIso })
+      .eq('id', workOrderId)
+  } catch (e) {
+    console.error(
+      `[publish-worker] 发布信号 emit 失败(片已发出,待补发对账重发) ${workOrderId}: ${e instanceof Error ? e.message : e}`,
+    )
+  }
+}
+
+// ── 补发对账(堵 fail-silent,子牙+魏征双列必做):已 PUBLISHED 但信号没喊成的 Reel 重发 ──
+//
+// 为什么非补不可:emit 是 best-effort,一旦 Inngest 那一下失败,下游永远收不到"发了"→
+// 永远不建广告,且是静默的。这里每轮开工前扫最近几条已发但 event_ids 空的,补喊。
+// 只补真·PUBLISHED(video_state 戳),草稿绝不补喊。幂等 id 固定,补喊不会双发。
+export async function reconcileMissingReelEvents(limit = 25): Promise<void> {
+  // DB 层先收窄到"真·PUBLISHED 的 facebook Reel"(->> 文本过滤,PostgREST 稳),
+  // 再放宽窗口到 25 —— 一条持续 emit 失败的行 updated_at 不刷新,会被新片挤下去;
+  // 收窄+放宽后,要挤出窗口得同一轮内冒出 25 条更新的 facebook PUBLISHED reel(worker 一轮
+  // 只发 1 条,不可能)。理想是直接 `event_ids IS NULL` 过滤,但那要 jsonb null 过滤,
+  // 语法脆且 build 抓不到,先用这个稳的口径 + 内存兜底(见下 event_ids 判空)。backlog 记账。
+  const { data: rows } = await supabaseAdmin
+    .from('content_work_orders')
+    .select('id, client_id, published_ref')
+    .eq('status', 'published')
+    .eq('published_ref->>platform', 'facebook')
+    .eq('published_ref->>video_state', 'PUBLISHED')
+    .order('updated_at', { ascending: false })
+    .limit(limit)
+  if (!Array.isArray(rows)) return
+  for (const row of rows) {
+    const ref = (row.published_ref ?? null) as PublishedRef | null
+    if (!ref || ref.platform !== 'facebook' || ref.video_state !== 'PUBLISHED') continue
+    if (ref.event_ids && ref.event_ids.length > 0) continue
+    await emitReelPublishedEvent(String(row.id), ref, String(row.client_id))
+  }
+}
+
+/** cron 入口:一轮领 + 发一条(FB 视频上传慢,一次 1 条防超时)。返回本轮结果。
+ *  补发对账(reconcileMissingReelEvents)由 cron 路由单独调,不塞这里 —— 领单查询与
+ *  对账查询共用一张表,混在同一函数里会互相干扰(且脆的集成测试也难分辨)。 */
 export async function runPublishWorker(opts: PublishOptions): Promise<PublishOutcome> {
   const wo = await claimOne(opts.workerId)
   if (!wo) return { order_id: '', result: 'no_candidate' }

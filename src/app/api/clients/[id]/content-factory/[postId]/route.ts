@@ -1,8 +1,11 @@
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { scheduleSocialPost, resolveBoundPublerAccount } from '@/lib/flywheel/social-post-publish'
-import type { PublerAccount } from '@/lib/publer/client'
+import {
+  scheduleSocialPost,
+  resolveBoundPublerAccount,
+  type PublerAccount,
+} from '@/lib/flywheel/social-post-publish'
 import { LINKEDIN_PROGRESS_SOURCE, LINKEDIN_PROGRESS_PLATFORM } from '@/lib/linkedin-progress/constants'
 
 export const dynamic = 'force-dynamic'

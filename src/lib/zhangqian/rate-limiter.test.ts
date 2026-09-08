@@ -65,7 +65,11 @@ function makeBuilder(table: string) {
 }
 
 // RPC mock simulates the atomic INSERT...ON CONFLICT increment.
-const rpcMock = vi.fn(async (name: string, params: Record<string, unknown>) => {
+type RpcResult = {
+  data: Array<{ allowed: boolean; post_count: number }> | null
+  error: { message: string } | null
+}
+const rpcMock = vi.fn(async (name: string, params: Record<string, unknown>): Promise<RpcResult> => {
   if (name !== 'zhangqian_rate_limit_consume') return { data: null, error: null }
   const { p_bucket_type, p_bucket_key, p_window_start, p_cap } = params as {
     p_bucket_type: string; p_bucket_key: string; p_window_start: string; p_cap: number

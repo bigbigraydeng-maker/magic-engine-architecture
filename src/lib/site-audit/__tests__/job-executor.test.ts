@@ -228,12 +228,21 @@ describe('executeJob', () => {
     )
   })
 
-  it('completes with zero counts when no URLs discovered', async () => {
+  it('fails with a user-visible message when no URLs discovered', async () => {
     vi.mocked(crawlerDiscoverUrls).mockResolvedValue([])
 
     await executeJob(mockSupabase as unknown as SupabaseClient, 'job-123')
 
-    expect(mockRunner.completeJob).toHaveBeenCalledWith('job-123')
+    expect(mockRunner.updateProgress).toHaveBeenCalledWith(
+      'job-123',
+      expect.objectContaining({ totalUrlsDiscovered: 0 })
+    )
+    expect(mockRunner.failJob).toHaveBeenCalledWith(
+      'job-123',
+      expect.stringContaining('No pages found'),
+      []
+    )
+    expect(mockRunner.completeJob).not.toHaveBeenCalled()
     expect(crawlPages).not.toHaveBeenCalled()
   })
 
@@ -473,8 +482,9 @@ describe('crawlAndClassifyPages — database writes', () => {
 
     expect(upsertArg).toMatchObject({
       client_id: 'client-abc',
-      job_id: 'job-123',
       url,
+      path: '/about',
+      crawl_status: 'crawled',
       title: 'About Us',
       page_type: 'about',
       topics: ['company', 'team'],
@@ -483,6 +493,8 @@ describe('crawlAndClassifyPages — database writes', () => {
       has_geo_block: false,
       status_code: 200,
     })
+    // job_id is not a column on client_site_pages (removed in 40d43a86)
+    expect(upsertArg).not.toHaveProperty('job_id')
   })
 
   it('computes word_count from markdown content', async () => {
