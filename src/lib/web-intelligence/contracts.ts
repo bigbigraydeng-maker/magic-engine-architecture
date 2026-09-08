@@ -23,7 +23,7 @@ export const settingsSchema = z.object({
   context: z.string().max(2000),
 }).strict().refine(s => s.hard_stop_nzd >= s.target_nzd, 'Hard stop must cover target')
 export type Settings = z.infer<typeof settingsSchema>
-export const requestSchema = z.object({ client_id: z.string().uuid(), request_id: z.string().uuid(), domain: z.string().max(253), url: z.string().url().max(2048) }).strict()
+export const requestSchema = z.object({ client_id: z.string().guid(), request_id: z.string().uuid(), domain: z.string().max(253), url: z.string().url().max(2048) }).strict()
 export type CaptureRequest = z.infer<typeof requestSchema>
 export interface Run {
   id: string; client_id: string; domain: string; url: string; period_key: string

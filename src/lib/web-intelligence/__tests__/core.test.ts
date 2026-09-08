@@ -4,7 +4,7 @@ vi.mock('@/lib/supabase', () => ({ supabaseAdmin: {} }))
 vi.mock('@/lib/competitors/resolver', () => ({ normaliseDomain: (s: string) => s.trim().toLowerCase().replace(/^https?:\/\//, '').split(/[/?#]/)[0], getClientCompetitors: vi.fn() }))
 vi.mock('@/lib/anthropic/client', () => ({ MODEL_SONNET: 'test-model', callClaudeChat: vi.fn(), parseJsonResponse: JSON.parse }))
 import { canonicalDomain, approvedUrl } from '../targets'
-import { allowedClient, settingsSchema, metadataSchema, periodKey, type Signal, type Evidence } from '../contracts'
+import { allowedClient, requestSchema, settingsSchema, metadataSchema, periodKey, type Signal, type Evidence } from '../contracts'
 import { interpretationPrompt, validateInterpretation, changedWindow } from '../interpret'
 const a = '00000000-0000-4000-8000-000000000001'
 const b = '00000000-0000-4000-8000-000000000002'
@@ -41,4 +41,15 @@ describe('Website scope, budget and evidence contracts', () => {
   it('requires evidence to belong to the same client', () => expect(() => interpretationPrompt(signal, evidence.map(e => ({ ...e, client_id: b })), '')).toThrow('identity'))
   it('rejects invented citations', () => expect(() => validateInterpretation(JSON.stringify({ classification: 'threat', summary: 'Changed', confidence: 0.4, evidence_ids: [a, b], recommended_action: 'Review evidence' }), signal)).toThrow('invented'))
   it.each(['threat', 'opportunity', 'ignore'])('validates grounded %s recommendation', classification => expect(validateInterpretation(JSON.stringify({ classification, summary: 'Observed a change', confidence: 0.5, evidence_ids: [b, c], recommended_action: 'Review the offer' }), signal).classification).toBe(classification))
+})
+
+describe('existing database client identifiers', () => {
+  const request = { client_id: 'c0000000-0000-0000-0000-000000000000', request_id: a, domain: 'example.com', url: 'https://example.com/' }
+  it('accepts an existing PostgreSQL UUID without RFC version/variant bits', () => {
+    expect(requestSchema.parse(request).client_id).toBe(request.client_id)
+  })
+  it('still rejects malformed identifiers and non-generated request identities', () => {
+    expect(requestSchema.safeParse({ ...request, client_id: 'not-a-client-id' }).success).toBe(false)
+    expect(requestSchema.safeParse({ ...request, request_id: request.client_id }).success).toBe(false)
+  })
 })
