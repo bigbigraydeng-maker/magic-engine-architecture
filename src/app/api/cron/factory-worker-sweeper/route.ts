@@ -43,6 +43,11 @@ export async function GET(req: NextRequest) {
         claimed_at: null,
         heartbeat_at: null,
         reclaim_count: nextReclaim,
+        // 🔴 心跳超时收回 ≠ 失败:上一轮的 reject_reason 是「为什么上次失败」,
+        // 不是「为什么这次回到 queued」。留着它会让 pushFactoryWorkerItems
+        // 把「Mac 合盖丢心跳」误判成「反复失败」,报错的处置方向（充值 vs 开机）
+        // 会把 PM 指反(Codex review PR #1485)。
+        reject_reason: null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', wo.id)
