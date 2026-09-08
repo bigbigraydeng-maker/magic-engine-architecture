@@ -50,6 +50,50 @@
 
 ---
 
+### 2026-09-08（Gate B 步骤 1-3 上线：Daily Plan 页面能显示效果建议了，Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413#issuecomment-5570599894)）
+
+**上线内容**：三个 PR 依次合入 main —— [#1451](https://github.com/bigbigraydeng-maker/magic-engine/pull/1451) evaluator 纯函数 + 类型契约、[#1452](https://github.com/bigbigraydeng-maker/magic-engine/pull/1452) cohort loader（两步查读侧）、[#1453](https://github.com/bigbigraydeng-maker/magic-engine/pull/1453) endpoint + UI badge。系统现在**能**在 Daily Plan 页面每条已发布帖子下面显示一行「REPEAT / ITERATE / STOP / 数据不够」的效果建议 —— 从 Gate A 收回来的成绩 → evaluator 纯函数打分 → UI badge 展示，全链路只读。
+
+**规则**（PM 2026-09-07 拍板 & Issue #1413 Scope 冻结）：
+- 可比样本 < 3 → `数据还不够说话`（不猜）
+- delta ≥ +30% → `重复这个路数`
+- delta ≤ -30% → `别做了`
+- 中间灰区 → `微调再试`
+- 缺 T+72 / target 不可测 / 无共同主指标 → 各自的 INCONCLUSIVE 原因
+- shares 缺失（token 无 `read_insights` 是已知能力边界）进 caveats，不影响主指标
+
+阈值全部走 `DEFAULT_THRESHOLDS` 参数，Playbook / Profile 未来可覆盖，不硬编码到客户 / 行业。
+
+**Review 双岗**：
+- **子牙（架构）**：7 项全通过（复用边界 / `tune/` vs `intelligence/attribution/` 目录职责 / 两步查合理性 / 类型契约稳定性 / endpoint map / UI client 组件雷区 / 测试假件与真 schema）。
+- **魏征（挑刺）一审**：找出 4 条 —— 1 必修 + 3 建议同 PR 补：
+  1. **#7 fail-open 伪装成「未到点」**（必修）：`CampaignDailyPublishPanel.tsx` useEffect 的 500 / 403 / 网络断静默 → UI 显示「等 T+72」占位，PM 误以为「时间没到」实际后台挂了。命中 PITFALLS「读失败别显示空输入框」。
+  2. #8 useEffect 依赖 `publishedPosts.length` 漏拉「撤一条 + 发一条」场景。
+  3. #9 原 16 Panel 测试没触发新 useEffect，「全过 ≠ 我没破坏」。
+  4. #5 `normalizeStatus` 静默降级无 log，将来 DB 加 `'timeout'` / `'rate_limited'` 会让 partial 数据无声消失。
+- **修复 commit `233b4919`** 全部落地：`TuneSuggestionInline` 新增 `fetchFailed` prop（短路优先级高于 suggestion）；useEffect 依赖改 `publishedPosts.map(p=>p.post_id).join(',')`；新增 4 条 Panel 集成测试（真触发 useEffect + `waitFor` 断言 fetch URL + 500/异常路径显式排除「等 T+72」）；两处 `normalizeStatus` 加 `console.warn` + spy 断言。
+- **魏征二审**：逐条判「已修 / 未修」→ 可以合。
+
+**验证**：79 tests passed（20 evaluator + 14 cohort + 8 batch + 8 route + 9 badge + 20 Panel）；`tsc --noEmit` 新文件零错误；`npm run build` ✓。
+
+**产品意义**：能力上线，但因为 CTS 只有 2026-09-03 一条 Daily Plan Post（其余 6 条已撤回），凑不齐 min=3 样本，UI 实际渲染永远是「数据还不够说话」占位 —— 与规则一致，不是 bug。要看到真 REPEAT / STOP，得等 Gate B/4（保存计划时记 lineage）之后再跑几轮。已在 hello@magicengine.cloud 日历排 2026-09-09 09:30 NZST 做部署自检。
+
+**风险级 B**（读侧 / 无副作用 / fail-closed）。整体 Gate B 是 A 级但每单步 B 级。未动 Daily Plan 保存路径 / 发布路径 / Inngest / cron / migration / RLS / provider。
+
+**未修的（登记为后续，非本次范围）**：
+- 魏征 #2 evaluator cohort 全 0 → REPEAT + Infinity（缺 `cohort_all_zero` caveat）
+- #3 阈值浮点边界（`>= 30` / `<= -30` 走原始 deltaPct）
+- #6 `normalizeStatus` 三处复制（future refactor 时下沉到共享 helper）
+
+**Reuse Statement**：
+- **复用**：Gate A 建的 `flywheel_actions` / `social_post_measurement_receipts` / `record_post_measurement_snapshot` RPC；`requireDashboardClientAccess`；`supabaseAdmin`；`PublishReceipt.published[].post_id` UI 契约。
+- **platform-shared 新增**：`src/lib/flywheel/tune/{types, social-post-evaluator, social-post-cohort, campaign-tune-suggestions}.ts` + `/api/clients/[id]/campaign-daily-plan/tune-suggestions` + `TuneSuggestionInline` badge。**无客户名 / 客户 ID / 行业阈值** —— Roman / CTS / 未来 ME Real Estate 客户走完全相同路径。
+- **industry-specific**：无。
+- **client-specific**：无。`clientId` 从 URL params（isolation-safe），`campaignId` 从 query，都是必填。
+- **learning**：无升级。当前无 client-private / industry / global memory 写入。
+
+---
+
 ### 2026-09-07（Gate A 尾声：给测量回执 RPC 钉住 search_path，Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413#issuecomment-5562430183)）
 
 **上线内容**：把 PR [#1414](https://github.com/bigbigraydeng-maker/magic-engine/pull/1414) 已合并、生产未 apply 的加固补丁 `20260905123025_fix_post_measurement_search_path.sql` 应用到 Supabase 生产（`glbdnayojixmexgofbsd`），生产版本号 `20260906215112`。补丁一行：`ALTER FUNCTION public.record_post_measurement_snapshot(...) SET search_path = pg_catalog, pg_temp;` —— 不改数据、不改权限、不改签名。
