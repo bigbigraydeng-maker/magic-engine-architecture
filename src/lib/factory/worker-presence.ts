@@ -131,3 +131,67 @@ export function judgeWorkerPresence(snap: QueueSnapshot): WorkerPresence {
   // 工人在线、还有没失败过的新活在等 —— 那是产能问题，不是「没人干活」
   return { idle: true }
 }
+
+// ── 按客户分组判定 ──────────────────────────────────────────────────────────
+
+/** 队列里一行的最小形状（只取判定用得到的字段）。 */
+export interface QueuedOrderRow {
+  client_id: string
+  created_at: string
+  reject_reason: string | null
+}
+
+export interface ClientWorkerVerdict {
+  clientId: string
+  verdict: Exclude<WorkerPresence, { idle: true }>
+}
+
+/**
+ * 把队列按客户拆开，每个客户单独判一次。
+ *
+ * 🔴 **心跳必须按客户算，不能拿全局最新的**（Codex P1 复审 PR #1485）。
+ *
+ * worker 可以按 `client_id` 限定认领范围（`worker-guard.ts` 的
+ * `workerClaimClientIds`），所以不同客户可能由不同的 worker 实例服务。拿「所有
+ * 工单里最新的心跳」当「工人在线」会串台：CTS 的 worker 刚干完一单（心跳新鲜），
+ * 而能认领 Oztop 工单的那个 worker 已经离线 —— 判定却因为看到 CTS 的心跳就说
+ * 「工人在线、开机没用」，真正需要开机的那台继续躺着。
+ *
+ * 按客户算，在「worker 其实是全局的、只是这个客户的活还没轮到」时会偏保守，
+ * 多报一次「去开机」。**这个方向是刻意选的**：说「在线，别开机」而实际离线，
+ * 会让出片一直卡着；说「离线」而实际在线，最多让人白开一次机。
+ */
+export function judgeQueueByClient(
+  queued: readonly QueuedOrderRow[],
+  latestHeartbeatByClient: ReadonlyMap<string, string>,
+  now: Date,
+): ClientWorkerVerdict[] {
+  const hours = (iso: string) => (now.getTime() - Date.parse(iso)) / 3_600_000
+
+  const byClient = new Map<string, QueuedOrderRow[]>()
+  for (const row of queued) {
+    const list = byClient.get(row.client_id) ?? []
+    list.push(row)
+    byClient.set(row.client_id, list)
+  }
+
+  const out: ClientWorkerVerdict[] = []
+  for (const [clientId, rows] of byClient) {
+    // 最老的那单 —— 调用方可能没排序，这里自己取最小值，不假设入参有序
+    const oldest = rows.reduce(
+      (min, r) => (Date.parse(r.created_at) < Date.parse(min.created_at) ? r : min),
+      rows[0],
+    )
+    const stuck = rows.filter((r) => (r.reject_reason ?? '').trim().length > 0)
+    const hb = latestHeartbeatByClient.get(clientId)
+    const verdict = judgeWorkerPresence({
+      queued: rows.length,
+      oldestQueuedHours: hours(oldest.created_at),
+      lastHeartbeatHours: hb ? hours(hb) : null,
+      queuedStuckOnFailure: stuck.length,
+      stuckSampleReason: stuck[0]?.reject_reason?.trim().slice(0, 160) ?? null,
+    })
+    if (!verdict.idle) out.push({ clientId, verdict })
+  }
+  return out
+}

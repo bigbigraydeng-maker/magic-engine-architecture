@@ -148,7 +148,7 @@ import { checkCronHealth } from '@/lib/cron/health'
 import { CRON_REGISTRY } from '@/lib/cron/registry'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
-import { judgeWorkerPresence, QUEUE_STALE_HOURS } from '@/lib/factory/worker-presence'
+import { judgeWorkerPresence, judgeQueueByClient } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
@@ -362,7 +362,7 @@ export async function loadManualItems(
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
-  await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
+  await pushFactoryWorkerItems(supabase, items, now, clients).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
   )
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
@@ -1777,41 +1777,54 @@ async function pushFactoryWorkerItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   now: Date,
+  /** 客户名查表 —— 待办要说清是哪个客户的活卡了，显示 uuid 等于没显示。 */
+  clientNames: Map<string, { name: string }>,
 ): Promise<void> {
   // 真实列名（已核实）：status / created_at / heartbeat_at / reject_reason
   // 🔴 `reject_reason` 必须一起读：余额不足时 worker 把工单退回 queued 而不是
   //    标 failed，只数「队列里有几个」会把「失败后卡住的僵尸工单」误当成「等人干的新活」。
   const { data: queuedRows } = await supabase
     .from('content_work_orders')
-    .select('id, created_at, reject_reason')
+    .select('id, client_id, created_at, reject_reason')
     .eq('status', 'queued')
     .order('created_at', { ascending: true })
   const queued = (queuedRows ?? []) as Array<{
     id: string
+    client_id: string
     created_at: string
     reject_reason: string | null
   }>
   if (queued.length === 0) return
 
+  // 心跳按客户查 —— 判定层解释了为什么不能用全局最新的（judgeQueueByClient 头注）。
+  const clientIds = Array.from(new Set(queued.map((q) => q.client_id)))
   const { data: hbRows } = await supabase
     .from('content_work_orders')
-    .select('heartbeat_at')
+    .select('client_id, heartbeat_at')
+    .in('client_id', clientIds)
     .not('heartbeat_at', 'is', null)
     .order('heartbeat_at', { ascending: false })
-    .limit(1)
-  const lastHb = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+    .limit(500)
+  const latestHbByClient = new Map<string, string>()
+  for (const r of (hbRows ?? []) as Array<{ client_id: string; heartbeat_at: string }>) {
+    // 已按 heartbeat_at 倒序，每个客户第一次见到的就是最新的
+    if (!latestHbByClient.has(r.client_id)) latestHbByClient.set(r.client_id, r.heartbeat_at)
+  }
 
-  const hours = (iso: string) => (now.getTime() - Date.parse(iso)) / 3_600_000
-  const stuck = queued.filter((q) => (q.reject_reason ?? '').trim().length > 0)
-  const hbHours = lastHb ? hours(lastHb.heartbeat_at) : null
-  const verdict = judgeWorkerPresence({
-    queued: queued.length,
-    oldestQueuedHours: hours(queued[0].created_at),
-    lastHeartbeatHours: hbHours,
-    queuedStuckOnFailure: stuck.length,
-    stuckSampleReason: stuck[0]?.reject_reason?.trim().slice(0, 160) ?? null,
-  })
-  if (verdict.idle) return
+  // 一个客户一条：不同客户的 worker 在线状态是独立的，合成一条会把两种
+  // 完全不同的处置（这家去开机 / 那家去查报错）搅在一起。
+  for (const { clientId, verdict } of judgeQueueByClient(queued, latestHbByClient, now)) {
+    pushOneFactoryWorkerItem(items, verdict, clientNames.get(clientId)?.name ?? '未知客户')
+  }
+}
+
+/** 把一条工人待办写出来。两种病因两套话术，别混。 */
+function pushOneFactoryWorkerItem(
+  items: ManualItem[],
+  verdict: Exclude<ReturnType<typeof judgeWorkerPresence>, { idle: true }>,
+  clientName: string,
+): void {
+  const who = `【${clientName}】`
 
   // 两种病因，两套话术。判定层已经保证：`stuck_on_failure` 只在工人**在线**时
   // 产生（离线一律先报 worker_offline，因为开机是那种情况下无条件正确的第一步）。
@@ -1821,7 +1834,7 @@ async function pushFactoryWorkerItems(
       client_id: 'infra',
       client_name: 'Magic Engine 后台',
       what:
-        `${verdict.humanReason}` +
+        `${who}${verdict.humanReason}` +
         (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
       how:
         '工人现在是在线的，所以这不是开机能解决的 —— 先看上面那句报错：' +
@@ -1840,7 +1853,7 @@ async function pushFactoryWorkerItems(
     client_id: 'infra',
     client_name: 'Magic Engine 后台',
     what:
-      `${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做` +
+      `${who}${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做` +
       (verdict.sampleReason
         ? `。另外这些工单上次失败过，系统报的原因是：「${verdict.sampleReason}」`
         : ''),

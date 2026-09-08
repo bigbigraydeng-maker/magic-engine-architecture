@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { judgeWorkerPresence, QUEUE_STALE_HOURS, type QueueSnapshot } from './worker-presence'
+import {
+  judgeWorkerPresence,
+  judgeQueueByClient,
+  QUEUE_STALE_HOURS,
+  type QueueSnapshot,
+} from './worker-presence'
 
 /** 默认：队列里的活都是等人干的新活（没有失败原因）。 */
 function snap(over: Partial<QueueSnapshot> = {}): QueueSnapshot {
@@ -181,5 +186,76 @@ describe('judgeWorkerPresence —— 🔴 「没人干活」优先于「失败�
       expect(v.kind).toBe('stuck_on_failure')
       expect(v.sampleReason).toBeUndefined()
     }
+  })
+})
+
+/**
+ * 🔴 跨客户串台防线（Codex P1 复审 PR #1485）。
+ *
+ * worker 可以按 client_id 限定认领范围，所以不同客户可能由不同 worker 实例服务。
+ * 拿「所有工单里最新的心跳」当「工人在线」，会让 CTS 的 worker 心跳把 Oztop 的
+ * 离线状态盖掉 —— 判定说「工人在线、开机没用」，而真正需要开机的那台继续躺着。
+ */
+describe('judgeQueueByClient —— 🔴 心跳按客户算，不跨客户串台', () => {
+  const NOW = new Date('2026-09-08T12:00:00Z')
+  const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000).toISOString()
+
+  it('🔴 CTS worker 在线 + Oztop worker 离线 → Oztop 报 worker_offline，不被 CTS 的心跳盖掉', () => {
+    const out = judgeQueueByClient(
+      [{ client_id: 'oztop', created_at: hoursAgo(40), reject_reason: 'muapi: Insufficient credit' }],
+      // 全局最新心跳是 CTS 的（6 分钟前），但 Oztop 自己一条心跳都没有
+      new Map([['cts', hoursAgo(0.1)]]),
+      NOW,
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0].clientId).toBe('oztop')
+    // 关键：不能因为「有个 worker 在线」就说 Oztop 不用开机
+    expect(out[0].verdict.kind).toBe('worker_offline')
+  })
+
+  it('同一个客户自己的 worker 在线、活又都失败过 → 才是 stuck_on_failure', () => {
+    const out = judgeQueueByClient(
+      [{ client_id: 'oztop', created_at: hoursAgo(40), reject_reason: 'muapi: Insufficient credit' }],
+      new Map([['oztop', hoursAgo(0.1)]]),
+      NOW,
+    )
+    expect(out[0].verdict.kind).toBe('stuck_on_failure')
+  })
+
+  it('两个客户各判各的，互不影响', () => {
+    const out = judgeQueueByClient(
+      [
+        { client_id: 'cts', created_at: hoursAgo(40), reject_reason: 'boom' },
+        { client_id: 'oztop', created_at: hoursAgo(40), reject_reason: null },
+      ],
+      new Map([['cts', hoursAgo(0.1)]]), // CTS 在线，Oztop 没心跳
+      NOW,
+    )
+    const byClient = new Map(out.map((o) => [o.clientId, o.verdict.kind]))
+    expect(byClient.get('cts')).toBe('stuck_on_failure')
+    expect(byClient.get('oztop')).toBe('worker_offline')
+  })
+
+  it('入参没排序也能取到最老那单（不假设调用方排过序）', () => {
+    const out = judgeQueueByClient(
+      [
+        { client_id: 'a', created_at: hoursAgo(1), reject_reason: null },
+        { client_id: 'a', created_at: hoursAgo(50), reject_reason: null },
+      ],
+      new Map(),
+      NOW,
+    )
+    expect(out).toHaveLength(1)
+    if (!out[0].verdict.idle) expect(out[0].verdict.humanReason).toContain('50 小时')
+  })
+
+  it('没到门槛的客户不进结果', () => {
+    expect(
+      judgeQueueByClient(
+        [{ client_id: 'a', created_at: hoursAgo(1), reject_reason: null }],
+        new Map(),
+        NOW,
+      ),
+    ).toHaveLength(0)
   })
 })
