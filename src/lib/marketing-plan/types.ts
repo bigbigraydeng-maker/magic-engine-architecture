@@ -172,6 +172,8 @@ export interface MarketingPlan {
     prompt_version?: string
     generation_cost_usd?: number
     generated_at?: string
+    /** true = 生成时撞到输出上限被截断，tasks/email 等数组可能不完整，需要人工核对再批准。 */
+    truncated?: boolean
   } | null
   approved_at: string | null
   created_at: string

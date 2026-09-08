@@ -36,7 +36,7 @@ import { listSentCampaigns } from '@/lib/mailchimp/client'
 const CAMPAIGN_BUCKET = 'campaign-uploads'
 const MAX_CAMPAIGN_FILE_CHARS = 50_000
 
-export const maxDuration = 90  // Plan 生成耗时较长（Claude 大 token 输出）
+export const maxDuration = 180  // Plan 生成耗时较长（2026-09-08 maxOutputTokens 8000→16000 后同步调大，见 generator.ts）
 
 export async function POST(
   req: NextRequest,

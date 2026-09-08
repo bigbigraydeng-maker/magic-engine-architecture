@@ -181,6 +181,8 @@ export interface GenerateResult {
     input_tokens: number
     output_tokens: number
     generated_at: string
+    /** true = 撞到 maxOutputTokens 上限被截断，plan_data 可能不完整，UI 应该提示人工核对。 */
+    truncated: boolean
   }
 }
 
@@ -196,16 +198,30 @@ export async function generatePlanData(params: {
 }): Promise<GenerateResult> {
   const userPrompt = buildUserPrompt(params)
 
-  // bypassGateway: true — Marketing Plan generation can take 60-120s (8000 output
-  // tokens). CF AI Gateway kills requests after ~60s (524). Calling Anthropic
-  // directly avoids the timeout. See: fix/marketing-plan-cf-timeout
+  // bypassGateway: true — Marketing Plan generation can take 60-120s+. CF AI
+  // Gateway kills requests after ~60s (524). Calling Anthropic directly avoids
+  // the timeout. See: fix/marketing-plan-cf-timeout
+  //
+  // maxOutputTokens 16000（原 8000）：2026-09-08 CTS newsletter 排期实测——一次
+  // 加进 email 维度、topics 数量多的计划会把 8000 用满（output_tokens===8000
+  // 精确等于上限，是 stop_reason:'max_tokens' 截断的信号），email.topics 数组
+  // 完整生成了，但 tasks 数组只转出前面几条就被截断——calling route 的
+  // maxDuration 已同步调大（见 route.ts），非流式请求下 16000 是 Anthropic 官方
+  // 建议的安全默认值（Claude Sonnet 4.6 非流式上限 128K，但更大就该切流式）。
   const result = await callClaudeWithDocs({
     systemPrompt: SYSTEM_PROMPT,
     userMessage: userPrompt,
     docs: params.campaignDocs,
-    maxOutputTokens: 8000,
+    maxOutputTokens: 16000,
     bypassGateway: true,
   })
+
+  if (result.stop_reason === 'max_tokens') {
+    // 不隐藏——调用方 UI 应该能看到"这份计划可能没生成完"，而不是静默拿到
+    // 一份看起来正常、实际半截的 JSON（parseJsonResponse 的 jsonrepair 会把
+    // 截断的 JSON 修成语法合法但内容不完整的对象，从结构上完全看不出被切过）。
+    console.warn('[marketing-plan generator] Claude 输出在 16000 token 上限被截断，plan_data 可能不完整')
+  }
 
   const planData = parseJsonResponse<MarketingPlanData>(result.text)
 
@@ -244,6 +260,7 @@ export async function generatePlanData(params: {
       input_tokens: result.input_tokens,
       output_tokens: result.output_tokens,
       generated_at: new Date().toISOString(),
+      truncated: result.stop_reason === 'max_tokens',
     },
   }
 }

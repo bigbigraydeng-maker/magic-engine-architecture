@@ -194,6 +194,12 @@ export function PlanEditor({ clientId, plan, onUpdated, onArchived }: Props) {
   return (
     <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
 
+      {plan.generation_meta?.truncated && (
+        <div className="px-5 py-2.5 bg-amber-50 border-b border-amber-200 text-xs text-amber-800">
+          ⚠️ 这份计划生成时内容太多、被截断了——下面看到的主题和任务清单可能不完整，批准派发前建议先人工核对一遍，必要时重新生成。
+        </div>
+      )}
+
       {/* Header */}
       <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
