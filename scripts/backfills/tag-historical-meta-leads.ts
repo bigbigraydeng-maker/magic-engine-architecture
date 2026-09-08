@@ -39,6 +39,24 @@
  * **恢复条件**：脚本幂等（`applyMemberTags` 先查后改，标签已对就不发写请求），
  * 中断后原样重跑即可，重跑会往同一个回执文件继续追加。
  *
+ * ## ⚠️ 真跑（`--live`）之前必须先修这两条
+ *
+ * 目前只用来存档。Codex 复审指出两条**只在真跑时才咬人**的缺陷，还没修：
+ *
+ * 1. **可能漏掉同一个人的另一个邮箱**。挑目标邮箱靠的是
+ *    `contact_identities.first_source = 'meta_lead_form'`，但 `first_source`
+ *    只说明「这个身份第一次是从哪来的」。一个人先用邮箱 A 从别的渠道建档、
+ *    后来 A 和 B 都交过 Meta 表单时，只有 B 会被算进来，A 被整个排除在兜底
+ *    之外 —— 而 A 同样真的交过表单。正解是从**每一条来源事件**及其原始提交
+ *    数据里取邮箱，而不是从聚合后的身份表反推。
+ *
+ * 2. **回执记的是联系人 id，不是来源记录 id**。同一个人交过多次表单时，几条
+ *    回执长得一模一样，查不出「哪一次提交授权了哪一次修改」—— 跟本文件承诺的
+ *    「来源记录 id」对不上。正解是把触点的 `id` / `source_ref` 一路带到每条
+ *    回执里（现在的查询在中途就把它丢了）。
+ *
+ * 两条都不影响存档，但会让真跑的结果「少打一些人」且「回执追不到底」。
+ *
  * 用法：
  *   npx tsx scripts/backfills/tag-historical-meta-leads.ts                 # 预演，零写入
  *   npx tsx scripts/backfills/tag-historical-meta-leads.ts --live --receipt=./backfill-YYYYMMDD.jsonl
@@ -54,6 +72,8 @@ for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
 }
 
 const LIVE = process.argv.includes('--live')
+/** 回执一旦写不进去就立起来，后面一律不再动 provider。 */
+let receiptBroken = false
 const receiptArg = process.argv.find((a) => a.startsWith('--receipt='))
 const RECEIPT_PATH = receiptArg ? receiptArg.slice('--receipt='.length).trim() : ''
 const clientIdArg = process.argv.find((a) => a.startsWith('--client-id='))
@@ -269,11 +289,18 @@ async function main() {
         continue
       }
 
+      // 回执已经写不进去了 → 下一刀不许再落。回执写在动作之后，所以「停手」
+      // 只能靠动手之前的这道检查，不然就是句空话。
+      if (receiptBroken) {
+        per.failed++
+        break
+      }
+
       const r = await applyMemberTags(cfg, email, { add: [tagRead.tag] }, { dryRun: !LIVE })
 
       // 逐条落回执 —— 只在真跑时写。记的是 subscriber hash 不是明文邮箱：
       // 它既是 Mailchimp 里认人的那把钥匙（查得回去），又不是一份 PII 明文清单。
-      writeReceipt({
+      const recorded = writeReceipt({
         ts: new Date().toISOString(),
         event: 'tag_write',
         clientId: c.id,
@@ -285,6 +312,11 @@ async function main() {
         result: r.status,
         reason: 'reason' in r ? r.reason : null,
       })
+      if (!recorded) {
+        // 这一刀已经落下去了但没记上 —— 计入失败，并且不再往下走。
+        per.failed++
+        break
+      }
 
       if (r.status === 'applied') {
         per.applied++
@@ -309,6 +341,11 @@ async function main() {
     totals.notInAudience += per.notInAudience
     totals.dncSkipped += per.dncSkipped
     totals.failed += per.failed
+
+    if (receiptBroken) {
+      console.error('\n回执坏了，剩下的客户一个都不碰。修好落盘再重跑（脚本幂等）。')
+      break
+    }
   }
 
   console.log(
@@ -325,15 +362,24 @@ async function main() {
 /**
  * 追加一条回执。预演时不写（预演没有副作用，没什么好追查的）。
  *
- * 写失败**不**掀翻整批：这一刻 Mailchimp 那边可能已经改了，中途 throw 只会让
- * 后面本该记下的更多条也一起丢掉。如实喊一嗓子，继续跑。
+ * **写不进去就立刻停掉后面所有 provider 写入。** 上一版这里只打印然后继续 ——
+ * 那是错的：磁盘写满 / 挂载掉线 / 权限被改之后，后面每一次改 Mailchimp 都在
+ * 没有任何记录的情况下发生，最后还可能以退出码 0 收场，跑的人以为回执齐全。
+ * 「有副作用但没有回执」比「少改几个人」严重得多，所以这里选择停手。
+ *
+ * 返回 false = 已经记不下来了，调用方必须停。
  */
-function writeReceipt(entry: Record<string, unknown>): void {
-  if (!LIVE || !RECEIPT_PATH) return
+function writeReceipt(entry: Record<string, unknown>): boolean {
+  if (!LIVE || !RECEIPT_PATH) return true
+  if (receiptBroken) return false
   try {
     appendFileSync(RECEIPT_PATH, JSON.stringify(entry) + '\n')
+    return true
   } catch (e) {
-    console.error(`⚠ 回执写入失败（${e instanceof Error ? e.message : String(e)}）—— 这条没记上`)
+    receiptBroken = true
+    console.error(`✗ 回执写入失败（${e instanceof Error ? e.message : String(e)}）`)
+    console.error('  从这里开始不再改任何东西 —— 改了却记不下来，等于查不回去。')
+    return false
   }
 }
 
