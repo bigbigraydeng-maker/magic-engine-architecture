@@ -23,6 +23,8 @@
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
+- [ ] Readable UI follow-up: result-first views, collapsed configuration/evidence, Chinese future interpretations; locally verified, pending review/production release. Hiring/People/Partnership/Reviews/Technology collection remains a separate extension.
+
 - [x] Implementation merged (#1500); production migration and CTS-only pilot explicitly approved and enabled. Existing Industry Baselines UI → Inngest → Apify → immutable snapshot/evidence → actual cost settlement verified on Wendy Wu homepage. Compatibility fixes #1506/#1507 deployed. [Implementation / rollout receipt](./specs/2026-09-09-web-intelligence-v01.md).
 - [ ] Verify an actual later website change through LLM classification/recommendation; do not manufacture live evidence. Keep the three PM-accepted P2 findings deferred (UI draft refresh, queued-run reconciliation recheck, content-limit failure settlement). Hiring/People/Partnership/Reviews/Technology remain future extensions. No automatic action.
 

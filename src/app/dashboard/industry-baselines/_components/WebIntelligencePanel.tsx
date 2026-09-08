@@ -41,6 +41,7 @@ const defaults: Settings = {
   capture_limit_usd: 0, overhead_nzd: 0, context: '',
 }
 const money = (n: number | null | undefined) => n == null ? '—' : n.toFixed(2)
+const date = (value: string) => { const d = new Date(value); return Number.isNaN(d.getTime()) ? '时间未知' : new Intl.DateTimeFormat('zh-CN', { timeZone: 'Pacific/Auckland', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(d) }
 const split = (s: string) => s.split(/[\n,]/).map(v => v.trim()).filter(Boolean)
 
 async function request<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
@@ -66,15 +67,15 @@ export function WebIntelligencePanel() {
     return () => { alive = false }
   }, [])
   return <section className="space-y-4 text-me-charcoal" aria-label="Web intelligence">
-    <p className="text-sm">Detect website changes, understand market signals and review recommendations. Recommended actions are never executed automatically.</p>
-    <label className="block max-w-md text-sm font-bold">Client
+    <p className="text-sm">关注竞品发生了什么、意味着什么，以及是否值得回应。</p>
+    <label className="block max-w-md text-sm font-bold">客户
       <select className={field} value={clientId} onChange={e => setClientId(e.target.value)} disabled={loading}>
-        <option value="">{loading ? 'Loading clients…' : 'Select a client'}</option>
+        <option value="">{loading ? '正在加载客户…' : '选择客户'}</option>
         {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
       </select>
     </label>
     {error && <p role="alert" className="text-status-rej">{error}</p>}
-    {!loading && !error && clients.length === 0 && <p>No accessible clients.</p>}
+    {!loading && !error && clients.length === 0 && <p>暂无可访问的客户。</p>}
     {clientId && <ClientIntelligence key={clientId} clientId={clientId} />}
   </section>
 }
@@ -82,38 +83,52 @@ export function WebIntelligencePanel() {
 function ClientIntelligence({ clientId }: { clientId: string }) {
   const [data, setData] = useState<Payload | null>(null)
   const [refresh, setRefresh] = useState(0)
+  const [revision, setRevision] = useState(0)
+  const [view, setView] = useState<'signals' | 'competitors' | 'settings'>('signals')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const endpoint = `/api/clients/${encodeURIComponent(clientId)}/web-intelligence`
   useEffect(() => {
     let alive = true
     setLoading(true); setError('')
-    request<Payload>(endpoint).then(value => { if (alive) setData(value) })
-      .catch(e => { if (alive) setError(e instanceof Error ? e.message : 'Unable to load intelligence') })
+    request<Payload>(endpoint).then(value => { if (alive) { setData(value); setRevision(n => n + 1) } })
+      .catch(() => { if (alive) setError('未能读取最新情报，请重试。') })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
   }, [endpoint, refresh])
   const reload = () => setRefresh(n => n + 1)
-  return <div className="space-y-4">
-    <button className={button} onClick={reload} disabled={loading}>Refresh intelligence</button>
-    {loading && <p role="status">Loading intelligence…</p>}
+  const monitored = data?.competitors.filter(c => c.status !== 'archive' && c.urls.length).length ?? 0
+  return <div className="space-y-5">
+    {loading && <p role="status" className="text-sm">正在更新情报…</p>}
     {error && <p role="alert" className="text-status-rej">{error}</p>}
+    {error && !data && <button className={button} onClick={reload} disabled={loading}>重新读取</button>}
     {data && <>
-      <div className={card}>
-        <h2 className="text-lg font-bold">{data.client.name} · Monthly budget</h2>
-        <p>Accounted: NZ${money(data.budget.accounted_nzd)} · Reserved: NZ${money(data.budget.reserved_nzd)}</p>
-        <p className="text-sm">Target: NZ${money(data.settings?.target_nzd ?? 30)} · Hard stop: NZ${money(data.settings?.hard_stop_nzd ?? 50)}. Collection stops when the reserved and accounted total reaches the limit.</p>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-me-ivory p-4">
+        <div><h2 className="font-bold">{data.client.name}</h2><p className="mt-1 text-sm">{monitored} 家竞品已配置监控 · 本月已用 NZ${money(data.budget.accounted_nzd)}{data.budget.reserved_nzd > 0 && ` · 待结算 NZ$${money(data.budget.reserved_nzd)}`}</p></div>
+        <button className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm disabled:opacity-40" onClick={reload} disabled={loading}>刷新结果</button>
       </div>
-      <SettingsForm key={`settings-${refresh}`} settings={data.settings} canEdit={data.can_edit} endpoint={endpoint} onSaved={reload} />
-      <div className="space-y-3">
-        <h2 className="text-lg font-bold">Existing competitor watchlist</h2>
-        <p className="text-sm">Reuses the client competitor list and Industry Baseline matches. Add or remove domains through the existing competitor workflow.</p>
-        {!data.can_run && <p className="text-sm">Collection is unavailable until this client is enabled, entitled and approved for the pilot with a valid budget configuration.</p>}
-        {data.competitors.length === 0 && <p>No existing competitors found.</p>}
-        {data.competitors.map(c => <CompetitorCard key={`${c.domain}-${refresh}`} competitor={c} clientId={clientId} endpoint={endpoint} canEdit={data.can_edit} canRun={data.can_run} onSaved={reload} />)}
-      </div>
-      <Signals signals={data.signals} evidence={data.evidence} />
-      <Runs runs={data.runs} />
+      <nav aria-label="情报视图" className="flex gap-2 border-b border-black/10">
+        {([['signals', '情报'], ['competitors', '监控对象'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} aria-current={view === key ? 'page' : undefined} className={`px-4 py-3 text-sm ${view === key ? 'border-b-2 border-me-ochre font-bold text-me-charcoal' : 'text-me-charcoal/60'}`} onClick={() => setView(key)}>{label}</button>)}
+      </nav>
+      {view === 'signals' && <>
+        <p className="text-sm text-me-charcoal/70">当前覆盖：网站页面变化。招聘、人员、合作与公益、评论、技术专项尚未接入。</p>
+        <Signals signals={data.signals} evidence={data.evidence} />
+        <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">采集记录 · {data.runs.length} 次</summary><div className="mt-4"><Runs runs={data.runs} /></div></details>
+      </>}
+      {view === 'competitors' && <div className="space-y-3">
+        <h2 className="text-lg font-bold">监控对象</h2>
+        <p className="text-sm text-me-charcoal/70">沿用已有竞品名单。展开某家竞品后，可调整监控范围或手动采集。</p>
+        {!data.can_run && <p className="text-sm">该客户尚未开放采集，请在设置中检查监控资格与预算。</p>}
+        {data.competitors.length === 0 && <p>尚未找到已有竞品。</p>}
+        {data.competitors.map(c => <details key={c.domain} className="rounded-xl border border-black/10 bg-white p-4">
+          <summary className="cursor-pointer break-all text-sm"><strong>{c.domain}</strong><span className="ml-3 text-me-charcoal/60">{c.status === 'archive' ? '已归档' : c.urls.length ? `${c.urls.length} 个页面 · 每 ${c.interval_hours} 小时` : '尚未配置监控'}</span></summary>
+          <div className="mt-4"><CompetitorCard key={`${c.domain}-${revision}`} competitor={c} clientId={clientId} endpoint={endpoint} canEdit={data.can_edit} canRun={data.can_run} onSaved={reload} /></div>
+        </details>)}
+      </div>}
+      {view === 'settings' && <>
+        <p className="text-sm">月度目标 NZ${money(data.settings?.target_nzd ?? 30)} · 停止上限 NZ${money(data.settings?.hard_stop_nzd ?? 50)}。费用与待结算占用合计达到上限后停止新增采集。</p>
+        <SettingsForm key={`settings-${revision}`} settings={data.settings} canEdit={data.can_edit} endpoint={endpoint} onSaved={reload} />
+      </>}
     </>}
   </div>
 }
@@ -130,28 +145,28 @@ function SettingsForm({ settings, canEdit, endpoint, onSaved }: { settings: Sett
     finally { setSaving(false) }
   }
   return <form className={card} onSubmit={save}>
-    <h2 className="text-lg font-bold">Monitoring settings</h2>
-    {!settings && <p className="text-sm">Not configured. Monitoring is disabled by default. Confirm the subscription currency and collection budget before enabling.</p>}
+    <h2 className="text-lg font-bold">监控设置</h2>
+    {!settings && <p className="text-sm">尚未配置。请先确认监控资格、币种和费用上限，再开启监控。</p>}
     <fieldset disabled={!canEdit || saving} className="space-y-3">
       <div className="flex flex-wrap gap-4">
-        <label><input type="checkbox" checked={draft.enabled} onChange={e => set('enabled', e.target.checked)} /> Monitoring enabled</label>
-        <label><input type="checkbox" checked={draft.entitled} onChange={e => set('entitled', e.target.checked)} /> Advanced membership entitled</label>
+        <label><input type="checkbox" checked={draft.enabled} onChange={e => set('enabled', e.target.checked)} /> 开启监控</label>
+        <label><input type="checkbox" checked={draft.entitled} onChange={e => set('entitled', e.target.checked)} /> 已具备高级会员资格</label>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <label className="text-sm">Membership price / month<input className={field} value="499" readOnly /></label>
-        <label className="text-sm">Membership currency<select className={field} value={draft.entitlement_currency ?? ''} onChange={e => set('entitlement_currency', (e.target.value || null) as Settings['entitlement_currency'])}><option value="">Not confirmed</option>{['NZD', 'AUD', 'USD'].map(v => <option key={v}>{v}</option>)}</select></label>
+        <label className="text-sm">会员月费预留<input className={field} value="499" readOnly /></label>
+        <label className="text-sm">会员币种<select className={field} value={draft.entitlement_currency ?? ''} onChange={e => set('entitlement_currency', (e.target.value || null) as Settings['entitlement_currency'])}><option value="">未确认</option>{['NZD', 'AUD', 'USD'].map(v => <option key={v}>{v}</option>)}</select></label>
         {([
-          ['target_nzd', 'Monthly target (NZD)', 0.01, 30], ['hard_stop_nzd', 'Monthly hard stop (NZD)', 0.01, 50],
-          ['usd_to_nzd', 'USD to NZD rate', 0.0001, 9.9999], ['capture_limit_usd', 'Per-capture limit (USD)', 0.01, 1],
-          ['overhead_nzd', 'Per-capture overhead reserve (NZD)', 0.02, 1],
+          ['target_nzd', '月度费用目标（NZD）', 0.01, 30], ['hard_stop_nzd', '月度停止上限（NZD）', 0.01, 50],
+          ['usd_to_nzd', '美元兑纽币汇率', 0.0001, 9.9999], ['capture_limit_usd', '单次采集上限（USD）', 0.01, 1],
+          ['overhead_nzd', '单次间接成本（NZD）', 0.02, 1],
         ] as const).map(([key, label, min, max]) => <label key={key} className="text-sm">{label}<input className={field} type="number" min={min} max={max} step="any" required value={draft[key]} onChange={e => set(key, Number(e.target.value))} /></label>)}
-        <label className="text-sm">Exchange rate date<input className={field} type="date" required value={draft.fx_as_of} onChange={e => set('fx_as_of', e.target.value)} /></label>
-        <label className="text-sm">Collector version<input className={field} required pattern="[0-9]+\.[0-9]+\.[0-9]+" placeholder="0.0.1" value={draft.actor_build} onChange={e => set('actor_build', e.target.value)} /></label>
+        <label className="text-sm">汇率日期<input className={field} type="date" required value={draft.fx_as_of} onChange={e => set('fx_as_of', e.target.value)} /></label>
+        <label className="text-sm">采集器版本<input className={field} required pattern="[0-9]+\.[0-9]+\.[0-9]+" placeholder="0.0.1" value={draft.actor_build} onChange={e => set('actor_build', e.target.value)} /></label>
       </div>
-      <label className="block text-sm">Client interpretation context<textarea className={field} rows={3} maxLength={2000} value={draft.context} onChange={e => set('context', e.target.value)} /></label>
-      {canEdit && <button className={button} type="submit">{saving ? 'Saving…' : 'Save settings'}</button>}
+      <label className="block text-sm">客户分析背景<textarea className={field} rows={3} maxLength={2000} value={draft.context} onChange={e => set('context', e.target.value)} /></label>
+      {canEdit && <button className={button} type="submit">{saving ? '保存中…' : '保存设置'}</button>}
     </fieldset>
-    {!canEdit && <p className="text-sm">Settings are read-only for your account.</p>}
+    {!canEdit && <p className="text-sm">你的账号只能查看设置。</p>}
     {error && <p role="alert" className="text-status-rej">{error}</p>}
   </form>
 }
@@ -168,8 +183,8 @@ function CompetitorCard({ competitor, clientId, endpoint, canEdit, canRun, onSav
     setBusy(true); setError(''); setMessage('')
     try {
       if (capture) {
-        const result = await request<{ request_id: string }>(endpoint, 'POST', { domain: competitor.domain, url })
-        setMessage(`Collection queued. Request: ${result.request_id}. Refresh to check progress.`)
+        await request<{ request_id: string }>(endpoint, 'POST', { domain: competitor.domain, url })
+        setMessage(`已加入采集队列。回到“情报”刷新结果查看进度。`)
       } else {
         await request(`/api/clients/${encodeURIComponent(clientId)}/competitor-domains`, 'PATCH', { monitoring: { ...draft, tags: split(tags), urls: split(urls) } })
         onSaved()
@@ -179,23 +194,23 @@ function CompetitorCard({ competitor, clientId, endpoint, canEdit, canRun, onSav
   }
   const sources = Array.from(new Set([...sourceOptions, ...draft.sources]))
   return <article className={card}>
-    <h3 className="break-all font-bold">{competitor.domain}</h3>
+    <p className="text-sm font-bold">监控配置</p>
     <form onSubmit={e => { e.preventDefault(); void mutate(false) }}>
       <fieldset disabled={!canEdit || busy} className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-3">
-          <label className="text-sm">Tier<select className={field} value={draft.tier} onChange={e => setDraft(d => ({ ...d, tier: e.target.value as Competitor['tier'] }))}>{['core', 'secondary', 'benchmark', 'watch'].map(v => <option key={v}>{v}</option>)}</select></label>
-          <label className="text-sm">Status<select className={field} value={draft.status} onChange={e => setDraft(d => ({ ...d, status: e.target.value as Competitor['status'] }))}>{['active', 'emerging', 'archive'].map(v => <option key={v}>{v}</option>)}</select></label>
-          <label className="text-sm">Interval (hours)<input className={field} type="number" min="24" max="720" required value={draft.interval_hours} onChange={e => setDraft(d => ({ ...d, interval_hours: Number(e.target.value) }))} /></label>
+          <label className="text-sm">竞品层级<select className={field} value={draft.tier} onChange={e => setDraft(d => ({ ...d, tier: e.target.value as Competitor['tier'] }))}>{['core', 'secondary', 'benchmark', 'watch'].map(v => <option key={v}>{v}</option>)}</select></label>
+          <label className="text-sm">监控状态<select className={field} value={draft.status} onChange={e => setDraft(d => ({ ...d, status: e.target.value as Competitor['status'] }))}>{['active', 'emerging', 'archive'].map(v => <option key={v}>{v}</option>)}</select></label>
+          <label className="text-sm">检查间隔（小时）<input className={field} type="number" min="24" max="720" required value={draft.interval_hours} onChange={e => setDraft(d => ({ ...d, interval_hours: Number(e.target.value) }))} /></label>
         </div>
-        <fieldset><legend className="text-sm">Discovery sources</legend><div className="flex flex-wrap gap-3">{sources.map(source => <label key={source} className="text-sm"><input type="checkbox" checked={draft.sources.includes(source)} onChange={e => setDraft(d => ({ ...d, sources: e.target.checked ? [...d.sources, source] : d.sources.filter(s => s !== source) }))} /> {source}</label>)}</div></fieldset>
-        <label className="block text-sm">Tags (comma separated)<input className={field} value={tags} onChange={e => setTags(e.target.value)} /></label>
-        <label className="block text-sm">Monitored website URLs (up to 3, one per line)<textarea className={field} rows={2} value={urls} onChange={e => setUrls(e.target.value)} /></label>
-        {canEdit && <button className={button} type="submit">Save competitor settings</button>}
+        <fieldset><legend className="text-sm">发现来源</legend><div className="flex flex-wrap gap-3">{sources.map(source => <label key={source} className="text-sm"><input type="checkbox" checked={draft.sources.includes(source)} onChange={e => setDraft(d => ({ ...d, sources: e.target.checked ? [...d.sources, source] : d.sources.filter(s => s !== source) }))} /> {source}</label>)}</div></fieldset>
+        <label className="block text-sm">标签（逗号分隔）<input className={field} value={tags} onChange={e => setTags(e.target.value)} /></label>
+        <label className="block text-sm">监控网址（最多3个，每行一个）<textarea className={field} rows={2} value={urls} onChange={e => setUrls(e.target.value)} /></label>
+        {canEdit && <button className={button} type="submit">保存竞品设置</button>}
       </fieldset>
     </form>
     <form className="flex flex-wrap items-end gap-2" onSubmit={e => { e.preventDefault(); void mutate(true) }}>
-      <label className="min-w-0 flex-1 text-sm">URL to collect<select className={field} value={url} onChange={e => setUrl(e.target.value)} disabled={busy || !canRun}><option value="">Select a saved URL</option>{competitor.urls.map(u => <option key={u}>{u}</option>)}</select></label>
-      <button className={button} disabled={busy || !canRun || competitor.status === 'archive' || !url} type="submit">Collect website</button>
+      <label className="min-w-0 flex-1 text-sm">采集网址<select className={field} value={url} onChange={e => setUrl(e.target.value)} disabled={busy || !canRun}><option value="">选择已保存的网址</option>{competitor.urls.map(u => <option key={u}>{u}</option>)}</select></label>
+      <button className={button} disabled={busy || !canRun || competitor.status === 'archive' || !url} type="submit">采集此页面</button>
     </form>
     {message && <p role="status" className="break-all text-sm">{message}</p>}
     {error && <p role="alert" className="text-status-rej">{error}</p>}
@@ -203,47 +218,52 @@ function CompetitorCard({ competitor, clientId, endpoint, canEdit, canRun, onSav
 }
 
 function EvidenceCard({ evidence, label }: { evidence: Evidence | undefined; label: string }) {
-  if (!evidence) return <p className="text-sm">{label}: No linked evidence (initial observation or evidence unavailable).</p>
+  if (!evidence) return <p className="text-sm">{label}：暂无关联证据。</p>
   const safeUrl = /^https?:\/\//i.test(evidence.source_url) ? evidence.source_url : null
-  return <div className="min-w-0 space-y-1 rounded-lg bg-me-ivory p-3 text-sm">
-    <p className="font-bold">{label}</p>
-    {safeUrl ? <a className="break-all underline" href={safeUrl} target="_blank" rel="noopener noreferrer">{evidence.source_url}</a> : <p className="break-all">{evidence.source_url}</p>}
-    <p>Observed: {evidence.observed_at}</p>
-    <blockquote className="whitespace-pre-wrap break-words">{evidence.excerpt}</blockquote>
-    <details><summary>Evidence reference</summary><p className="break-all">{evidence.id} · {evidence.content_hash}</p></details>
+  return <div className="min-w-0 space-y-2 rounded-lg bg-me-ivory p-3 text-sm">
+    <p className="font-bold">{label} · {date(evidence.observed_at)} NZ</p>
+    {safeUrl ? <a className="break-all underline" href={safeUrl} target="_blank" rel="noopener noreferrer">查看来源网页</a> : <p>来源链接不可用</p>}
+    <details><summary className="cursor-pointer">展开采集原文</summary><blockquote className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs leading-6">{evidence.excerpt}</blockquote></details>
+    <details><summary className="cursor-pointer text-xs text-me-charcoal/60">证据编号</summary><p className="break-all text-xs">{evidence.id} · {evidence.content_hash}</p></details>
   </div>
 }
 
+function SignalCard({ signal: s, evidence }: { signal: Signal; evidence: Evidence[] }) {
+  const complete = s.interpretation_status === 'complete'
+  const labels: Record<string, string> = { threat: '值得警惕', opportunity: '值得关注的机会', ignore: '无需行动' }
+  const label = complete ? labels[s.classification ?? ''] ?? '已分析' : s.interpretation_status === 'failed' ? '分析未完成' : '正在分析'
+  const summary = s.interpretation?.summary
+  const action = s.recommended_action === 'No action recommended.' ? '无需采取行动。' : s.recommended_action
+  return <article className={card}>
+    <div className="flex flex-wrap items-center justify-between gap-2"><span className={`rounded-full px-3 py-1 text-xs font-bold ${!complete ? 'bg-amber-50 text-amber-800' : s.classification === 'threat' ? 'bg-red-50 text-red-800' : s.classification === 'opportunity' ? 'bg-green-50 text-green-800' : 'bg-black/5 text-me-charcoal/60'}`}>{label}</span><time className="text-xs text-me-charcoal/60" dateTime={s.created_at}>{date(s.created_at)} NZ</time></div>
+    <h3 className="break-all text-lg font-bold">{s.domain}</h3>
+    <p className="text-sm leading-7">{complete ? summary ?? '分析已完成，暂无文字摘要。' : s.interpretation_status === 'failed' ? '已保留页面变化，但本次分析未能生成有效结论。请查看采集记录中的原因。' : '已发现页面差异，正在整理结论。'}</p>
+    {complete && <div className="rounded-lg bg-me-ivory p-3 text-sm leading-6"><strong>建议</strong><p>{action ?? '暂无建议。'}</p></div>}
+    <p className="text-xs text-me-charcoal/60">网站页面变化 · 仅供判断，未自动执行{complete && s.interpretation?.confidence != null ? ` · 判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
+    <div className="grid gap-3 md:grid-cols-2"><EvidenceCard label="变化前" evidence={evidence.find(e => e.id === s.before_evidence_id)} /><EvidenceCard label="变化后" evidence={evidence.find(e => e.id === s.after_evidence_id)} /></div>
+  </article>
+}
+
 function Signals({ signals, evidence }: { signals: Signal[]; evidence: Evidence[] }) {
-  return <section className="space-y-3" aria-label="Market signals">
-    <h2 className="text-lg font-bold">Market signals and recommendations</h2>
-    {signals.length === 0 && <p className="text-sm">No signals yet. The first successful capture establishes a baseline; later captures can reveal changes.</p>}
-    {signals.map(s => <article className={card} key={s.id}>
-      <h3 className="break-all font-bold">{s.domain} · {s.kind}</h3>
-      <p className="text-sm">{s.classification ?? 'Awaiting classification'} · Interpretation: {s.interpretation_status} · {s.created_at}</p>
-      <p>{s.interpretation?.summary ?? 'Interpretation is not available yet.'}</p>
-      {s.interpretation?.confidence != null && <p className="text-sm">Confidence: {s.interpretation.confidence}</p>}
-      <div className="grid gap-3 md:grid-cols-2">
-        <EvidenceCard label="Before" evidence={evidence.find(e => e.id === s.before_evidence_id)} />
-        <EvidenceCard label="After" evidence={evidence.find(e => e.id === s.after_evidence_id)} />
-      </div>
-      <p className="text-sm"><strong>Recommended action:</strong> {s.recommended_action ?? 'No recommendation yet.'}</p>
-      <p className="text-xs font-bold">Recommendation only · No action executed</p>
-    </article>)}
+  const ignored = signals.filter(s => s.interpretation_status === 'complete' && s.classification === 'ignore')
+  const attention = signals.filter(s => !(s.interpretation_status === 'complete' && s.classification === 'ignore'))
+  return <section className="space-y-4" aria-label="竞品情报">
+    <div><h2 className="text-xl font-bold">值得你看的变化</h2><p className="mt-1 text-sm text-me-charcoal/60">先看结论，需要核对时再展开网页原文。</p></div>
+    {signals.length === 0 ? <div className={card}><p className="font-bold">还没有变化情报</p><p className="text-sm">首次采集建立对照基准，后续采集才会比较变化。可在“监控对象”中查看已配置页面。</p></div> : attention.length === 0 ? <p className="rounded-xl bg-me-ivory p-4 text-sm">当前已分析的变化均无需行动，可在下方展开查看。</p> : null}
+    {attention.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}
+    {ignored.length > 0 && <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">无需行动 · {ignored.length} 条</summary><div className="mt-4 space-y-3">{ignored.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}</div></details>}
   </section>
 }
 
 function Runs({ runs }: { runs: Run[] }) {
-  return <section className="space-y-3" aria-label="Collection runs">
-    <h2 className="text-lg font-bold">Collection history</h2>
-    {runs.length === 0 && <p className="text-sm">No collection runs yet.</p>}
+  const labels: Record<string, string> = { complete: '已完成', failed: '未完成', reserved: '排队中', capturing: '采集中', captured: '已采集', reconciliation: '费用待核对' }
+  return <section className="space-y-3" aria-label="采集记录">
+    {runs.length === 0 && <p className="text-sm">暂无采集记录。</p>}
     {runs.map(r => <article className={card} key={r.id}>
-      <p className="break-all font-bold">{r.domain} · {r.status}</p>
-      <p className="break-all text-sm">{r.url}</p>
-      <p className="text-sm">{r.created_at} · Collection status: {r.provider_status ?? 'Pending'}</p>
-      <p className="text-sm">Collection US${money(r.capture_cost_usd)} · Interpretation US${money(r.interpretation_cost_usd)} · Accounted NZ${money(r.accounted_nzd)} · Reserved NZ${money(r.reserved_nzd)}</p>
-      {r.error_code && <p className="text-sm text-status-rej">Error: {r.error_code}</p>}
-      <details className="text-xs"><summary>Request reference</summary><p className="break-all">{r.id}</p></details>
+      <p className="break-all text-sm font-bold">{r.domain} · {labels[r.status] ?? '处理中'}</p>
+      <p className="text-sm">{date(r.created_at)} NZ · {r.accounted_nzd == null ? `待结算 NZ$${money(r.reserved_nzd)}` : `已结算 NZ$${money(r.accounted_nzd)}`}</p>
+      {r.error_code && <p className="text-sm text-status-rej">{r.error_code.startsWith('interpretation_') ? '网页已采集，但分析结果未完成。' : r.status === 'reconciliation' ? '费用需要核对后才能继续采集。' : '本次采集未完成。'}</p>}
+      <details className="text-xs"><summary className="cursor-pointer">查看诊断信息</summary><div className="mt-2 space-y-2 break-all"><p>{r.url}</p><p>请求编号：{r.id}</p><p>采集状态：{r.provider_status ?? '等待中'} · 采集 US${money(r.capture_cost_usd)} · 分析 US${money(r.interpretation_cost_usd)}</p>{r.error_code && <p>{r.error_code}</p>}</div></details>
     </article>)}
   </section>
 }
