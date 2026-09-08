@@ -51,3 +51,14 @@ Sources checked: [Apify crawler](https://apify.com/apify/website-content-crawler
 ## Next extensions
 
 Hiring: job opening/closing and role mix. People: published leadership changes. Partnership/CSR: official announcements with named parties/date. Reviews: platform IDs, score/count and new-review evidence. Technology: observed stack or tracking changes. Each extends signal kind/extraction over the same snapshots, evidence, budget and recommendation boundary; evaluate Apify first and introduce another provider only with a documented capability gap. None is implemented in v0.1.
+
+
+## Readability follow-up (2026-09-09, pending release)
+
+Base: origin/main `5f44651f55d99e9958f318b7f96806e2ff0f6f3f`. Existing capability presentation only, risk C. User feedback prioritizes frequently read results over adding new collection directions.
+
+Default view shows conclusions and recommendations; competitor controls and settings are separate views. Ignore items, raw evidence and run diagnostics are collapsed. Failed/pending interpretations remain visible. Sources and capture times remain readable. Future v3 interpretations request concise Simplified Chinese; historical summaries remain unchanged. Failed initial reads have a retry control, and forms reset only after fresh data arrives.
+
+Reuse statement: existing Industry Baselines panel, endpoints, shared competitor identities, permission checks, budget ledger and Inngest flow are reused. No customer-specific logic, new paid calls, schema changes, providers or action execution. Hiring/review/advertising adapters exist elsewhere but are not connected to market signals by this patch; no extra coverage is claimed.
+
+Validation: five UI regressions and 91 related runtime/provider tests pass; focused lint and production build pass. Browser smoke used explicitly synthetic data in the actual component and confirmed result-first layout and collapsed competitor controls. Independent review found no P0/P1; initial-error retry issue fixed. This is local verification, not production acceptance of the new UI.
