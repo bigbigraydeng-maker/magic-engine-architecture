@@ -1780,7 +1780,7 @@ async function pushFactoryWorkerItems(
 ): Promise<void> {
   // 真实列名（已核实）：status / created_at / heartbeat_at / reject_reason
   // 🔴 `reject_reason` 必须一起读：余额不足时 worker 把工单退回 queued 而不是
-  //    标 failed，只数「队列里有几个」会把「反复失败的僵尸工单」误当成「等人干的新活」。
+  //    标 failed，只数「队列里有几个」会把「失败后卡住的僵尸工单」误当成「等人干的新活」。
   const { data: queuedRows } = await supabase
     .from('content_work_orders')
     .select('id, created_at, reject_reason')
@@ -1813,7 +1813,7 @@ async function pushFactoryWorkerItems(
   if (verdict.idle) return
 
   // 两种病因，两套话术 —— 混成一条会让人做错的事：
-  // 「没人干活」要去把工人跑起来；「每轮都失败」开机一百次也没用。
+  // 「没人干活」要去把工人跑起来；「失败后卡住」开机一百次也没用。
   if (verdict.kind === 'stuck_on_failure') {
     items.push({
       kind: 'factory_worker_idle',
@@ -1823,9 +1823,9 @@ async function pushFactoryWorkerItems(
         `${verdict.humanReason}` +
         (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
       how:
-        '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完这些工单下一轮会自己跑掉；' +
+        '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完之后工人下次上线会把它重新领走；' +
         '写的是别的原因，回我一句「出片工单卡住了」，我去查。' +
-        '这条**不是**工人没开机 —— 去开机跑命令解决不了它',
+        '这条**不是**工人没开机 —— 光去开机跑命令解决不了它（失败原因还在那儿）',
       href: 'https://app.magicengine.com.au/dashboard/factory',
     })
     return
