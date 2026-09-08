@@ -34,7 +34,8 @@ export async function startWebsiteCapture(args: {
     useSitemaps: false, useLlmsTxt: false, respectRobotsTxtFile: true,
     initialConcurrency: 1, maxConcurrency: 1, maxRequestRetries: 0, maxSessionRotations: 0,
     requestTimeoutSecs: 60, dynamicContentWaitSecs: 10,
-    proxyConfiguration: { useApifyProxy: false },
+    // The official Actor rejects a disabled proxy (validated against build 0.3.97).
+    proxyConfiguration: { useApifyProxy: true },
     saveMarkdown: true, saveHtml: false, saveHtmlAsFile: false,
     saveFiles: false, saveContentTypes: '', saveScreenshots: false,
     summarize: false, blockMedia: true, expandIframes: false, clickElementsCssSelector: '',
