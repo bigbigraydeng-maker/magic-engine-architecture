@@ -1,11 +1,11 @@
 import type { BriefDimension, BriefStatus, CompetitionBrief as Brief } from '@/lib/web-intelligence/competition-brief'
 
 const statusLabel: Record<BriefStatus, string> = {
-  ready: '数据可用', stale: '需要更新', unconfigured: '尚未配置',
+  ready: '可直接比较', limited: '仅有单方数据', stale: '需要更新', unconfigured: '尚未配置',
   no_observation: '暂无记录', failed: '读取失败', not_connected: '尚未接入',
 }
 const statusStyle: Record<BriefStatus, string> = {
-  ready: 'bg-green-50 text-green-800', stale: 'bg-amber-50 text-amber-800',
+  ready: 'bg-green-50 text-green-800', limited: 'bg-amber-50 text-amber-800', stale: 'bg-amber-50 text-amber-800',
   unconfigured: 'bg-black/5 text-me-charcoal/60', no_observation: 'bg-black/5 text-me-charcoal/60',
   failed: 'bg-red-50 text-red-800', not_connected: 'bg-black/5 text-me-charcoal/60',
 }
@@ -20,6 +20,7 @@ function DimensionCard({ item }: { item: BriefDimension }) {
     </div>
     <p className="mt-3 text-sm font-bold leading-6">{item.headline}</p>
     <p className="mt-2 text-sm leading-6 text-me-charcoal/75">{item.detail}</p>
+    {item.items && item.items.length > 0 && <ul className="mt-3 divide-y divide-black/5 rounded-lg bg-me-ivory px-3">{item.items.map(value => <li key={value} className="py-2 text-sm leading-6">{value}</li>)}</ul>}
     <div className="mt-4 border-t border-black/5 pt-3 text-xs leading-5 text-me-charcoal/55">
       <p>{item.source} · {observed(item.observed_at)}</p>
       <p>{item.coverage}</p>

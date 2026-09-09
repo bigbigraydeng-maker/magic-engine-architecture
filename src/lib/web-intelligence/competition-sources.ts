@@ -44,7 +44,7 @@ export async function loadCompetitionBrief(clientId: string, client: { name: str
   return buildCompetitionBrief({
     clientName: client.name,
     clientDomain: client.domain,
-    competitorCount: active.length,
+    competitorCount: active.filter(item => item.urls.length > 0).length,
     configuredPageCount: active.reduce((sum, item) => sum + item.urls.length, 0),
     snapshots: { data: (snapshots.data ?? []) as MarketSnapshot[], failed: Boolean(snapshots.error) },
     baselines: { data: (baselines.data ?? []) as BaselineDomain[], failed: Boolean(baselines.error) },
