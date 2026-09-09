@@ -74,6 +74,19 @@ describe('durable provider boundaries', () => {
       p_projection_version: 'business-content-v1+actor-1.2.3',
     }))
   })
+  it('uses the travel profile projection and versions its baseline separately', async () => {
+    const travelRun = { ...run, url: 'https://example.com/new-tours/' }
+    mocks.eligible.mockResolvedValue({ tags: ['industry:travel'] })
+    mocks.get.mockResolvedValue({ status: 'complete', run: { status: 'SUCCEEDED', usageTotalUsd: 0.01 }, page: {
+      url: travelRun.url, title: 'New tours', text: 'New tours available for New Zealand travellers\n* EARLY BIRD SALE\nDisplay Map\nTour A\n10 days from $5,000pp\nIncludes international flights\nAuckland - A - B - Auckland\nView Tour',
+    } })
+    expect(await collectCapture(travelRun, 'p')).toBe('captured')
+    expect(mocks.rpc).toHaveBeenCalledWith('web_intelligence_record_business_snapshot', expect.objectContaining({
+      p_projection: expect.stringContaining('Tour: Tour A'),
+      p_projection_version: 'business-content-v1+me-travel-v2+actor-1.2.3',
+      p_page_role: 'product_listing',
+    }))
+  })
   it('settles a paid capture whose business projection is too weak', async () => {
     mocks.get.mockResolvedValue({ status: 'complete', run: { status: 'SUCCEEDED', usageTotalUsd: 0.01 }, page: { url: run.url, title: 'Assets', text: '![image](https://example.com/a.jpg) '.repeat(20) } })
     expect(await collectCapture(run, 'p')).toBe('failed')
@@ -90,6 +103,15 @@ describe('durable provider boundaries', () => {
   it('baseline and unchanged captures incur no interpretation call', async () => {
     mocks.input.mockResolvedValue({ signal: null, evidence: [], context: '' }); await understand(run)
     expect(mocks.interpret).not.toHaveBeenCalled(); expect(mocks.update).toHaveBeenCalledWith(id, id, { interpretation_cost_usd: 0 })
+  })
+  it('passes travel comparison rules to the model only for a travel target', async () => {
+    const pendingSignal = { id: 's', interpretation_status: 'pending' }
+    mocks.input.mockResolvedValue({ signal: pendingSignal, evidence: [], context: '' })
+    mocks.eligible.mockResolvedValue({ tags: ['industry:travel'] })
+    mocks.interpret.mockResolvedValue({ text: '{}', cost_usd: 0.01, stop_reason: 'end_turn' })
+    mocks.validate.mockReturnValue({ classification: 'ignore', recommended_action: '无需采取行动。' })
+    await understand(run)
+    expect(mocks.interpret).toHaveBeenCalledWith(pendingSignal, [], '', expect.stringContaining('exact Tour name'))
   })
   it('an uncertain interpretation attempt does not create another paid call', async () => {
     mocks.input.mockResolvedValue({ signal: { id: 's', interpretation_status: 'pending' }, evidence: [], context: '' }); mocks.claim.mockResolvedValue(false)

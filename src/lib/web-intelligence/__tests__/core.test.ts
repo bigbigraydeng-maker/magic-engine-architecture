@@ -7,7 +7,7 @@ import { canonicalDomain, approvedUrl } from '../targets'
 import { allowedClient, requestSchema, settingsSchema, metadataSchema, periodKey, type Signal, type Evidence } from '../contracts'
 import { interpretationPrompt, validateInterpretation, changedWindow } from '../interpret'
 import { classifyBusinessPage, projectBusinessContent } from '../content-projection'
-import { TRAVEL_BUSINESS_PROFILE, profileForTags } from '../profiles/travel'
+import { extractTourRecords, projectTravelContent, TRAVEL_BUSINESS_PROFILE, TRAVEL_INTERPRETATION_GUIDANCE, profileForTags } from '../profiles/travel'
 const a = '00000000-0000-4000-8000-000000000001'
 const b = '00000000-0000-4000-8000-000000000002'
 const c = '00000000-0000-4000-8000-000000000003'
@@ -85,6 +85,45 @@ describe('Website scope, budget and evidence contracts', () => {
     expect(classifyBusinessPage('https://example.com/china/tours/', TRAVEL_BUSINESS_PROFILE)).toBe('product_listing')
     expect(classifyBusinessPage('https://example.com/china/tours/classic-china.htm', TRAVEL_BUSINESS_PROFILE)).toBe('product_detail')
     expect(classifyBusinessPage('https://example.com/new-tours/', TRAVEL_BUSINESS_PROFILE)).toBe('product_listing')
+  })
+  it('associates each travel offer with the named tour before sorting records', () => {
+    const raw = `
+      * EARLY BIRD SALE
+      Display Map
+      Japan Explorer
+      16 days from $14,980pp
+      Includes international airfares
+      Osaka (3N) - Tokyo (3N)
+      View Tour
+      *
+      Display Map
+      India Explored
+      15 days from $6,440pp
+      2 Reviews
+      Includes international airfares
+      Delhi (2N) - Goa (5N)
+      View Tour
+    `
+    expect(extractTourRecords(raw)).toEqual([
+      expect.objectContaining({ name: 'India Explored', price: '$6,440pp', promotion: 'none', reviews: '2 Reviews' }),
+      expect.objectContaining({ name: 'Japan Explorer', price: '$14,980pp', promotion: 'EARLY BIRD SALE' }),
+    ])
+  })
+  it('produces the same listing projection when tour display order changes', () => {
+    const a = '* EARLY BIRD SALE\nDisplay Map\nTour A\n10 days from $5,000pp\nIncludes flights\nA - B\nView Tour'
+    const b = '*\nDisplay Map\nTour B\n12 days from $6,000pp\nIncludes flights\nC - D\nView Tour'
+    expect(projectTravelContent(`${a}\n${b}`, 'product_listing')).toBe(projectTravelContent(`${b}\n${a}`, 'product_listing'))
+  })
+  it('makes a named tour field change explicit in the evidence projection', () => {
+    const before = 'Display Map\nTour A\n10 days from $5,000pp\nIncludes flights\nA - B\nView Tour'
+    const after = 'Display Map\nTour A\n10 days from $5,500pp\nIncludes flights\nA - B\nView Tour'
+    expect(projectTravelContent(before, 'product_listing')).toContain('Tour: Tour A | Duration: 10 days | Price: $5,000pp')
+    expect(projectTravelContent(after, 'product_listing')).toContain('Tour: Tour A | Duration: 10 days | Price: $5,500pp')
+  })
+  it('places Tour comparison rules in the industry guidance, not the shared prompt', () => {
+    const prompt = interpretationPrompt(signal, evidence, '', TRAVEL_INTERPRETATION_GUIDANCE)
+    expect(prompt).toContain('exact Tour name plus before and after values')
+    expect(prompt).toContain('departure dates')
   })
   it('round-trips settings read from database without metadata columns', () => {
     const read = settingsSchema.strip().parse({ ...settings, client_id: a, updated_at: '2026-09-09' })
