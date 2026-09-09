@@ -1,6 +1,6 @@
 # Creatomate Connector 接入计划 · 内容工厂"确认出片"入口重新点亮 · spec v2
 
-> 起草：Claude Code · v1 2026-09-09 · **v2 2026-09-09（子牙+鲁班+魏征三方并行复审后重写，见 §10 改动清单）**
+> 起草：Claude Code · v1 2026-09-09 · **v2 2026-09-09（子牙+鲁班+魏征三方并行复审后重写，见 §10 改动清单；定稿前另查到 window bda74d92 立项记录，补回 §4.3a 场景素材编排，避免漏掉 PM 要求的"编排 imageToClip+shot-guards+creatomate"）**
 > 审查沿革：v1 → 子牙（架构，❌不能进 GO BUILD）+ 鲁班（执行视角，❌预算不现实）+ 魏征（挑刺，❌）三方并行复审 → v2 全部吸收，核心架构从"接现有渲染管线"改为"重新点亮一个已知的死入口"
 > Tier 判定：**L3 Connector**（me-platform-tier-gate 已过，理由见 §2）——挂在既有"内容工厂"能力下，不新增能力线，不登记 platform-candidates
 > 对外大白话名（提案，待复核）：复用 **Video Studio**
@@ -106,7 +106,9 @@ planned → waiting → transcribing → rendering → succeeded | failed | canc
 
 Creatomate 是"确认选题→自动出片"这条 2026-09-02 关掉的入口的**新引擎**，不是给旧表加一条并列的分支。只对 `factory_config.render.engine === 'creatomate'` 的客户生效；没配置的客户，"确认"按钮继续返回现在这句"需人工处理"，**不受影响、不强推**。
 
-明确排除：不碰 `content_work_orders`（语义不通用，§1.2 已说明）；不碰 `render-pipeline.ts`/`render-assemble.ts`/`scripts/render-worker/`（继续保持死透）——Creatomate 路径不需要分镜规划/i2v/配音，直接从 `content_posts` 字段到 Creatomate `modifications`，跳过整个旧生成流程，**这也是 v2 比 v1 简单的地方**。
+明确排除：不碰 `content_work_orders`（语义不通用，§1.2 已说明）；不碰 `render-assemble.ts`（ffmpeg 拼接）/`scripts/render-worker/`（继续保持死透）。
+
+**v2 定稿修正**（起草过程中查到 window bda74d92 的立项记录 `project-creatomate-connector-b-min`，原文明写工作流要"编排 `imageToClip` + `shot-guards` + `creatomate`"——本节初稿曾漏掉这层，直接从 `content_posts` 字段跳到 Creatomate `modifications`，会漏掉 PM 模板里需要的动态画面镜头）：Creatomate **不**取代分镜/画面生成这一层，只取代 `render-assemble.ts` 的 ffmpeg 拼接这一层。分镜规划（`planScenes()`）、画面生成（`generateImage()`+`uploadFromBase64()`）、i2v（`imageToClip()`）、配音（`generateVoiceover()`）——这四个都是 `render-pipeline.ts`/`broll-clip.ts` 里现成的**无状态可调用函数**，不依赖已死的 worker 或 `content_factory_render_jobs` 状态机，直接复用，不重写。**新增的唯一逻辑**是用 `classifyRenderMode()`（PR #1373 已写好、至今没有任何管线调用过的闸）决定每个镜头走 i2v 还是真实像素——这也顺带把 #1373 留下的"有闸没接线"缺口填上了。详细编排见 §4.3a。
 
 ### 4.2 状态机
 
@@ -126,18 +128,34 @@ src/lib/creatomate/
   types.ts      — CreateRenderParams / RenderStatus / RenderResult
   render.ts     — submitRender()（幂等：先查 job 是否已有 creatomate_render_id）/ getRender() / pollUntilTerminal()
   cost.ts       — creditsForVideo()（§3.4 公式的唯一实现处，Math.ceil，禁止别处重算）/ creditsToUsd()
-  modifications.ts — buildModifications(post, factoryConfig) → 按 factory_config.render.creatomate.field_map 把 content_posts 字段映射成 Creatomate modifications
+  modifications.ts — buildModifications(preparedScenes, factoryConfig) → 按 factory_config.render.creatomate.field_map 把 §4.3a 的镜头结果映射成 Creatomate modifications
+  scene-assets.ts  — prepareSceneAssets()（§4.3a，编排 planScenes/generateImage/classifyRenderMode/imageToClip/generateVoiceover，全部复用既有函数）
   __tests__/
 ```
 
-**不改动** `render-pipeline.ts`（v1 曾要求同步改这个文件，魏征指出 v1 §4.2 状态映射跟它实际行为对不上——v2 直接不调用它，这个问题连带消失）。
+**不改动** `render-pipeline.ts`（不调用这个文件本身，避开魏征指出的"状态映射跟它实际行为对不上"问题）——但**复用它内部用到的独立函数**，见 §4.3a。
+
+### 4.3a 场景素材准备（新增，衔接 §4.1 的定稿修正）
+
+`src/lib/creatomate/scene-assets.ts::prepareSceneAssets({clientId, title, script}): Promise<PreparedScene[]>`——不是新逻辑，是把已有函数按新顺序编排一次：
+
+1. `planScenes({clientId, title, script})`（`scene-plan.ts`，原样复用）→ 4-6 个镜头，每个带 `imagePrompt`/`motionPrompt`/`voText`/`captionText`
+2. 每个镜头并行：
+   - `generateImage({prompt: imagePrompt, aspect_ratio:'9:16'})` + `uploadFromBase64()`（`broll-clip.ts` 内部用的同一对函数，直接 import，不是新写）→ 拿到静态首帧图
+   - `classifyRenderMode(imagePrompt)`（`shot-guards.ts`，PR #1373 已合、至今零调用方）→ `real_pixel` 就到此为止用静态图；`i2v` 才继续下一步
+   - `i2v` 分支：`imageToClip({clientId, imageUrl, motionPrompt})`（`broll-clip.ts`，PR #1360）→ 拿到运镜后的 clip
+   - `generateVoiceover({clientId, text: voText, voiceId, folder})`（原样复用，`voiceId` 读 `factory_config.render.voice_id`，跟 ffmpeg 路径共用同一个客户配置字段，不重复定义）
+3. 返回每个镜头：`{index, captionText, visualUrl, visualType: 'image'|'video', voUrl}`——这份结构就是 §4.7 `field_map` 要映射进 Creatomate `modifications` 的数据源
+
+**这一步本身也花钱**（gpt-image 出图 + i2v 视 `classifyRenderMode` 结果按需触发 + 配音），跟 §4.4 的 Creatomate 提交是**两笔独立的外部花费**，各自需要独立的幂等/不重试处理（不能因为 Creatomate 那步的 `retries:0` 就以为这一步也天然安全）——具体落进 §4.4 的 step 拆分。
 
 ### 4.4 Inngest 工作流（每个副作用独立 step，付费步骤禁止默认重试）
 
 1. `[id]/route.ts` 的"确认"分支：若 `factory_config.render.engine === 'creatomate'`，恢复调用 `enqueueRenderJob()`（这个函数本身没退役，一直能用，只是没人调），发 Inngest 事件 `me/factory.creatomate_render.requested`（`{ jobId, clientId, postId }`，snake_case 字段名对齐仓库既有事件 payload 惯例）
 2. 云端函数 `cloud-factory-creatomate-render`（`concurrency: { limit: 3, key: 'event.data.client_id' }`，对齐 `flywheel-seo-weekly.ts` 已有写法，防止同客户并发出片打爆限流）：
-   - **step "check-existing"**（可重试）：读 job 行。若已有 `creatomate_render_id`，跳过提交，直接进入下面的确认分支——这是防止"提交"和"落库"分离后，函数重放时误判"还没提交过"
-   - **step "submit"**（`retries: 0`，不可重试——省的钱是真钱）：调用 `buildModifications()` 组装 `modifications`，`submitRender()` 提交，拿到 `render_id`
+   - **step "check-existing"**（可重试）：读 job 行。若已有 `creatomate_render_id`，跳过下面两步，直接进入确认分支——防止"提交"和"落库"分离后，函数重放时误判"还没提交过"
+   - **step "prepare-assets"**（`retries: 0`，不可重试——§4.3a 这一步花的是 gpt-image/Muapi 的真钱，若已有 `scenes` 落库同样先查后做，跟"submit"同一条纪律）：调用 `prepareSceneAssets()`（§4.3a），把结果落 job 行的 `scenes` 列（复用 `content_factory_render_jobs.scenes` jsonb 现有列，不新建列）
+   - **step "submit"**（`retries: 0`，不可重试）：`buildModifications()` 按 §4.7 的 `field_map` 把上一步的 `scenes` 结果组装成 Creatomate `modifications`，`submitRender()` 提交，拿到 `render_id`
    - **step "persist-render-id"**（可重试，纯写库幂等）：把 `render_id` 写进 job 行的 `creatomate_render_id`
    - `step.waitForEvent('me/factory.creatomate_render.webhook_received', { match: 'data.job_id', timeout: '15m' })`——**webhook 事件本身只携带 `job_id` 和 `render_id`，不携带 `status`/`url`**（类型层面就不给，杜绝"webhook 说成功就直接采信"这条路，见 §6.1）
    - 不管是被 webhook 唤醒还是等满 15 分钟超时，**下一步永远是** `step.run` 独立调 `GET /v2/renders/{id}` 拿真实状态——webhook 只负责"提前戳一下，别等满 15 分钟"，从不负责"这就是结果"
@@ -221,7 +239,7 @@ Essential 档：**$54/月**（PM 确认已订阅），2,000 credits/月。均摊
 
 （v1 曾写 107/53，是抄官方文档未取整的示例数字算出来的，v2 按官方文档自己写的"rounded up"规则重算。）
 
-对比 Muapi i2v 单价 $0.30/条（PR #1360 实测）：用途不同，不能只比价格，Creatomate 是模板排版，i2v 是给静图配运动。
+**§4.3a 补上后，一条渲染的真实成本不止 Creatomate credits 一项**：还要加每个 i2v 镜头 $0.30/条（PR #1360 实测单价，只有 `classifyRenderMode` 判 `i2v` 的镜头才产生这笔）+ gpt-image 出图（每镜头一张首帧图，成本参考 `reference-ai-api-unit-costs-2026-08` 现有记录）+ 配音。一条 4-6 镜头的 reel，若全部走 i2v，Muapi 那部分就是 $1.2-1.8，比 Creatomate 本身的均摊成本（$0.5-1）还高——**Creatomate 从来不是这条链路唯一的花费大户，`cost_usd` 记账必须把两边都算进去**，不能只记 Creatomate 那一半。
 
 ---
 
@@ -243,7 +261,7 @@ Essential 档：**$54/月**（PM 确认已订阅），2,000 credits/月。均摊
 2. 复活 ffmpeg 蒙太奇路径的自动 worker——那条路径继续保持死透，本次不管
 3. `content_work_orders`（广告创意变体循环）的任何改动——语义不通用，本次不碰
 
-**时间估算**：鲁班在 v1 设计（挂在既有分镜生成管线之后）下估了 6.5-8 个工作日，主要超支在"webhook+轮询双保险"这套本仓库云端第一次出现的新模式。v2 因为完全跳过了分镜/i2v/配音这一层（§1.3），少了一块集成面，但"双保险"工作流本身的设计复杂度不变——现实估计 **5.5-7 个工作日**，仍然比 PM 最初给的 4-5 天多，多出来的部分基本都在 §4.4 这条工作流的设计和验证上。
+**时间估算**：鲁班在 v1 设计（挂在既有分镜生成管线之后）下估了 6.5-8 个工作日，主要超支在"webhook+轮询双保险"这套本仓库云端第一次出现的新模式。v2 定稿版把分镜/i2v/配音这一层（§4.3a）按 window bda74d92 原立项要求加回来了（比最初"完全跳过"的中间版本多一块集成面，但全部是复用现成函数，不是新写生成逻辑），综合下来现实估计 **6-7.5 个工作日**，仍然比 PM 最初给的 4-5 天多，多出来的部分主要在 §4.4 工作流本身的设计验证，其次是 §4.3a 两笔独立花费（Creatomate + Muapi/gpt-image）各自的幂等处理。
 
 ---
 
@@ -279,7 +297,7 @@ Essential 档：**$54/月**（PM 确认已订阅），2,000 credits/月。均摊
 
 ## Reuse Statement（v2）
 
-- **复用了什么已有平台能力**：`content_factory_render_jobs` 表（不新建表）、`content_posts` 现有字段、`enqueueRenderJob()`（未改动，只是重新被调用）、Supabase Storage `content-factory` bucket、`src/lib/workflows/inngest-event.ts`、`flywheel-seo-weekly.ts` 的云端函数+回执范式、`src/lib/factory/safe-remote-fetch.ts` 的域名校验模式、`FactoryConfigPanel.tsx` 现有 Settings 面板、`src/lib/pm-todo/manual-items.ts` 的人工待办栏
+- **复用了什么已有平台能力**：`content_factory_render_jobs` 表（不新建表）、`content_posts` 现有字段、`enqueueRenderJob()`（未改动，只是重新被调用）、`planScenes()`/`generateImage()`+`uploadFromBase64()`/`classifyRenderMode()`/`imageToClip()`/`generateVoiceover()`（§4.3a，全部原样复用，零新写生成逻辑，顺带把 PR #1373 的闸接上了第一个真实调用方）、Supabase Storage `content-factory` bucket、`src/lib/workflows/inngest-event.ts`、`flywheel-seo-weekly.ts` 的云端函数+回执范式、`src/lib/factory/safe-remote-fetch.ts` 的域名校验模式、`FactoryConfigPanel.tsx` 现有 Settings 面板、`src/lib/pm-todo/manual-items.ts` 的人工待办栏
 - **真正 platform-shared**：`src/lib/creatomate/` 整个 L3 Connector；"确认出片"入口重新点亮这件事本身（不限于 Creatomate，未来任何引擎都能挂在同一个 `render_engine` 开关下）
 - **industry-specific**：无
 - **client-specific**：`factory_config.render.creatomate.{template_id, field_map, audio_keys}`；§6.3 的 CTS 试点假设
