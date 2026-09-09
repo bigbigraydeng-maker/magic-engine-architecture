@@ -1,5 +1,5 @@
 (() => {
-  const labels = { overview: 'Growth overview', insights: 'Market signals', actions: 'Action queue', content: 'Content studio' };
+  const labels = { overview: 'Growth overview', insights: 'Market discovery', visibility: 'SEO & AI visibility', ads: 'Ads intelligence', content: 'Content studio', leads: 'Social & leads', actions: 'Actions & approvals', outcomes: 'Outcomes & reports' };
   document.querySelectorAll('[data-view]').forEach(control => {
     control.addEventListener('click', () => {
       const id = control.dataset.view;
