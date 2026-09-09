@@ -12,6 +12,7 @@ const input = {
 describe('buildCompetitionBrief', () => {
   it('turns current tour evidence into an operating brief without inventing a total score', () => {
     const brief = buildCompetitionBrief(input)
+    expect(brief.subject).toBe('Tour')
     expect(brief.headline).toContain('竞品Tour盘面已可查看')
     expect(brief.actions).toHaveLength(3)
     expect(brief.dimensions.find(item => item.key === 'product')?.status).toBe('stale')
@@ -67,6 +68,7 @@ describe('buildCompetitionBrief', () => {
 
   it('uses the selected client identity in missing-data actions', () => {
     const brief = buildCompetitionBrief({ ...input, clientName: 'Example Dental', clientDomain: 'exampledental.co.nz', snapshots: { failed: false, data: [] } })
+    expect(brief.subject).toBe('产品')
     expect(brief.actions.join(' ')).toContain('Example Dental')
     expect(brief.actions.join(' ')).not.toContain('CTS')
     expect(brief.headline).not.toContain('9 月')

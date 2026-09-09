@@ -8,12 +8,12 @@ const payload = (id = 'a') => ({
   client: { id, name: `Client ${id.toUpperCase()}` }, settings: null,
   competitors: [baseCompetitor], signals: [], evidence: [], runs: [],
   brief: {
-    as_of: '2026-09-10T00:00:00Z', headline: '现有数据还不足以回答 9 月应该争哪条线路、用什么价格。',
-    summary: '当前 2/4 个核心维度数据可用，监控 1 家竞品、1 个业务页面。',
+    as_of: '2026-09-10T00:00:00Z', subject: 'Tour', headline: '现有数据还不足以回答 9 月应该争哪条线路、用什么价格。',
+    summary: '当前 1/4 个维度可直接竞争对比，1 个只有单方或有限数据；监控 1 家竞品、1 个业务页面。',
     actions: ['补齐竞品核心 Tour 列表与详情页。', '绑定评价平台身份。', '只对已验证变化形成建议。'],
     warnings: [], gaps: [{ label: '竞品广告', reason: '尚未形成可比较的历史快照' }],
     dimensions: [
-      { key: 'product', label: '竞品产品与价格', status: 'ready', headline: '已读取 1/1 个已配置业务页面', detail: 'Tour 盘面', source: '竞品官网已配置页面', observed_at: '2026-09-10', coverage: '仅代表已配置页面。' },
+      { key: 'product', label: '竞品产品与价格', status: 'limited', headline: '已读取 1/1 个已配置业务页面', detail: 'Tour 盘面', source: '竞品官网已配置页面', observed_at: '2026-09-10', coverage: '仅代表已配置页面。' },
       { key: 'search', label: '网站搜索基础', status: 'ready', headline: 'Client A 26；example.com 22', detail: '不等于 Google 排名、流量或市场份额。', source: 'Industry Baseline', observed_at: '2026-09-01', coverage: '2 个网站。' },
       { key: 'reputation', label: '客户评价', status: 'unconfigured', headline: '尚未形成可比较的评价', detail: '明确身份', source: 'Google', observed_at: null, coverage: '未配置。' },
       { key: 'ai_visibility', label: 'AI 推荐表现', status: 'no_observation', headline: '尚无快照', detail: '只展示客户自身表现', source: 'AI Visibility', observed_at: null, coverage: '尚无记录。' },
@@ -30,11 +30,14 @@ function openSection(name: string) { fireEvent.click(screen.getByText(name)) }
 afterEach(() => vi.unstubAllGlobals())
 
 describe('WebIntelligencePanel competition brief flow', () => {
-  it('puts one analysis action and the decision result ahead of configuration', async () => {
+  it('puts the current decision ahead of product evidence and configuration', async () => {
     vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : payload())))
     render(<WebIntelligencePanel />); await selectClient()
-    expect(await screen.findByText('现有数据还不足以回答 9 月应该争哪条线路、用什么价格。')).toBeVisible()
-    expect(screen.getByText('四个经营维度')).toBeVisible()
+    expect(await screen.findByText('现在需要回应什么')).toBeVisible()
+    expect(screen.getByText('还没有可用的竞争分析')).toBeVisible()
+    expect(screen.getByText('Tour 竞争盘面')).toBeVisible()
+    expect(screen.getByText('查看其他判断依据与数据缺口')).toBeVisible()
+    expect(screen.queryByText('四个经营维度')).not.toBeInTheDocument()
     openSection('重新采集与系统运行说明')
     expect(screen.getByRole('button', { name: '开始竞争分析' })).toBeVisible()
     expect(screen.getByText('本次将分析 1 家竞品、1 个页面')).toBeVisible()
@@ -81,26 +84,113 @@ describe('WebIntelligencePanel competition brief flow', () => {
     vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
     render(<WebIntelligencePanel />); await selectClient()
     expect(await screen.findByText('最近一次没有发现需要调衡的竞争变化')).toBeVisible()
-    expect(screen.getByText('覆盖状态：1/1 个页面完成')).toBeVisible()
-    expect(screen.getByText('Old misleading conclusion')).not.toBeVisible()
+    expect(screen.getByText('本次监控覆盖：1/1 个页面证据有效')).toBeVisible()
+    expect(screen.queryByText('Old misleading conclusion')).not.toBeInTheDocument()
     openSection('历史分析 · 1 条')
-    expect(screen.getByText('Old misleading conclusion')).toBeVisible()
+    expect(screen.queryByText('Old misleading conclusion')).not.toBeInTheDocument()
+    expect(screen.getByText('模型结论没有形成完整的前后证据链，当前不能作为经营决定。')).toBeVisible()
   })
 
   it('shows current evidence as Inspect, Measure and Prescribe without claiming execution', async () => {
     const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
     const data = { ...payload(), runs: [run], evidence: [
-      { id: 'before', source_url: run.url, excerpt: 'Standard price $1,200\nAvailable', observed_at: '2026-09-08', content_hash: 'a' },
-      { id: 'after', source_url: run.url, excerpt: 'Earlybird price $950\nOnly 3 spaces left', observed_at: '2026-09-09', content_hash: 'b' },
-    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'threat', interpretation: { summary: '竞品降价并接近售罄。', confidence: 0.9 }, recommended_action: '比较同类产品价值，并决定是否调整优惠。', created_at: run.created_at }] }
+      { id: 'before', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: $1,200 | Availability: Available', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: $950 | Availability: Only 3 spaces left', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'threat', interpretation: { summary: '竞品降价并接近售罄。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '比较同类产品价值，并决定是否调整优惠。', created_at: run.created_at }] }
     vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
     render(<WebIntelligencePanel />); await selectClient()
-    expect(await screen.findByText('I · 发现了什么')).toBeVisible()
-    expect(screen.getByText('M · 竞争影响')).toBeVisible()
-    expect(screen.getByText('P · 建议下一步')).toBeVisible()
-    expect(screen.getByText(/A 尚未执行 · C\/T 将在执行并获得结果后启用/)).toBeVisible()
-    expect(screen.getByText('+ Earlybird price $950')).toBeVisible()
-    expect(screen.getByText('− Standard price $1,200')).toBeVisible()
+    expect(await screen.findByText('发生了什么')).toBeVisible()
+    expect(screen.getByText('对 Client A 的潜在影响')).toBeVisible()
+    expect(screen.getByText('建议怎么做')).toBeVisible()
+    expect(screen.getByText(/当前判断 · 仅代表这个竞品的这个页面 · 尚未执行任何动作/)).toBeVisible()
+    expect(screen.getByText('+ Tour: Wonders of China | Price: $950 | Availability: Only 3 spaces left')).toBeVisible()
+    expect(screen.getByText('− Tour: Wonders of China | Price: $1,200 | Availability: Available')).toBeVisible()
+  })
+
+  it('withholds a model conclusion when its evidence chain is incomplete', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Price $1,200', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Price $950', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'opportunity', interpretation: { summary: '竞品降价。', confidence: 0.8, evidence_ids: ['before'] }, recommended_action: '立即降价。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('待核实')).toBeVisible()
+    expect(screen.getByText('模型结论没有形成完整的前后证据链，当前不能作为经营决定。')).toBeVisible()
+    expect(screen.queryByText('立即降价。')).not.toBeInTheDocument()
+  })
+
+  it('withholds an otherwise grounded conclusion when the evidence is stale', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-01', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Price $1,200', observed_at: '2026-08-30', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Price $950', observed_at: '2026-09-01', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'threat', interpretation: { summary: '竞品降价。', confidence: 0.8, evidence_ids: ['before', 'after'] }, recommended_action: '立即降价。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('这条观察已超过 8 天，请重新采集后再决定。')).toBeVisible()
+    expect(screen.queryByText('立即降价。')).not.toBeInTheDocument()
+  })
+
+  it('keeps a model price claim absent from evidence as a lead without exposing its action', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Tour A old package', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour A revised package', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'opportunity', interpretation: { summary: 'Tour A 已降价至 $950。', confidence: 0.7, evidence_ids: ['before', 'after'] }, recommended_action: '核对 CTS 同类产品。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('Tour A 已降价至 $950。')).toBeVisible()
+    expect(screen.getByText('模型发现了一条待核实线索')).toBeVisible()
+    expect(screen.queryByText('核对 CTS 同类产品。')).not.toBeInTheDocument()
+    expect(screen.queryByText(/没有提取到明确的价格/)).not.toBeInTheDocument()
+  })
+
+  it('withholds an action when model prices and direction conflict with same-category evidence', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Tour A price NZD 5,000', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour A price NZD 4,500', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'threat', interpretation: { summary: 'Tour A 从 NZD 9,000 涨价到 NZD 12,000。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '跟随涨价。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('模型发现了一条待核实线索')).toBeVisible()
+    expect(screen.queryByText('跟随涨价。')).not.toBeInTheDocument()
+    expect(screen.getByText('Tour A 从 NZD 9,000 涨价到 NZD 12,000。')).toBeVisible()
+  })
+
+  it('withholds an action when correct prices are assigned to the wrong before-and-after direction', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: NZD 5,000', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: NZD 4,500', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'threat', interpretation: { summary: 'Wonders of China 从 NZD 4,500 降价至 NZD 5,000。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '立即跟进。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('模型发现了一条待核实线索')).toBeVisible()
+    expect(screen.queryByText('立即跟进。')).not.toBeInTheDocument()
+  })
+
+  it('does not pair prices from different tours through a generic shared word', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Tour: China Tour A | Duration: 10 days | Promotion: none | Reviews: 20 | Price: NZD 5,000', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Japan Tour B | Duration: 10 days | Promotion: none | Reviews: 20 | Price: NZD 4,500', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'threat', interpretation: { summary: 'China Tour A 从 NZD 5,000 降价至 NZD 4,500。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '立即跟进。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('模型发现了一条待核实线索')).toBeVisible()
+    expect(screen.queryByText('立即跟进。')).not.toBeInTheDocument()
+  })
+
+  it('does not present an old unchanged run as the current market state', async () => {
+    const data = { ...payload(), runs: [{ id: 'old-run', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-08-20', capture_cost_usd: 0.01, interpretation_cost_usd: 0, accounted_nzd: 0.02, reserved_nzd: 0 }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('最近一次证据已过期，请重新采集')).toBeVisible()
+    expect(screen.getByText('旧记录只能说明当时没有发现变化，不能代表当前竞争盘面。')).toBeVisible()
+    expect(screen.getByText(/0\/1 个页面证据有效 · 1 个已过期/)).toBeVisible()
+    expect(screen.queryByText(/没有发现需要调衡/)).not.toBeInTheDocument()
   })
 
   it('reports partial coverage instead of a safe conclusion', async () => {
