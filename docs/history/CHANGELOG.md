@@ -5,6 +5,16 @@
 
 ---
 
+### 2026-09-10（CTS 竞品 Tour 具名对比上线）
+
+PR [#1523](https://github.com/bigbigraydeng-maker/magic-engine/pull/1523) 已合并并由 Render 将提交 `3ba2439` 部署为 Live。Travel profile 将产品列表归一化为具名 Tour 记录，对比名称、天数、价格、促销、评价、包含项目与路线；展示顺序及未绑定到具体 Tour 的重复促销标签不再形成业务信号。LLM 只可引用明确的 Tour 与变化前后值，证据不足必须判为无需行动。
+
+生产验收对 Wendy Wu `new-tours/` 连续采集两次：请求 `0b053d17-d17a-4f4e-9f5b-d13d97c10813` 建立 `me-travel-v2` 基线，请求 `72b981dc-b6fb-49a1-9641-eb9c6b9e2436` 对同一业务内容复采；两次均 `SUCCEEDED`、各结算 NZ$0.02，均未调用 LLM（分析 US$0.00），第二次没有新增 market signal。CTS 当月累计 NZ$0.39，低于 NZ$30 目标与 NZ$50 hard stop。历史 55% 误报保留作审计记录，没有冒充本轮结果。
+
+**验证**：77 项针对性测试、ESLint、本地生产构建，以及 PR 的类型检查、应用构建、CRM 回归、编排测试、Claude Review 和 Cloudflare 预览全部通过。无 migration、无新 provider、无自动执行动作。
+
+**Reuse Statement**：复用现有 Apify、snapshot/evidence、market signal、Inngest 和 Industry Baselines。共享层只增加可选行业投影与解释指引接口；Tour 规则位于 L2 Travel profile，CTS 只通过既有监控配置使用，客户名称、ID 和事实未写入共享运行时。
+
 ### 2026-09-09（Creatomate Connector 落地——重新点亮已退役的确认出片入口）
 
 PR [#1513](https://github.com/bigbigraydeng-maker/magic-engine/pull/1513) 已合并。给内容工厂接入 Creatomate 模板渲染引擎（PM 已订阅 Essential $54/月），把 2026-09-02 主动关掉的"确认选题→自动出片"入口重新点亮——只对配置了 `factory_config.render.engine='creatomate'` 的客户生效，其余客户维持原状不受影响。
