@@ -48,6 +48,16 @@ function record(value: unknown): Record<string, unknown> {
     ? value as Record<string, unknown> : {}
 }
 
+function pageIdentity(url: URL): string {
+  const host = url.hostname.replace(/^www\./, '').toLowerCase()
+  const path = url.pathname.replace(/\/+$/, '') || '/'
+  const kept = [...url.searchParams.entries()]
+    .filter(([key]) => !key.toLowerCase().startsWith('utm_') && !['gclid', 'dclid', 'fbclid', 'msclkid', '_ga', '_gl'].includes(key.toLowerCase()))
+    .sort(([a], [b]) => a.localeCompare(b))
+  const query = new URLSearchParams(kept).toString()
+  return `${host}${path}${query ? `?${query}` : ''}`
+}
+
 function parsePage(raw: unknown, expectedUrl: string): NonNullable<WebsiteCapture['page']> {
   const item = record(raw)
   const crawl = record(item.crawl)
@@ -58,6 +68,7 @@ function parsePage(raw: unknown, expectedUrl: string): NonNullable<WebsiteCaptur
   if (host(finalUrl) !== host(expected) || (expected.protocol === 'https:' && finalUrl.protocol !== 'https:')) {
     throw new Error('Capture redirected outside the approved origin')
   }
+  if (pageIdentity(finalUrl) !== pageIdentity(expected)) throw new Error('Capture redirected to a different page')
   const status = crawl.httpStatusCode ?? item.statusCode
   if (typeof status !== 'number' || status < 200 || status >= 400) throw new Error('Capture has no successful HTTP status')
   const text = typeof item.markdown === 'string' ? item.markdown.trim() : ''
@@ -67,6 +78,9 @@ function parsePage(raw: unknown, expectedUrl: string): NonNullable<WebsiteCaptur
   }
   if (/captcha|verify (?:that )?you are (?:a )?human|checking your browser|access denied|just a moment/i.test(`${title}\n${text.slice(0, 1500)}`)) {
     throw new Error('Capture contains a challenge or access-denied page')
+  }
+  if (/^(?:404\b|page not found\b|not found\b)/i.test(title.trim()) || /^#{0,2}\s*(?:404\b|page not found\b)/im.test(text.slice(0, 800))) {
+    throw new Error('Capture contains a not-found page')
   }
   return { url: finalUrl.href, title, text }
 }

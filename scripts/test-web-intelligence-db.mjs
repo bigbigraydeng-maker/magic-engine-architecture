@@ -68,6 +68,17 @@ async function capture(client, content, hash) {
   await sql(`UPDATE web_intelligence_runs SET capture_cost_usd=0.01,interpretation_cost_usd=0 WHERE id='${request.id}'; SELECT web_intelligence_settle('${request.id}','${client}')`)
   return { ...result, runId: request.id }
 }
+async function businessCapture(client, raw, projection, version = 'business-content-v1+actor-1.0.0', path = '/', finalUrl = `https://example.com${path}`) {
+  const request = reserve(client, randomUUID(), 'example.com', path)
+  await sql(request.statement)
+  await sql(`UPDATE web_intelligence_runs SET provider_run_id='local-fixture',provider_status='SUCCEEDED' WHERE id='${request.id}'`)
+  const result = JSON.parse(await sql(`SELECT web_intelligence_record_business_snapshot(
+    '${request.id}','${client}',${literal(finalUrl)},'Fixture',${literal(raw)},
+    '${createHash('sha256').update(raw).digest('hex')}',${literal(projection)},
+    '${createHash('sha256').update(projection).digest('hex')}','${version}','product_listing')`))
+  await sql(`UPDATE web_intelligence_runs SET capture_cost_usd=0.01,interpretation_cost_usd=0 WHERE id='${request.id}'; SELECT web_intelligence_settle('${request.id}','${client}')`)
+  return { ...result, runId: request.id }
+}
 async function verifyDatabase(migration) {
   await sql(`CREATE ROLE service_role; CREATE ROLE anon; CREATE ROLE authenticated;
     GRANT USAGE ON SCHEMA public TO service_role,anon,authenticated;
@@ -208,6 +219,22 @@ const databaseChecks = [
     assert.equal(replay.signal_id,changed.signal_id)
     assert.equal(await sql(`SELECT count(*) FROM market_signals WHERE client_id='${client}'`),'1')
   }],
+  ['Business projection suppresses framework noise and version upgrades start a baseline', async () => {
+    const client = await fixture()
+    const first = await businessCapture(client, 'Navigation v1\nTour Alpha\nFrom NZ$5,000'.repeat(5), 'Tour Alpha\nFrom NZ$5,000'.repeat(5))
+    const noise = await businessCapture(client, 'Navigation v2\nTour Alpha\nFrom NZ$5,000'.repeat(5), 'Tour Alpha\nFrom NZ$5,000'.repeat(5), 'business-content-v1+actor-1.0.0', '/', 'https://www.example.com/?utm_source=redirect')
+    const changed = await businessCapture(client, 'Navigation v3\nTour Alpha\nFrom NZ$5,500'.repeat(5), 'Tour Alpha\nFrom NZ$5,500'.repeat(5))
+    const upgraded = await businessCapture(client, 'Navigation v3\nTour Alpha\nFrom NZ$5,500'.repeat(5), 'Tour Alpha\nFrom NZ$5,500'.repeat(5), 'business-content-v1+actor-2.0.0')
+    assert.equal(first.state,'baseline'); assert.equal(noise.state,'technical_noise')
+    assert.equal(changed.state,'changed'); assert.ok(changed.signal_id)
+    assert.equal(upgraded.state,'baseline'); assert.equal(upgraded.signal_id,null)
+  }],
+  ['Business snapshot rejects null page identity fields', async () => {
+    const client = await fixture(), request = reserve(client)
+    await sql(request.statement)
+    await sql(`UPDATE web_intelligence_runs SET provider_run_id='local-fixture',provider_status='SUCCEEDED' WHERE id='${request.id}'`)
+    await denied(`SELECT web_intelligence_record_business_snapshot('${request.id}','${client}','https://example.com/','Fixture','${'R'.repeat(100)}','raw','${'P'.repeat(100)}','projection','v1',NULL)`, /invalid_business_snapshot/)
+  }],
   ['Long-page evidence retains the actual changed tail for interpretation', async () => {
     const client = await fixture(), prefix = 'Unchanged introduction. '.repeat(1000)
     const first = await capture(client, prefix + 'Price NZ$5000', 'tail-before')
@@ -248,7 +275,14 @@ const databaseChecks = [
     for (const role of ['anon','authenticated']) {
       for (const table of tables) await denied(`SET ROLE ${role}; SELECT * FROM ${table}`,/permission denied/)
       const id=randomUUID(),client=randomUUID()
-      for (const statement of [reserve(client,id).statement,`SELECT web_intelligence_claim('${id}','${client}','capture')`,`SELECT web_intelligence_budget('${client}')`,`SELECT web_intelligence_settle('${id}','${client}')`,`SELECT web_intelligence_record_snapshot('${id}','${client}','x','x','x','x')`]) {
+      for (const statement of [
+        reserve(client,id).statement,
+        `SELECT web_intelligence_claim('${id}','${client}','capture')`,
+        `SELECT web_intelligence_budget('${client}')`,
+        `SELECT web_intelligence_settle('${id}','${client}')`,
+        `SELECT web_intelligence_record_snapshot('${id}','${client}','x','x','x','x')`,
+        `SELECT web_intelligence_record_business_snapshot('${id}','${client}','x','x','x','x','x','x','x','other')`,
+      ]) {
         await denied(`SET ROLE ${role}; ${statement}`,/permission denied/)
       }
     }
@@ -273,7 +307,9 @@ try {
   assert.equal(await sql('SHOW listen_addresses'), '127.0.0.1')
   evidence.checks.push('PostgreSQL 17 isolated cluster bound only to 127.0.0.1')
   if (!process.argv.includes('--smoke')) {
-    const migration = await readFile(resolve(repo, 'supabase/migrations/20260908153810_web_intelligence_v01.sql'), 'utf8')
+    const base = await readFile(resolve(repo, 'supabase/migrations/20260908153810_web_intelligence_v01.sql'), 'utf8')
+    const upgrade = await readFile(resolve(repo, 'supabase/migrations/20260909160000_web_intelligence_business_projection.sql'), 'utf8')
+    const migration = `${base}\n${upgrade}`
     assert.ok(migration.trim(), 'Web Intelligence migration must be ready before database acceptance')
     evidence.migrationSha256 = createHash('sha256').update(migration).digest('hex')
     await verifyDatabase(migration)

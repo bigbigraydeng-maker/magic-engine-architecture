@@ -6,6 +6,8 @@ vi.mock('@/lib/anthropic/client', () => ({ MODEL_SONNET: 'test-model', callClaud
 import { canonicalDomain, approvedUrl } from '../targets'
 import { allowedClient, requestSchema, settingsSchema, metadataSchema, periodKey, type Signal, type Evidence } from '../contracts'
 import { interpretationPrompt, validateInterpretation, changedWindow } from '../interpret'
+import { classifyBusinessPage, projectBusinessContent } from '../content-projection'
+import { TRAVEL_BUSINESS_PROFILE, profileForTags } from '../profiles/travel'
 const a = '00000000-0000-4000-8000-000000000001'
 const b = '00000000-0000-4000-8000-000000000002'
 const c = '00000000-0000-4000-8000-000000000003'
@@ -33,6 +35,56 @@ describe('Website scope, budget and evidence contracts', () => {
   it('marks omitted regions of a large diff explicitly', () => {
     const change = changedWindow('A'.repeat(10000), 'B'.repeat(10000))
     expect(change.partial).toBe(true); expect(change.before).toContain('omitted')
+  })
+  it('keeps a middle price change when framework lines also change', () => {
+    const unchanged = Array.from({ length: 900 }, (_, i) => `Tour detail ${i}`)
+    const before = ['Navigation old', ...unchanged.slice(0, 450), 'From NZ$5,000', ...unchanged.slice(450), 'Pixel old'].join('\n')
+    const after = ['Navigation new', ...unchanged.slice(0, 450), 'From NZ$5,500', ...unchanged.slice(450), 'Pixel new'].join('\n')
+    const change = changedWindow(before, after)
+    expect(change.before).toContain('NZ$5,000'); expect(change.after).toContain('NZ$5,500')
+  })
+  it('keeps product-price association when two prices swap', () => {
+    const change = changedWindow(
+      'Tour A\nNZ$5,000\nTour B\nNZ$6,000',
+      'Tour A\nNZ$6,000\nTour B\nNZ$5,000',
+    )
+    expect(change.before).toContain('Tour A\nNZ$5,000')
+    expect(change.after).toContain('Tour A\nNZ$6,000')
+  })
+  it('keeps a price change inside a very long changed line', () => {
+    const prefix = 'Long product description '.repeat(400)
+    const change = changedWindow(`Product A\n${prefix}Price NZ$5,000`, `Product A\n${prefix}Price NZ$4,500`)
+    expect(change.before).toContain('NZ$5,000'); expect(change.after).toContain('NZ$4,500')
+    expect(change.partial).toBe(true)
+  })
+  it('projects business facts while removing image and tracker noise', () => {
+    const projected = projectBusinessContent(`
+      # China Tours
+      ![destination](https://cdn.example.com/a.jpg)
+      [Wonders of China](https://example.com/tours/wonders?utm_source=ad)
+      From NZ$9,030pp
+      https://bat.bing.com/action/0?ti=123
+      China Tours
+    `)
+    expect(projected).toBe('China Tours\nWonders of China\nFrom NZ$9,030pp\nChina Tours')
+  })
+  it('collapses only adjacent duplicates so repeated prices keep their product context', () => {
+    expect(projectBusinessContent('Tour A\nNZ$5,000\nNZ$5,000\nTour B\nNZ$5,000')).toBe('Tour A\nNZ$5,000\nTour B\nNZ$5,000')
+  })
+  it('keeps price, availability and dates in the comparison projection', () => {
+    expect(projectBusinessContent('Depart NZ 5 Oct 2026\nOnly 3 Spaces Left\nPrice NZ$15,380')).toContain('Only 3 Spaces Left')
+  })
+  it('preserves product and price association when values swap', () => {
+    const before = projectBusinessContent('Tour A\nNZ$5,000\nTour B\nNZ$6,000')
+    const after = projectBusinessContent('Tour A\nNZ$6,000\nTour B\nNZ$5,000')
+    expect(before).not.toBe(after)
+  })
+  it('loads travel semantics only from an industry profile tag', () => {
+    expect(profileForTags([])).toBeUndefined()
+    expect(profileForTags(['industry:travel'])).toBe(TRAVEL_BUSINESS_PROFILE)
+    expect(classifyBusinessPage('https://example.com/china/tours/', TRAVEL_BUSINESS_PROFILE)).toBe('product_listing')
+    expect(classifyBusinessPage('https://example.com/china/tours/classic-china.htm', TRAVEL_BUSINESS_PROFILE)).toBe('product_detail')
+    expect(classifyBusinessPage('https://example.com/new-tours/', TRAVEL_BUSINESS_PROFILE)).toBe('product_listing')
   })
   it('round-trips settings read from database without metadata columns', () => {
     const read = settingsSchema.strip().parse({ ...settings, client_id: a, updated_at: '2026-09-09' })
