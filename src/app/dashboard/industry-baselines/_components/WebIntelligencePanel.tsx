@@ -16,7 +16,7 @@ type Competitor = {
 }
 type Evidence = { id: string; source_url: string; excerpt: string; observed_at: string; content_hash: string }
 type Signal = {
-  id: string; domain: string; kind: string; before_evidence_id: string | null
+  id: string; run_id: string; domain: string; kind: string; before_evidence_id: string | null
   after_evidence_id: string | null; interpretation_status: string
   classification: string | null; interpretation: { summary?: string; confidence?: number; evidence_ids?: string[] } | null
   recommended_action: string | null; created_at: string
@@ -30,6 +30,18 @@ type Payload = {
   client: { id: string; name: string }; settings: Settings | null; competitors: Competitor[]
   signals: Signal[]; evidence: Evidence[]; runs: Run[]
   budget: { accounted_nzd: number; reserved_nzd: number }; can_edit: boolean; can_run: boolean
+}
+type AnalysisTarget = { domain: string; url: string; tier: Competitor['tier'] }
+type BatchTarget = AnalysisTarget & { request_id: string; status: 'pending' | 'queued' | 'failed' }
+
+function latestRunsForTargets(runs: Run[], targets: AnalysisTarget[]): Run[] {
+  const targetKeys = new Set(targets.map(target => JSON.stringify([target.domain, target.url])))
+  const latest = new Map<string, Run>()
+  for (const run of [...runs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))) {
+    const key = JSON.stringify([run.domain, run.url])
+    if (targetKeys.has(key) && !latest.has(key)) latest.set(key, run)
+  }
+  return [...latest.values()]
 }
 const field = 'mt-1 w-full rounded-lg border border-black/15 bg-white px-3 py-2 text-sm disabled:bg-black/5'
 const button = 'rounded-lg bg-me-ochre px-3 py-2 text-sm font-bold text-white disabled:opacity-40'
@@ -126,7 +138,7 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
   const [data, setData] = useState<Payload | null>(null)
   const [refresh, setRefresh] = useState(0)
   const [revision, setRevision] = useState(0)
-  const [view, setView] = useState<'signals' | 'competitors' | 'settings'>('signals')
+  const [batch, setBatch] = useState<BatchTarget[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const endpoint = `/api/clients/${encodeURIComponent(clientId)}/web-intelligence`
@@ -140,39 +152,90 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
   }, [endpoint, refresh])
   const reload = () => setRefresh(n => n + 1)
   const monitored = data?.competitors.filter(c => c.status !== 'archive' && c.urls.length).length ?? 0
+  const targets = data?.competitors
+    .filter(c => c.status !== 'archive')
+    .flatMap(c => c.urls.map(url => ({ domain: c.domain, url, tier: c.tier }))) ?? []
+  const hasRunningTarget = latestRunsForTargets(data?.runs ?? [], targets).some(run => !['complete', 'failed', 'reconciliation'].includes(run.status))
+  useEffect(() => {
+    if (!hasRunningTarget) return
+    const timer = window.setTimeout(reload, 8000)
+    return () => window.clearTimeout(timer)
+  }, [hasRunningTarget, refresh])
   return <div className="space-y-5">
     {loading && <p role="status" className="text-sm">正在更新情报…</p>}
     {error && <p role="alert" className="text-status-rej">{error}</p>}
     {error && !data && <button className={button} onClick={reload} disabled={loading}>重新读取</button>}
     {data && <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-me-ivory p-4">
-        <div><h2 className="font-bold">{data.client.name}</h2><p className="mt-1 text-sm">{monitored} 家竞品已配置监控 · 本月已用 NZ${money(data.budget.accounted_nzd)}{data.budget.reserved_nzd > 0 && ` · 待结算 NZ$${money(data.budget.reserved_nzd)}`}</p></div>
+        <div><h2 className="font-bold">{data.client.name} · 竞争分析</h2><p className="mt-1 text-sm">{monitored} 家竞品 · {targets.length} 个业务页面 · 本月已用 NZ${money(data.budget.accounted_nzd)}</p></div>
         <button className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm disabled:opacity-40" onClick={reload} disabled={loading}>刷新结果</button>
       </div>
-      <nav aria-label="情报视图" className="flex gap-2 border-b border-black/10">
-        {([['signals', '情报'], ['competitors', '监控对象'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} aria-current={view === key ? 'page' : undefined} className={`px-4 py-3 text-sm ${view === key ? 'border-b-2 border-me-ochre font-bold text-me-charcoal' : 'text-me-charcoal/60'}`} onClick={() => setView(key)}>{label}</button>)}
-      </nav>
-      {view === 'signals' && <>
-        <p className="text-sm text-me-charcoal/70">当前仅分析“监控对象”中已配置的页面，不代表竞品全站。招聘、人员、合作与公益、评论、技术专项尚未接入。</p>
-        <Signals signals={data.signals} evidence={data.evidence} />
-        <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">采集记录 · {data.runs.length} 次</summary><div className="mt-4"><Runs runs={data.runs} /></div></details>
-      </>}
-      {view === 'competitors' && <div className="space-y-3">
-        <h2 className="text-lg font-bold">监控对象</h2>
-        <p className="text-sm text-me-charcoal/70">沿用已有竞品名单。优先配置真正会更新价格、产品、优惠和余位的业务页面；首页只适合发现线索。</p>
-        {!data.can_run && <p className="text-sm">该客户尚未开放采集，请在设置中检查监控资格与预算。</p>}
-        {data.competitors.length === 0 && <p>尚未找到已有竞品。</p>}
-        {data.competitors.map(c => <details key={c.domain} className="rounded-xl border border-black/10 bg-white p-4">
-          <summary className="cursor-pointer break-all text-sm"><strong>{c.domain}</strong><span className="ml-3 text-me-charcoal/60">{c.status === 'archive' ? '已归档' : c.urls.length ? `${c.urls.length} 个页面 · 每 ${c.interval_hours} 小时` : '尚未配置监控'}</span></summary>
-          <div className="mt-4"><CompetitorCard key={`${c.domain}-${revision}`} competitor={c} clientId={clientId} endpoint={endpoint} canEdit={data.can_edit} canRun={data.can_run} onSaved={reload} /></div>
-        </details>)}
-      </div>}
-      {view === 'settings' && <>
-        <p className="text-sm">月度目标 NZ${money(data.settings?.target_nzd ?? 30)} · 停止上限 NZ${money(data.settings?.hard_stop_nzd ?? 50)}。费用与待结算占用合计达到上限后停止新增采集。</p>
-        <SettingsForm key={`settings-${revision}`} settings={data.settings} canEdit={data.can_edit} endpoint={endpoint} onSaved={reload} />
-      </>}
+      <AnalysisLauncher targets={targets} endpoint={endpoint} canRun={data.can_run} batch={batch} setBatch={setBatch} onProgress={reload} />
+      <ImpactProgress />
+      <Signals signals={data.signals} evidence={data.evidence} runs={data.runs} targets={targets} batch={batch} />
+      <details className="rounded-xl border border-black/10 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-bold">管理监控范围</summary>
+        <div className="mt-4 space-y-3">
+          <p className="text-sm text-me-charcoal/70">沿用已有竞品名单。业务页面用于分析产品、价格、促销和余位。</p>
+          {!data.can_run && <p className="text-sm">该客户尚未开放分析，请检查资格与预算设置。</p>}
+          {data.competitors.length === 0 && <p>尚未找到已有竞品。</p>}
+          {data.competitors.map(c => <details key={c.domain} className="rounded-xl border border-black/10 p-4">
+            <summary className="cursor-pointer break-all text-sm"><strong>{c.domain}</strong><span className="ml-3 text-me-charcoal/60">{c.status === 'archive' ? '已归档' : c.urls.length ? `${c.urls.length} 个页面` : '尚未配置页面'}</span></summary>
+            <div className="mt-4"><CompetitorCard key={`${c.domain}-${revision}`} competitor={c} clientId={clientId} endpoint={endpoint} canEdit={data.can_edit} canRun={data.can_run} onSaved={reload} /></div>
+          </details>)}
+        </div>
+      </details>
+      <details className="rounded-xl border border-black/10 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-bold">成本、运行记录与证据</summary>
+        <div className="mt-4 space-y-5">
+          <p className="text-sm">月度目标 NZ${money(data.settings?.target_nzd ?? 30)} · 停止上限 NZ${money(data.settings?.hard_stop_nzd ?? 50)}{data.budget.reserved_nzd > 0 && ` · 待结算 NZ$${money(data.budget.reserved_nzd)}`}。</p>
+          <Runs runs={data.runs} />
+          <SettingsForm key={`settings-${revision}`} settings={data.settings} canEdit={data.can_edit} endpoint={endpoint} onSaved={reload} />
+        </div>
+      </details>
     </>}
   </div>
+}
+
+function AnalysisLauncher({ targets, endpoint, canRun, batch, setBatch, onProgress }: { targets: AnalysisTarget[]; endpoint: string; canRun: boolean; batch: BatchTarget[]; setBatch: (batch: BatchTarget[]) => void; onProgress: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const ordered = [...targets].sort((a, b) => Number(b.tier === 'core') - Number(a.tier === 'core'))
+  const queued = batch.filter(target => target.status === 'queued').length
+  const failed = batch.filter(target => target.status === 'failed').length
+  async function analyse() {
+    setBusy(true)
+    const resumesPartialBatch = batch.some(target => target.status !== 'queued')
+    let work = resumesPartialBatch ? batch : ordered.map(target => ({ ...target, request_id: crypto.randomUUID(), status: 'pending' as const }))
+    setBatch(work)
+    for (const target of work.filter(item => item.status !== 'queued')) {
+      try {
+        const receipt = await request<{ request_id: string }>(endpoint, 'POST', { domain: target.domain, url: target.url, request_id: target.request_id })
+        work = work.map(item => item.request_id === target.request_id ? { ...item, request_id: receipt.request_id, status: 'queued' as const } : item)
+        setBatch(work); onProgress()
+      } catch {
+        work = work.map(item => item.request_id === target.request_id ? { ...item, status: 'failed' as const } : item)
+        setBatch(work)
+        break
+      }
+    }
+    setBusy(false)
+    ;[3000, 9000, 18000].forEach(delay => window.setTimeout(onProgress, delay))
+  }
+  const label = busy ? '正在启动分析…' : failed ? '继续未完成页面' : batch.length && queued === batch.length ? '开始新一轮竞争分析' : '开始竞争分析'
+  return <section className="rounded-2xl border border-me-ochre/30 bg-gradient-to-br from-me-ochre/10 to-white p-5">
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <div><h3 className="text-xl font-bold">让 ME 分析竞争变化</h3><p className="mt-1 text-sm text-me-charcoal/70">自动读取已配置业务页面，识别变化、衡量影响并给出下一步建议，不自动采取行动。</p><p className="mt-2 text-xs font-bold text-me-charcoal/55">本次将分析 {new Set(targets.map(target => target.domain)).size} 家竞品、{targets.length} 个页面</p></div>
+      <button className={`${button} px-5 py-3`} disabled={busy || !canRun || targets.length === 0} onClick={() => void analyse()}>{label}</button>
+    </div>
+    {targets.length === 0 && <p className="mt-3 text-sm text-status-rej">尚未配置业务页面，请展开“管理监控范围”添加页面。</p>}
+    {batch.length > 0 && <p className="mt-3 text-sm" role="status">本批次：{queued}/{batch.length} 个页面已开始{failed ? `，${failed} 个页面未能启动，其余页面已暂停。` : '。分析完成后结果会自动刷新。'}</p>}
+  </section>
+}
+
+function ImpactProgress() {
+  return <section aria-label="IMPACT 进度" className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+    {[['I', '发现变化', true], ['M', '衡量影响', true], ['P', '建议下一步', true], ['A', '尚未执行', false], ['C', '执行后验证', false], ['T', '根据结果调优', false]].map(([letter, label, active]) => <div key={String(letter)} className={`rounded-xl border p-3 ${active ? 'border-me-ochre/30 bg-me-ochre/10' : 'border-black/10 bg-black/[0.02] text-me-charcoal/45'}`}><p className="text-xs font-black">{letter}</p><p className="mt-1 text-xs font-bold">{label}</p></div>)}
+  </section>
 }
 
 function SettingsForm({ settings, canEdit, endpoint, onSaved }: { settings: Settings | null; canEdit: boolean; endpoint: string; onSaved: () => void }) {
@@ -288,13 +351,13 @@ function SignalCard({ signal: s, evidence }: { signal: Signal; evidence: Evidenc
     <h3 className="break-all text-lg font-bold">{s.domain}{source ? ` · ${pagePurpose(source)}` : ''}</h3>
     {complete ? <>
       <div className="grid gap-3 lg:grid-cols-3">
-        <div className="rounded-lg bg-me-ivory p-4"><p className="text-xs font-bold text-me-charcoal/60">发生了什么</p><p className="mt-2 text-sm leading-6">{summary ?? '分析已完成，暂无文字摘要。'}</p></div>
-        <div className={`rounded-lg p-4 ${s.classification === 'threat' ? 'bg-red-50' : s.classification === 'opportunity' ? 'bg-green-50' : 'bg-black/[0.03]'}`}><p className="text-xs font-bold text-me-charcoal/60">对我们的影响</p><p className="mt-2 text-sm font-bold leading-6">{impactCopy(s.classification)}</p></div>
-        <div className="rounded-lg border border-me-ochre/30 bg-me-ochre/10 p-4"><p className="text-xs font-bold text-me-charcoal/60">如何调衡</p><p className="mt-2 text-sm font-bold leading-6">{action ?? '暂无建议。'}</p></div>
+        <div className="rounded-lg bg-me-ivory p-4"><p className="text-xs font-bold text-me-charcoal/60">I · 发现了什么</p><p className="mt-2 text-sm leading-6">{summary ?? '分析已完成，暂无文字摘要。'}</p></div>
+        <div className={`rounded-lg p-4 ${s.classification === 'threat' ? 'bg-red-50' : s.classification === 'opportunity' ? 'bg-green-50' : 'bg-black/[0.03]'}`}><p className="text-xs font-bold text-me-charcoal/60">M · 竞争影响</p><p className="mt-2 text-sm font-bold leading-6">{impactCopy(s.classification)}</p></div>
+        <div className="rounded-lg border border-me-ochre/30 bg-me-ochre/10 p-4"><p className="text-xs font-bold text-me-charcoal/60">P · 建议下一步</p><p className="mt-2 text-sm font-bold leading-6">{action ?? '暂无建议。'}</p></div>
       </div>
       {baselineReset ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>本次是采集方式升级</strong><p>变化前的证据不完整，变化后首次读到完整业务区块。本次只建立新基线，不作为竞争动作；下一次采集才可可靠比较价格、档期和余位。</p></div> : <ChangeHighlights added={highlights.added} removed={highlights.removed} />}
     </> : <p className="text-sm leading-7">{s.interpretation_status === 'failed' ? '已保留页面变化，但本次分析未能生成有效结论。请查看采集记录中的原因。' : '已发现页面差异，正在整理结论。'}</p>}
-    <p className="text-xs text-me-charcoal/60">{s.kind === 'business_page_changed' ? '业务内容变化' : '网站页面变化'} · 仅供判断，未自动执行{complete && s.interpretation?.confidence != null ? ` · 判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
+    <p className="text-xs text-me-charcoal/60">{s.kind === 'business_page_changed' ? '业务内容变化' : '网站页面变化'} · A 尚未执行 · C/T 将在执行并获得结果后启用{complete && s.interpretation?.confidence != null ? ` · 判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
     <details className="rounded-lg bg-me-ivory p-3"><summary className="cursor-pointer text-sm font-bold">查看变化前后证据</summary><div className="mt-3 grid gap-3 md:grid-cols-2"><EvidenceCard label="之前快照" evidence={before} /><EvidenceCard label="当前快照" evidence={after} /></div></details>
   </article>
 }
@@ -310,24 +373,36 @@ function ChangeHighlights({ added, removed }: { added: string[]; removed: string
   </section>
 }
 
-function Signals({ signals, evidence }: { signals: Signal[]; evidence: Evidence[] }) {
-  const sources = new Map(evidence.map(e => [e.id, e.source_url]))
-  const seen = new Set<string>()
-  const latest: Signal[] = []
-  const history: Signal[] = []
-  const timestamp = (s: Signal) => Date.parse(s.created_at) || 0
-  for (const signal of [...signals].sort((a, b) => timestamp(b) - timestamp(a))) {
-    const source = signal.after_evidence_id ? sources.get(signal.after_evidence_id) : undefined
-    // Missing page identity must not hide another page's unresolved result.
-    const key = JSON.stringify([signal.domain, signal.kind, source || signal.id])
-    if (seen.has(key)) history.push(signal)
-    else { seen.add(key); latest.push(signal) }
-  }
+function Signals({ signals, evidence, runs, targets, batch }: { signals: Signal[]; evidence: Evidence[]; runs: Run[]; targets: AnalysisTarget[]; batch: BatchTarget[] }) {
+  const recentRuns = latestRunsForTargets(runs, targets)
+  const batchIds = new Set(batch.filter(target => target.status === 'queued').map(target => target.request_id))
+  const currentRuns = batch.length ? runs.filter(run => batchIds.has(run.id)) : recentRuns
+  const currentRunIds = new Set(currentRuns.map(run => run.id))
+  const latest = signals.filter(signal => currentRunIds.has(signal.run_id)).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+  const completed = currentRuns.filter(run => run.status === 'complete').length
+  const failedRuns = currentRuns.filter(run => ['failed', 'reconciliation'].includes(run.status)).length
+  const stopped = batch.filter(target => target.status !== 'queued').length
+  const failed = failedRuns + stopped
+  const pending = batch.length
+    ? batchIds.size - completed - failedRuns
+    : currentRuns.filter(run => !['complete', 'failed', 'reconciliation'].includes(run.status)).length
+  const scope = batch.length || targets.length
+  const untouched = batch.length ? 0 : targets.length - recentRuns.length
+  const insufficient = failed > 0 || untouched > 0
+  const emptyTitle = pending ? '分析正在进行'
+    : !batch.length && currentRuns.length === 0 ? '还没有可用的竞争分析'
+      : insufficient ? `${batch.length ? '本轮' : '最近一次'}覆盖不足，暂不能下结论`
+        : `${batch.length ? '本轮' : '最近一次'}没有发现需要调衡的竞争变化`
+  const emptyCopy = !batch.length && currentRuns.length === 0
+    ? '点击“开始竞争分析”，ME 会读取已配置业务页面并在发现可靠变化时给出建议。'
+    : insufficient ? '已完成页面暂未发现可靠变化，但仍有页面未完成，不能代表完整竞争情况。'
+      : '已完成页面没有出现可靠的产品、价格、促销、档期或余位变化。首次读取只建立业务基线。'
   return <section className="space-y-4" aria-label="竞品情报">
-    <div><h2 className="text-xl font-bold">最新变化结果</h2><p className="mt-1 text-sm text-me-charcoal/60">按页面和情报方向显示最近一条变化结果，包括无需行动的结论。这里不代表每次采集的状态，完整状态请查看采集记录。</p></div>
-    {signals.length === 0 && <div className={card}><p className="font-bold">还没有变化情报</p><p className="text-sm">首次采集建立对照基准，后续采集才会比较变化。可在“监控对象”中查看已配置页面。</p></div>}
+    <div><h2 className="text-xl font-bold">{batch.length ? '本轮决策结果' : '最近决策结果'}</h2><p className="mt-1 text-sm text-me-charcoal/60">{batch.length ? '只显示本次实际启动页面产生的结论；未启动页面不会沿用旧结论。' : '显示每个业务页面最近一次分析对应的结论。'}</p></div>
+    <p className="text-sm font-bold">覆盖状态：{completed}/{scope} 个页面完成{pending ? ` · ${pending} 个处理中` : ''}{failed ? ` · ${failed} 个未完成` : ''}{untouched ? ` · ${untouched} 个尚未运行` : ''}</p>
+    {latest.length === 0 && <div className={card}><p className="font-bold">{emptyTitle}</p><p className="text-sm">{emptyCopy}</p></div>}
     {latest.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}
-    {history.length > 0 && <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">历史变化与分析记录 · {history.length} 条</summary><p className="mt-3 text-sm text-me-charcoal/60">以下是同一页面较早的记录。后续结果不代表旧问题已解决，原有结论和失败原因均保留。</p><div className="mt-4 space-y-3">{history.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}</div></details>}
+    {signals.length > latest.length && <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">历史分析 · {signals.length - latest.length} 条</summary><div className="mt-4 space-y-3">{signals.filter(signal => !currentRunIds.has(signal.run_id)).map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}</div></details>}
   </section>
 }
 
