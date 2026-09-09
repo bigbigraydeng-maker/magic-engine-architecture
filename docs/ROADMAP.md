@@ -21,6 +21,15 @@
 
 ---
 
+## Creatomate Connector 落地后续（PR #1513 已合，代码就绪，未接通真实客户流量）
+
+> 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2，含两轮复审吸收清单）。四件事任一没做完，这条链路对客户来说都是"建好了但没通电"。
+
+- [ ] `CREATOMATE_API_KEY` 配进 Render 环境变量（`docs/ENV.md` 已登记，只差实际填值）
+- [ ] 第一条真实渲染跑完后核实 webhook payload 真实字段结构（官方文档没给全，本地开发环境收不到公网回调，只能上线后验证，见 spec §5 渲染验证铁律）
+- [ ] 找 Creatomate 客服或后台账单确认超出 2,000 credits/月后的真实计费行为（硬顶拒绝还是继续扣钱），不确定之前 `cost_usd` 记账在超额区间不可信（spec §6.2）
+- [ ] 至少一个试点客户（如 CTS）在 Settings 面板（客户详情页 → 出片引擎）填模板 ID + 镜头槽位映射，这条链路才有客户能真正用
+
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
 - [ ] Readable UI follow-up: result-first views, collapsed configuration/evidence, Chinese future interpretations; locally verified, pending review/production release. Hiring/People/Partnership/Reviews/Technology collection remains a separate extension.

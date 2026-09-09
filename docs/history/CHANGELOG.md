@@ -5,6 +5,22 @@
 
 ---
 
+### 2026-09-09（Creatomate Connector 落地——重新点亮已退役的确认出片入口）
+
+PR [#1513](https://github.com/bigbigraydeng-maker/magic-engine/pull/1513) 已合并。给内容工厂接入 Creatomate 模板渲染引擎（PM 已订阅 Essential $54/月），把 2026-09-02 主动关掉的"确认选题→自动出片"入口重新点亮——只对配置了 `factory_config.render.engine='creatomate'` 的客户生效，其余客户维持原状不受影响。
+
+**为什么不是"接现有渲染管线"**：起草阶段（子牙+鲁班+魏征三方并行复审 Spec v1）发现原方案打算接的 `content_factory_render_jobs` 管线早在 2026-09-02 就已退役、两周零产出、没有 worker 消费。Spec 改版为独立的新入口，不依赖任何死管线，但复用了该管线遗留下来的表结构（加两列，不新建表）和 `planScenes`/`generateImage`/`classifyRenderMode`/`imageToClip`/`generateVoiceover` 等现成生成函数——顺带把 PR #1373 的 `classifyRenderMode` 闸接上了第一个真实调用方。
+
+**实现阶段复审**（子牙+魏征审真代码）挑出并修复了三个真实缺陷：付费步骤的 `retries:0` 只写在注释里没真加（Inngest 默认重试会重复扣钱）；提交前的异常此前不会把任务标记失败，人工待办机制永远看不见；音频时长保护挡的是一个真实数据永远不会触发的假想场景（已移除这个自相矛盾的半成品功能）。
+
+**架构要点**：Inngest 工作流全程 `retries:0` + 幂等检查；webhook 无法验证来源（官方未提供签名机制），事件类型上就不带 status/url，不管哪条分支唤醒都独立回读 `GET /v2/renders/{id}` 确认真实状态；超时后有限次数轮询兜底，仍未完成则转人工待办（替代已随旧管线退役的 `reapStale()`）；成本记账同时覆盖 i2v/配音实际花费和 Creatomate credits 估算。
+
+**验证**：新增 41 个测试全部通过；`factory-creatomate-render.ts`（此前零覆盖）补齐装配测试 + 关键路径测试；全仓 vitest 14531 passed（42 failed 均为触碰前既有的无关 baseline，与本次改动前后一致）；`tsc --noEmit` 触碰文件零错误；`npm run build` 编译成功。
+
+**未接通真实客户流量**（登记进 [ROADMAP.md](../ROADMAP.md)）：API key 待配置、webhook 真实字段结构待第一条真实渲染验证、超额计费规则待人工确认、试点客户模板待在 Settings 面板配置。
+
+**Reuse Statement**：`src/lib/creatomate/` 是新的 platform-shared L3 Connector；复用 `content_factory_render_jobs` 表、`content_posts` 字段、`enqueueRenderJob()`、五个现成生成函数、`flywheel-seo-weekly.ts` 的 Inngest 云端函数+`retries:0`+回执范式、`safe-remote-fetch.ts` 域名校验模式（向后兼容扩展）、`FactoryConfigPanel.tsx` 现有 Settings 面板、`manual-items.ts` 人工待办栏。`factory_config.render.creatomate.{template_id, scene_field_map, output_width/height/frame_rate}` 是客户配置，未写入 shared runtime。
+
 ### 2026-09-09（CTS Web Intelligence 生产试点启用）
 
 PR #1500 已上线；用户明确批准生产数据库更新后应用 6 张隔离表及受限 RPC，仅允许 CTS 启用。复用原竞品名单及 Industry Baselines 后台、Apify 和 Inngest，Wendy Wu 首页按 24 小时间隔检查；只检测、理解、建议，无自动营销动作。预算目标 NZ$30 / hard stop NZ$50，499 NZD/月仅预留 entitlement 字段。
