@@ -21,6 +21,15 @@ describe('buildCompetitionBrief', () => {
     expect(brief.dimensions.find(item => item.key === 'reputation')?.status).toBe('unconfigured')
   })
 
+  it('recognises legacy Tour snapshots when the profile version is missing', () => {
+    const brief = buildCompetitionBrief({
+      ...input,
+      snapshots: { ...input.snapshots, data: input.snapshots.data.map(row => ({ ...row, projection_version: null })) },
+    })
+    expect(brief.subject).toBe('Tour')
+    expect(brief.headline).toContain('竞品Tour盘面')
+  })
+
   it('does not call single-sided dimensions directly comparable', () => {
     const complete = buildCompetitionBrief({
       ...input, configuredPageCount: 1,
