@@ -2,38 +2,19 @@
 // 的 Inngest step 里（retries:0）——这个函数本身不做幂等判断，幂等判断是调用方
 // （job 行有没有 creatomate_render_id）的责任，不是这个连接器的责任。
 import { creatomateFetch } from './client'
-import type { CreateRenderParams, CreatomateRender, CreatomateRenderStatus, CreatomateTemplateContract } from './types'
+import type { CreateRenderParams, CreatomateRender, CreatomateRenderStatus } from './types'
 
-/**
- * 坑#2（spec §5）：音频元素缺 duration 会把全片时长撑爆。连接器不认识具体客户的模板
- * 结构，只按 factory_config 声明的 audioKeys 校验——这些 key 若出现在 modifications
- * 里，必须同时给 `${key}.duration`（Creatomate 的 dot-path 属性覆盖写法），否则拒绝提交。
- *
- * ⚠️ dot-path 属性名（`.duration`）官方文档没有逐字确认，是按 Creatomate 通用的
- * element.property 覆盖约定推断的——上线前必须走一次真实渲染验证（spec §5 渲染验证铁律），
- * 不能只信这段代码编译通过。
- */
-export function assertAudioDurationsProvided(
-  modifications: Record<string, string>,
-  contract: CreatomateTemplateContract,
-): void {
-  for (const key of contract.audioKeys ?? []) {
-    if (!(key in modifications)) continue
-    const durationKey = `${key}.duration`
-    if (!(durationKey in modifications)) {
-      throw new Error(
-        `音频元素「${key}」缺少 duration（${durationKey}）——不给会把整片时长撑成这段音乐的长度（已知坑，见 spec §5 坑#2）`,
-      )
-    }
-  }
-}
+// 🔴 坑#2（spec §5，音频缺 duration 撑爆全片）v1 曾想在这里挡：校验 factory_config
+//    声明的 audioKeys 若出现在 modifications 里必须同时给 `${key}.duration`。第二轮复审
+//    （子牙+魏征交叉指出）核实：本 MVP 的 buildModifications()（modifications.ts）只写
+//    sceneFieldMap 声明的 visual/caption/voice 三种 key，从来不会产出跟 audioKeys 同名的
+//    modification——这道闸要么永远不触发（形同虚设），要么配错了名字永远提交失败（把客户
+//    锁死），两种结果都不对。本 MVP 不支持"可替换背景音乐"这类独立音频元素（模板设计阶段
+//    背景音乐固定死，不通过 modifications 动态换），坑#2 因此不适用——真加这类支持时，要在
+//    有真实数据源（modifications 里会不会真的出现独立音频 key）之后再补校验，不能先写断言
+//    再假装已经防住。
 
-export async function submitRender(
-  params: CreateRenderParams,
-  contract: CreatomateTemplateContract,
-): Promise<{ renderId: string }> {
-  assertAudioDurationsProvided(params.modifications, contract)
-
+export async function submitRender(params: CreateRenderParams): Promise<{ renderId: string }> {
   const body = await creatomateFetch('/renders', {
     method: 'POST',
     body: {

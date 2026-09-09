@@ -44,12 +44,12 @@ describe('projectFactoryConfig — 投影', () => {
     const r = projectFactoryConfig({
       render: {
         engine: 'creatomate',
-        creatomate: { template_id: 'tmpl-1', scene_field_map: [{ visual: 'Video-1' }], audio_keys: ['Music-1'] },
+        creatomate: { template_id: 'tmpl-1', scene_field_map: [{ visual: 'Video-1' }], output_width: 1080, output_height: 1920, output_frame_rate: 30 },
       },
     }).render
     expect(r).toEqual({
       engine: 'creatomate',
-      creatomate: { templateId: 'tmpl-1', sceneFieldMap: [{ visual: 'Video-1' }], audioKeys: ['Music-1'] },
+      creatomate: { templateId: 'tmpl-1', sceneFieldMap: [{ visual: 'Video-1' }], outputWidth: 1080, outputHeight: 1920, outputFrameRate: 30 },
     })
   })
 
@@ -323,14 +323,14 @@ describe('render — 子对象合并，不整体替换（子牙复审 B5：voice
     const r = mergeFactoryConfig({}, {
       render: {
         engine: 'creatomate',
-        creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1', caption: 'C-1' }], audio_keys: ['Music-1'] },
+        creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1', caption: 'C-1' }], output_width: 1080, output_height: 1920, output_frame_rate: 30 },
       },
     })
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.config.render).toEqual({
       engine: 'creatomate',
-      creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1', caption: 'C-1' }], audio_keys: ['Music-1'] },
+      creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1', caption: 'C-1' }], output_width: 1080, output_height: 1920, output_frame_rate: 30 },
     })
   })
 
@@ -339,6 +339,16 @@ describe('render — 子对象合并，不整体替换（子牙复审 B5：voice
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect('render' in r.config).toBe(false)
+  })
+
+  it('🔴 PATCH 只带 creatomate 不带 engine → 不覆写既有 engine（魏征复审：曾会把已经是 creatomate 的客户静默降级回 ffmpeg）', () => {
+    const r = mergeFactoryConfig(
+      { render: { engine: 'creatomate', creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1' }] } } },
+      { render: { creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1', caption: 'C-1' }] } } },
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect((r.config.render as { engine: string }).engine).toBe('creatomate')
   })
 
   it('body 未提及 recipe → 现有配置原样保留(合并语义)', () => {

@@ -34,17 +34,16 @@ export async function POST(req: NextRequest) {
     .eq('creatomate_render_id', renderId)
     .maybeSingle()
 
-  if (!job) {
-    // 没有匹配的 job 不是错误——可能是重复回调，或者别的环境/租户的 render id。
-    // 200 让 Creatomate 别重试，静默丢弃比报错更安全（不暴露内部匹配逻辑）。
-    return NextResponse.json({ ok: true, matched: false })
+  if (job) {
+    await sendInngestEvent({
+      id: `creatomate-webhook:${renderId}`,
+      name: CREATOMATE_RENDER_WEBHOOK_RECEIVED_EVENT,
+      data: { job_id: job.id, render_id: renderId },
+    })
   }
-
-  await sendInngestEvent({
-    id: `creatomate-webhook:${renderId}`,
-    name: CREATOMATE_RENDER_WEBHOOK_RECEIVED_EVENT,
-    data: { job_id: job.id, render_id: renderId },
-  })
-
-  return NextResponse.json({ ok: true, matched: true })
+  // 没有匹配的 job 不是错误——可能是重复回调，或者别的环境/租户的 render id。
+  // 🔴 匹配与否返回同一个响应体（第二轮复审 ⚠️7 指出：分开返回 matched:true/false
+  // 等于把"这个 render_id 存不存在"的判断结果从状态码换到了 body 里，一样能被拿来当
+  // 存在性探针）——不给对方任何信号，200 让 Creatomate 别重试就够了。
+  return NextResponse.json({ ok: true })
 }

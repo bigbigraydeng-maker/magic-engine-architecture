@@ -1,9 +1,11 @@
 /**
  * Creatomate 渲染工作流（spec docs/specs/2026-09-09-creatomate-connector-spec-v1.md §4.4）。
  *
- * 🔴 付费步骤（prepare-assets / submit）一律 `retries: 0`——Inngest 默认对失败的 step
- *    重放整个 step，而这两步花的是真钱（gpt-image/Muapi/Creatomate），重放 = 重复扣钱
- *    （子牙+鲁班复审交叉指出）。幂等靠"先查 job 行有没有已经做过"，不是禁止重试本身。
+ * 🔴 函数级 `retries: 0`——Inngest 3.54 的 retries 只能在函数级配置（`createFunction()`
+ *    的选项，不是 per-step），对这条函数的所有 step 一起生效，跟 `flywheel-seo-weekly.ts`
+ *    处理"provider 的钱在函数内部花掉"这类问题的既有写法一致。第二轮复审（子牙+魏征交叉
+ *    实测）抓出 v1 只在注释里写了这句话、`createFunction()` 配置里没真的加——已修正。
+ *    幂等辅助靠"先查 job 行有没有已经做过"，两层一起兜底，不是只靠不重试。
  *
  * 🔴 webhook 不可信：无法验证来源（官方文档没给签名机制，spec §3.3/§6.1）。events.ts 里
  *    webhook 事件类型上就不带 status/url，物理上不给"直接采信"的机会——不管是被 webhook
@@ -28,6 +30,7 @@ import { buildModifications } from '@/lib/creatomate/modifications'
 import { submitRender, getRender } from '@/lib/creatomate/render'
 import { isTerminalStatus, type CreatomateRender, type CreatomateTemplateContract } from '@/lib/creatomate/types'
 import { storeCreatomateResult } from '@/lib/creatomate/store-result'
+import { estimateCreatomateCostUsd } from '@/lib/creatomate/cost'
 import { projectFactoryConfig } from '@/lib/factory/client-config'
 
 const REPOLL_ATTEMPTS = 10
@@ -50,6 +53,22 @@ async function patchJob(supabase: SupabaseClient, jobId: string, patch: Record<s
   if (error) throw new Error(`patchJob(${jobId}) 失败: ${error.message}`)
 }
 
+/** `content_factory_render_jobs.scenes` 是同一列，旧 ffmpeg 路径写的形状是 `Scene[]`
+ *  （render-pipeline.ts，字段是 imagePrompt/motionPrompt/voText，没有 visualUrl）。
+ *  第二轮复审 ⚠️6 指出：旧形状的行如果被当成 PreparedScene[] 直接用，`buildModifications`
+ *  会拿到一堆 undefined，Creatomate 渲出空模板却仍标 ready_for_review——"假成功"。
+ *  这里做运行时形状校验，不是简单 `as` 断言：不是这个形状就当没准备过，重新走一遍。 */
+function isPreparedSceneArray(v: unknown): v is PreparedScene[] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (s) =>
+        s && typeof s === 'object' && typeof (s as Record<string, unknown>).visualUrl === 'string' &&
+        typeof (s as Record<string, unknown>).costUsd === 'number',
+    )
+  )
+}
+
 async function readJob(supabase: SupabaseClient, jobId: string): Promise<JobRow> {
   const { data, error } = await supabase
     .from('content_factory_render_jobs')
@@ -57,7 +76,11 @@ async function readJob(supabase: SupabaseClient, jobId: string): Promise<JobRow>
     .eq('id', jobId)
     .single()
   if (error || !data) throw new Error(`render job not found: ${jobId}`)
-  return data as JobRow
+  const row = data as { id: string; client_id: string; content_post_id: string; status: string; scenes: unknown; creatomate_render_id: string | null }
+  return {
+    ...row,
+    scenes: isPreparedSceneArray(row.scenes) ? row.scenes : null,
+  }
 }
 
 /** 只读一次 factory_config，原样传下去——不拼凑/强转出第二份假形状（避免接口跟真实
@@ -91,6 +114,7 @@ async function finalizeSuccess(
   supabase: SupabaseClient,
   job: JobRow,
   render: CreatomateRender,
+  totalCostUsd: number,
 ): Promise<void> {
   if (!render.url) throw new Error(`Creatomate 状态 succeeded 但没有 url（render_id=${render.id}）`)
   const { storageUrl } = await storeCreatomateResult({
@@ -98,14 +122,68 @@ async function finalizeSuccess(
     clientId: job.client_id,
     jobId: job.id,
   })
-  await patchJob(supabase, job.id, { status: 'ready_for_review', output_url: storageUrl })
+  await patchJob(supabase, job.id, { status: 'ready_for_review', output_url: storageUrl, cost_usd: totalCostUsd })
   await supabase.from('content_posts').update({ source_video_url: storageUrl }).eq('id', job.content_post_id)
 }
 
-async function finalizeFailure(supabase: SupabaseClient, job: JobRow, reason: string): Promise<void> {
-  await patchJob(supabase, job.id, { status: 'failed', error: reason })
+async function finalizeFailure(supabase: SupabaseClient, job: JobRow, reason: string, costUsd: number): Promise<void> {
+  await patchJob(supabase, job.id, { status: 'failed', error: reason, cost_usd: costUsd })
   // 人工待办见 src/lib/pm-todo/manual-items.ts::pushCreatomateRenderItems（读这张表的
   // failed 行，不在这里直接写待办表——同一份"扫失败行"逻辑复用，不建第二条通道）。
+}
+
+/** 处理一条 `CREATOMATE_RENDER_REQUESTED_EVENT` 事件——单独导出以便直接单测（不需要
+ *  经过 Inngest 的 createFunction 包装/真实调度），是第二轮复审揪出 ❌1/❌2 之后补的
+ *  测试接缝，同一模式见 flywheel-seo-weekly.ts 的 create*Function 注入写法。 */
+export async function handleCreatomateRenderRequested(
+  supabase: SupabaseClient,
+  event: { data?: unknown },
+  step: StepTools,
+): Promise<{ ok: boolean; reason?: string }> {
+  const parsed = CreatomateRenderRequestedSchema.safeParse(event.data)
+  if (!parsed.success) return { ok: false, reason: 'invalid_payload' }
+  const { job_id: jobId } = parsed.data
+
+  // job_name 必须是静态字面量（不能拼 jobId 进去）——registry.test.ts 用 AST 静态扫描
+  // startCronRun(Id) 的入参来认领监控清单，动态值会读不出来、也会让 job_name 无限增殖，
+  // 这套回执机制是给"稳定命名的任务"用的，具体是哪条 render 由 summary.source_record_id 区分。
+  const runId = await step.run('start-receipt', () => startCronRunId('creatomate-render'))
+  const startedAt = Date.now()
+
+  try {
+    const result = await runWorkflow(supabase, jobId, step)
+    await step.run('finish-receipt', () =>
+      cronRunHandle('creatomate-render', runId, startedAt).finish({
+        completed: result.ok ? 1 : 0,
+        failed: result.ok ? 0 : 1,
+        summary: {
+          request_id: runId,
+          client_id: result.clientId,
+          source_record_id: jobId,
+          cost_usd: result.costUsd,
+          no_publish: true,
+        },
+        error: result.ok ? undefined : result.reason,
+      }),
+    )
+    return result
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    // 🔴 第二轮复审（子牙 ❌2）抓出：提交前抛出的任何异常（客户没配模板/没配声音/
+    //    选题没逐字稿/分镜超槽位/402 额度用完⋯）此前一条都不会把 job 标 failed，
+    //    job 永远停在 queued/rendering，manual-items.ts 只扫 status='failed'，
+    //    这类失败因此对人工待办永远不可见。这里兜底：不管失败发生在哪一步，
+    //    job 行必须落终态，failed 之外没有第三种可能。
+    await step.run('finalize-failure-outer', () =>
+      patchJob(supabase, jobId, { status: 'failed', error: message }).catch((patchErr) =>
+        console.error(`[factory-creatomate-render] job ${jobId} 标 failed 也失败了，彻底孤儿:`, patchErr),
+      ),
+    )
+    await step.run('finish-receipt-error', () =>
+      cronRunHandle('creatomate-render', runId, startedAt).finish({ failed: 1, error: message }),
+    )
+    throw e
+  }
 }
 
 export function createFactoryCreatomateRender(deps: { supabase: SupabaseClient }) {
@@ -114,44 +192,13 @@ export function createFactoryCreatomateRender(deps: { supabase: SupabaseClient }
       id: `${CLOUD_FN_PREFIX}factory-creatomate-render`,
       name: 'Factory: Creatomate template render',
       concurrency: { limit: 3, key: 'event.data.client_id' },
+      // 见文件头注：函数级 retries:0，跟 flywheel-seo-weekly.ts 处理付费 provider 调用
+      // 的既有写法一致——这条函数从 prepare-assets 到 submit 全程在花真钱，Inngest 默认
+      // 重试会把已经花过的钱再花一遍。
+      retries: 0,
     },
     { event: CREATOMATE_RENDER_REQUESTED_EVENT },
-    async ({ event, step }) => {
-      const parsed = CreatomateRenderRequestedSchema.safeParse(event.data)
-      if (!parsed.success) return { ok: false, reason: 'invalid_payload' }
-      const { job_id: jobId } = parsed.data
-
-      // job_name 必须是静态字面量（不能拼 jobId 进去）——registry.test.ts 用 AST 静态扫描
-      // startCronRun(Id) 的入参来认领监控清单，动态值会读不出来、也会让 job_name 无限增殖，
-      // 这套回执机制是给"稳定命名的任务"用的，具体是哪条 render 由 summary.source_record_id 区分。
-      const runId = await step.run('start-receipt', () => startCronRunId('creatomate-render'))
-      const startedAt = Date.now()
-
-      try {
-        const result = await runWorkflow(deps.supabase, jobId, step)
-        await step.run('finish-receipt', () =>
-          cronRunHandle('creatomate-render', runId, startedAt).finish({
-            completed: result.ok ? 1 : 0,
-            failed: result.ok ? 0 : 1,
-            summary: {
-              request_id: runId,
-              client_id: result.clientId,
-              source_record_id: jobId,
-              cost_usd: result.costUsd,
-              no_publish: true,
-            },
-            error: result.ok ? undefined : result.reason,
-          }),
-        )
-        return result
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e)
-        await step.run('finish-receipt-error', () =>
-          cronRunHandle('creatomate-render', runId, startedAt).finish({ failed: 1, error: message }),
-        )
-        throw e
-      }
-    },
+    ({ event, step }) => handleCreatomateRenderRequested(deps.supabase, event, step),
   )
 }
 
@@ -177,16 +224,22 @@ async function runWorkflow(
 
   const render = await resolveTerminal(step, renderId)
   if (!render) {
-    await step.run('finalize-timeout', () => finalizeFailure(supabase, job, 'Creatomate 渲染超时未完成'))
+    await step.run('finalize-timeout', () => finalizeFailure(supabase, job, 'Creatomate 渲染超时未完成', costUsd))
     return { ok: false, reason: 'timeout', clientId: job.client_id, costUsd }
   }
   if (render.status === 'succeeded') {
-    await step.run('finalize-success', () => finalizeSuccess(supabase, job, render))
-    return { ok: true, clientId: job.client_id, costUsd }
+    // Creatomate 自己这次渲染花的 credits，此前从不记账（第二轮复审 ⚠️4）——按模板声明的
+    // 输出维度 + 镜头数估算，不是精确值（cost.ts::estimateCreatomateCostUsd 头注）。
+    const contract = await step.run('read-contract-for-cost', async () =>
+      extractTemplateContract(await readFactoryConfig(supabase, job.client_id), job.client_id),
+    )
+    const totalCostUsd = costUsd + estimateCreatomateCostUsd(contract, scenes.length)
+    await step.run('finalize-success', () => finalizeSuccess(supabase, job, render, totalCostUsd))
+    return { ok: true, clientId: job.client_id, costUsd: totalCostUsd }
   }
 
   const reason = render.errorMessage ?? `Creatomate 渲染失败（状态：${render.status}）`
-  await step.run('finalize-failure', () => finalizeFailure(supabase, job, reason))
+  await step.run('finalize-failure', () => finalizeFailure(supabase, job, reason, costUsd))
   return { ok: false, reason, clientId: job.client_id, costUsd }
 }
 
@@ -205,7 +258,8 @@ async function ensureSceneAssets(
       script,
       factoryConfig,
     })
-    await patchJob(supabase, job.id, { status: 'rendering', scenes })
+    const sceneCostUsd = scenes.reduce((sum, s) => sum + s.costUsd, 0)
+    await patchJob(supabase, job.id, { status: 'rendering', scenes, cost_usd: sceneCostUsd })
     return scenes
   })
 }
@@ -221,7 +275,7 @@ async function ensureSubmitted(
     const contract = extractTemplateContract(factoryConfig, job.client_id)
     const modifications = buildModifications(scenes, contract)
     const webhookUrl = `${requireBaseUrl()}/api/webhooks/creatomate`
-    const { renderId } = await submitRender({ templateId: contract.templateId, modifications, webhookUrl }, contract)
+    const { renderId } = await submitRender({ templateId: contract.templateId, modifications, webhookUrl })
     return renderId
   })
   await step.run('persist-render-id', () => patchJob(supabase, job.id, { creatomate_render_id: renderId }))

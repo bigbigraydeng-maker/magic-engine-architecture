@@ -154,7 +154,9 @@ function projectRender(raw: unknown): FactoryConfigView['render'] {
       ? {
           templateId: c.template_id,
           sceneFieldMap: c.scene_field_map as CreatomateTemplateContract['sceneFieldMap'],
-          audioKeys: Array.isArray(c.audio_keys) ? (c.audio_keys as string[]) : undefined,
+          outputWidth: typeof c.output_width === 'number' ? c.output_width : undefined,
+          outputHeight: typeof c.output_height === 'number' ? c.output_height : undefined,
+          outputFrameRate: typeof c.output_frame_rate === 'number' ? c.output_frame_rate : undefined,
         }
       : null
   return { engine, creatomate }
@@ -307,11 +309,18 @@ export function mergeFactoryConfig(
     if (raw === null) {
       delete next.render
     } else {
-      const engine = raw.engine === 'creatomate' ? 'creatomate' : 'ffmpeg'
       // 子对象合并，不是整体替换：existing.render 里的 voice_id/avatar_image_url
       // （lecture-render.ts/render-pipeline.ts 用，这个表单不认识、也不该动）原样保留。
       const existingRender = (next.render ?? {}) as Record<string, unknown>
-      const merged: Record<string, unknown> = { ...existingRender, engine }
+      const merged: Record<string, unknown> = { ...existingRender }
+
+      // 🔴 只在 body 真的带了 engine 时才覆写——第二轮复审指出，PATCH 只带
+      //    { render: { creatomate: {...} } } 而不带 engine 时，无条件覆写会把已经是
+      //    creatomate 的客户静默降级回 ffmpeg（"确认"从此不出片也不报错，同类事故
+      //    Meta targeting 局部传值清空兄弟字段那次已经吃过一次教训）。
+      if ('engine' in raw) {
+        merged.engine = raw.engine === 'creatomate' ? 'creatomate' : 'ffmpeg'
+      }
 
       if ('creatomate' in raw) {
         const c = raw.creatomate as Record<string, unknown> | null
@@ -329,10 +338,15 @@ export function mergeFactoryConfig(
               return { ok: false, error: '每个镜头槽位至少要填 visual（画面元素名）' }
             }
           }
+          const outputWidth = c.output_width != null ? Number(c.output_width) : undefined
+          const outputHeight = c.output_height != null ? Number(c.output_height) : undefined
+          const outputFrameRate = c.output_frame_rate != null ? Number(c.output_frame_rate) : undefined
           merged.creatomate = {
             template_id: templateId,
             scene_field_map: sceneFieldMap,
-            ...(Array.isArray(c.audio_keys) ? { audio_keys: c.audio_keys } : {}),
+            ...(outputWidth ? { output_width: outputWidth } : {}),
+            ...(outputHeight ? { output_height: outputHeight } : {}),
+            ...(outputFrameRate ? { output_frame_rate: outputFrameRate } : {}),
           }
         }
       }

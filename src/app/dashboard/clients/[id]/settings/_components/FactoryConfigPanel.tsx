@@ -41,7 +41,7 @@ interface Config {
    *  PATCH 时子对象合并（见 client-config.ts::mergeFactoryConfig），不会被这里的保存覆盖掉。 */
   render: {
     engine: 'ffmpeg' | 'creatomate'
-    creatomate: { templateId: string; sceneFieldMap: { visual: string; caption?: string; voice?: string }[]; audioKeys?: string[] } | null
+    creatomate: { templateId: string; sceneFieldMap: { visual: string; caption?: string; voice?: string }[] } | null
   } | null
 }
 
@@ -109,8 +109,6 @@ interface Draft {
   /** sceneFieldMap 的 JSON 文本 —— 结构不算简单，用文本框比拼 N 个输入框更不容易出错，
    *  保存前解析校验，解析失败直接报错不让保存。 */
   creatomateSceneFieldMapJson: string
-  /** 逗号分隔 */
-  creatomateAudioKeys: string
 }
 
 const toDraft = (c: Config): Draft => ({
@@ -135,7 +133,6 @@ const toDraft = (c: Config): Draft => ({
   renderEngine: c.render?.engine ?? 'ffmpeg',
   creatomateTemplateId: c.render?.creatomate?.templateId ?? '',
   creatomateSceneFieldMapJson: c.render?.creatomate ? JSON.stringify(c.render.creatomate.sceneFieldMap, null, 2) : '',
-  creatomateAudioKeys: (c.render?.creatomate?.audioKeys ?? []).join(', '),
 })
 
 const eqDraft = (a: Draft, b: Draft) =>
@@ -148,7 +145,7 @@ const eqDraft = (a: Draft, b: Draft) =>
   a.look === b.look && a.captionMode === b.captionMode && a.xfade === b.xfade &&
   a.endcardPanel === b.endcardPanel && a.recipeId === b.recipeId &&
   a.renderEngine === b.renderEngine && a.creatomateTemplateId === b.creatomateTemplateId &&
-  a.creatomateSceneFieldMapJson === b.creatomateSceneFieldMapJson && a.creatomateAudioKeys === b.creatomateAudioKeys
+  a.creatomateSceneFieldMapJson === b.creatomateSceneFieldMapJson
 
 export function FactoryConfigPanel({ clientId }: Props) {
   const [state, setState] = useState<PanelState>({ phase: 'loading' })
@@ -180,7 +177,7 @@ export function FactoryConfigPanel({ clientId }: Props) {
     setSaving(true)
     setErrMsg(null)
 
-    let creatomate: { template_id: string; scene_field_map: unknown; audio_keys?: string[] } | null = null
+    let creatomate: { template_id: string; scene_field_map: unknown } | null = null
     if (draft.renderEngine === 'creatomate') {
       let sceneFieldMap: unknown
       try {
@@ -190,12 +187,7 @@ export function FactoryConfigPanel({ clientId }: Props) {
         setSaving(false)
         return
       }
-      const audioKeys = draft.creatomateAudioKeys.split(',').map((k) => k.trim()).filter(Boolean)
-      creatomate = {
-        template_id: draft.creatomateTemplateId.trim(),
-        scene_field_map: sceneFieldMap,
-        ...(audioKeys.length > 0 ? { audio_keys: audioKeys } : {}),
-      }
+      creatomate = { template_id: draft.creatomateTemplateId.trim(), scene_field_map: sceneFieldMap }
     }
 
     try {
@@ -560,21 +552,9 @@ export function FactoryConfigPanel({ clientId }: Props) {
                   className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600">音频元素名（逗号分隔，可选）</label>
-                <p className="mt-0.5 text-[11px] text-slate-400">
-                  模板里可替换的背景音乐等音频元素名。填了的话，提交时会要求同时给时长，缺了会拒绝提交
-                  ——已知坑：音频不给时长会把全片撑成那首歌的长度。
-                </p>
-                <input
-                  type="text"
-                  value={draft.creatomateAudioKeys}
-                  onChange={(e) => setDraft((d) => ({ ...d, creatomateAudioKeys: e.target.value }))}
-                  disabled={saving}
-                  placeholder="Music-1"
-                  className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
-                />
-              </div>
+              <p className="text-[11px] text-slate-400">
+                背景音乐等固定音频请在模板设计阶段配好，这版暂不支持通过这里动态替换。
+              </p>
             </div>
           )}
         </div>

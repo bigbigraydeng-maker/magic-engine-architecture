@@ -68,6 +68,8 @@ export interface CreatomateTemplateContract {
   templateId: string
   /** 镜头槽位映射，见 SceneSlotFieldMap。 */
   sceneFieldMap: SceneSlotFieldMap[]
-  /** 这些元素名对应音频，提交前必须同时给 duration，否则拒绝提交（坑#2，spec §5）。 */
-  audioKeys?: string[]
+  /** 模板的输出画布（credits 估算用，spec §7）。不填按 1080×1920@30fps 估（spec 全篇示例口径）。 */
+  outputWidth?: number
+  outputHeight?: number
+  outputFrameRate?: number
 }
