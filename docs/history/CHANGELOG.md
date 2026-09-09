@@ -5,6 +5,16 @@
 
 ---
 
+### 2026-09-10（竞争分析收敛为 IMPACT 单入口）
+
+PR [#1525](https://github.com/bigbigraydeng-maker/magic-engine/pull/1525) 已合并并部署生产（`66a17018`）。Industry Baselines 的入口改为「竞争分析」，决策者只需点一次「开始竞争分析」，系统便按 core 优先读取全部已配置业务页面；页面只把本轮真实启动的请求计入覆盖，未完成、失败或未启动的页面都会阻止整体「没有变化」结论。主界面按 IMPACT 展示发现、衡量和建议，明确标记尚未执行；配置、成本、运行记录和原始证据收进折叠区。
+
+生产 CTS 验收：对 Wendy Wu 的产品列表、`new-tours/` 和 `wonders-of-china.htm` 详情页启动同一批次，处理中从 0/3、1/3、2/3 逐步刷新，最终达到 3/3。三条均 `SUCCEEDED` 并各结算 NZ$0.02，本轮 NZ$0.06，CTS 当月累计由 NZ$0.39 增至 NZ$0.45；页面只在全量完成后显示「本轮没有发现需要调衡的竞争变化」。业务内容无可靠变化，因此三条均未调用 LLM（分析 US$0.00），没有自动执行动作。工作日志已写入 CTS 客户页。
+
+**验证**：84 项 Web Intelligence 针对性测试、changed-file ESLint、生产构建及 PR 全部检查通过；设计和实现复审无剩余 P0/P1。无 migration、无新 provider、无生产配置改动。
+
+**Reuse Statement**：复用既有竞品解析、监控网址、Apify 采集、snapshot/evidence、market signal、原子预算预留、Inngest 和 Industry Baselines。批次请求恢复、覆盖判定和 IMPACT 呈现属于 platform-shared；Tour 拆解仍位于既有 Travel profile；Wendy Wu 网址和 CTS 背景仍为客户配置。共享运行时没有加入客户名称、ID、私有事实或旅游行业判断，也没有把客户学习升级到行业或全局记忆。
+
 ### 2026-09-10（CTS 竞品 Tour 具名对比上线）
 
 PR [#1523](https://github.com/bigbigraydeng-maker/magic-engine/pull/1523) 已合并并由 Render 将提交 `3ba2439` 部署为 Live。Travel profile 将产品列表归一化为具名 Tour 记录，对比名称、天数、价格、促销、评价、包含项目与路线；展示顺序及未绑定到具体 Tour 的重复促销标签不再形成业务信号。LLM 只可引用明确的 Tour 与变化前后值，证据不足必须判为无需行动。
