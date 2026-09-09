@@ -40,6 +40,7 @@ describe('WebIntelligencePanel', () => {
     })
     vi.stubGlobal('fetch', fetcher)
     render(<WebIntelligencePanel />); await selectClient(); await competitor()
+    expect(screen.getByText(/产品列表、新品\/优惠、核心产品详情/)).toBeVisible()
     fireEvent.change(screen.getByLabelText('标签（逗号分隔）'), { target: { value: 'priority, travel' } })
     fireEvent.click(screen.getByRole('button', { name: '保存竞品设置' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Metadata update rejected')
@@ -48,6 +49,20 @@ describe('WebIntelligencePanel', () => {
     expect(JSON.parse(call[1]!.body as string)).toEqual({ monitoring: { ...payload().competitors[0], tags: ['priority', 'travel'] } })
     fireEvent.click(screen.getByRole('button', { name: '采集此页面' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Monthly hard stop reached')
+  })
+
+  it('labels configured travel business surfaces without claiming whole-site coverage', async () => {
+    const data = { ...payload(), competitors: [{ ...payload().competitors[0], urls: [
+      'https://example.com/china/tours/',
+      'https://example.com/new-tours/',
+      'https://example.com/china/tours/wonders-of-china.htm',
+    ] }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText(/不代表竞品全站/)).toBeVisible()
+    await competitor()
+    expect(screen.getAllByText('产品列表')).toHaveLength(2)
+    expect(screen.getByText('产品详情')).toBeVisible()
   })
 
   it('clears client-private results immediately and ignores late previous-client responses', async () => {

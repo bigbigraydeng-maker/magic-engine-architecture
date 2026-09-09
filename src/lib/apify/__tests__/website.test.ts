@@ -51,6 +51,18 @@ describe('bounded Website capture', () => {
     vi.mocked(getDatasetItems).mockResolvedValue([{ ...page(), crawl: { httpStatusCode: 200, loadedUrl: 'https://www.example.com/' } }])
     expect((await getWebsiteCapture('run1', 'https://example.com')).status).toBe('complete')
   })
+  it.each(['https://example.com/', 'https://example.com/login', 'https://example.com/not-found'])('rejects a configured product page redirected to %s', async loadedUrl => {
+    vi.mocked(getDatasetItems).mockResolvedValue([{ ...page(), crawl: { httpStatusCode: 200, loadedUrl } }])
+    expect((await getWebsiteCapture('run1', 'https://example.com/products/tour-one')).status).toBe('failed')
+  })
+  it('accepts tracking-only query changes on the same page', async () => {
+    vi.mocked(getDatasetItems).mockResolvedValue([{ ...page(), url: 'https://example.com/products?utm_source=x', crawl: { httpStatusCode: 200, loadedUrl: 'https://example.com/products?utm_source=x' } }])
+    expect((await getWebsiteCapture('run1', 'https://example.com/products')).status).toBe('complete')
+  })
+  it('rejects a soft not-found page with HTTP 200', async () => {
+    vi.mocked(getDatasetItems).mockResolvedValue([{ ...page(), metadata: { title: 'Page not found' } }])
+    expect((await getWebsiteCapture('run1', 'https://example.com')).status).toBe('failed')
+  })
   it('returns failure with run receipt if dataset read fails', async () => {
     vi.mocked(getDatasetItems).mockRejectedValue(new Error('dataset unavailable'))
     expect(await getWebsiteCapture('run1', 'https://example.com')).toMatchObject({ status: 'failed', run, error: 'dataset unavailable' })

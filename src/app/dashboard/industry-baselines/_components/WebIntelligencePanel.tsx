@@ -43,6 +43,15 @@ const defaults: Settings = {
 const money = (n: number | null | undefined) => n == null ? '—' : n.toFixed(2)
 const date = (value: string) => { const d = new Date(value); return Number.isNaN(d.getTime()) ? '时间未知' : new Intl.DateTimeFormat('zh-CN', { timeZone: 'Pacific/Auckland', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(d) }
 const split = (s: string) => s.split(/[\n,]/).map(v => v.trim()).filter(Boolean)
+const pagePurpose = (raw: string) => {
+  let path = ''
+  try { path = new URL(raw).pathname.toLowerCase() } catch { return '业务页面' }
+  if (path === '/') return '首页'
+  if (/new-tours|(?:^|\/)tours\/?$|escorted-tours|private-tours/.test(path)) return '产品列表'
+  if (/\/tours\/[^/]+/.test(path)) return '产品详情'
+  if (/offer|deal|promotion|sale/.test(path)) return '优惠活动'
+  return '业务页面'
+}
 
 async function request<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
   const res = await fetch(url, { method, cache: 'no-store', ...(body === undefined ? {} : {
@@ -111,13 +120,13 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
         {([['signals', '情报'], ['competitors', '监控对象'], ['settings', '设置']] as const).map(([key, label]) => <button key={key} aria-current={view === key ? 'page' : undefined} className={`px-4 py-3 text-sm ${view === key ? 'border-b-2 border-me-ochre font-bold text-me-charcoal' : 'text-me-charcoal/60'}`} onClick={() => setView(key)}>{label}</button>)}
       </nav>
       {view === 'signals' && <>
-        <p className="text-sm text-me-charcoal/70">当前覆盖：网站页面变化。招聘、人员、合作与公益、评论、技术专项尚未接入。</p>
+        <p className="text-sm text-me-charcoal/70">当前仅分析“监控对象”中已配置的页面，不代表竞品全站。招聘、人员、合作与公益、评论、技术专项尚未接入。</p>
         <Signals signals={data.signals} evidence={data.evidence} />
         <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">采集记录 · {data.runs.length} 次</summary><div className="mt-4"><Runs runs={data.runs} /></div></details>
       </>}
       {view === 'competitors' && <div className="space-y-3">
         <h2 className="text-lg font-bold">监控对象</h2>
-        <p className="text-sm text-me-charcoal/70">沿用已有竞品名单。展开某家竞品后，可调整监控范围或手动采集。</p>
+        <p className="text-sm text-me-charcoal/70">沿用已有竞品名单。优先配置真正会更新价格、产品、优惠和余位的业务页面；首页只适合发现线索。</p>
         {!data.can_run && <p className="text-sm">该客户尚未开放采集，请在设置中检查监控资格与预算。</p>}
         {data.competitors.length === 0 && <p>尚未找到已有竞品。</p>}
         {data.competitors.map(c => <details key={c.domain} className="rounded-xl border border-black/10 bg-white p-4">
@@ -204,7 +213,8 @@ function CompetitorCard({ competitor, clientId, endpoint, canEdit, canRun, onSav
         </div>
         <fieldset><legend className="text-sm">发现来源</legend><div className="flex flex-wrap gap-3">{sources.map(source => <label key={source} className="text-sm"><input type="checkbox" checked={draft.sources.includes(source)} onChange={e => setDraft(d => ({ ...d, sources: e.target.checked ? [...d.sources, source] : d.sources.filter(s => s !== source) }))} /> {source}</label>)}</div></fieldset>
         <label className="block text-sm">标签（逗号分隔）<input className={field} value={tags} onChange={e => setTags(e.target.value)} /></label>
-        <label className="block text-sm">监控网址（最多3个，每行一个）<textarea className={field} rows={2} value={urls} onChange={e => setUrls(e.target.value)} /></label>
+        <label className="block text-sm">业务监控网址（最多3个，每行一个）<textarea className={field} rows={3} value={urls} onChange={e => setUrls(e.target.value)} /><span className="mt-1 block text-xs text-me-charcoal/60">建议：产品列表、新品/优惠、核心产品详情各 1 个。</span></label>
+        {split(urls).length > 0 && <ul className="space-y-1 text-xs text-me-charcoal/70">{split(urls).map(value => <li className="break-all" key={value}><strong>{pagePurpose(value)}</strong> · {value}</li>)}</ul>}
         {canEdit && <button className={button} type="submit">保存竞品设置</button>}
       </fieldset>
     </form>
@@ -234,12 +244,13 @@ function SignalCard({ signal: s, evidence }: { signal: Signal; evidence: Evidenc
   const label = complete ? labels[s.classification ?? ''] ?? '已分析' : s.interpretation_status === 'failed' ? '分析未完成' : '正在分析'
   const summary = s.interpretation?.summary
   const action = s.recommended_action === 'No action recommended.' ? '无需采取行动。' : s.recommended_action
+  const source = evidence.find(e => e.id === s.after_evidence_id)?.source_url
   return <article className={card}>
     <div className="flex flex-wrap items-center justify-between gap-2"><span className={`rounded-full px-3 py-1 text-xs font-bold ${!complete ? 'bg-amber-50 text-amber-800' : s.classification === 'threat' ? 'bg-red-50 text-red-800' : s.classification === 'opportunity' ? 'bg-green-50 text-green-800' : 'bg-black/5 text-me-charcoal/60'}`}>{label}</span><time className="text-xs text-me-charcoal/60" dateTime={s.created_at}>{date(s.created_at)} NZ</time></div>
-    <h3 className="break-all text-lg font-bold">{s.domain}</h3>
+    <h3 className="break-all text-lg font-bold">{s.domain}{source ? ` · ${pagePurpose(source)}` : ''}</h3>
     <p className="text-sm leading-7">{complete ? summary ?? '分析已完成，暂无文字摘要。' : s.interpretation_status === 'failed' ? '已保留页面变化，但本次分析未能生成有效结论。请查看采集记录中的原因。' : '已发现页面差异，正在整理结论。'}</p>
     {complete && <div className="rounded-lg bg-me-ivory p-3 text-sm leading-6"><strong>建议</strong><p>{action ?? '暂无建议。'}</p></div>}
-    <p className="text-xs text-me-charcoal/60">网站页面变化 · 仅供判断，未自动执行{complete && s.interpretation?.confidence != null ? ` · 判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
+    <p className="text-xs text-me-charcoal/60">{s.kind === 'business_page_changed' ? '业务内容变化' : '网站页面变化'} · 仅供判断，未自动执行{complete && s.interpretation?.confidence != null ? ` · 判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
     <div className="grid gap-3 md:grid-cols-2"><EvidenceCard label="变化前" evidence={evidence.find(e => e.id === s.before_evidence_id)} /><EvidenceCard label="变化后" evidence={evidence.find(e => e.id === s.after_evidence_id)} /></div>
   </article>
 }

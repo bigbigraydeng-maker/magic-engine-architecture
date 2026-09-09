@@ -15,6 +15,7 @@ const req = { client_id: id, request_id: id, domain: run.domain, url: run.url } 
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubEnv('WEB_INTELLIGENCE_ALLOWED_CLIENT_IDS', id)
   mocks.read.mockResolvedValue(run); mocks.claim.mockResolvedValue(true); mocks.rpc.mockResolvedValue({ error: null, data: {} })
+  mocks.eligible.mockResolvedValue({ tags: [] })
   mocks.start.mockResolvedValue({ id: 'provider1', defaultDatasetId: 'dataset1', status: 'RUNNING' })
 })
 describe('durable provider boundaries', () => {
@@ -67,7 +68,24 @@ describe('durable provider boundaries', () => {
   it('stores a valid snapshot before interpreting, using a stable content hash', async () => {
     mocks.get.mockResolvedValue({ status: 'complete', run: { status: 'SUCCEEDED', usageTotalUsd: 0.01 }, page: { url: run.url, title: 'Prices', text: 'Valid page content '.repeat(20) } })
     expect(await collectCapture(run, 'p')).toBe('captured')
-    expect(mocks.rpc).toHaveBeenCalledWith('web_intelligence_record_snapshot', expect.objectContaining({ p_id: id, p_client_id: id, p_hash: expect.stringMatching(/^[a-f0-9]{64}$/) }))
+    expect(mocks.rpc).toHaveBeenCalledWith('web_intelligence_record_business_snapshot', expect.objectContaining({
+      p_id: id, p_client_id: id, p_raw_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      p_projection_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      p_projection_version: 'business-content-v1+actor-1.2.3',
+    }))
+  })
+  it('settles a paid capture whose business projection is too weak', async () => {
+    mocks.get.mockResolvedValue({ status: 'complete', run: { status: 'SUCCEEDED', usageTotalUsd: 0.01 }, page: { url: run.url, title: 'Assets', text: '![image](https://example.com/a.jpg) '.repeat(20) } })
+    expect(await collectCapture(run, 'p')).toBe('failed')
+    expect(mocks.update).toHaveBeenCalledWith(id, id, expect.objectContaining({ error_code: 'capture_content_limit', interpretation_cost_usd: 0 }))
+    expect(mocks.settle).toHaveBeenCalledWith(id, id)
+  })
+  it('settles a paid capture if its configured target was removed while running', async () => {
+    mocks.get.mockResolvedValue({ status: 'complete', run: { status: 'SUCCEEDED', usageTotalUsd: 0.01 }, page: { url: run.url, title: 'Tour', text: 'Valid tour content '.repeat(20) } })
+    mocks.eligible.mockRejectedValue(new Error('url_not_configured'))
+    expect(await collectCapture(run, 'p')).toBe('failed')
+    expect(mocks.update).toHaveBeenCalledWith(id, id, expect.objectContaining({ error_code: 'target_changed_after_capture' }))
+    expect(mocks.settle).toHaveBeenCalledWith(id, id)
   })
   it('baseline and unchanged captures incur no interpretation call', async () => {
     mocks.input.mockResolvedValue({ signal: null, evidence: [], context: '' }); await understand(run)

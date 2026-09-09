@@ -6,6 +6,8 @@ import { allowedClient, type CaptureRequest, type Run } from './contracts'
 import { assertEligibleTarget, validatePublicTarget } from './targets'
 import { claim, readRun, updateRun, reserve, settle, loadInterpretationInput, updateSignal } from './store'
 import { interpretChange, validateInterpretation, interpretationPrompt, MODEL_SONNET, PROMPT_VERSION } from './interpret'
+import { BUSINESS_PROJECTION_VERSION, classifyBusinessPage, projectBusinessContent } from './content-projection'
+import { profileForTags } from './profiles/travel'
 
 export async function authorize(req: CaptureRequest): Promise<Run> {
   if (!allowedClient(req.client_id)) throw new Error('client_not_in_rollout')
@@ -46,15 +48,32 @@ export async function collectCapture(run: Run, providerId: string): Promise<'pen
   if (capture.status === 'pending') return 'pending'
   await updateRun(run.id, run.client_id, { capture_cost_usd: knownCost(capture.run.usageTotalUsd) })
   if (capture.status !== 'complete' || !capture.page) {
-    await updateRun(run.id, run.client_id, { status: 'failed', interpretation_cost_usd: 0, error_code: 'capture_invalid' })
-    await settle(run.id, run.client_id)
-    return 'failed'
+    return failKnownCapture(run, 'capture_invalid')
   }
+  let target: Awaited<ReturnType<typeof assertEligibleTarget>>
+  try { target = await assertEligibleTarget(run.client_id, run.domain, run.url) }
+  catch { return failKnownCapture(run, 'target_changed_after_capture') }
   const content = normaliseContent(capture.page.text)
-  if (content.length < 100 || content.length > 200000) throw new Error('capture_content_limit')
-  const saved = await db.rpc('web_intelligence_record_snapshot', { p_id: run.id, p_client_id: run.client_id, p_url: capture.page.url, p_title: capture.page.title, p_content: content, p_hash: createHash('sha256').update(content).digest('hex') })
+  const projection = projectBusinessContent(content)
+  if (content.length < 100 || content.length > 200000 || projection.length < 80 || projection.length > 200000) {
+    return failKnownCapture(run, 'capture_content_limit')
+  }
+  const saved = await db.rpc('web_intelligence_record_business_snapshot', {
+    p_id: run.id, p_client_id: run.client_id, p_final_url: capture.page.url,
+    p_title: capture.page.title, p_raw_content: content,
+    p_raw_hash: createHash('sha256').update(content).digest('hex'),
+    p_projection: projection,
+    p_projection_hash: createHash('sha256').update(projection).digest('hex'),
+    p_projection_version: `${BUSINESS_PROJECTION_VERSION}+actor-${run.actor_build}`,
+    p_page_role: classifyBusinessPage(capture.page.url, profileForTags(target.tags)),
+  })
   if (saved.error) throw new Error('snapshot_write_failed')
   return 'captured'
+}
+async function failKnownCapture(run: Run, errorCode: string): Promise<'failed'> {
+  await updateRun(run.id, run.client_id, { status: 'failed', interpretation_cost_usd: 0, error_code: errorCode })
+  await settle(run.id, run.client_id)
+  return 'failed'
 }
 export async function stopUnfinishedCapture(run: Run, providerId: string): Promise<void> {
   await abortRun(providerId)
