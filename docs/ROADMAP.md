@@ -714,6 +714,27 @@ Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说�
 - [ ] **多视角对抗复盘工作流**(1-2 天,可后置):battle-plan §8 方法论固化成可复用 Workflow/agent(N 视角互相证伪前提 → 作战计划 → 喂鲁班),异常触发非每日跑
 - [ ] **开放项**:三张新表 migration 逐次 PM `go apply`(`ad_daily_insights` / `ad_strategy_configs`+`_triggers` / `ad_health_narratives`)· P5 泛化首批客户(Oztop?)· 姊妹 spec Creative Lifecycle 同一 GHA 笔误待独立小 PR 修
 
+## Creatomate L3 Connector · 最小可交付版 📋 2026-09-09 立项，PM 已订购
+
+> 背景：本窗口延续 [CHANGELOG 2026-09-04](./history/CHANGELOG.md) 的 4 个已合 PR（#1351 配方对账 · #1360 imageToClip · #1367 分镜自检 · #1373 shot-guards），把 Creatomate 从 PM 手动开浏览器点导出的模式，接成 `src/lib/creatomate/` L3 Connector。走**最小版**（PM 2026-09-09 拍板），不做 quota 闸和后台 UI，跑起来后再加。
+
+**PM 决定**（2026-09-09）：走最小版；已订 Creatomate Essential $54/月 + Muapi 起充；Spec 阶段和落地实施**另开新窗口做**（不在本窗口继续，避免混入归档窗口）。
+
+- [ ] **Spec 起草**（1-2 天，C 级）：`src/lib/creatomate/` 客户端接口签名 · 模板 JSON 落库 · Inngest 工作流编排 · 错误恢复 · 幂等 · Reuse Statement（明确哪些复用 `imageToClip` / `shot-guards` / `factory` 既有能力）
+- [ ] **三审并行**（半天）：子牙（架构）+ 鲁班（执行）+ 魏征（挑刺）· Spec 未过审前不动生产代码
+- [ ] **L3 Connector 开发**（2 天，B 级）：`src/lib/creatomate/client.ts` 提交 · 轮询 · 转存 Supabase
+- [ ] **模板 JSON 落库 + 参数化**（半天）：CTS 圣诞 / Golden China / 通用模板
+- [ ] **Inngest 工作流串联**（2 天）：`video-render` 编排 `imageToClip` + `shot-guards.classifyRenderMode` + `creatomate.render` + Supabase 存
+- [ ] **端到端联调 + PR 复审**（1 天）：用 CTS Golden China 场景跑一次
+
+**砍掉的两块**（跑起来后再加）：
+- ~~分档 AI 视频配额闸~~ — 已进 [`docs/registry/platform-candidates.md`](./registry/platform-candidates.md)，10-04 复查（PR #1396）
+- ~~后台自助 UI~~ — 管理员触发即可，等真实客户需求验证后再加
+
+**总时间预估**：4-5 工作日（不含 PM 审 Spec 和等 CI 时间）
+
+**关联**：memory `[[project-creatomate-connector-b-min]]`（本项完整状态）· `[[reference-creatomate-silent-failures]]`（Spec 必写死的 5 个坑）· `[[project-social-video-i2v-muapi]]`（i2v 使用禁忌）
+
 ## Phase 18.E — Audience Asset Engine / 中介私域买家库 🔄 建池器已落地（2026-07-29 登记）
 
 > 蓝图：[`specs/2026-07-28-audience-asset-engine.md`](./specs/2026-07-28-audience-asset-engine.md)（v0.3 · 魏征 + 板桥双审 + PM 四项拍板）
