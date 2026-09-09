@@ -7,6 +7,18 @@ const baseCompetitor = { domain: 'example.com', tier: 'core', status: 'active', 
 const payload = (id = 'a') => ({
   client: { id, name: `Client ${id.toUpperCase()}` }, settings: null,
   competitors: [baseCompetitor], signals: [], evidence: [], runs: [],
+  brief: {
+    as_of: '2026-09-10T00:00:00Z', headline: '现有数据还不足以回答 9 月应该争哪条线路、用什么价格。',
+    summary: '当前 2/4 个核心维度数据可用，监控 1 家竞品、1 个业务页面。',
+    actions: ['补齐竞品核心 Tour 列表与详情页。', '绑定评价平台身份。', '只对已验证变化形成建议。'],
+    warnings: [], gaps: [{ label: '竞品广告', reason: '尚未形成可比较的历史快照' }],
+    dimensions: [
+      { key: 'product', label: '竞品产品与价格', status: 'ready', headline: '已读取 1/1 个已配置业务页面', detail: 'Tour 盘面', source: '竞品官网已配置页面', observed_at: '2026-09-10', coverage: '仅代表已配置页面。' },
+      { key: 'search', label: '网站搜索基础', status: 'ready', headline: 'Client A 26；example.com 22', detail: '不等于 Google 排名、流量或市场份额。', source: 'Industry Baseline', observed_at: '2026-09-01', coverage: '2 个网站。' },
+      { key: 'reputation', label: '客户评价', status: 'unconfigured', headline: '尚未形成可比较的评价', detail: '明确身份', source: 'Google', observed_at: null, coverage: '未配置。' },
+      { key: 'ai_visibility', label: 'AI 推荐表现', status: 'no_observation', headline: '尚无快照', detail: '只展示客户自身表现', source: 'AI Visibility', observed_at: null, coverage: '尚无记录。' },
+    ],
+  },
   budget: { accounted_nzd: 3, reserved_nzd: 2 }, can_edit: true, can_run: true,
 })
 const response = (data: unknown, ok = true) => Promise.resolve({ ok, status: ok ? 200 : 400, json: async () => data } as Response)
@@ -17,14 +29,16 @@ async function selectClient(id = 'a') {
 function openSection(name: string) { fireEvent.click(screen.getByText(name)) }
 afterEach(() => vi.unstubAllGlobals())
 
-describe('WebIntelligencePanel IMPACT flow', () => {
+describe('WebIntelligencePanel competition brief flow', () => {
   it('puts one analysis action and the decision result ahead of configuration', async () => {
     vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : payload())))
     render(<WebIntelligencePanel />); await selectClient()
-    expect(await screen.findByRole('button', { name: '开始竞争分析' })).toBeVisible()
+    expect(await screen.findByText('现有数据还不足以回答 9 月应该争哪条线路、用什么价格。')).toBeVisible()
+    expect(screen.getByText('四个经营维度')).toBeVisible()
+    openSection('重新采集与系统运行说明')
+    expect(screen.getByRole('button', { name: '开始竞争分析' })).toBeVisible()
     expect(screen.getByText('本次将分析 1 家竞品、1 个页面')).toBeVisible()
     expect(screen.getByText('还没有可用的竞争分析')).toBeVisible()
-    expect(screen.getByRole('region', { name: 'IMPACT 进度' })).toHaveTextContent('I发现变化M衡量影响P建议下一步A尚未执行C执行后验证T根据结果调优')
     expect(screen.getByLabelText('开启监控')).not.toBeVisible()
     openSection('成本、运行记录与证据')
     expect(screen.getByLabelText('开启监控')).not.toBeChecked()
@@ -45,6 +59,7 @@ describe('WebIntelligencePanel IMPACT flow', () => {
     })
     vi.stubGlobal('fetch', fetcher)
     render(<WebIntelligencePanel />); await selectClient()
+    fireEvent.click(await screen.findByText('重新采集与系统运行说明'))
     fireEvent.click(await screen.findByRole('button', { name: '开始竞争分析' }))
     expect(await screen.findByText(/1\/2 个页面已开始，1 个页面/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '继续未完成页面' }))
@@ -113,7 +128,7 @@ describe('WebIntelligencePanel IMPACT flow', () => {
       return response({ ...payload('b'), competitors: [{ ...baseCompetitor, domain: 'private-b.example', urls: [] }] })
     }))
     render(<WebIntelligencePanel />); await selectClient(); await selectClient('b')
-    await screen.findByText('Client B · 竞争分析'); openSection('管理监控范围'); await screen.findByText('private-b.example')
+    await screen.findByText('Client B · 竞争简报'); openSection('管理监控范围'); await screen.findByText('private-b.example')
     await act(async () => resolveA(await response(payload())))
     expect(screen.queryByText('example.com')).not.toBeInTheDocument()
   })

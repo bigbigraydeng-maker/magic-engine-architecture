@@ -1,6 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import type { CompetitionBrief as CompetitionBriefData } from '@/lib/web-intelligence/competition-brief'
+import { CompetitionBrief } from './CompetitionBrief'
 
 type Settings = {
   enabled: boolean; entitled: boolean; entitlement_price: number
@@ -29,6 +31,7 @@ type Run = {
 type Payload = {
   client: { id: string; name: string }; settings: Settings | null; competitors: Competitor[]
   signals: Signal[]; evidence: Evidence[]; runs: Run[]
+  brief: CompetitionBriefData
   budget: { accounted_nzd: number; reserved_nzd: number }; can_edit: boolean; can_run: boolean
 }
 type AnalysisTarget = { domain: string; url: string; tier: Competitor['tier'] }
@@ -167,12 +170,15 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
     {error && !data && <button className={button} onClick={reload} disabled={loading}>重新读取</button>}
     {data && <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-me-ivory p-4">
-        <div><h2 className="font-bold">{data.client.name} · 竞争分析</h2><p className="mt-1 text-sm">{monitored} 家竞品 · {targets.length} 个业务页面 · 本月已用 NZ${money(data.budget.accounted_nzd)}</p></div>
+        <div><h2 className="font-bold">{data.client.name} · 竞争简报</h2><p className="mt-1 text-sm">{monitored} 家竞品 · {targets.length} 个业务页面 · 本月已用 NZ${money(data.budget.accounted_nzd)}</p></div>
         <button className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm disabled:opacity-40" onClick={reload} disabled={loading}>刷新结果</button>
       </div>
-      <AnalysisLauncher targets={targets} endpoint={endpoint} canRun={data.can_run} batch={batch} setBatch={setBatch} onProgress={reload} />
-      <ImpactProgress />
+      <CompetitionBrief brief={data.brief} />
       <Signals signals={data.signals} evidence={data.evidence} runs={data.runs} targets={targets} batch={batch} />
+      <details className="rounded-xl border border-black/10 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-bold">重新采集与系统运行说明</summary>
+        <div className="mt-4"><AnalysisLauncher targets={targets} endpoint={endpoint} canRun={data.can_run} batch={batch} setBatch={setBatch} onProgress={reload} /></div>
+      </details>
       <details className="rounded-xl border border-black/10 bg-white p-4">
         <summary className="cursor-pointer text-sm font-bold">管理监控范围</summary>
         <div className="mt-4 space-y-3">
@@ -229,12 +235,6 @@ function AnalysisLauncher({ targets, endpoint, canRun, batch, setBatch, onProgre
     </div>
     {targets.length === 0 && <p className="mt-3 text-sm text-status-rej">尚未配置业务页面，请展开“管理监控范围”添加页面。</p>}
     {batch.length > 0 && <p className="mt-3 text-sm" role="status">本批次：{queued}/{batch.length} 个页面已开始{failed ? `，${failed} 个页面未能启动，其余页面已暂停。` : '。分析完成后结果会自动刷新。'}</p>}
-  </section>
-}
-
-function ImpactProgress() {
-  return <section aria-label="IMPACT 进度" className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-    {[['I', '发现变化', true], ['M', '衡量影响', true], ['P', '建议下一步', true], ['A', '尚未执行', false], ['C', '执行后验证', false], ['T', '根据结果调优', false]].map(([letter, label, active]) => <div key={String(letter)} className={`rounded-xl border p-3 ${active ? 'border-me-ochre/30 bg-me-ochre/10' : 'border-black/10 bg-black/[0.02] text-me-charcoal/45'}`}><p className="text-xs font-black">{letter}</p><p className="mt-1 text-xs font-bold">{label}</p></div>)}
   </section>
 }
 

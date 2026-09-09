@@ -1,6 +1,7 @@
 import { supabaseAdmin as db } from '@/lib/supabase'
 import { allowedClient, settingsSchema, type Settings, type Signal } from './contracts'
 import { loadCompetitors } from './targets'
+import { loadCompetitionBrief } from './competition-sources'
 
 export async function saveSettings(clientId: string, raw: unknown): Promise<void> {
   const settings = settingsSchema.parse(raw)
@@ -10,7 +11,7 @@ export async function saveSettings(clientId: string, raw: unknown): Promise<void
 }
 export async function readView(clientId: string, canEdit: boolean) {
   const [client, settings, competitors, signals, runs, budget] = await Promise.all([
-    db.from('clients').select('id,name').eq('id', clientId).single(),
+    db.from('clients').select('id,name,domain').eq('id', clientId).single(),
     db.from('web_intelligence_settings').select('*').eq('client_id', clientId).maybeSingle(),
     loadCompetitors(clientId),
     db.from('market_signals').select('*').eq('client_id', clientId).order('created_at', { ascending: false }).limit(50),
@@ -22,5 +23,6 @@ export async function readView(clientId: string, canEdit: boolean) {
   const evidence = ids.length ? await db.from('market_evidence').select('*').eq('client_id', clientId).in('id', ids) : { data: [], error: null }
   if (evidence.error) throw new Error('evidence_read_failed')
   const config: Settings | null = settings.data ? settingsSchema.strip().parse(settings.data) : null
-  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, budget: budget.data, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
+  const brief = await loadCompetitionBrief(clientId, client.data, competitors)
+  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, budget: budget.data, brief, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
 }
