@@ -54,7 +54,10 @@ export async function collectCapture(run: Run, providerId: string): Promise<'pen
   try { target = await assertEligibleTarget(run.client_id, run.domain, run.url) }
   catch { return failKnownCapture(run, 'target_changed_after_capture') }
   const content = normaliseContent(capture.page.text)
-  const projection = projectBusinessContent(content)
+  const profile = profileForTags(target.tags)
+  const pageRole = classifyBusinessPage(capture.page.url, profile)
+  const projection = profile?.projectContent?.(content, pageRole) ?? projectBusinessContent(content)
+  const projectionVersion = [BUSINESS_PROJECTION_VERSION, profile?.id, `actor-${run.actor_build}`].filter(Boolean).join('+')
   if (content.length < 100 || content.length > 200000 || projection.length < 80 || projection.length > 200000) {
     return failKnownCapture(run, 'capture_content_limit')
   }
@@ -64,8 +67,8 @@ export async function collectCapture(run: Run, providerId: string): Promise<'pen
     p_raw_hash: createHash('sha256').update(content).digest('hex'),
     p_projection: projection,
     p_projection_hash: createHash('sha256').update(projection).digest('hex'),
-    p_projection_version: `${BUSINESS_PROJECTION_VERSION}+actor-${run.actor_build}`,
-    p_page_role: classifyBusinessPage(capture.page.url, profileForTags(target.tags)),
+    p_projection_version: projectionVersion,
+    p_page_role: pageRole,
   })
   if (saved.error) throw new Error('snapshot_write_failed')
   return 'captured'
@@ -86,21 +89,26 @@ export async function understand(run: Run): Promise<void> {
     return
   }
   if (input.signal.interpretation_status === 'complete') return
+  let industryGuidance = ''
+  try {
+    const target = await assertEligibleTarget(run.client_id, run.domain, run.url)
+    industryGuidance = profileForTags(target.tags)?.interpretationGuidance ?? ''
+  } catch { /* Evidence remains readable if a target is archived after capture. */ }
   // Validate bounded input before claiming a paid attempt.
-  interpretationPrompt(input.signal, input.evidence, input.context)
+  interpretationPrompt(input.signal, input.evidence, input.context, industryGuidance)
   const permission = await claimPaid(run, 'interpretation_claimed')
   if (permission === 'disabled') return
   if (permission === 'unknown') {
     await updateRun(run.id, run.client_id, { status: 'reconciliation', error_code: 'interpretation_attempt_unknown' })
     return
   }
-  await invokeInterpretation(run, input)
+  await invokeInterpretation(run, input, industryGuidance)
 }
-async function invokeInterpretation(run: Run, input: Awaited<ReturnType<typeof loadInterpretationInput>>): Promise<void> {
+async function invokeInterpretation(run: Run, input: Awaited<ReturnType<typeof loadInterpretationInput>>, industryGuidance: string): Promise<void> {
   const signal = input.signal!
   let failureCode = 'interpretation_failed'
   try {
-    const result = await interpretChange(signal, input.evidence, input.context)
+    const result = await interpretChange(signal, input.evidence, input.context, industryGuidance)
     await updateRun(run.id, run.client_id, { interpretation_cost_usd: knownCost(result.cost_usd) })
     failureCode = 'interpretation_truncated'
     if (result.stop_reason === 'max_tokens') throw new Error(failureCode)
