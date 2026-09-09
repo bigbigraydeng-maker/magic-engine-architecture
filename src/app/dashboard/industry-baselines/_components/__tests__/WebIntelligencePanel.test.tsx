@@ -135,6 +135,42 @@ describe('WebIntelligencePanel', () => {
     expect(screen.getByText('Older conclusion')).not.toBeVisible()
   })
 
+  it('shows decision impact, adjustment and high-signal evidence differences before raw text', async () => {
+    const data = { ...payload(), evidence: [
+      { id: 'before', source_url: 'https://example.com/product', excerpt: 'Standard price $1,200\nAvailable', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: 'https://example.com/product', excerpt: 'Earlybird price $950\nOnly 3 spaces left', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{
+      id: 'decision', domain: 'example.com', kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after',
+      interpretation_status: 'complete', classification: 'threat', interpretation: { summary: '竞品降价并接近售罄。', confidence: 0.9 },
+      recommended_action: '比较同类产品价值，并决定是否调整优惠。', created_at: '2026-09-09',
+    }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('发生了什么')).toBeVisible()
+    expect(screen.getByText('对我们的影响')).toBeVisible()
+    expect(screen.getByText('如何调衡')).toBeVisible()
+    expect(screen.getByText('关键差异')).toBeVisible()
+    expect(screen.getByText('+ Earlybird price $950')).toBeVisible()
+    expect(screen.getByText('− Standard price $1,200')).toBeVisible()
+    expect(screen.getByText('查看变化前后证据').closest('details')).not.toHaveAttribute('open')
+  })
+
+  it('explains collector upgrades as a baseline reset instead of a competitor move', async () => {
+    const data = { ...payload(), evidence: [
+      { id: 'before', source_url: 'https://example.com/product', excerpt: 'Short page', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: 'https://example.com/product', excerpt: 'Price $950\nAvailable', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{
+      id: 'baseline', domain: 'example.com', kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after',
+      interpretation_status: 'complete', classification: 'ignore', interpretation: { summary: '采集器升级后首次完整读取业务区块，设为新基线。', confidence: 0.82 },
+      recommended_action: '无需行动。', created_at: '2026-09-09',
+    }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('本次是采集方式升级')).toBeVisible()
+    expect(screen.getByText(/本次只建立新基线，不作为竞争动作/)).toBeVisible()
+    expect(screen.queryByText('关键差异')).not.toBeInTheDocument()
+  })
+
   it('remounts saved settings only after the refreshed payload arrives', async () => {
     const settings = { enabled: false, entitled: false, entitlement_price: 499, entitlement_currency: 'NZD', target_nzd: 30, hard_stop_nzd: 50, usd_to_nzd: 1.7, fx_as_of: '2026-09-09', actor_build: '0.3.97', capture_limit_usd: 0.1, overhead_nzd: 0.02, context: 'original' }
     let readCount = 0, resolveRefresh!: (response: Response) => void
