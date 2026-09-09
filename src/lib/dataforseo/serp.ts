@@ -142,7 +142,10 @@ export async function getSerpPage(
   if (!res.ok) throw new Error(`DataForSEO SERP error: ${res.status}`)
 
   const json = await res.json() as {
-    tasks?: Array<{\n      status_code?: number\n      status_message?: string\n      result?: Array<{
+    tasks?: Array<{
+      status_code?: number
+      status_message?: string
+      result?: Array<{
         items?: Array<{
           type?:                  string
           rank_absolute?:         number
