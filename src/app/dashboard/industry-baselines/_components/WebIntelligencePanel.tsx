@@ -245,13 +245,23 @@ function SignalCard({ signal: s, evidence }: { signal: Signal; evidence: Evidenc
 }
 
 function Signals({ signals, evidence }: { signals: Signal[]; evidence: Evidence[] }) {
-  const ignored = signals.filter(s => s.interpretation_status === 'complete' && s.classification === 'ignore')
-  const attention = signals.filter(s => !(s.interpretation_status === 'complete' && s.classification === 'ignore'))
+  const sources = new Map(evidence.map(e => [e.id, e.source_url]))
+  const seen = new Set<string>()
+  const latest: Signal[] = []
+  const history: Signal[] = []
+  const timestamp = (s: Signal) => Date.parse(s.created_at) || 0
+  for (const signal of [...signals].sort((a, b) => timestamp(b) - timestamp(a))) {
+    const source = signal.after_evidence_id ? sources.get(signal.after_evidence_id) : undefined
+    // Missing page identity must not hide another page's unresolved result.
+    const key = JSON.stringify([signal.domain, signal.kind, source || signal.id])
+    if (seen.has(key)) history.push(signal)
+    else { seen.add(key); latest.push(signal) }
+  }
   return <section className="space-y-4" aria-label="竞品情报">
-    <div><h2 className="text-xl font-bold">值得你看的变化</h2><p className="mt-1 text-sm text-me-charcoal/60">先看结论，需要核对时再展开网页原文。</p></div>
-    {signals.length === 0 ? <div className={card}><p className="font-bold">还没有变化情报</p><p className="text-sm">首次采集建立对照基准，后续采集才会比较变化。可在“监控对象”中查看已配置页面。</p></div> : attention.length === 0 ? <p className="rounded-xl bg-me-ivory p-4 text-sm">当前已分析的变化均无需行动，可在下方展开查看。</p> : null}
-    {attention.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}
-    {ignored.length > 0 && <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">无需行动 · {ignored.length} 条</summary><div className="mt-4 space-y-3">{ignored.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}</div></details>}
+    <div><h2 className="text-xl font-bold">最新变化结果</h2><p className="mt-1 text-sm text-me-charcoal/60">按页面和情报方向显示最近一条变化结果，包括无需行动的结论。这里不代表每次采集的状态，完整状态请查看采集记录。</p></div>
+    {signals.length === 0 && <div className={card}><p className="font-bold">还没有变化情报</p><p className="text-sm">首次采集建立对照基准，后续采集才会比较变化。可在“监控对象”中查看已配置页面。</p></div>}
+    {latest.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}
+    {history.length > 0 && <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">历史变化与分析记录 · {history.length} 条</summary><p className="mt-3 text-sm text-me-charcoal/60">以下是同一页面较早的记录。后续结果不代表旧问题已解决，原有结论和失败原因均保留。</p><div className="mt-4 space-y-3">{history.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}</div></details>}
   </section>
 }
 
