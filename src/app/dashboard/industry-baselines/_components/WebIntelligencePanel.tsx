@@ -94,13 +94,48 @@ const changedFacts = (from: Evidence | undefined, to: Evidence | undefined) => {
     .slice(0, 3).map(item => item.text)
   return { added: select(after, beforeSet), removed: select(before, afterSet) }
 }
+const factKinds = (value: string) => new Set([
+  /[$€£]\s?\d|\b(?:nzd|aud|usd)\s?\d|价格|降价|涨价/i.test(value) && 'price',
+  /available|availability|sold out|spaces? left|in stock|out of stock|余位|售罄/i.test(value) && 'availability',
+  /sale|save|offer|discount|promotion|earlybird|优惠|促销/i.test(value) && 'promotion',
+  /\b20\d{2}\b|departure|start date|end date|档期|出发日期/i.test(value) && 'schedule',
+  /review|rating|评价|评分|口碑/i.test(value) && 'reputation',
+  /product|service|package|tour|route|days|产品|线路|行程|天数|包含/i.test(value) && 'product',
+  /hiring|vacancy|career|招聘|职位/i.test(value) && 'hiring',
+  /executive|director|manager|高管|负责人/i.test(value) && 'people',
+  /partner|partnership|合作|公益|charity|csr/i.test(value) && 'partnership',
+  /technology|tracking|pixel|software|技术|像素/i.test(value) && 'technology',
+].filter((kind): kind is string => Boolean(kind)))
+const numericClaims = (value: string) => (value.match(/\d[\d,.]*/g) ?? []).map(item => item.replace(/,/g, '').replace(/\.$/, ''))
+const productIdentity = (line: string) => line.match(/(?:^|[|;])\s*(?:tour|product)\s*:\s*([^|;]+)/i)?.[1]?.trim().toLowerCase() ?? null
+const moneyFacts = (value: string) => value.split(/\n+/).flatMap(line => [...line.matchAll(/([$€£]|\b(?:nzd|aud|usd)\b)\s*([\d,]+(?:\.\d+)?)/gi)].map(match => ({
+  currency: match[1].toUpperCase(), value: Number(match[2].replace(/,/g, '')),
+  product: productIdentity(line),
+}))).filter(item => Number.isFinite(item.value))
+const sameProduct = (before: { product: string | null }, after: { product: string | null }) => before.product !== null && before.product === after.product
+const claimDetailsVerified = (summary: string, added: string[], removed: string[]) => {
+  const difference = [...added, ...removed].join('\n')
+  if (!numericClaims(summary).every(claim => numericClaims(difference).includes(claim))) return false
+  const direction = /降价|price (?:drop|cut|decrease)|cheaper/i.test(summary) ? 'down' : /涨价|提价|price (?:rise|increase)|more expensive/i.test(summary) ? 'up' : null
+  const summaryHasPrice = factKinds(summary).has('price')
+  if (!summaryHasPrice) return true
+  const oldPrices = moneyFacts(removed.join('\n'))
+  const newPrices = moneyFacts(added.join('\n'))
+  if (oldPrices.length !== 1 || newPrices.length !== 1) return false
+  const [oldPrice] = oldPrices; const [newPrice] = newPrices
+  if (oldPrice.currency !== newPrice.currency || !sameProduct(oldPrice, newPrice)) return false
+  const claims = numericClaims(summary).map(Number).filter(Number.isFinite)
+  if (claims.length >= 2 && (claims[0] !== oldPrice.value || claims.at(-1) !== newPrice.value)) return false
+  if (claims.length === 1 && claims[0] !== newPrice.value) return false
+  if (direction === 'down') return oldPrice.value > newPrice.value
+  if (direction === 'up') return oldPrice.value < newPrice.value
+  return true
+}
 const isBaselineReset = (signal: Signal) => /采集器|采集方式|完整读取|新基线|无法证明/.test(signal.interpretation?.summary ?? '')
-const impactCopy = (classification: string | null) => classification === 'threat'
-  ? '可能削弱我方竞争力，需要评估是否跟进。'
-  : classification === 'opportunity'
-    ? '出现可抢占空间，值得评估先行动。'
-    : '当前证据不支持调整策略。'
-
+const isFreshAt = (observedAt: string, asOf: string) => {
+  const age = Date.parse(asOf) - Date.parse(observedAt)
+  return Number.isFinite(age) && age >= -DAY && age <= 8 * DAY
+}
 async function request<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
   const res = await fetch(url, { method, cache: 'no-store', ...(body === undefined ? {} : {
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -173,8 +208,8 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
         <div><h2 className="font-bold">{data.client.name} · 竞争简报</h2><p className="mt-1 text-sm">{monitored} 家竞品 · {targets.length} 个业务页面 · 本月已用 NZ${money(data.budget.accounted_nzd)}</p></div>
         <button className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm disabled:opacity-40" onClick={reload} disabled={loading}>刷新结果</button>
       </div>
+      <Signals signals={data.signals} evidence={data.evidence} runs={data.runs} targets={targets} batch={batch} asOf={data.brief.as_of} clientName={data.client.name} />
       <CompetitionBrief brief={data.brief} />
-      <Signals signals={data.signals} evidence={data.evidence} runs={data.runs} targets={targets} batch={batch} />
       <details className="rounded-xl border border-black/10 bg-white p-4">
         <summary className="cursor-pointer text-sm font-bold">重新采集与系统运行说明</summary>
         <div className="mt-4"><AnalysisLauncher targets={targets} endpoint={endpoint} canRun={data.can_run} batch={batch} setBatch={setBatch} onProgress={reload} /></div>
@@ -335,35 +370,55 @@ function EvidenceCard({ evidence, label }: { evidence: Evidence | undefined; lab
   </div>
 }
 
-function SignalCard({ signal: s, evidence }: { signal: Signal; evidence: Evidence[] }) {
-  const complete = s.interpretation_status === 'complete'
-  const labels: Record<string, string> = { threat: '值得警惕', opportunity: '值得关注的机会', ignore: '无需行动' }
-  const label = complete ? labels[s.classification ?? ''] ?? '已分析' : s.interpretation_status === 'failed' ? '分析未完成' : '正在分析'
-  const summary = s.interpretation?.summary
-  const action = s.recommended_action === 'No action recommended.' ? '无需采取行动。' : s.recommended_action
+const DAY = 86_400_000
+function signalEvidenceState(s: Signal, evidence: Evidence[], asOf: string) {
   const before = evidence.find(e => e.id === s.before_evidence_id)
   const after = evidence.find(e => e.id === s.after_evidence_id)
-  const source = after?.source_url
+  const cited = new Set(s.interpretation?.evidence_ids ?? [])
+  const linked = Boolean(before && after && cited.has(s.before_evidence_id ?? '') && cited.has(s.after_evidence_id ?? ''))
+  const observed = after?.observed_at ?? s.created_at
+  const fresh = isFreshAt(observed, asOf)
   const highlights = changedFacts(before, after)
+  const evidenceKinds = factKinds([...highlights.added, ...highlights.removed].join('\n'))
+  const summaryKinds = factKinds(s.interpretation?.summary ?? '')
+  const specificClaims = [...summaryKinds].filter(kind => kind !== 'product')
+  const requiredClaims = specificClaims.length > 0 ? specificClaims : [...summaryKinds]
+  const verified = requiredClaims.length > 0
+    && requiredClaims.every(kind => evidenceKinds.has(kind))
+    && claimDetailsVerified(s.interpretation?.summary ?? '', highlights.added, highlights.removed)
+  return { before, after, linked, fresh, highlights, verified }
+}
+
+function SignalCard({ signal: s, evidence, asOf, clientName, featured = false, historical = false }: { signal: Signal; evidence: Evidence[]; asOf: string; clientName: string; featured?: boolean; historical?: boolean }) {
+  const complete = s.interpretation_status === 'complete'
+  const labels: Record<string, string> = { threat: '需要评估应对', opportunity: '出现可利用机会', ignore: '该页面暂不建议回应' }
+  const summary = s.interpretation?.summary
+  const action = s.recommended_action === 'No action recommended.' ? '无需采取行动。' : s.recommended_action
+  const { before, after, linked, fresh, highlights, verified } = signalEvidenceState(s, evidence, asOf)
+  const source = after?.source_url
   const baselineReset = isBaselineReset(s)
-  return <article className={card}>
-    <div className="flex flex-wrap items-center justify-between gap-2"><span className={`rounded-full px-3 py-1 text-xs font-bold ${!complete ? 'bg-amber-50 text-amber-800' : s.classification === 'threat' ? 'bg-red-50 text-red-800' : s.classification === 'opportunity' ? 'bg-green-50 text-green-800' : 'bg-black/5 text-me-charcoal/60'}`}>{label}</span><time className="text-xs text-me-charcoal/60" dateTime={s.created_at}>{date(s.created_at)} NZ</time></div>
-    <h3 className="break-all text-lg font-bold">{s.domain}{source ? ` · ${pagePurpose(source)}` : ''}</h3>
-    {complete ? <>
+  const modelLead = complete && linked && fresh && !baselineReset && !verified
+  const decisionReady = complete && linked && fresh && !baselineReset && verified
+  const label = historical && decisionReady ? '历史参考' : decisionReady ? labels[s.classification ?? ''] ?? '已完成判断' : complete ? '待核实' : s.interpretation_status === 'failed' ? '分析未完成' : '正在分析'
+  const impact = s.classification === 'threat' ? `这项变化可能削弱 ${clientName} 同类产品的竞争力，需要先做同类产品对位。` : s.classification === 'opportunity' ? `这项变化可能留下可抢占空间，需要先确认 ${clientName} 同类产品是否具备优势。` : `该页面本次变化暂不值得 ${clientName} 调整产品或推广策略。`
+  return <article className={`${card} ${featured ? 'border-me-ochre/40 bg-gradient-to-br from-me-ochre/10 to-white p-5' : ''}`}>
+    <div className="flex flex-wrap items-center justify-between gap-2"><span className={`rounded-full px-3 py-1 text-xs font-bold ${!decisionReady ? 'bg-amber-50 text-amber-800' : s.classification === 'threat' ? 'bg-red-50 text-red-800' : s.classification === 'opportunity' ? 'bg-green-50 text-green-800' : 'bg-black/5 text-me-charcoal/60'}`}>{label}</span><time className="text-xs text-me-charcoal/60" dateTime={s.created_at}>观察于 {date(s.created_at)} NZ</time></div>
+    <h3 className={`${featured ? 'text-2xl' : 'text-lg'} break-all font-black`}>关于 {s.domain}{source ? ` · ${pagePurpose(source)}` : ''}</h3>
+    {decisionReady ? <>
       <div className="grid gap-3 lg:grid-cols-3">
-        <div className="rounded-lg bg-me-ivory p-4"><p className="text-xs font-bold text-me-charcoal/60">I · 发现了什么</p><p className="mt-2 text-sm leading-6">{summary ?? '分析已完成，暂无文字摘要。'}</p></div>
-        <div className={`rounded-lg p-4 ${s.classification === 'threat' ? 'bg-red-50' : s.classification === 'opportunity' ? 'bg-green-50' : 'bg-black/[0.03]'}`}><p className="text-xs font-bold text-me-charcoal/60">M · 竞争影响</p><p className="mt-2 text-sm font-bold leading-6">{impactCopy(s.classification)}</p></div>
-        <div className="rounded-lg border border-me-ochre/30 bg-me-ochre/10 p-4"><p className="text-xs font-bold text-me-charcoal/60">P · 建议下一步</p><p className="mt-2 text-sm font-bold leading-6">{action ?? '暂无建议。'}</p></div>
+        <div className="rounded-lg bg-white/80 p-4"><p className="text-xs font-bold text-me-charcoal/60">发生了什么</p><p className="mt-2 text-sm leading-6">{summary ?? '分析已完成，暂无文字摘要。'}</p></div>
+        <div className={`rounded-lg p-4 ${s.classification === 'threat' ? 'bg-red-50' : s.classification === 'opportunity' ? 'bg-green-50' : 'bg-black/[0.03]'}`}><p className="text-xs font-bold text-me-charcoal/60">对 {clientName} 的潜在影响</p><p className="mt-2 text-sm font-bold leading-6">{impact}</p></div>
+        <div className="rounded-lg border border-me-ochre/30 bg-me-ochre/10 p-4"><p className="text-xs font-bold text-me-charcoal/60">{historical ? '当时建议' : '建议怎么做'}</p><p className="mt-2 text-sm font-bold leading-6">{action ?? '暂无建议。'}</p></div>
       </div>
-      {baselineReset ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>本次是采集方式升级</strong><p>变化前的证据不完整，变化后首次读到完整业务区块。本次只建立新基线，不作为竞争动作；下一次采集才可可靠比较价格、档期和余位。</p></div> : <ChangeHighlights added={highlights.added} removed={highlights.removed} />}
-    </> : <p className="text-sm leading-7">{s.interpretation_status === 'failed' ? '已保留页面变化，但本次分析未能生成有效结论。请查看采集记录中的原因。' : '已发现页面差异，正在整理结论。'}</p>}
-    <p className="text-xs text-me-charcoal/60">{s.kind === 'business_page_changed' ? '业务内容变化' : '网站页面变化'} · A 尚未执行 · C/T 将在执行并获得结果后启用{complete && s.interpretation?.confidence != null ? ` · 判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
+      <ChangeHighlights added={highlights.added} removed={highlights.removed} />
+    </> : modelLead ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>模型发现了一条待核实线索</strong><p className="mt-1">{summary}</p><p className="mt-2 text-me-charcoal/65">现有证据未提取到可核对的关键差异，暂不展示行动建议。</p></div> : baselineReset ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>本次只建立新基线</strong><p>变化前的证据不完整，暂不作为经营决定；下一次采集后再比较价格、档期和余位。</p></div> : <p className="text-sm leading-7">{!complete ? s.interpretation_status === 'failed' ? '页面变化已保存，但这次没有形成有效分析，当前不能据此决策。' : '页面变化正在分析，完成前不建议采取行动。' : !linked ? '模型结论没有形成完整的前后证据链，当前不能作为经营决定。' : '这条观察已超过 8 天，请重新采集后再决定。'}</p>}
+    <p className="text-xs text-me-charcoal/60">{historical ? '历史参考' : '当前判断'} · 仅代表这个竞品的这个页面 · 尚未执行任何动作{decisionReady && s.interpretation?.confidence != null ? ` · 模型判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
     <details className="rounded-lg bg-me-ivory p-3"><summary className="cursor-pointer text-sm font-bold">查看变化前后证据</summary><div className="mt-3 grid gap-3 md:grid-cols-2"><EvidenceCard label="之前快照" evidence={before} /><EvidenceCard label="当前快照" evidence={after} /></div></details>
   </article>
 }
 
 function ChangeHighlights({ added, removed }: { added: string[]; removed: string[] }) {
-  if (added.length === 0 && removed.length === 0) return <div className="rounded-lg border border-black/10 p-4 text-sm"><strong>关键差异</strong><p className="mt-2 text-me-charcoal/70">没有提取到明确的价格、优惠、档期、余位或产品事实增减，请结合上方结论判断。</p></div>
+  if (added.length === 0 && removed.length === 0) return null
   return <section className="space-y-3" aria-label="关键差异">
     <h4 className="text-sm font-bold">关键差异</h4>
     <div className="grid gap-3 md:grid-cols-2">
@@ -373,36 +428,48 @@ function ChangeHighlights({ added, removed }: { added: string[]; removed: string
   </section>
 }
 
-function Signals({ signals, evidence, runs, targets, batch }: { signals: Signal[]; evidence: Evidence[]; runs: Run[]; targets: AnalysisTarget[]; batch: BatchTarget[] }) {
+function Signals({ signals, evidence, runs, targets, batch, asOf, clientName }: { signals: Signal[]; evidence: Evidence[]; runs: Run[]; targets: AnalysisTarget[]; batch: BatchTarget[]; asOf: string; clientName: string }) {
   const recentRuns = latestRunsForTargets(runs, targets)
   const batchIds = new Set(batch.filter(target => target.status === 'queued').map(target => target.request_id))
   const currentRuns = batch.length ? runs.filter(run => batchIds.has(run.id)) : recentRuns
   const currentRunIds = new Set(currentRuns.map(run => run.id))
   const latest = signals.filter(signal => currentRunIds.has(signal.run_id)).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-  const completed = currentRuns.filter(run => run.status === 'complete').length
+  const completedRuns = currentRuns.filter(run => run.status === 'complete')
+  const stale = completedRuns.filter(run => !isFreshAt(run.created_at, asOf)).length
+  const completed = completedRuns.length - stale
   const failedRuns = currentRuns.filter(run => ['failed', 'reconciliation'].includes(run.status)).length
   const stopped = batch.filter(target => target.status !== 'queued').length
   const failed = failedRuns + stopped
   const pending = batch.length
-    ? batchIds.size - completed - failedRuns
+    ? batchIds.size - completedRuns.length - failedRuns
     : currentRuns.filter(run => !['complete', 'failed', 'reconciliation'].includes(run.status)).length
   const scope = batch.length || targets.length
   const untouched = batch.length ? 0 : targets.length - recentRuns.length
-  const insufficient = failed > 0 || untouched > 0
+  const insufficient = failed > 0 || untouched > 0 || stale > 0
   const emptyTitle = pending ? '分析正在进行'
     : !batch.length && currentRuns.length === 0 ? '还没有可用的竞争分析'
-      : insufficient ? `${batch.length ? '本轮' : '最近一次'}覆盖不足，暂不能下结论`
+      : stale > 0 ? '最近一次证据已过期，请重新采集'
+        : insufficient ? `${batch.length ? '本轮' : '最近一次'}覆盖不足，暂不能下结论`
         : `${batch.length ? '本轮' : '最近一次'}没有发现需要调衡的竞争变化`
   const emptyCopy = !batch.length && currentRuns.length === 0
     ? '点击“开始竞争分析”，ME 会读取已配置业务页面并在发现可靠变化时给出建议。'
-    : insufficient ? '已完成页面暂未发现可靠变化，但仍有页面未完成，不能代表完整竞争情况。'
+    : stale > 0 ? '旧记录只能说明当时没有发现变化，不能代表当前竞争盘面。'
+      : insufficient ? '已完成页面暂未发现可靠变化，但仍有页面未完成，不能代表完整竞争情况。'
       : '已完成页面没有出现可靠的产品、价格、促销、档期或余位变化。首次读取只建立业务基线。'
+  const ordered = [...latest].sort((a, b) => {
+    const ready = (s: Signal) => { const state = signalEvidenceState(s, evidence, asOf); return Number(s.interpretation_status === 'complete' && state.linked && state.fresh && state.verified && !isBaselineReset(s)) }
+    const priority = (s: Signal) => s.classification === 'threat' ? 2 : s.classification === 'opportunity' ? 1 : 0
+    return ready(b) - ready(a) || priority(b) - priority(a) || Date.parse(b.created_at) - Date.parse(a.created_at)
+  })
+  const primary = ordered[0]
+  const additional = ordered.slice(1)
   return <section className="space-y-4" aria-label="竞品情报">
-    <div><h2 className="text-xl font-bold">{batch.length ? '本轮决策结果' : '最近决策结果'}</h2><p className="mt-1 text-sm text-me-charcoal/60">{batch.length ? '只显示本次实际启动页面产生的结论；未启动页面不会沿用旧结论。' : '显示每个业务页面最近一次分析对应的结论。'}</p></div>
-    <p className="text-sm font-bold">覆盖状态：{completed}/{scope} 个页面完成{pending ? ` · ${pending} 个处理中` : ''}{failed ? ` · ${failed} 个未完成` : ''}{untouched ? ` · ${untouched} 个尚未运行` : ''}</p>
+    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">当前经营决定</p><h2 className="mt-1 text-xl font-bold">现在需要回应什么</h2><p className="mt-1 text-sm text-me-charcoal/60">每条判断只对应一个竞品页面，不代表整个市场。</p></div>
     {latest.length === 0 && <div className={card}><p className="font-bold">{emptyTitle}</p><p className="text-sm">{emptyCopy}</p></div>}
-    {latest.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}
-    {signals.length > latest.length && <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">历史分析 · {signals.length - latest.length} 条</summary><div className="mt-4 space-y-3">{signals.filter(signal => !currentRunIds.has(signal.run_id)).map(s => <SignalCard key={s.id} signal={s} evidence={evidence} />)}</div></details>}
+    {primary && <SignalCard signal={primary} evidence={evidence} asOf={asOf} clientName={clientName} featured />}
+    <p className="text-xs text-me-charcoal/60">本次监控覆盖：{completed}/{scope} 个页面证据有效{stale ? ` · ${stale} 个已过期` : ''}{pending ? ` · ${pending} 个处理中` : ''}{failed ? ` · ${failed} 个未完成` : ''}{untouched ? ` · ${untouched} 个尚未运行` : ''}</p>
+    {additional.length > 0 && <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">其他当前页面判断 · {additional.length} 条</summary><div className="mt-4 space-y-3">{additional.map(s => <SignalCard key={s.id} signal={s} evidence={evidence} asOf={asOf} clientName={clientName} />)}</div></details>}
+    {signals.length > latest.length && <details className="rounded-xl border border-black/10 p-4"><summary className="cursor-pointer text-sm font-bold">历史分析 · {signals.length - latest.length} 条</summary><div className="mt-4 space-y-3">{signals.filter(signal => !currentRunIds.has(signal.run_id)).map(s => <SignalCard key={s.id} signal={s} evidence={evidence} asOf={asOf} clientName={clientName} historical />)}</div></details>}
   </section>
 }
 

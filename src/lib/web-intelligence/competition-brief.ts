@@ -14,6 +14,7 @@ export type BriefDimension = {
 
 export type CompetitionBrief = {
   as_of: string
+  subject: 'Tour' | '产品'
   headline: string
   summary: string
   actions: string[]
@@ -160,7 +161,7 @@ export function buildCompetitionBrief(input: BriefInput): CompetitionBrief {
     '只对已验证的价格、促销、档期或口碑变化形成经营建议。',
   ]
   return {
-    as_of: now.toISOString(), headline,
+    as_of: now.toISOString(), subject, headline,
     summary: `当前 ${readyCount}/4 个维度可直接竞争对比，${limitedCount} 个只有单方或有限数据；监控 ${input.competitorCount} 家竞品、${input.configuredPageCount} 个业务页面。`,
     actions, dimensions, warnings,
     gaps: [

@@ -29,24 +29,20 @@ function DimensionCard({ item }: { item: BriefDimension }) {
 }
 
 export function CompetitionBrief({ brief }: { brief: Brief }) {
+  const product = brief.dimensions.find(item => item.key === 'product')
+  const supporting = brief.dimensions.filter(item => item.key !== 'product')
   return <section className="space-y-4" aria-label="竞争简报">
-    <div className="rounded-2xl border border-me-ochre/30 bg-gradient-to-br from-me-ochre/10 to-white p-5">
-      <p className="text-xs font-bold tracking-wide text-me-charcoal/55">经营判断 · {generated(brief.as_of)} NZ</p>
-      <h2 className="mt-2 text-2xl font-black leading-tight">{brief.headline}</h2>
-      <p className="mt-2 text-sm text-me-charcoal/70">{brief.summary}</p>
-      <div className="mt-5 rounded-xl bg-white/80 p-4">
-        <h3 className="font-bold">本周建议</h3>
-        <ol className="mt-2 space-y-2 text-sm leading-6">{brief.actions.slice(0, 3).map((action, index) => <li key={action}><strong>{index + 1}.</strong> {action}</li>)}</ol>
-      </div>
-    </div>
-    {brief.warnings.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm" role="status"><strong>数据限制</strong><ul className="mt-2 space-y-1">{brief.warnings.map(item => <li key={item}>• {item}</li>)}</ul></div>}
     <div>
-      <h2 className="text-xl font-bold">四个经营维度</h2>
-      <p className="mt-1 text-sm text-me-charcoal/60">各维度口径不同，分别用于判断产品、获客、信任与 AI 推荐表现，不合成虚假总分。</p>
+      <p className="text-xs font-bold tracking-wide text-me-charcoal/55">竞争盘面 · {generated(brief.as_of)} NZ</p>
+      <h2 className="mt-1 text-xl font-bold">{brief.subject} 竞争盘面</h2>
+      <p className="mt-1 text-sm text-me-charcoal/60">先看竞品在卖什么；只有与客户同类{brief.subject}对位后，才能判断价格和产品竞争力。</p>
     </div>
-    <div className="grid gap-3 lg:grid-cols-2">{brief.dimensions.map(item => <DimensionCard key={item.key} item={item} />)}</div>
+    {product && <DimensionCard item={product} />}
     <details className="rounded-xl border border-black/10 bg-white p-4">
-      <summary className="cursor-pointer text-sm font-bold">其他监控维度 · {brief.gaps.length} 项待补齐</summary>
+      <summary className="cursor-pointer text-sm font-bold">查看其他判断依据与数据缺口</summary>
+      <p className="mt-3 text-sm text-me-charcoal/65">{brief.summary}</p>
+      {brief.warnings.length > 0 && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm" role="status"><strong>数据限制</strong><ul className="mt-2 space-y-1">{brief.warnings.map(item => <li key={item}>• {item}</li>)}</ul></div>}
+      <div className="mt-3 grid gap-3 lg:grid-cols-3">{supporting.map(item => <DimensionCard key={item.key} item={item} />)}</div>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">{brief.gaps.map(gap => <div key={gap.label} className="rounded-lg bg-black/[0.03] p-3 text-sm"><strong>{gap.label}</strong><p className="mt-1 text-me-charcoal/60">{gap.reason}</p></div>)}</div>
     </details>
   </section>
