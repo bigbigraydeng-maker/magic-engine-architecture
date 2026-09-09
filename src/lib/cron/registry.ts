@@ -230,4 +230,11 @@ export const UNSCHEDULED_CRON_ROUTES: Readonly<Record<string, string>> = {
   // render.yaml + CRON_REGISTRY 那行都注释掉了;路由留着并加了 FACTORY_STOCK_REFILL_ENABLED
   // 开关兜底(默认关)。恢复条件见 CRON_REGISTRY 里那段注释。
   'factory-stock-refill': '2026-09-08 PM 停抓图,render.yaml/registry 已注释,恢复条件见 CRON_REGISTRY 注释',
+
+  // Creatomate 渲染工作流（src/lib/inngest/functions/factory-creatomate-render.ts）不是
+  // 周期任务——它由客户内容"确认"按钮按需触发（一天可能 0 次也可能 N 次），设计上就不该
+  // 排班。回执写 cron_run_logs 只是复用这套"有独立历史、健康检查看得见"的落点（spec
+  // docs/specs/2026-09-09-creatomate-connector-spec-v1.md §4.4），job_name 恒为
+  // 'creatomate-render'，具体是哪条渲染由 summary.source_record_id 区分，不是按周期对账。
+  'creatomate-render': '按需事件触发（内容确认时），非周期任务，不适用 CRON_REGISTRY 的排班对账',
 }

@@ -27,9 +27,30 @@ describe('projectFactoryConfig — 投影', () => {
       allow_b_track_landmark_ads: false, auto_order_enabled: false,
       creative_profile: EMPTY_CREATIVE_PROFILE,
       creative_recipe: null,
+      render: null,
     })
     expect(projectFactoryConfig(null).publish_target).toBeNull()
     expect(projectFactoryConfig(null).creative_recipe).toBeNull()
+    expect(projectFactoryConfig(null).render).toBeNull()
+  })
+
+  it('render:配了 engine=creatomate 但模板槽位不合法 → creatomate 投影为 null（不把半个对象丢给前端）', () => {
+    expect(
+      projectFactoryConfig({ render: { engine: 'creatomate', creatomate: { template_id: 'tmpl-1' } } }).render,
+    ).toEqual({ engine: 'creatomate', creatomate: null })
+  })
+
+  it('render:合法配置原样投影，camelCase 供内存使用', () => {
+    const r = projectFactoryConfig({
+      render: {
+        engine: 'creatomate',
+        creatomate: { template_id: 'tmpl-1', scene_field_map: [{ visual: 'Video-1' }], audio_keys: ['Music-1'] },
+      },
+    }).render
+    expect(r).toEqual({
+      engine: 'creatomate',
+      creatomate: { templateId: 'tmpl-1', sceneFieldMap: [{ visual: 'Video-1' }], audioKeys: ['Music-1'] },
+    })
   })
 
   it('🔴 只填一半的发布目标 → 投影成 null(等于没配,UI 才会提示「缺发布目标」)', () => {
@@ -270,6 +291,54 @@ describe('creative_recipe — 白名单 + 版本闸(合同 5469105522 §1)', () 
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect('creative_recipe' in r.config).toBe(false)
+  })
+})
+
+describe('render — 子对象合并，不整体替换（子牙复审 B5：voice_id/avatar_image_url 是另一条管线的字段）', () => {
+  it('只改 engine 时，既有 voice_id/avatar_image_url 原样保留', () => {
+    const r = mergeFactoryConfig(
+      { render: { engine: 'ffmpeg', voice_id: 'bigrayvoice01', avatar_image_url: 'https://x/a.jpg' } },
+      { render: { engine: 'creatomate' } },
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.config.render).toEqual({
+      engine: 'creatomate',
+      voice_id: 'bigrayvoice01',
+      avatar_image_url: 'https://x/a.jpg',
+    })
+  })
+
+  it('配 creatomate 模板但缺 template_id → 拒', () => {
+    const r = mergeFactoryConfig({}, { render: { engine: 'creatomate', creatomate: { scene_field_map: [{ visual: 'V-1' }] } } })
+    expect(r.ok).toBe(false)
+  })
+
+  it('配 creatomate 模板但槽位为空 → 拒（模板容不下任何内容等于没配）', () => {
+    const r = mergeFactoryConfig({}, { render: { engine: 'creatomate', creatomate: { template_id: 't1', scene_field_map: [] } } })
+    expect(r.ok).toBe(false)
+  })
+
+  it('合法 creatomate 配置 → 存下（存储层 snake_case，跟 factory_config 其余字段同惯例）', () => {
+    const r = mergeFactoryConfig({}, {
+      render: {
+        engine: 'creatomate',
+        creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1', caption: 'C-1' }], audio_keys: ['Music-1'] },
+      },
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.config.render).toEqual({
+      engine: 'creatomate',
+      creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1', caption: 'C-1' }], audio_keys: ['Music-1'] },
+    })
+  })
+
+  it('传 render: null → 整段删掉', () => {
+    const r = mergeFactoryConfig({ render: { engine: 'creatomate' } }, { render: null })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect('render' in r.config).toBe(false)
   })
 
   it('body 未提及 recipe → 现有配置原样保留(合并语义)', () => {

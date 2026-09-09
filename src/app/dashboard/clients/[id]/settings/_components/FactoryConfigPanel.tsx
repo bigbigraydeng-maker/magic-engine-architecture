@@ -36,6 +36,13 @@ interface Config {
   creative_profile: Style
   /** 版本化 winner recipe(合同 5469105522 §1)。null = 走 legacy 分镜路径。 */
   creative_recipe: { id: string; version: number } | null
+  /** 出片引擎（spec docs/specs/2026-09-09-creatomate-connector-spec-v1.md §9）。
+   *  voice_id/avatar_image_url 是 lecture-render.ts 用的既有字段，这个面板不显示、不碰它们——
+   *  PATCH 时子对象合并（见 client-config.ts::mergeFactoryConfig），不会被这里的保存覆盖掉。 */
+  render: {
+    engine: 'ffmpeg' | 'creatomate'
+    creatomate: { templateId: string; sceneFieldMap: { visual: string; caption?: string; voice?: string }[]; audioKeys?: string[] } | null
+  } | null
 }
 
 /** 目前已注册的 recipe。新增 recipe = 平台层升级,必先走 me-platform-tier-gate。 */
@@ -97,6 +104,13 @@ interface Draft {
   endcardPanel: 'default' | 'on' | 'off'
   /** '' = 未配 recipe(legacy 路径);否则 = 已注册 recipe id */
   recipeId: string
+  renderEngine: 'ffmpeg' | 'creatomate'
+  creatomateTemplateId: string
+  /** sceneFieldMap 的 JSON 文本 —— 结构不算简单，用文本框比拼 N 个输入框更不容易出错，
+   *  保存前解析校验，解析失败直接报错不让保存。 */
+  creatomateSceneFieldMapJson: string
+  /** 逗号分隔 */
+  creatomateAudioKeys: string
 }
 
 const toDraft = (c: Config): Draft => ({
@@ -118,6 +132,10 @@ const toDraft = (c: Config): Draft => ({
   xfade: c.creative_profile?.xfade != null ? String(c.creative_profile.xfade) : '',
   endcardPanel: c.creative_profile?.endcard_panel == null ? 'default' : (c.creative_profile.endcard_panel ? 'on' : 'off'),
   recipeId: c.creative_recipe?.id ?? '',
+  renderEngine: c.render?.engine ?? 'ffmpeg',
+  creatomateTemplateId: c.render?.creatomate?.templateId ?? '',
+  creatomateSceneFieldMapJson: c.render?.creatomate ? JSON.stringify(c.render.creatomate.sceneFieldMap, null, 2) : '',
+  creatomateAudioKeys: (c.render?.creatomate?.audioKeys ?? []).join(', '),
 })
 
 const eqDraft = (a: Draft, b: Draft) =>
@@ -128,14 +146,16 @@ const eqDraft = (a: Draft, b: Draft) =>
   a.allowLandmark === b.allowLandmark &&
   a.autoOrder === b.autoOrder && a.music === b.music && a.musicMood === b.musicMood &&
   a.look === b.look && a.captionMode === b.captionMode && a.xfade === b.xfade &&
-  a.endcardPanel === b.endcardPanel && a.recipeId === b.recipeId
+  a.endcardPanel === b.endcardPanel && a.recipeId === b.recipeId &&
+  a.renderEngine === b.renderEngine && a.creatomateTemplateId === b.creatomateTemplateId &&
+  a.creatomateSceneFieldMapJson === b.creatomateSceneFieldMapJson && a.creatomateAudioKeys === b.creatomateAudioKeys
 
 export function FactoryConfigPanel({ clientId }: Props) {
   const [state, setState] = useState<PanelState>({ phase: 'loading' })
   const [draft, setDraft] = useState<Draft>(toDraft({
     publish_target: null, factory_goal_id: null, verified_offer: null, verified_cta: null,
     allow_b_track_landmark_ads: false, auto_order_enabled: false, creative_profile: EMPTY_STYLE,
-    creative_recipe: null,
+    creative_recipe: null, render: null,
   }))
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<string | null>(null)
@@ -159,6 +179,25 @@ export function FactoryConfigPanel({ clientId }: Props) {
   const handleSave = async () => {
     setSaving(true)
     setErrMsg(null)
+
+    let creatomate: { template_id: string; scene_field_map: unknown; audio_keys?: string[] } | null = null
+    if (draft.renderEngine === 'creatomate') {
+      let sceneFieldMap: unknown
+      try {
+        sceneFieldMap = JSON.parse(draft.creatomateSceneFieldMapJson || '[]')
+      } catch {
+        setErrMsg('镜头槽位映射不是合法的 JSON —— 格式类似 [{"visual":"Video-1","caption":"Caption-1"}]')
+        setSaving(false)
+        return
+      }
+      const audioKeys = draft.creatomateAudioKeys.split(',').map((k) => k.trim()).filter(Boolean)
+      creatomate = {
+        template_id: draft.creatomateTemplateId.trim(),
+        scene_field_map: sceneFieldMap,
+        ...(audioKeys.length > 0 ? { audio_keys: audioKeys } : {}),
+      }
+    }
+
     try {
       const res = await fetch(`/api/clients/${clientId}/factory-config`, {
         method: 'PATCH',
@@ -200,6 +239,7 @@ export function FactoryConfigPanel({ clientId }: Props) {
                 version: RECIPE_OPTIONS.find((r) => r.value === draft.recipeId)?.version ?? 1,
               }
             : null,
+          render: { engine: draft.renderEngine, creatomate },
         }),
       })
       const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
@@ -473,6 +513,70 @@ export function FactoryConfigPanel({ clientId }: Props) {
               <option key={r.value} value={r.value}>{r.label}</option>
             ))}
           </select>
+        </div>
+
+        {/* 出片引擎 —— spec docs/specs/2026-09-09-creatomate-connector-spec-v1.md §9。
+            默认 ffmpeg(维持现状,不强推)。选 Creatomate 才需要填模板信息。 */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">出片引擎</p>
+          <p className="mt-0.5 text-xs text-slate-400">
+            默认<span className="font-medium text-slate-600">「ffmpeg」</span>(维持现状,"确认"按钮不会自动出片,需人工处理)。
+            选 Creatomate 后,"确认"选题会自动提交渲染。模板要先在 Creatomate 编辑器里搭好,这里只填对应关系。
+          </p>
+          <select
+            value={draft.renderEngine}
+            onChange={(e) => setDraft((d) => ({ ...d, renderEngine: e.target.value as Draft['renderEngine'] }))}
+            disabled={saving}
+            className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+          >
+            <option value="ffmpeg">ffmpeg(默认 · 出片需人工处理)</option>
+            <option value="creatomate">Creatomate 模板(自动提交渲染)</option>
+          </select>
+
+          {draft.renderEngine === 'creatomate' && (
+            <div className="mt-3 space-y-3 border-t border-slate-200 pt-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600">模板 ID</label>
+                <input
+                  type="text"
+                  value={draft.creatomateTemplateId}
+                  onChange={(e) => setDraft((d) => ({ ...d, creatomateTemplateId: e.target.value }))}
+                  disabled={saving}
+                  placeholder="Creatomate 后台的 template_id"
+                  className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600">镜头槽位映射（JSON）</label>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  数组下标 = 分镜顺序。每项至少填 visual（画面元素名）；caption/voice 可选。
+                </p>
+                <textarea
+                  value={draft.creatomateSceneFieldMapJson}
+                  onChange={(e) => setDraft((d) => ({ ...d, creatomateSceneFieldMapJson: e.target.value }))}
+                  disabled={saving}
+                  rows={5}
+                  placeholder='[{"visual":"Video-1","caption":"Caption-1","voice":"Voice-1"}]'
+                  className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600">音频元素名（逗号分隔，可选）</label>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  模板里可替换的背景音乐等音频元素名。填了的话，提交时会要求同时给时长，缺了会拒绝提交
+                  ——已知坑：音频不给时长会把全片撑成那首歌的长度。
+                </p>
+                <input
+                  type="text"
+                  value={draft.creatomateAudioKeys}
+                  onChange={(e) => setDraft((d) => ({ ...d, creatomateAudioKeys: e.target.value }))}
+                  disabled={saving}
+                  placeholder="Music-1"
+                  className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 自动排产 —— 这是唯一会自动花钱的开关,放在最显眼处并写清楚代价 */}

@@ -53,6 +53,10 @@ export type ManualItemKind =
   | 'meta_stuck'
   | 'crawl_stale'
   | 'video_credits_out'
+  /** Creatomate 渲染失败或超时未完成（额度用完 / 渲染卡死超过 15+20 分钟兜底轮询）—— 见
+   *  docs/specs/2026-09-09-creatomate-connector-spec-v1.md §4.4，旧管线的 reapStale() 已死，
+   *  这条是它的替代 */
+  | 'creatomate_render_failed'
   | 'dataforseo_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
@@ -366,6 +370,10 @@ export async function loadManualItems(
   await pushFactoryWorkerItems(supabase, items, now, clients).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
   )
+  // Creatomate 渲染失败/超时 —— 旧路径的卡死回收已死透，这是它的替代（spec §4.4 B4）
+  await pushCreatomateRenderItems(supabase, items, now, clients).catch((e) =>
+    console.warn('[manual-items] Creatomate 渲染检查失败（不阻塞其他待办）:', e),
+  )
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
   await pushAdReadbackItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 广告闸门结果读取失败（不阻塞其他待办）:', e),
@@ -637,6 +645,49 @@ async function pushVideoCreditsItem(
     how: '打开链接充值（这是我们生成视频画面用的账户）。充完回我一句，我把断掉的那几单重跑',
     href: MUAPI_TOPUP_URL,
   })
+}
+
+/**
+ * Creatomate 渲染失败 / 超时 —— 旧 ffmpeg 路径的 reapStale() 随 2026-09-02 退役一起死了
+ * （见 docs/specs/2026-09-09-creatomate-connector-spec-v1.md §4.4 B4），这条是它的替代：
+ * 卡死的任务不会自己被谁看见，必须扫一遍 failed 行主动下发。
+ *
+ * 判据：`render_engine='creatomate' AND status='failed'`，近 3 天（避免翻出陈年旧账）。
+ * `error` 文案区分"额度用完"（402，见 spec §6.2）和其他失败（超时/参数错误等），
+ * 前者的 how 指向充值，后者指向去 Creatomate 后台查那条具体的 render。
+ */
+export async function pushCreatomateRenderItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  clientNames: Map<string, { name: string }>,
+): Promise<void> {
+  const since = new Date(now.getTime() - 3 * 86_400_000).toISOString()
+  const { data } = await supabase
+    .from('content_factory_render_jobs')
+    .select('id, client_id, error, creatomate_render_id')
+    .eq('render_engine', 'creatomate')
+    .eq('status', 'failed')
+    .gte('updated_at', since)
+    .limit(50)
+
+  const rows = (data ?? []) as Array<{ id: string; client_id: string; error: string | null; creatomate_render_id: string | null }>
+  for (const row of rows) {
+    const clientName = clientNames.get(row.client_id)?.name ?? '未知客户'
+    const creditsOut = /402|insufficient|credit/i.test(row.error ?? '')
+    items.push({
+      kind: 'creatomate_render_failed',
+      client_id: row.client_id,
+      client_name: clientName,
+      what: creditsOut
+        ? `${clientName} 有一条视频没做完 —— Creatomate 出片额度可能用完了，只有人能充值`
+        : `${clientName} 有一条视频做片失败：${row.error ?? '原因未知'}`,
+      how: creditsOut
+        ? '登录 Creatomate 后台确认额度并充值，充完回我一句，我把这条重新提交'
+        : `登录 Creatomate 后台查这条 render（id: ${row.creatomate_render_id ?? '未知，看工单详情'}）到底卡在哪，或者直接找我重跑`,
+      href: `https://app.magicengine.com.au/dashboard/clients/${row.client_id}/content-factory`,
+    })
+  }
 }
 
 /** Mailchimp 后台的联系人页 —— 登录后一定打得开的稳定入口。 */

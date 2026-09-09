@@ -7,6 +7,9 @@ import {
   type PublerAccount,
 } from '@/lib/flywheel/social-post-publish'
 import { LINKEDIN_PROGRESS_SOURCE, LINKEDIN_PROGRESS_PLATFORM } from '@/lib/linkedin-progress/constants'
+import { enqueueRenderJob } from '@/lib/factory/render-queue'
+import { sendInngestEvent } from '@/lib/workflows/inngest-event'
+import { CREATOMATE_RENDER_REQUESTED_EVENT } from '@/lib/creatomate/events'
 
 export const dynamic = 'force-dynamic'
 
@@ -116,16 +119,40 @@ export async function PATCH(
       })
     }
 
-    // 🔴 2026-09-02：旧 Render 拼片管线(enqueueRenderJob → content_factory_render_jobs)已退役，
-    // 没有 worker 再消费这张表。这条"确认"按钮从此**不会再自动触发出片**——
-    // content_work_orders 现在只服务广告成片工单(review-sync.ts 从 Airtable Winner Intake
-    // 建的)，不是这条普通内容的替代管线；本机 scripts/factory-worker 目前也没有从
-    // content_posts 自动建工单的桥。真要出片，这条内容此刻需要人工另外处理。
+    // 🔴 2026-09-02：旧 Render 拼片管线(ffmpeg 拼接)已退役，没有 worker 再消费 ffmpeg
+    // 那条路径。content_work_orders 服务的是广告成片工单，跟这条普通内容语义不通用，
+    // 不是替代管线。2026-09-09 重新点亮这个入口——但只对配置了 Creatomate 模板的客户
+    // 生效（`factory_config.render.engine === 'creatomate'`），见
+    // docs/specs/2026-09-09-creatomate-connector-spec-v1.md §4.1/§4.4。
+    // 没配置的客户维持原状：出片仍需人工处理，不强推全量客户。
     // 用 error(不是自造字段)是因为前端 page.tsx 只认 render.error 来判断要不要显示
     // "建做片任务失败"，用别的字段名会被前端忽略、误显示成"正在做片"的假成功提示。
     let render: { jobId: string | null; created: boolean; error?: string } | undefined
     if (body.action === 'confirm') {
-      render = { jobId: null, created: false, error: '旧拼片管线已退役，出片暂无自动管线，需人工处理这条内容' }
+      const { data: client } = await supabaseAdmin
+        .from('clients')
+        .select('factory_config')
+        .eq('id', params.id)
+        .single()
+      const engine = (client?.factory_config as { render?: { engine?: string } } | null)?.render?.engine
+
+      if (engine === 'creatomate') {
+        const enqueued = await enqueueRenderJob({ clientId: params.id, contentPostId: params.postId })
+        if (enqueued.jobId) {
+          await supabaseAdmin
+            .from('content_factory_render_jobs')
+            .update({ render_engine: 'creatomate' })
+            .eq('id', enqueued.jobId)
+          await sendInngestEvent({
+            id: `creatomate-render-requested:${enqueued.jobId}`,
+            name: CREATOMATE_RENDER_REQUESTED_EVENT,
+            data: { job_id: enqueued.jobId, client_id: params.id, post_id: params.postId },
+          })
+        }
+        render = { jobId: enqueued.jobId, created: enqueued.created }
+      } else {
+        render = { jobId: null, created: false, error: '出片暂无自动管线，需人工处理这条内容' }
+      }
     }
 
     return NextResponse.json({ post: data, render })

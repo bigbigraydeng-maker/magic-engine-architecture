@@ -1,0 +1,73 @@
+// Creatomate（对外化名：Video Studio）L3 Connector 共享类型。
+// Spec：docs/specs/2026-09-09-creatomate-connector-spec-v1.md §3/§4.3
+
+/** 官方状态机（2026-09-09 实测抓取 creatomate.com/llms/quick-start.md）。 */
+export type CreatomateRenderStatus =
+  | 'planned'
+  | 'waiting'
+  | 'transcribing'
+  | 'rendering'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+
+export const CREATOMATE_TERMINAL_STATUSES: readonly CreatomateRenderStatus[] = [
+  'succeeded',
+  'failed',
+  'cancelled',
+]
+
+export function isTerminalStatus(status: CreatomateRenderStatus): boolean {
+  return CREATOMATE_TERMINAL_STATUSES.includes(status)
+}
+
+/** POST /v2/renders 请求体。modifications 的 key 是模板里的元素名，value 是要填的内容。 */
+export interface CreateRenderParams {
+  templateId: string
+  modifications: Record<string, string>
+  webhookUrl?: string
+}
+
+/** GET /v2/renders/{id} 返回的 render 对象（官方文档未列全字段，只声明确认过的）。 */
+export interface CreatomateRender {
+  id: string
+  status: CreatomateRenderStatus
+  url?: string
+  errorMessage?: string
+}
+
+/** 400/401/402/404 的错误响应体（官方文档确认字段）。 */
+export interface CreatomateErrorBody {
+  hint: string
+  documentation?: string
+}
+
+/** client.ts 统一抛出的错误类型，携带足够信息让调用方按状态码分支处理（spec §4.4 失败分类表）。 */
+export class CreatomateApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly hint?: string,
+  ) {
+    super(message)
+    this.name = 'CreatomateApiError'
+  }
+}
+
+/** 一个模板"镜头槽位"对应到哪几个 Creatomate 元素名。数组下标 = PreparedScene.index
+ *  的顺序（模板槽位数量在编辑器里是固定的，PM 设计模板时定好，不是运行时动态的）。 */
+export interface SceneSlotFieldMap {
+  visual: string
+  caption?: string
+  voice?: string
+}
+
+/** 模板契约（clients.factory_config.render.creatomate，spec §4.7）。连接器不认识任何具体客户的
+ *  模板结构，只按这份声明取值/校验——换客户只是换一份这个对象，不改连接器代码（红线4）。 */
+export interface CreatomateTemplateContract {
+  templateId: string
+  /** 镜头槽位映射，见 SceneSlotFieldMap。 */
+  sceneFieldMap: SceneSlotFieldMap[]
+  /** 这些元素名对应音频，提交前必须同时给 duration，否则拒绝提交（坑#2，spec §5）。 */
+  audioKeys?: string[]
+}

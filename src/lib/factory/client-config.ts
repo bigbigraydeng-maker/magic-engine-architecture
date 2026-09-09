@@ -22,6 +22,7 @@ import {
   type RecipeCtaFacts,
   type WinnerRecipeId,
 } from './recipe'
+import type { CreatomateTemplateContract } from '@/lib/creatomate/types'
 
 /** 只有 facebook 有真实 adapter;publer 在 publish-worker.ts 仍是注释状态。
  *  放开别的平台 = 配了个必然 markFailed('no_adapter') 的目标。 */
@@ -80,6 +81,13 @@ export interface FactoryConfigView {
    * 只允许 WINNER_RECIPE_IDS 白名单里的 id;version 显式且与已注册 recipe 不一致 → 拒。
    */
   creative_recipe: { id: WinnerRecipeId; version: number } | null
+  /**
+   * 出片引擎（spec docs/specs/2026-09-09-creatomate-connector-spec-v1.md §4.1/§9）。
+   * 默认 ffmpeg（不配 = 维持现状，出片仍需人工处理）。voice_id/avatar_image_url 是
+   * lecture-render.ts/render-pipeline.ts 的既有字段，这个投影不认识它们、也不会碰它们——
+   * mergeFactoryConfig 对 render 做的是子对象合并，不是整体替换，见下方合并逻辑。
+   */
+  render: { engine: 'ffmpeg' | 'creatomate'; creatomate: CreatomateTemplateContract | null } | null
 }
 
 export type MergeResult =
@@ -132,7 +140,24 @@ export function projectFactoryConfig(raw: unknown): FactoryConfigView {
         return null
       }
     })(),
+    render: projectRender(cfg.render),
   }
+}
+
+function projectRender(raw: unknown): FactoryConfigView['render'] {
+  const r = (raw ?? null) as Record<string, unknown> | null
+  if (!r) return null
+  const engine = r.engine === 'creatomate' ? 'creatomate' : 'ffmpeg'
+  const c = (r.creatomate ?? null) as Record<string, unknown> | null
+  const creatomate =
+    c && typeof c.template_id === 'string' && Array.isArray(c.scene_field_map)
+      ? {
+          templateId: c.template_id,
+          sceneFieldMap: c.scene_field_map as CreatomateTemplateContract['sceneFieldMap'],
+          audioKeys: Array.isArray(c.audio_keys) ? (c.audio_keys as string[]) : undefined,
+        }
+      : null
+  return { engine, creatomate }
 }
 
 /** 风格投影:脏数据一律降级 null,不把半个对象抛给前端或下发给装配脚本。 */
@@ -274,6 +299,44 @@ export function mergeFactoryConfig(
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) }
       }
+    }
+  }
+
+  if ('render' in body) {
+    const raw = body.render as Record<string, unknown> | null
+    if (raw === null) {
+      delete next.render
+    } else {
+      const engine = raw.engine === 'creatomate' ? 'creatomate' : 'ffmpeg'
+      // 子对象合并，不是整体替换：existing.render 里的 voice_id/avatar_image_url
+      // （lecture-render.ts/render-pipeline.ts 用，这个表单不认识、也不该动）原样保留。
+      const existingRender = (next.render ?? {}) as Record<string, unknown>
+      const merged: Record<string, unknown> = { ...existingRender, engine }
+
+      if ('creatomate' in raw) {
+        const c = raw.creatomate as Record<string, unknown> | null
+        if (c === null) {
+          delete merged.creatomate
+        } else {
+          const templateId = asTrimmed(c.template_id)
+          const sceneFieldMap = c.scene_field_map
+          if (!templateId) return { ok: false, error: 'Creatomate 模板 ID 不能为空' }
+          if (!Array.isArray(sceneFieldMap) || sceneFieldMap.length === 0) {
+            return { ok: false, error: 'Creatomate 镜头槽位映射不能为空（至少配一个镜头对应的元素名）' }
+          }
+          for (const slot of sceneFieldMap) {
+            if (!slot || typeof (slot as Record<string, unknown>).visual !== 'string') {
+              return { ok: false, error: '每个镜头槽位至少要填 visual（画面元素名）' }
+            }
+          }
+          merged.creatomate = {
+            template_id: templateId,
+            scene_field_map: sceneFieldMap,
+            ...(Array.isArray(c.audio_keys) ? { audio_keys: c.audio_keys } : {}),
+          }
+        }
+      }
+      next.render = merged
     }
   }
 

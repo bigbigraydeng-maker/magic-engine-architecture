@@ -62,6 +62,7 @@
 |---|---|---|---|
 | `ATLAS_CLOUD_API_KEY` | WaveSpeed 图片 + Seedance 视频（共用一把 key） | Render-web | 🔴 见下方 |
 | `MUAPI_API_KEY` | Muapi 图生视频（Visual Studio） | Render-web | ✅ |
+| `CREATOMATE_API_KEY` | Creatomate 模板渲染（Video Studio）——`src/lib/creatomate/client.ts`，PM 2026-09-09 已订阅 Essential $54/月 | Render-web | ❌ 落地 PR 需补 |
 | `FACTORY_CJK_FONT` | 🔴 已废弃（2026-09-02）—— 只被已退役的 `content-factory-render-worker` 读，现在没有任何服务读它。CTS/Oztop 拼片改走本机 `scripts/factory-worker`，字体在 make_promo.py 那边另配 | — | ❌ |
 | `HEYGEN_API_KEY` | 数字人头像视频 | Render-web | ✅ |
 | `HEYGEN_DEFAULT_AVATAR_ID` / `HEYGEN_DEFAULT_VOICE_ID` | HeyGen 默认形象/音色 | Render-web | ✅ |
