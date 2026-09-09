@@ -23,6 +23,8 @@
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
+- [ ] Latest-result follow-up: show newest signal per page/direction including ignore; collapse earlier records without implying they are resolved. Read-only presentation, risk C, based on main bd6d3c4e47ae4d02feccabc9dcb88aabb744c1c6 fetched 2026-09-09.
+
 - [ ] Readable UI follow-up: result-first views, collapsed configuration/evidence, Chinese future interpretations; locally verified, pending review/production release. Hiring/People/Partnership/Reviews/Technology collection remains a separate extension.
 
 - [x] Implementation merged (#1500); production migration and CTS-only pilot explicitly approved and enabled. Existing Industry Baselines UI → Inngest → Apify → immutable snapshot/evidence → actual cost settlement verified on Wendy Wu homepage. Compatibility fixes #1506/#1507 deployed. [Implementation / rollout receipt](./specs/2026-09-09-web-intelligence-v01.md).

@@ -65,7 +65,7 @@ describe('WebIntelligencePanel', () => {
     expect(screen.queryByText('private-b.example')).not.toBeInTheDocument()
   })
 
-  it('keeps failed analysis visible, groups ignore results and collapses raw evidence', async () => {
+  it('shows latest ignore results and unresolved pages with collapsed raw evidence', async () => {
     const data = { ...payload(), can_edit: false, can_run: false,
       evidence: [{ id: 'e2', source_url: 'https://example.com/news', excerpt: 'Long original source text', observed_at: '2026-09-09', content_hash: 'abc' }],
       signals: [
@@ -76,8 +76,7 @@ describe('WebIntelligencePanel', () => {
     vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
     render(<WebIntelligencePanel />); await selectClient()
     expect(await screen.findByText('分析未完成')).toBeVisible()
-    expect(screen.getByText('No material change.')).not.toBeVisible()
-    fireEvent.click(screen.getByText('无需行动 · 1 条'))
+    expect(screen.getByText('No material change.')).toBeVisible()
     expect(screen.getByText('无需采取行动。')).toBeVisible()
     expect(screen.getAllByText('Long original source text').every(el => !el.closest('details')?.open)).toBe(true)
     const signals = screen.getByRole('region', { name: '竞品情报' })
@@ -85,6 +84,40 @@ describe('WebIntelligencePanel', () => {
     expect(within(signals).queryByRole('button')).not.toBeInTheDocument()
     await view('设置'); expect(screen.getByLabelText('开启监控')).toBeDisabled()
     expect(screen.queryByRole('button', { name: '保存设置' })).not.toBeInTheDocument()
+  })
+
+  it('shows the newest result per page and retains older failures in history regardless of input order', async () => {
+    const old = { id: 'old', domain: 'example.com', kind: 'website', before_evidence_id: null, after_evidence_id: 'home', interpretation_status: 'failed', classification: null, interpretation: null, recommended_action: null, created_at: '2026-09-09T01:00:00Z' }
+    const data = { ...payload(), evidence: [
+      { id: 'home', source_url: 'https://example.com/', excerpt: 'Home evidence', observed_at: '2026-09-09', content_hash: 'h' },
+      { id: 'jobs', source_url: 'https://example.com/jobs', excerpt: 'Jobs evidence', observed_at: '2026-09-09', content_hash: 'j' },
+    ], signals: [old,
+      { ...old, id: 'latest', interpretation_status: 'complete', classification: 'ignore', interpretation: { summary: 'Latest completed conclusion' }, recommended_action: 'No action recommended.', created_at: '2026-09-09T02:00:00Z' },
+      { ...old, id: 'other-page', after_evidence_id: 'jobs' },
+      { ...old, id: 'other-direction', kind: 'hiring' },
+      { ...old, id: 'missing-evidence', after_evidence_id: null },
+    ] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('Latest completed conclusion')).toBeVisible()
+    const history = screen.getByText('历史变化与分析记录 · 1 条').closest('details')!
+    expect(history).not.toHaveAttribute('open')
+    expect(within(history).getByText('分析未完成')).not.toBeVisible()
+    expect(screen.getAllByText('分析未完成').filter(el => !history.contains(el))).toHaveLength(3)
+    fireEvent.click(within(history).getByText('历史变化与分析记录 · 1 条'))
+    expect(within(history).getByText('分析未完成')).toBeVisible()
+  })
+
+  it('does not hide a newer failure behind an older successful conclusion', async () => {
+    const signal = { domain: 'example.com', kind: 'website', before_evidence_id: null, after_evidence_id: 'home', recommended_action: null }
+    const data = { ...payload(), evidence: [{ id: 'home', source_url: 'https://example.com/', excerpt: '', observed_at: '2026-09-09', content_hash: 'h' }], signals: [
+      { ...signal, id: 'older', created_at: '2026-09-09T01:00:00Z', interpretation_status: 'complete', classification: 'ignore', interpretation: { summary: 'Older conclusion' } },
+      { ...signal, id: 'newer', created_at: '2026-09-09T02:00:00Z', interpretation_status: 'failed', classification: null, interpretation: null },
+    ] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('分析未完成')).toBeVisible()
+    expect(screen.getByText('Older conclusion')).not.toBeVisible()
   })
 
   it('remounts saved settings only after the refreshed payload arrives', async () => {
