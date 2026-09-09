@@ -53,6 +53,39 @@ const pagePurpose = (raw: string) => {
   return '业务页面'
 }
 
+const normaliseFact = (value: string) => value.toLowerCase().replace(/[*_`#>[\]()]/g, '').replace(/\s+/g, ' ').trim()
+const factScore = (value: string) => {
+  let score = 0
+  if (/[$€£]\s?\d|\b(?:nzd|aud|usd)\s?\d/i.test(value)) score += 5
+  if (/available|availability|sold out|spaces? left|in stock|out of stock|book now/i.test(value)) score += 4
+  if (/sale|save|offer|discount|promotion|launch|earlybird|new /i.test(value)) score += 3
+  if (/\b20\d{2}\b|departure|start date|end date/i.test(value)) score += 2
+  if (/price|pricing|review|rating|product|service|package|tour|hiring|partner|technology/i.test(value)) score += 1
+  return score
+}
+const facts = (value = '') => Array.from(new Map(value.split(/\n+/)
+  .map(line => line.trim()).filter(line => line.length >= 6 && line.length <= 220)
+  .map(line => [normaliseFact(line), line])).values())
+const changedFacts = (from: Evidence | undefined, to: Evidence | undefined) => {
+  const before = facts(from?.excerpt)
+  const after = facts(to?.excerpt)
+  const beforeSet = new Set(before.map(normaliseFact))
+  const afterSet = new Set(after.map(normaliseFact))
+  const select = (items: string[], seen: Set<string>) => items
+    .filter(item => !seen.has(normaliseFact(item)))
+    .map((text, order) => ({ text, order, score: factScore(text) }))
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .slice(0, 3).map(item => item.text)
+  return { added: select(after, beforeSet), removed: select(before, afterSet) }
+}
+const isBaselineReset = (signal: Signal) => /采集器|采集方式|完整读取|新基线|无法证明/.test(signal.interpretation?.summary ?? '')
+const impactCopy = (classification: string | null) => classification === 'threat'
+  ? '可能削弱我方竞争力，需要评估是否跟进。'
+  : classification === 'opportunity'
+    ? '出现可抢占空间，值得评估先行动。'
+    : '当前证据不支持调整策略。'
+
 async function request<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
   const res = await fetch(url, { method, cache: 'no-store', ...(body === undefined ? {} : {
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -230,10 +263,11 @@ function CompetitorCard({ competitor, clientId, endpoint, canEdit, canRun, onSav
 function EvidenceCard({ evidence, label }: { evidence: Evidence | undefined; label: string }) {
   if (!evidence) return <p className="text-sm">{label}：暂无关联证据。</p>
   const safeUrl = /^https?:\/\//i.test(evidence.source_url) ? evidence.source_url : null
-  return <div className="min-w-0 space-y-2 rounded-lg bg-me-ivory p-3 text-sm">
-    <p className="font-bold">{label} · {date(evidence.observed_at)} NZ</p>
+  return <div className="min-w-0 space-y-2 rounded-lg border border-black/10 bg-white p-3 text-sm">
+    <p className="font-bold">{label}</p>
+    <p className="text-xs text-me-charcoal/60">{date(evidence.observed_at)} NZ · {evidence.excerpt.length.toLocaleString()} 字符</p>
     {safeUrl ? <a className="break-all underline" href={safeUrl} target="_blank" rel="noopener noreferrer">查看来源网页</a> : <p>来源链接不可用</p>}
-    <details><summary className="cursor-pointer">展开采集原文</summary><blockquote className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs leading-6">{evidence.excerpt}</blockquote></details>
+    <details><summary className="cursor-pointer">查看完整证据</summary><blockquote className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs leading-6">{evidence.excerpt}</blockquote></details>
     <details><summary className="cursor-pointer text-xs text-me-charcoal/60">证据编号</summary><p className="break-all text-xs">{evidence.id} · {evidence.content_hash}</p></details>
   </div>
 }
@@ -244,15 +278,36 @@ function SignalCard({ signal: s, evidence }: { signal: Signal; evidence: Evidenc
   const label = complete ? labels[s.classification ?? ''] ?? '已分析' : s.interpretation_status === 'failed' ? '分析未完成' : '正在分析'
   const summary = s.interpretation?.summary
   const action = s.recommended_action === 'No action recommended.' ? '无需采取行动。' : s.recommended_action
-  const source = evidence.find(e => e.id === s.after_evidence_id)?.source_url
+  const before = evidence.find(e => e.id === s.before_evidence_id)
+  const after = evidence.find(e => e.id === s.after_evidence_id)
+  const source = after?.source_url
+  const highlights = changedFacts(before, after)
+  const baselineReset = isBaselineReset(s)
   return <article className={card}>
     <div className="flex flex-wrap items-center justify-between gap-2"><span className={`rounded-full px-3 py-1 text-xs font-bold ${!complete ? 'bg-amber-50 text-amber-800' : s.classification === 'threat' ? 'bg-red-50 text-red-800' : s.classification === 'opportunity' ? 'bg-green-50 text-green-800' : 'bg-black/5 text-me-charcoal/60'}`}>{label}</span><time className="text-xs text-me-charcoal/60" dateTime={s.created_at}>{date(s.created_at)} NZ</time></div>
     <h3 className="break-all text-lg font-bold">{s.domain}{source ? ` · ${pagePurpose(source)}` : ''}</h3>
-    <p className="text-sm leading-7">{complete ? summary ?? '分析已完成，暂无文字摘要。' : s.interpretation_status === 'failed' ? '已保留页面变化，但本次分析未能生成有效结论。请查看采集记录中的原因。' : '已发现页面差异，正在整理结论。'}</p>
-    {complete && <div className="rounded-lg bg-me-ivory p-3 text-sm leading-6"><strong>建议</strong><p>{action ?? '暂无建议。'}</p></div>}
+    {complete ? <>
+      <div className="grid gap-3 lg:grid-cols-3">
+        <div className="rounded-lg bg-me-ivory p-4"><p className="text-xs font-bold text-me-charcoal/60">发生了什么</p><p className="mt-2 text-sm leading-6">{summary ?? '分析已完成，暂无文字摘要。'}</p></div>
+        <div className={`rounded-lg p-4 ${s.classification === 'threat' ? 'bg-red-50' : s.classification === 'opportunity' ? 'bg-green-50' : 'bg-black/[0.03]'}`}><p className="text-xs font-bold text-me-charcoal/60">对我们的影响</p><p className="mt-2 text-sm font-bold leading-6">{impactCopy(s.classification)}</p></div>
+        <div className="rounded-lg border border-me-ochre/30 bg-me-ochre/10 p-4"><p className="text-xs font-bold text-me-charcoal/60">如何调衡</p><p className="mt-2 text-sm font-bold leading-6">{action ?? '暂无建议。'}</p></div>
+      </div>
+      {baselineReset ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>本次是采集方式升级</strong><p>变化前的证据不完整，变化后首次读到完整业务区块。本次只建立新基线，不作为竞争动作；下一次采集才可可靠比较价格、档期和余位。</p></div> : <ChangeHighlights added={highlights.added} removed={highlights.removed} />}
+    </> : <p className="text-sm leading-7">{s.interpretation_status === 'failed' ? '已保留页面变化，但本次分析未能生成有效结论。请查看采集记录中的原因。' : '已发现页面差异，正在整理结论。'}</p>}
     <p className="text-xs text-me-charcoal/60">{s.kind === 'business_page_changed' ? '业务内容变化' : '网站页面变化'} · 仅供判断，未自动执行{complete && s.interpretation?.confidence != null ? ` · 判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
-    <div className="grid gap-3 md:grid-cols-2"><EvidenceCard label="变化前" evidence={evidence.find(e => e.id === s.before_evidence_id)} /><EvidenceCard label="变化后" evidence={evidence.find(e => e.id === s.after_evidence_id)} /></div>
+    <details className="rounded-lg bg-me-ivory p-3"><summary className="cursor-pointer text-sm font-bold">查看变化前后证据</summary><div className="mt-3 grid gap-3 md:grid-cols-2"><EvidenceCard label="之前快照" evidence={before} /><EvidenceCard label="当前快照" evidence={after} /></div></details>
   </article>
+}
+
+function ChangeHighlights({ added, removed }: { added: string[]; removed: string[] }) {
+  if (added.length === 0 && removed.length === 0) return <div className="rounded-lg border border-black/10 p-4 text-sm"><strong>关键差异</strong><p className="mt-2 text-me-charcoal/70">没有提取到明确的价格、优惠、档期、余位或产品事实增减，请结合上方结论判断。</p></div>
+  return <section className="space-y-3" aria-label="关键差异">
+    <h4 className="text-sm font-bold">关键差异</h4>
+    <div className="grid gap-3 md:grid-cols-2">
+      <div className="rounded-lg border border-red-100 bg-red-50/60 p-4"><p className="text-xs font-bold text-red-800">减少或不再出现</p>{removed.length ? <ul className="mt-2 space-y-2 text-sm">{removed.map(value => <li key={value}>− {value}</li>)}</ul> : <p className="mt-2 text-sm text-me-charcoal/60">未发现高信号事实减少</p>}</div>
+      <div className="rounded-lg border border-green-100 bg-green-50/60 p-4"><p className="text-xs font-bold text-green-800">新增或发生改变</p>{added.length ? <ul className="mt-2 space-y-2 text-sm">{added.map(value => <li key={value}>+ {value}</li>)}</ul> : <p className="mt-2 text-sm text-me-charcoal/60">未发现高信号事实新增</p>}</div>
+    </div>
+  </section>
 }
 
 function Signals({ signals, evidence }: { signals: Signal[]; evidence: Evidence[] }) {
