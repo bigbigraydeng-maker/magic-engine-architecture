@@ -130,7 +130,7 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
   },
   {
     // 与 docs/registry/platform-candidates.md 候选名逐字一致
-    name: 'CTS 前台内容 + 广告内容联合周排产(内容工厂与广告引擎两条独立排产线打通,一次产出"这周前台发什么 + 这周广告投什么"一张表)',
+    name: '跨渠道营销统筹(Google 广告 / 视频生产 / Newsletter / Facebook 前台内容+广告 多条并行工作流的联合排产 + 联合执行)',
     reviewDate: '2026-10-09',
   },
 ]
