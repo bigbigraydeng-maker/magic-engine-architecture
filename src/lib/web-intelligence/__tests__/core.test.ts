@@ -7,7 +7,7 @@ import { canonicalDomain, approvedUrl } from '../targets'
 import { allowedClient, requestSchema, settingsSchema, metadataSchema, periodKey, type Signal, type Evidence } from '../contracts'
 import { interpretationPrompt, validateInterpretation, changedWindow } from '../interpret'
 import { classifyBusinessPage, projectBusinessContent } from '../content-projection'
-import { extractTourRecords, projectTravelContent, TRAVEL_BUSINESS_PROFILE, TRAVEL_INTERPRETATION_GUIDANCE, profileForTags } from '../profiles/travel'
+import { deriveTravelScope, extractTourRecords, matchChangedToursScope, matchTravelScope, projectTravelContent, TRAVEL_BUSINESS_PROFILE, TRAVEL_INTERPRETATION_GUIDANCE, profileForTags, travelMarketsIn } from '../profiles/travel'
 const a = '00000000-0000-4000-8000-000000000001'
 const b = '00000000-0000-4000-8000-000000000002'
 const c = '00000000-0000-4000-8000-000000000003'
@@ -124,6 +124,34 @@ describe('Website scope, budget and evidence contracts', () => {
     const prompt = interpretationPrompt(signal, evidence, '', TRAVEL_INTERPRETATION_GUIDANCE)
     expect(prompt).toContain('exact Tour name plus before and after values')
     expect(prompt).toContain('departure dates')
+  })
+  it('derives a travel market from configured products before marketing keywords', () => {
+    expect(deriveTravelScope([{ name: 'Wonders of China' }], ['japan tours'])).toMatchObject({ status: 'configured', market_ids: ['china'], source: '主力产品' })
+    expect(deriveTravelScope([], ['cts china travel service'])).toMatchObject({ status: 'inferred', market_ids: ['china'], source: '主关键词' })
+    expect(deriveTravelScope([{ name: 'Signature Journey', usp: 'China specialist' }], ['japan tours'])).toMatchObject({ status: 'configured', market_ids: ['china'] })
+    expect(deriveTravelScope([{ name: 'China' }, { name: 'Japan' }, { name: 'Vietnam' }, { name: 'India' }], [])).toMatchObject({ market_ids: ['china', 'vietnam', 'japan', 'india'] })
+  })
+  it('matches a China tour, excludes foreign tours and holds mixed destinations for confirmation', () => {
+    const scope = deriveTravelScope([], ['china tours from nz'])
+    expect(scope.market_ids).toEqual(['china'])
+    expect(matchTravelScope('Tour: Wonders of China | Route: Shanghai - Xian', 'https://example.com/new-tours/', scope).status).toBe('matched')
+    expect(matchTravelScope('Tour: Angkor to Bali | Route: Siem Reap - Bali', 'https://example.com/china/tours/', scope).status).toBe('outside')
+    expect(matchTravelScope('Tour: China & Mongolia Heartlands | Route: Beijing - Gobi', 'https://example.com/china/tours/', scope).status).toBe('unknown')
+    expect(matchTravelScope('Tour: France Highlights', 'https://example.com/china/tours/', scope).status).toBe('unknown')
+    expect(deriveTravelScope([], ['China tours from Auckland']).market_ids).toEqual(['china'])
+    expect(deriveTravelScope([], ['China tours from Singapore']).market_ids).toEqual(['china'])
+  })
+  it('uses every changed Tour record for the product-scope gate', () => {
+    const scope = deriveTravelScope([], ['china tours'])
+    const before = ['Tour: Wonders of China | Price: $1', 'Tour: China Explorer | Price: $2', 'Tour: Beijing Break | Price: $3', 'Tour: Japan Explorer | Price: $4'].join('\n')
+    const after = ['Tour: Wonders of China | Price: $11', 'Tour: China Explorer | Price: $22', 'Tour: Beijing Break | Price: $33', 'Tour: Japan Explorer | Price: $44'].join('\n')
+    expect(matchChangedToursScope(before, after, 'https://example.com/china/tours/', scope).status).toBe('unknown')
+  })
+  it('uses market aliases with word boundaries and leaves ambiguous text unknown', () => {
+    expect(travelMarketsIn('Tour: Japan Explorer | Route: Tokyo - Kyoto')).toEqual(['japan'])
+    expect(travelMarketsIn('Tour: Japanese Explorer')).toEqual(['japan'])
+    expect(travelMarketsIn('Tour: Chinatown Food Walk')).toEqual([])
+    expect(matchTravelScope('Tour: Classic Discovery', 'https://example.com/new-tours/', deriveTravelScope([], ['china tours'])).status).toBe('unknown')
   })
   it('round-trips settings read from database without metadata columns', () => {
     const read = settingsSchema.strip().parse({ ...settings, client_id: a, updated_at: '2026-09-09' })

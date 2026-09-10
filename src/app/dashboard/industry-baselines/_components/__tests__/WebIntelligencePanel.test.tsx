@@ -12,6 +12,7 @@ const payload = (id = 'a') => ({
     summary: '当前 1/4 个维度可直接竞争对比，1 个只有单方或有限数据；监控 1 家竞品、1 个业务页面。',
     actions: ['补齐竞品核心 Tour 列表与详情页。', '绑定评价平台身份。', '只对已验证变化形成建议。'],
     warnings: [], gaps: [{ label: '竞品广告', reason: '尚未形成可比较的历史快照' }],
+    product_scope: { status: 'unknown', market_ids: [], labels: [], basis: [], source: '尚无可靠范围', rule_version: 'travel-market-v1', applies: false, evidence_status: 'available' },
     dimensions: [
       { key: 'product', label: '竞品产品与价格', status: 'limited', headline: '已读取 1/1 个已配置业务页面', detail: 'Tour 盘面', source: '竞品官网已配置页面', observed_at: '2026-09-10', coverage: '仅代表已配置页面。' },
       { key: 'search', label: '网站搜索基础', status: 'ready', headline: 'Client A 26；example.com 22', detail: '不等于 Google 排名、流量或市场份额。', source: 'Industry Baseline', observed_at: '2026-09-01', coverage: '2 个网站。' },
@@ -105,6 +106,33 @@ describe('WebIntelligencePanel competition brief flow', () => {
     expect(screen.getByText(/当前判断 · 仅代表这个竞品的这个页面 · 尚未执行任何动作/)).toBeVisible()
     expect(screen.getByText('+ Tour: Wonders of China | Price: $950 | Availability: Only 3 spaces left')).toBeVisible()
     expect(screen.getByText('− Tour: Wonders of China | Price: $1,200 | Availability: Available')).toBeVisible()
+  })
+
+  it('removes a clearly foreign Tour change from the client decision and keeps the record', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), brief: { ...payload().brief, product_scope: { status: 'inferred', market_ids: ['china'], labels: ['中国'], basis: ['cts china'], source: '主关键词', rule_version: 'travel-market-v1', applies: true, evidence_status: 'available' } }, runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Tour: Malaysia & Singapore | Price: $10,430', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Malaysia & Singapore | Price: $10,730', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'opportunity', interpretation: { summary: '竞品涨价，可能形成机会。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '立即调整 CTS 中国团价格。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('本次采集尚未找到匹配产品变化')).toBeVisible()
+    expect(screen.queryByText('立即调整 CTS 中国团价格。')).not.toBeInTheDocument()
+    openSection('当前业务范围外 · 1 条')
+    expect(screen.getByText('已从 Client A 当前经营判断中排除')).toBeVisible()
+    expect(screen.getByText(/马来西亚、新加坡/)).toBeVisible()
+  })
+
+  it('withholds actions when the client product scope is unavailable', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), brief: { ...payload().brief, product_scope: { ...payload().brief.product_scope, applies: true, evidence_status: 'failed' } }, runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: $1,200', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: $950', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'opportunity', interpretation: { summary: '竞品降价。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '立即调价。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('客户产品范围读取失败，本页暂不提供经营行动建议。')).toBeVisible()
+    expect(screen.queryByText('立即调价。')).not.toBeInTheDocument()
   })
 
   it('withholds a model conclusion when its evidence chain is incomplete', async () => {

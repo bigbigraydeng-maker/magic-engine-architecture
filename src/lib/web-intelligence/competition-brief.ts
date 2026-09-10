@@ -1,3 +1,5 @@
+import { matchTravelScope, type TravelScope } from './profiles/travel'
+
 export type BriefStatus = 'ready' | 'limited' | 'stale' | 'unconfigured' | 'no_observation' | 'failed' | 'not_connected'
 
 export type BriefDimension = {
@@ -21,6 +23,7 @@ export type CompetitionBrief = {
   dimensions: BriefDimension[]
   gaps: { label: string; reason: string }[]
   warnings: string[]
+  product_scope: TravelScope & { applies: boolean; evidence_status: 'available' | 'failed' }
 }
 
 export type MarketSnapshot = {
@@ -47,6 +50,10 @@ type BriefInput = {
   baselines: SourceResult<BaselineDomain[]>
   reputation: SourceResult<ReputationSnapshot[]>
   ai: SourceResult<AiSnapshot | null>
+  productScope: TravelScope
+  productScopeFailed?: boolean
+  productScopeApplies?: boolean
+  hasConfiguredProducts?: boolean
   now?: Date
 }
 
@@ -59,7 +66,7 @@ const dateRange = (values: (string | null)[]) => {
   return first === last ? first : `${first} 至 ${last}`
 }
 const isStale = (value: string | null, days: number, now: Date) => !value || now.getTime() - Date.parse(value) > days * DAY
-const businessFacts = (text: string) => text.split('\n').filter(line => /Tour:/i.test(line)).slice(0, 4).map(line => {
+const businessFacts = (text: string) => text.split('\n').filter(line => /Tour:/i.test(line)).slice(0, 100).map(line => {
   const fields = new Map(line.split('|').map(part => {
     const [key, ...value] = part.trim().split(':')
     return [key.trim().toLowerCase(), value.join(':').trim()]
@@ -67,12 +74,14 @@ const businessFacts = (text: string) => text.split('\n').filter(line => /Tour:/i
   const values = [fields.get('tour'), fields.get('duration'), fields.get('price')]
   const promotion = fields.get('promotion')
   if (promotion && !/^none|not stated$/i.test(promotion)) values.push(promotion)
-  return values.filter(Boolean).join(' · ')
-}).filter(Boolean)
+  const display = values.filter(Boolean).join(' · ')
+  return display ? { display, raw: line } : null
+}).filter((fact): fact is { display: string; raw: string } => Boolean(fact))
 const canonical = (value: string | null) => (value ?? '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]
 
 export function buildCompetitionBrief(input: BriefInput): CompetitionBrief {
   const now = input.now ?? new Date()
+  const scopeApplies = input.productScopeApplies !== false
   const warnings: string[] = []
   const latestByUrl = new Map<string, MarketSnapshot>()
   for (const row of input.snapshots.data) if (!latestByUrl.has(row.url)) latestByUrl.set(row.url, row)
@@ -83,14 +92,31 @@ export function buildCompetitionBrief(input: BriefInput): CompetitionBrief {
   const productStatus: BriefStatus = input.snapshots.failed ? 'failed' : !input.configuredPageCount ? 'unconfigured' : !current.length ? 'no_observation' : productIncomplete || productHasStale ? 'stale' : 'limited'
   if (!['ready', 'limited'].includes(productStatus)) warnings.push(productStatus === 'failed' ? '竞品业务页面读取失败。' : productStatus === 'stale' ? '竞品业务页面存在缺失或超过 8 天的记录。' : '竞品业务页面尚未形成可用快照。')
   const fresh = current.filter(row => !isStale(row.captured_at, 8, now))
-  const facts = fresh.flatMap(row => businessFacts(row.projection_content ?? '').map(fact => `${row.domain} · ${fact}`)).slice(0, 4)
+  const allFacts = fresh.flatMap(row => businessFacts(row.projection_content ?? '').map(fact => {
+    const match = scopeApplies ? matchTravelScope(fact.raw, row.url, input.productScope) : { status: 'matched' as const, matched: [], outside: [] }
+    return { ...fact, domain: row.domain, match }
+  }))
+  const scopedFacts = [...new Map(allFacts.map(fact => [`${fact.domain}:${fact.display}`, fact] as const)).values()]
+  const matchedFacts = scopedFacts.filter(fact => fact.match.status === 'matched')
+  const outsideFacts = scopedFacts.filter(fact => fact.match.status === 'outside')
+  const unknownFacts = scopedFacts.filter(fact => fact.match.status === 'unknown')
+  const facts = matchedFacts.slice(0, 4).map(fact => `${fact.domain} · ${fact.display}`)
+  const scopeLabel = input.productScope.labels.join('、')
+  const scopeReady = !scopeApplies || (input.productScope.status !== 'unknown' && !input.productScopeFailed)
   const product: BriefDimension = {
     key: 'product', label: '竞品产品与价格', status: productStatus,
-    headline: current.length ? `已读取 ${current.length}/${input.configuredPageCount} 个已配置业务页面` : '尚无可用的产品盘面',
-    detail: facts.length ? `以下为最近抓到的 ${Math.min(facts.length, 4)} 个代表产品；尚未接入 ${input.clientName} 自身产品数据，暂不能直接判断胜负。` : '当前只能说明页面覆盖，尚未提取到足够的 Tour、价格或促销事实。',
-    items: facts,
+    headline: current.length
+      ? scopeReady ? scopeApplies ? `已找到 ${matchedFacts.length} 个与“${scopeLabel}”范围匹配的 Tour` : `已读取 ${current.length}/${input.configuredPageCount} 个已配置业务页面` : `已读取 ${current.length}/${input.configuredPageCount} 个已配置业务页面`
+      : '尚无可用的产品盘面',
+    detail: !scopeReady
+      ? `尚无可靠的客户产品范围，已暂停展示竞品代表产品，避免把无关线路带入 ${input.clientName} 的经营判断。`
+      : !scopeApplies ? '当前行业尚未启用目的地范围匹配；以下内容仅代表已配置页面。'
+        : facts.length
+        ? `当前按“${scopeLabel}”筛选（依据：${input.productScope.source}）。展示同一目的地范围内的产品；${outsideFacts.length} 个范围外、${unknownFacts.length} 个目的地待确认的产品未进入经营判断。`
+        : `本次采集尚未找到与“${scopeLabel}”匹配的 Tour；${outsideFacts.length} 个范围外、${unknownFacts.length} 个目的地待确认。不能据此断定市场没有竞争。`,
+    items: scopeReady ? facts : [],
     source: '竞品官网已配置页面', observed_at: snapshotAt,
-    coverage: `当前 ${fresh.length}/${input.configuredPageCount} 个页面在 8 天有效期内；仅代表已配置页面，不代表竞品全站。`,
+    coverage: `当前 ${fresh.length}/${input.configuredPageCount} 个页面在 8 天有效期内；共识别 ${scopedFacts.length} 个 Tour：匹配 ${matchedFacts.length}、范围外 ${outsideFacts.length}、待确认 ${unknownFacts.length}。`,
   }
 
   const baselineAt = latestDate(input.baselines.data.map(row => row.last_collected_at))
@@ -149,14 +175,16 @@ export function buildCompetitionBrief(input: BriefInput): CompetitionBrief {
   const dimensions = [product, search, reputation, ai]
   const readyCount = dimensions.filter(item => item.status === 'ready').length
   const limitedCount = dimensions.filter(item => item.status === 'limited').length
-  const travelProfile = current.some(row => row.projection_version?.startsWith('me-travel')) || facts.length > 0
+  const travelProfile = current.some(row => row.projection_version?.startsWith('me-travel')) || scopedFacts.length > 0
   const subject = travelProfile ? 'Tour' : '产品'
-  const hasBusinessFacts = facts.length > 0
+  const hasBusinessFacts = matchedFacts.length > 0
   const headline = hasBusinessFacts
     ? `竞品${subject}盘面已可查看；仍需与 ${input.clientName} 同类${subject}对位后再决定是否回应。`
     : `现有数据还不足以回答当前应该争什么${subject}、用什么价格。`
   const actions = [
-    hasBusinessFacts ? `把 ${input.clientName} 同类${subject}的日期、总价、行程天数和包含项目纳入同一张对比表。` : `补齐竞品核心${subject}列表与详情页，让 ME 先看见真实产品盘面。`,
+    hasBusinessFacts
+      ? `${input.hasConfiguredProducts ? '把' : '先确认'} ${input.clientName} 同类${subject}的日期、总价、行程天数和包含项目，再做逐项对位。`
+      : `补齐 ${input.clientName} 的主力${subject}与竞品同类详情页，再判断真实产品差距。`,
     repStatus === 'ready' ? '按评价量、评分与近期新增评价判断信任差距。' : `补齐核心竞品的评价平台身份，再与 ${input.clientName} 比较信任差距。`,
     '只对已验证的价格、促销、档期或口碑变化形成经营建议。',
   ]
@@ -164,6 +192,7 @@ export function buildCompetitionBrief(input: BriefInput): CompetitionBrief {
     as_of: now.toISOString(), subject, headline,
     summary: `当前 ${readyCount}/4 个维度可直接竞争对比，${limitedCount} 个只有单方或有限数据；监控 ${input.competitorCount} 家竞品、${input.configuredPageCount} 个业务页面。`,
     actions, dimensions, warnings,
+    product_scope: { ...input.productScope, applies: scopeApplies, evidence_status: input.productScopeFailed ? 'failed' : 'available' },
     gaps: [
       { label: '竞品广告', reason: '尚未形成可比较的历史快照' },
       { label: '招聘与人员', reason: '尚未接入' },
