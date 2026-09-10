@@ -152,6 +152,18 @@ describe('Website scope, budget and evidence contracts', () => {
     const after = ['Tour: Wonders of China | Price: $11', 'Tour: China Explorer | Price: $22', 'Tour: Beijing Break | Price: $33', 'Tour: Japan Explorer | Price: $44'].join('\n')
     expect(matchChangedToursScope(before, after, 'https://example.com/china/tours/', scope).status).toBe('unknown')
   })
+  it('matches a changed China Tour in full captured page evidence', () => {
+    const scope = deriveTravelScope([], ['china tours'])
+    const before = ['Classic Group Tour', 'Classic China', '22 days from $10,080pp', '44 Reviews', 'Includes international airfares', 'Beijing - Xian - Shanghai'].join('\n')
+    const after = ['Classic Group Tour', 'Classic China', '22 days from $10,580pp', '44 Reviews', 'Includes international airfares', 'Beijing - Xian - Shanghai'].join('\n')
+    expect(matchChangedToursScope(before, after, 'https://example.com/china/tours/', scope)).toMatchObject({ status: 'matched', matched: ['china'], outside: [] })
+  })
+  it('normalises each side when stored Tour evidence formats differ', () => {
+    const scope = deriveTravelScope([], ['china tours'])
+    const before = ['Classic Group Tour', 'Japan Explorer', '10 days from $5,000pp', 'Tokyo - Kyoto'].join('\n')
+    const after = 'Tour: Classic China | Duration: 22 days | Price: $10,580pp | Route: Beijing - Xian - Shanghai'
+    expect(matchChangedToursScope(before, after, 'https://example.com/china/tours/', scope).status).toBe('unknown')
+  })
   it('uses market aliases with word boundaries and leaves ambiguous text unknown', () => {
     expect(travelMarketsIn('Tour: Japan Explorer | Route: Tokyo - Kyoto')).toEqual(['japan'])
     expect(travelMarketsIn('Tour: Japanese Explorer')).toEqual(['japan'])
