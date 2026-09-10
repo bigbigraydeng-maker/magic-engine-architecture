@@ -51,7 +51,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     <section className="grid gap-4 lg:grid-cols-2">
       <article className="rounded-2xl border border-black/10 bg-white p-5">
         <h2 className="text-lg font-bold">竞品情报</h2>
-        {decision.external_signal.length ? <ul className="mt-3 space-y-2 text-sm leading-6">{decision.external_signal.map(item => <li key={item} className="rounded-lg bg-me-ivory p-3">{item}</li>)}</ul> : <p className="mt-3 text-sm text-me-charcoal/60">尚无可用竞品产品证据。</p>}
+        {decision.external_signal.length ? <ul className="mt-3 space-y-2 text-sm leading-6">{decision.external_signal.map(item => <li key={`${item.source_url}-${item.observed_at ?? 'unknown'}`} className="rounded-lg bg-me-ivory p-3"><p>{item.statement}</p><p className="mt-2 text-xs text-me-charcoal/60"><a className="underline" href={item.source_url} target="_blank" rel="noreferrer">来源</a> · 观察于 {item.observed_at ? new Date(item.observed_at).toLocaleString('zh-CN') : '时间未知'} · 有效至 {item.valid_until ? new Date(item.valid_until).toLocaleDateString('zh-CN') : '未知'}</p></li>)}</ul> : <p className="mt-3 text-sm text-me-charcoal/60">尚无可用竞品产品证据。</p>}
       </article>
       <article className="rounded-2xl border border-black/10 bg-white p-5">
         <h2 className="text-lg font-bold">同类产品判断</h2>

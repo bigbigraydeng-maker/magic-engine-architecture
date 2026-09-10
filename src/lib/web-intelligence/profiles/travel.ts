@@ -11,6 +11,9 @@ export type TourRecord = {
   reviews: string
   includes: string
   route: string
+  departureWindow?: string
+  positioning?: string
+  audience?: string
 }
 
 export type TravelScope = {

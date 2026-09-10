@@ -14,6 +14,13 @@ export type OperatingEvidence = {
   confidence: 'high' | 'medium' | 'low'
 }
 
+export type OperatingSignal = {
+  statement: string
+  source_url: string
+  observed_at: string | null
+  valid_until: string | null
+}
+
 export type ProductMatch = {
   status: ProductMatchStatus
   client_product: string | null
@@ -24,7 +31,7 @@ export type ProductMatch = {
 export type OperatingDecision = {
   question: string
   context: string[]
-  external_signal: string[]
+  external_signal: OperatingSignal[]
   impact: string
   recommendation: string
   authorization: 'review_required'
@@ -48,10 +55,24 @@ export type OperatingBriefInput = {
   client: { id: string; name: string }
   goal: OperatingBrief['goal']
   product_scope: TravelScope
-  client_products: Array<{ name: string; duration_days?: number; price?: string; route?: string }>
-  competitor_products: Array<{ domain: string; observed_at: string | null; records: TourRecord[] }>
+  client_products: Array<{ name: string; destination?: string; route?: string; duration_days?: number; price?: string; departure_window?: string; includes?: string; positioning?: string; audience?: string }>
+  competitor_products: Array<{ domain: string; source_url: string; observed_at: string | null; records: TourRecord[] }>
   evidence: OperatingEvidence[]
   now?: Date
+}
+
+export function normalizeOperatingProducts(raw: unknown): OperatingBriefInput['client_products'] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const value = item as Record<string, unknown>
+    const text = (key: string) => typeof value[key] === 'string' ? value[key].trim() : undefined
+    const number = (key: string) => typeof value[key] === 'number' && Number.isFinite(value[key]) ? value[key] : undefined
+    return [{
+      name: text('name') ?? '', destination: text('destination'), route: text('route'), duration_days: number('duration_days'),
+      price: text('price'), departure_window: text('departure_window'), includes: text('includes'), positioning: text('positioning'), audience: text('audience'),
+    }]
+  })
 }
 
 function productLabel(product: TourRecord): string {
@@ -74,14 +95,41 @@ export function parseTourRecordLine(line: string): TourRecord | null {
     reviews: values.get('reviews') ?? 'not stated',
     includes: values.get('includes') ?? 'not stated',
     route: values.get('route') ?? 'not stated',
+    departureWindow: values.get('departure') ?? values.get('departure_window'),
+    positioning: values.get('positioning'),
+    audience: values.get('audience'),
   }
 }
 
-function competitorFacts(input: OperatingBriefInput): string[] {
-  return input.competitor_products.flatMap(item => item.records.slice(0, 3).map(record =>
-    `${item.domain}：${productLabel(record)}`,
-  ))
+function competitorFacts(input: OperatingBriefInput, now: Date): OperatingSignal[] {
+  return input.competitor_products.flatMap(item => item.records.slice(0, 3).map(record => ({
+    statement: `${item.domain}：${productLabel(record)}`,
+    source_url: item.source_url,
+    observed_at: item.observed_at,
+    valid_until: item.observed_at ? new Date(Date.parse(item.observed_at) + 8 * 86_400_000).toISOString() : null,
+  }))).filter(item => item.observed_at !== null && Number.isFinite(Date.parse(item.observed_at)) && now.getTime() - Date.parse(item.observed_at) >= 0 && now.getTime() - Date.parse(item.observed_at) <= 8 * 86_400_000)
 }
+
+function completeClientProduct(product: OperatingBriefInput['client_products'][number]): boolean {
+  return [product.destination, product.route, product.duration_days, product.price, product.departure_window, product.includes, product.positioning, product.audience]
+    .every(value => typeof value === 'string' ? value.trim().length > 0 : typeof value === 'number' && Number.isFinite(value))
+}
+
+function completeCompetitorProduct(record: TourRecord): boolean {
+  return [record.route, record.durationDays, record.price, record.departureWindow, record.includes, record.positioning, record.audience]
+    .every(value => typeof value === 'string' ? value.trim().length > 0 : typeof value === 'number' && Number.isFinite(value))
+}
+
+const comparableText = (value: string | undefined) => (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+const samePriceBasis = (left: string, right: string) => comparableText(left).replace(/\d+/g, '') === comparableText(right).replace(/\d+/g, '')
+const sameTourShape = (client: OperatingBriefInput['client_products'][number], competitor: TourRecord) =>
+  comparableText(client.route) === comparableText(competitor.route) &&
+  client.duration_days === competitor.durationDays &&
+  samePriceBasis(client.price!, competitor.price) &&
+  comparableText(client.departure_window) === comparableText(competitor.departureWindow) &&
+  comparableText(client.includes) === comparableText(competitor.includes) &&
+  comparableText(client.positioning) === comparableText(competitor.positioning) &&
+  comparableText(client.audience) === comparableText(competitor.audience)
 
 function matchesFor(input: OperatingBriefInput): ProductMatch[] {
   const competitorRecords = input.competitor_products.flatMap(item => item.records.map(record => ({ item, record })))
@@ -97,12 +145,12 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
     })
   }
   return input.client_products.map(product => {
-    const sameScope = competitorRecords.find(({ record }) => input.product_scope.market_ids.some(id => `${record.name} ${record.route}`.toLowerCase().includes(id)))
-    if (!sameScope) return {
+    const sameScope = competitorRecords.find(({ record }) => matchTravelScope(`${record.name} ${record.route}`, '', input.product_scope).status === 'matched')
+    if (!sameScope || !completeClientProduct(product) || !completeCompetitorProduct(sameScope.record) || !sameTourShape(product, sameScope.record)) return {
       status: 'insufficient_evidence' as const,
       client_product: product.name,
-      competitor_product: null,
-      reason: '没有找到同时满足客户产品范围和可比较路线的竞品记录。',
+      competitor_product: sameScope ? `${sameScope.item.domain}：${productLabel(sameScope.record)}` : null,
+      reason: !completeClientProduct(product) ? '客户产品缺少目的地、路线、天数、价格口径、出发窗口、包含项目、定位或目标客群。' : !sameScope ? '没有找到同时满足客户产品范围和可比较路线的竞品记录。' : !completeCompetitorProduct(sameScope.record) ? '竞品记录缺少路线、天数、价格、出发窗口、包含项目、定位或目标客群。' : '路线、天数、价格口径、出发窗口、包含项目、定位或目标客群未完成逐项对位。',
     }
     return {
       status: 'comparable' as const,
@@ -116,12 +164,13 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
 export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief {
   const now = input.now ?? new Date()
   const matches = matchesFor(input)
-  const competitorSignal = competitorFacts(input)
+  const competitorSignal = competitorFacts(input, now)
   const allInsufficient = matches.length === 0 || matches.every(match => match.status === 'insufficient_evidence')
   const evidence = input.evidence.filter(item => item.scope === 'client' || item.scope === 'competitor')
   const unknowns = [
     ...(input.client_products.length ? [] : ['CTS 产品目录、路线、天数、价格、包含项目、出发日期和余位尚未进入已验证数据源。']),
     ...(input.goal ? [] : ['没有当前有效经营目标，不能把历史目标当作当前目标。']),
+    ...(competitorSignal.length ? [] : ['没有未过期的竞品快照，不能把历史记录当作当前情报。']),
     '没有 CTS 与竞品同类产品的询盘、成交或转化对照，不能估计经营影响或建议调价。',
   ]
   const recommendation = allInsufficient

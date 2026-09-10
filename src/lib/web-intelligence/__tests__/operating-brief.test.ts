@@ -8,20 +8,26 @@ const evidence = [{ id: '00000000-0000-0000-0000-000000000001', client_id: 'clie
 
 describe('buildOperatingBrief', () => {
   it('refuses price advice when the client product source is missing', () => {
-    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', observed_at: evidence[0].observed_at, records: [record] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
     expect(brief.matches[0].status).toBe('insufficient_evidence')
     expect(brief.decision.recommendation).toContain('暂不调价')
     expect(brief.decision.authorization).toBe('review_required')
   })
 
-  it('keeps a client product and an in-scope competitor as a candidate match', () => {
-    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: { title: 'Grow leads', status: 'active', metric: 'leads/mo', target: 30 }, product_scope: scope, client_products: [{ name: 'China Highlights' }], competitor_products: [{ domain: 'competitor.example', observed_at: evidence[0].observed_at, records: [record] }], evidence })
-    expect(brief.matches[0].status).toBe('comparable')
-    expect(brief.decision.recommendation).toContain('复核')
+  it('fails closed when the client product lacks comparison fields', () => {
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: { title: 'Grow leads', status: 'active', metric: 'leads/mo', target: 30 }, product_scope: scope, client_products: [{ name: 'China Highlights' }], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record] }], evidence })
+    expect(brief.matches[0].status).toBe('insufficient_evidence')
+    expect(brief.matches[0].reason).toContain('客户产品缺少')
+  })
+
+  it('does not compare tours with a different route, duration, or price basis', () => {
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [{ name: 'China Highlights', destination: 'China', route: 'Beijing Shanghai', duration_days: 12, price: 'NZD 4999 pp', departure_window: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [{ ...record, route: 'Beijing Xian', durationDays: 14, price: 'AUD 9030 pp', departureWindow: 'November 2026', includes: 'Flights hotels', positioning: 'large group', audience: 'NZ travellers' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
+    expect(brief.matches[0].status).toBe('insufficient_evidence')
+    expect(brief.matches[0].reason).toContain('逐项对位')
   })
 
   it('keeps an explicit out-of-scope tour out of the decision', () => {
-    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', observed_at: null, records: [{ ...record, name: 'Japan Discovery', route: 'Japan Tokyo Kyoto' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/japan', observed_at: null, records: [{ ...record, name: 'Japan Discovery', route: 'Japan Tokyo Kyoto' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
     expect(brief.matches[0].status).toBe('out_of_scope')
     expect(brief.matches[0].reason).toContain('范围之外')
   })
