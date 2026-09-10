@@ -1,0 +1,28 @@
+import { describe, expect, it } from 'vitest'
+import { buildOperatingBrief } from '../operating-brief'
+import type { TravelScope } from '../profiles/travel'
+
+const scope: TravelScope = { status: 'configured', market_ids: ['china'], labels: ['中国'], basis: ['China'], source: '主力产品', rule_version: 'travel-market-v1' }
+const record = { name: 'Wonders of China', durationDays: 17, price: 'from $9,030PP', promotion: 'EARLY BIRD SALE', reviews: '425 Reviews', includes: 'Fully Inclusive', route: 'China Great Wall Xian Yangtze River' }
+const evidence = [{ id: '00000000-0000-0000-0000-000000000001', client_id: 'client', source: 'competitor website', scope: 'competitor' as const, statement: 'Wendy Wu has a China Tour', observed_at: '2026-09-10T00:00:00Z', fact_type: 'fact' as const, confidence: 'high' as const }]
+
+describe('buildOperatingBrief', () => {
+  it('refuses price advice when the client product source is missing', () => {
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', observed_at: evidence[0].observed_at, records: [record] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
+    expect(brief.matches[0].status).toBe('insufficient_evidence')
+    expect(brief.decision.recommendation).toContain('暂不调价')
+    expect(brief.decision.authorization).toBe('review_required')
+  })
+
+  it('keeps a client product and an in-scope competitor as a candidate match', () => {
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: { title: 'Grow leads', status: 'active', metric: 'leads/mo', target: 30 }, product_scope: scope, client_products: [{ name: 'China Highlights' }], competitor_products: [{ domain: 'competitor.example', observed_at: evidence[0].observed_at, records: [record] }], evidence })
+    expect(brief.matches[0].status).toBe('comparable')
+    expect(brief.decision.recommendation).toContain('复核')
+  })
+
+  it('keeps an explicit out-of-scope tour out of the decision', () => {
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', observed_at: null, records: [{ ...record, name: 'Japan Discovery', route: 'Japan Tokyo Kyoto' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
+    expect(brief.matches[0].status).toBe('out_of_scope')
+    expect(brief.matches[0].reason).toContain('范围之外')
+  })
+})
