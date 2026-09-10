@@ -113,18 +113,42 @@ export function matchTravelScope(text: string, sourceUrl: string, scope: TravelS
 
 const canonicalTourLine = (line: string) => line.trim().toLowerCase().replace(/\s+/g, ' ')
 
+function tourRecordLine(record: TourRecord): string {
+  return [
+    `Tour: ${record.name}`,
+    `Duration: ${record.durationDays} days`,
+    `Price: ${record.price}`,
+    `Promotion: ${record.promotion}`,
+    `Reviews: ${record.reviews}`,
+    `Includes: ${record.includes}`,
+    `Route: ${record.route}`,
+  ].join(' | ')
+}
+
+function changedTourLines(before: string, after: string): string[] {
+  // Older evidence records contain the captured page body rather than the
+  // canonical projection. Recreate the same Tour records before evaluating
+  // scope so a clearly named product does not become "unknown" merely because
+  // of its storage format.
+  const comparableLines = (value: string) => {
+    const projected = value.split('\n').filter(line => /(?:^|[|;])\s*tour\s*:/i.test(line))
+    return projected.length ? projected : extractTourRecords(value).map(tourRecordLine)
+  }
+  const beforeRecords = comparableLines(before)
+  const afterRecords = comparableLines(after)
+  if (!beforeRecords.length || !afterRecords.length) return []
+  const beforeSet = new Set(beforeRecords.map(canonicalTourLine))
+  const afterSet = new Set(afterRecords.map(canonicalTourLine))
+  return [
+    ...beforeRecords.filter(line => !afterSet.has(canonicalTourLine(line))),
+    ...afterRecords.filter(line => !beforeSet.has(canonicalTourLine(line))),
+  ]
+}
+
 /** Evaluate every changed canonical Tour record; display truncation must not change the gate. */
 export function matchChangedToursScope(before: string, after: string, sourceUrl: string, scope: TravelScope): TravelScopeMatch {
   if (scope.status === 'unknown') return { status: 'unknown', matched: [], outside: [] }
-  const tourLines = (value: string) => value.split('\n').filter(line => /(?:^|[|;])\s*tour\s*:/i.test(line))
-  const beforeLines = tourLines(before)
-  const afterLines = tourLines(after)
-  const beforeSet = new Set(beforeLines.map(canonicalTourLine))
-  const afterSet = new Set(afterLines.map(canonicalTourLine))
-  const changed = [
-    ...beforeLines.filter(line => !afterSet.has(canonicalTourLine(line))),
-    ...afterLines.filter(line => !beforeSet.has(canonicalTourLine(line))),
-  ]
+  const changed = changedTourLines(before, after)
   if (!changed.length) return { status: 'unknown', matched: [], outside: [] }
   const matches = changed.map(line => matchTravelScope(line, sourceUrl, scope))
   const statuses = new Set(matches.map(match => match.status))
@@ -183,15 +207,7 @@ export function projectTravelContent(raw: string, role: BusinessPageRole): strin
   if (role !== 'product_listing' && role !== 'offers') return null
   const records = extractTourRecords(raw)
   if (records.length === 0) return null
-  return records.map(record => [
-    `Tour: ${record.name}`,
-    `Duration: ${record.durationDays} days`,
-    `Price: ${record.price}`,
-    `Promotion: ${record.promotion}`,
-    `Reviews: ${record.reviews}`,
-    `Includes: ${record.includes}`,
-    `Route: ${record.route}`,
-  ].join(' | ')).join('\n')
+  return records.map(tourRecordLine).join('\n')
 }
 
 export const TRAVEL_INTERPRETATION_GUIDANCE = `The evidence contains canonical Tour records. Compare Tour competitiveness by named Tour and exact fields only: product presence, price, promotion, duration, route or destinations, departure dates, availability, inclusions, positioning and reviews. State the exact Tour name plus before and after values. Never infer that a promotion moved or disappeared from an unassociated repeated label. If no named Tour has a verifiable field change, classify ignore and state that no reliable Tour change was found.`

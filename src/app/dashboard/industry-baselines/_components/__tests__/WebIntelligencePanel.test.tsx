@@ -34,7 +34,7 @@ describe('WebIntelligencePanel competition brief flow', () => {
   it('puts the current decision ahead of product evidence and configuration', async () => {
     vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : payload())))
     render(<WebIntelligencePanel />); await selectClient()
-    expect(await screen.findByText('现在需要回应什么')).toBeVisible()
+    expect(await screen.findByText('竞品做了什么，Client A 这周怎么跟进')).toBeVisible()
     expect(screen.getByText('还没有可用的竞争分析')).toBeVisible()
     expect(screen.getByText('Tour 竞争盘面')).toBeVisible()
     expect(screen.getByText('查看其他判断依据与数据缺口')).toBeVisible()
@@ -100,12 +100,31 @@ describe('WebIntelligencePanel competition brief flow', () => {
     ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'threat', interpretation: { summary: '竞品降价并接近售罄。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '比较同类产品价值，并决定是否调整优惠。', created_at: run.created_at }] }
     vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
     render(<WebIntelligencePanel />); await selectClient()
-    expect(await screen.findByText('发生了什么')).toBeVisible()
-    expect(screen.getByText('对 Client A 的潜在影响')).toBeVisible()
-    expect(screen.getByText('建议怎么做')).toBeVisible()
+    expect(await screen.findByText('竞品降价并接近售罄。')).toBeVisible()
+    expect(screen.getByText('对 Client A 的意义')).toBeVisible()
+    expect(screen.getByText('这周下一步')).toBeVisible()
     expect(screen.getByText(/当前判断 · 仅代表这个竞品的这个页面 · 尚未执行任何动作/)).toBeVisible()
+    fireEvent.click(screen.getByText('查看变化依据'))
     expect(screen.getByText('+ Tour: Wonders of China | Price: $950 | Availability: Only 3 spaces left')).toBeVisible()
     expect(screen.getByText('− Tour: Wonders of China | Price: $1,200 | Availability: Available')).toBeVisible()
+  })
+
+  it('presents a relevant full-page China price change as a comparison decision', async () => {
+    const run = { id: 'current', domain: 'wendywutours.co.nz', url: 'https://wendywutours.co.nz/china/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const page = (price: string) => ['Classic Group Tour', 'Classic China', `22 days from ${price}`, '44 Reviews', 'Includes international airfares', 'Beijing - Xian - Shanghai'].join('\n')
+    const data = { ...payload(), competitors: [{ ...baseCompetitor, domain: run.domain, urls: [run.url] }], brief: { ...payload().brief, product_scope: { status: 'inferred', market_ids: ['china'], labels: ['中国'], basis: ['china tours'], source: '主关键词', rule_version: 'travel-market-v1', applies: true, evidence_status: 'available' } }, runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: page('$10,080pp'), observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: page('$10,580pp'), observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'ignore', interpretation: { summary: 'Wendy Wu 的 Classic China 22 天产品每人上涨 $500。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '无需采取行动。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('需要同类对比')).toBeVisible()
+    expect(screen.getByText('分析范围：中国团')).toBeVisible()
+    expect(screen.getByText(/请先找出 Client A 最接近的线路/)).toBeVisible()
+    expect(screen.queryByText('业务相关性待确认')).not.toBeInTheDocument()
+    expect(screen.getByText(/china tours/)).not.toBeVisible()
+    fireEvent.click(screen.getByText(/分析范围：中国团/))
+    expect(screen.getByText(/判断依据：主关键词/)).toBeVisible()
   })
 
   it('removes a clearly foreign Tour change from the client decision and keeps the record', async () => {
@@ -197,6 +216,41 @@ describe('WebIntelligencePanel competition brief flow', () => {
     render(<WebIntelligencePanel />); await selectClient()
     expect(await screen.findByText('模型发现了一条待核实线索')).toBeVisible()
     expect(screen.queryByText('立即跟进。')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    'Wonders of China 每人下跌 NZD 500。',
+    'Wonders of China 涨价至 NZD 500。',
+    'Wonders of China 当前价格 NZD 5,000。',
+    'Wonders of China 从 NZD 500 涨价至 NZD 5,500。',
+    'Wonders of China 从 NZD 5,000 上涨 NZD 5,500。',
+    'Wonders of China 价格 NZD 500。',
+    'Wonders of China 从 NZD 5,000 到 NZD 5,500，当前价格 NZD 500。',
+    'Wonders of China 价格从 5500 降到 5000。',
+  ])('withholds a misleading single-amount price claim: %s', async summary => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const data = { ...payload(), runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: NZD 5,000', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: NZD 5,500', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'threat', interpretation: { summary, confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: '立即调价。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('模型发现了一条待核实线索')).toBeVisible()
+    expect(screen.queryByText('立即调价。')).not.toBeInTheDocument()
+  })
+
+  it('does not expose a pricing action before a scoped Tour has a client comparator', async () => {
+    const run = { id: 'current', domain: 'example.com', url: 'https://example.com/tours/', status: 'complete', provider_status: 'SUCCEEDED', error_code: null, created_at: '2026-09-10', capture_cost_usd: 0.01, interpretation_cost_usd: 0.02, accounted_nzd: 0.05, reserved_nzd: 0 }
+    const scoped = { ...payload().brief, product_scope: { status: 'inferred' as const, market_ids: ['china'], labels: ['中国'], basis: ['china tours'], source: '主关键词' as const, rule_version: 'travel-market-v1' as const, applies: true, evidence_status: 'available' as const } }
+    const data = { ...payload(), brief: scoped, runs: [run], evidence: [
+      { id: 'before', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: NZD 5,000', observed_at: '2026-09-08', content_hash: 'a' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: NZD 5,500', observed_at: '2026-09-09', content_hash: 'b' },
+    ], signals: [{ id: 'decision', run_id: run.id, domain: run.domain, kind: 'business_page_changed', before_evidence_id: 'before', after_evidence_id: 'after', interpretation_status: 'complete', classification: 'opportunity', interpretation: { summary: 'Wonders of China 从 NZD 5,000 涨价至 NZD 5,500。', confidence: 0.9, evidence_ids: ['before', 'after'] }, recommended_action: 'CTS 立即涨价 NZD 300。', created_at: run.created_at }] }
+    vi.stubGlobal('fetch', vi.fn((url: string) => response(url === '/api/clients' ? clients : data)))
+    render(<WebIntelligencePanel />); await selectClient()
+    expect(await screen.findByText('建议先核对')).toBeVisible()
+    expect(screen.getByText(/请先找出 Client A 最接近的线路/)).toBeVisible()
+    expect(screen.queryByText('CTS 立即涨价 NZD 300。')).not.toBeInTheDocument()
   })
 
   it('does not pair prices from different tours through a generic shared word', async () => {

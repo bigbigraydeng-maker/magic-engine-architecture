@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { CompetitionBrief as CompetitionBriefData } from '@/lib/web-intelligence/competition-brief'
 import { CompetitionBrief } from './CompetitionBrief'
-import { matchChangedToursScope, travelMarketLabels, type TravelScopeMatch } from '@/lib/web-intelligence/profiles/travel'
+import { matchChangedToursScope, projectTravelContent, travelMarketLabels, type TravelScopeMatch } from '@/lib/web-intelligence/profiles/travel'
 
 type Settings = {
   enabled: boolean; entitled: boolean; entitlement_price: number
@@ -84,8 +84,9 @@ const facts = (value = '') => Array.from(new Map(value.split(/\n+/)
   .map(line => line.trim()).filter(line => line.length >= 6 && line.length <= 220)
   .map(line => [normaliseFact(line), line])).values())
 const changedFacts = (from: Evidence | undefined, to: Evidence | undefined) => {
-  const before = facts(from?.excerpt)
-  const after = facts(to?.excerpt)
+  const businessFacts = (value: string | undefined) => value ? projectTravelContent(value, 'product_listing') ?? value : ''
+  const before = facts(businessFacts(from?.excerpt))
+  const after = facts(businessFacts(to?.excerpt))
   const beforeSet = new Set(before.map(normaliseFact))
   const afterSet = new Set(after.map(normaliseFact))
   const select = (items: string[], seen: Set<string>) => items
@@ -117,18 +118,45 @@ const moneyFacts = (value: string) => value.split(/\n+/).flatMap(line => [...lin
 const sameProduct = (before: { product: string | null }, after: { product: string | null }) => before.product !== null && before.product === after.product
 const claimDetailsVerified = (summary: string, added: string[], removed: string[]) => {
   const difference = [...added, ...removed].join('\n')
-  if (!numericClaims(summary).every(claim => numericClaims(difference).includes(claim))) return false
-  const direction = /降价|price (?:drop|cut|decrease)|cheaper/i.test(summary) ? 'down' : /涨价|提价|price (?:rise|increase)|more expensive/i.test(summary) ? 'up' : null
+  const direction = /降价|下跌|下降|下调|调低|降幅|减少|price (?:drop|cut|decrease)|cheaper/i.test(summary) ? 'down'
+    : /涨价|提价|上涨|上升|上调|调高|涨幅|增加|price (?:rise|increase)|more expensive/i.test(summary) ? 'up' : null
   const summaryHasPrice = factKinds(summary).has('price')
-  if (!summaryHasPrice) return true
+  if (!summaryHasPrice) return numericClaims(summary).every(claim => numericClaims(difference).includes(claim))
   const oldPrices = moneyFacts(removed.join('\n'))
   const newPrices = moneyFacts(added.join('\n'))
   if (oldPrices.length !== 1 || newPrices.length !== 1) return false
   const [oldPrice] = oldPrices; const [newPrice] = newPrices
   if (oldPrice.currency !== newPrice.currency || !sameProduct(oldPrice, newPrice)) return false
-  const claims = numericClaims(summary).map(Number).filter(Number.isFinite)
-  if (claims.length >= 2 && (claims[0] !== oldPrice.value || claims.at(-1) !== newPrice.value)) return false
-  if (claims.length === 1 && claims[0] !== newPrice.value) return false
+  const priceDelta = Math.abs(newPrice.value - oldPrice.value)
+  const summaryPrices = moneyFacts(summary)
+  if (summaryPrices.some(claim => claim.currency !== oldPrice.currency || ![oldPrice.value, newPrice.value, priceDelta].includes(claim.value))) return false
+  if (summaryPrices.length === 0 && numericClaims(summary).length > 0) return false
+  const summaryWithoutMoney = summary.replace(/([$€£]|\b(?:nzd|aud|usd)\b)\s*[\d,]+(?:\.\d+)?/gi, '')
+  if (!numericClaims(summaryWithoutMoney).every(claim => numericClaims(difference).includes(claim))) return false
+  const moneyMentions = [...summary.matchAll(/([$€£]|\b(?:nzd|aud|usd)\b)\s*([\d,]+(?:\.\d+)?)/gi)]
+  if (summaryPrices.length >= 2) {
+    if (summaryPrices[0].value !== oldPrice.value || summaryPrices[1].value !== newPrice.value) return false
+    const firstStart = moneyMentions[0].index ?? 0
+    const firstEnd = firstStart + moneyMentions[0][0].length
+    const secondStart = moneyMentions[1].index ?? firstEnd
+    const prefix = summary.slice(Math.max(0, firstStart - 12), firstStart)
+    const transition = summary.slice(firstEnd, secondStart)
+    if (!/(?:从|由|from)\s*$/i.test(prefix) || !/(?:至|到|调整为|变为|to)/i.test(transition)) return false
+    if (summaryPrices.slice(2).some((claim, offset) => {
+      const mention = moneyMentions[offset + 2]
+      const mentionStart = mention.index ?? 0
+      const amountPrefix = summary.slice(Math.max(0, mentionStart - 16), mentionStart)
+      return claim.value !== priceDelta || !/(?:涨幅|降幅|上涨|下跌|增加|减少|上调|下调|涨价|降价)(?:了|约|近|达)?\s*$/i.test(amountPrefix)
+    })) return false
+  }
+  if (summaryPrices.length === 1) {
+    const [claim] = summaryPrices
+    const mentionStart = moneyMentions[0].index ?? 0
+    const amountPrefix = summary.slice(Math.max(0, mentionStart - 16), mentionStart)
+    const amountMeansCurrentPrice = /(?:至|到|调整为|现价|当前价格|价格为)\s*(?:[$€£]|\b(?:nzd|aud|usd)\b)/i.test(summary)
+    const amountMeansDelta = /(?:涨幅|降幅|上涨|下跌|增加|减少|上调|下调|涨价|降价)(?:了|约|近|达)?\s*$/i.test(amountPrefix)
+    if (amountMeansCurrentPrice ? claim.value !== newPrice.value : !amountMeansDelta || claim.value !== priceDelta) return false
+  }
   if (direction === 'down') return oldPrice.value > newPrice.value
   if (direction === 'up') return oldPrice.value < newPrice.value
   return true
@@ -399,7 +427,6 @@ function signalEvidenceState(s: Signal, evidence: Evidence[], asOf: string, prod
 
 function SignalCard({ signal: s, evidence, asOf, clientName, productScope, featured = false, historical = false }: { signal: Signal; evidence: Evidence[]; asOf: string; clientName: string; productScope: ProductScope; featured?: boolean; historical?: boolean }) {
   const complete = s.interpretation_status === 'complete'
-  const labels: Record<string, string> = { threat: '需要评估应对', opportunity: '出现可利用机会', ignore: '该页面暂不建议回应' }
   const summary = s.interpretation?.summary
   const action = s.recommended_action === 'No action recommended.' ? '无需采取行动。' : s.recommended_action
   const { before, after, linked, fresh, highlights, verified, scopeMatch } = signalEvidenceState(s, evidence, asOf, productScope)
@@ -408,21 +435,30 @@ function SignalCard({ signal: s, evidence, asOf, clientName, productScope, featu
   const productMatched = scopeAllowsDecision(productScope, scopeMatch)
   const modelLead = complete && linked && fresh && !baselineReset && (!verified || !productMatched)
   const decisionReady = complete && linked && fresh && !baselineReset && verified && productMatched
-  const label = scopeMatch.status === 'outside' ? '当前业务范围外' : productScope.applies && !productMatched ? '产品匹配待确认' : historical && decisionReady ? '历史参考' : decisionReady ? labels[s.classification ?? ''] ?? '已完成判断' : complete ? '待核实' : s.interpretation_status === 'failed' ? '分析未完成' : '正在分析'
-  const impact = s.classification === 'threat' ? `这项变化可能削弱 ${clientName} 同类产品的竞争力，需要先做同类产品对位。` : s.classification === 'opportunity' ? `这项变化可能留下可抢占空间，需要先确认 ${clientName} 同类产品是否具备优势。` : `该页面本次变化暂不值得 ${clientName} 调整产品或推广策略。`
+  const label = scopeMatch.status === 'outside' ? '当前业务范围外'
+    : productScope.applies && !productMatched ? '业务相关性待确认'
+      : historical && decisionReady ? '历史参考'
+        : decisionReady ? s.classification === 'threat' ? '需要评估应对' : s.classification === 'opportunity' ? '出现可利用机会' : '需要同类对比'
+          : complete ? '待核实' : s.interpretation_status === 'failed' ? '分析未完成' : '正在分析'
+  const impact = s.classification === 'threat'
+    ? `这项变化发生在 ${clientName} 的经营范围内，可能削弱同类产品竞争力；对位前还不能判断实际差距。`
+    : s.classification === 'opportunity'
+      ? `这项变化发生在 ${clientName} 的经营范围内，可能留下竞争空间；对位前还不能确认现有优势。`
+      : `这项变化发生在 ${clientName} 的经营范围内；找到同类线路前，还不能判断价格或产品优势。`
+  const compareAction = `请先找出 ${clientName} 最接近的线路，对比出发日期、总价、行程天数和包含项目，再决定是否调整产品或推广。`
+  const nextStep = historical ? action ?? '当时没有形成建议。' : productScope.applies ? compareAction : action ?? '暂无建议。'
   return <article className={`${card} ${featured ? 'border-me-ochre/40 bg-gradient-to-br from-me-ochre/10 to-white p-5' : ''}`}>
     <div className="flex flex-wrap items-center justify-between gap-2"><span className={`rounded-full px-3 py-1 text-xs font-bold ${!decisionReady ? 'bg-amber-50 text-amber-800' : s.classification === 'threat' ? 'bg-red-50 text-red-800' : s.classification === 'opportunity' ? 'bg-green-50 text-green-800' : 'bg-black/5 text-me-charcoal/60'}`}>{label}</span><time className="text-xs text-me-charcoal/60" dateTime={s.created_at}>观察于 {date(s.created_at)} NZ</time></div>
-    <h3 className={`${featured ? 'text-2xl' : 'text-lg'} break-all font-black`}>关于 {s.domain}{source ? ` · ${pagePurpose(source)}` : ''}</h3>
+    <p className="text-xs font-bold text-me-charcoal/55">{s.domain}{source ? ` · ${pagePurpose(source)}` : ''}</p>
     {scopeMatch.status === 'outside' ? <div className="rounded-lg border border-black/10 bg-black/[0.03] p-4 text-sm leading-6"><strong>已从 {clientName} 当前经营判断中排除</strong><p className="mt-1">这条变化涉及{travelMarketLabels(scopeMatch.outside).join('、')}，与当前按“{productScope.labels.join('、')}”筛选的产品范围不一致。</p><p className="mt-2 text-me-charcoal/65">竞品变化仍保留作市场记录，但不会生成行动建议。</p></div> : decisionReady ? <>
-      <div className="grid gap-3 lg:grid-cols-3">
-        <div className="rounded-lg bg-white/80 p-4"><p className="text-xs font-bold text-me-charcoal/60">发生了什么</p><p className="mt-2 text-sm leading-6">{summary ?? '分析已完成，暂无文字摘要。'}</p></div>
-        <div className={`rounded-lg p-4 ${s.classification === 'threat' ? 'bg-red-50' : s.classification === 'opportunity' ? 'bg-green-50' : 'bg-black/[0.03]'}`}><p className="text-xs font-bold text-me-charcoal/60">对 {clientName} 的潜在影响</p><p className="mt-2 text-sm font-bold leading-6">{impact}</p></div>
-        <div className="rounded-lg border border-me-ochre/30 bg-me-ochre/10 p-4"><p className="text-xs font-bold text-me-charcoal/60">{historical ? '当时建议' : '建议怎么做'}</p><p className="mt-2 text-sm font-bold leading-6">{action ?? '暂无建议。'}</p></div>
+      <h3 className={`${featured ? 'text-2xl' : 'text-lg'} font-black leading-snug`}>{summary ?? '已发现一项与当前业务相关的竞品变化。'}</h3>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-lg bg-white/80 p-4"><p className="text-xs font-bold text-me-charcoal/60">对 {clientName} 的意义</p><p className="mt-2 text-sm font-bold leading-6">{impact}</p></div>
+        <div className="rounded-lg border border-me-ochre/30 bg-me-ochre/10 p-4"><p className="text-xs font-bold text-me-charcoal/60">{historical ? '当时建议' : productScope.applies ? '建议先核对' : '这周下一步'}</p><p className="mt-2 text-sm font-bold leading-6">{nextStep}</p></div>
       </div>
-      <ChangeHighlights added={highlights.added} removed={highlights.removed} />
-    </> : modelLead ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>{productScope.applies && !productMatched ? '变化产品与客户范围尚未匹配' : '模型发现了一条待核实线索'}</strong><p className="mt-1">{summary}</p><p className="mt-2 text-me-charcoal/65">{productScope.applies && !productMatched ? productScope.evidence_status === 'failed' ? '客户产品范围读取失败，暂不展示行动建议。' : productScope.status === 'unknown' ? '客户产品范围尚未配置或推断，暂不展示行动建议。' : `未能确认变化产品属于“${productScope.labels.join('、')}”范围，暂不展示行动建议。` : '现有证据未提取到可核对的关键差异，暂不展示行动建议。'}</p></div> : baselineReset ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>本次只建立新基线</strong><p>变化前的证据不完整，暂不作为经营决定；下一次采集后再比较价格、档期和余位。</p></div> : <p className="text-sm leading-7">{!complete ? s.interpretation_status === 'failed' ? '页面变化已保存，但这次没有形成有效分析，当前不能据此决策。' : '页面变化正在分析，完成前不建议采取行动。' : !linked ? '模型结论没有形成完整的前后证据链，当前不能作为经营决定。' : '这条观察已超过 8 天，请重新采集后再决定。'}</p>}
+    </> : modelLead ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>{productScope.applies && !productMatched ? '这条变化的业务范围待确认' : '模型发现了一条待核实线索'}</strong><p className="mt-1">{summary}</p><p className="mt-2 text-me-charcoal/65">{productScope.applies && !productMatched ? productScope.evidence_status === 'failed' ? '客户经营范围读取失败，暂不展示行动建议。' : productScope.status === 'unknown' ? '客户经营范围尚未配置或推断，暂不展示行动建议。' : `现有证据还不能确认它是否属于“${productScope.labels.join('、')}”业务，暂不展示行动建议。` : '现有证据未提取到可核对的关键差异，暂不展示行动建议。'}</p></div> : baselineReset ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6"><strong>本次只建立新基线</strong><p>变化前的证据不完整，暂不作为经营决定；下一次采集后再比较价格、档期和余位。</p></div> : <p className="text-sm leading-7">{!complete ? s.interpretation_status === 'failed' ? '页面变化已保存，但这次没有形成有效分析，当前不能据此决策。' : '页面变化正在分析，完成前不建议采取行动。' : !linked ? '模型结论没有形成完整的前后证据链，当前不能作为经营决定。' : '这条观察已超过 8 天，请重新采集后再决定。'}</p>}
     <p className="text-xs text-me-charcoal/60">{historical ? '历史参考' : '当前判断'} · 仅代表这个竞品的这个页面 · 尚未执行任何动作{decisionReady && s.interpretation?.confidence != null ? ` · 模型判断置信度 ${Math.round(s.interpretation.confidence * 100)}%` : ''}</p>
-    <details className="rounded-lg bg-me-ivory p-3"><summary className="cursor-pointer text-sm font-bold">查看变化前后证据</summary><div className="mt-3 grid gap-3 md:grid-cols-2"><EvidenceCard label="之前快照" evidence={before} /><EvidenceCard label="当前快照" evidence={after} /></div></details>
+    <details className="rounded-lg bg-me-ivory p-3"><summary className="cursor-pointer text-sm font-bold">查看变化依据</summary><div className="mt-3 space-y-3"><ChangeHighlights added={highlights.added} removed={highlights.removed} /><div className="grid gap-3 md:grid-cols-2"><EvidenceCard label="之前快照" evidence={before} /><EvidenceCard label="当前快照" evidence={after} /></div></div></details>
   </article>
 }
 
@@ -475,10 +511,10 @@ function Signals({ signals, evidence, runs, targets, batch, asOf, clientName, pr
   const primary = inScope[0]
   const additional = inScope.slice(1)
   return <section className="space-y-4" aria-label="竞品情报">
-    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">当前经营决定</p><h2 className="mt-1 text-xl font-bold">现在需要回应什么</h2><p className="mt-1 text-sm text-me-charcoal/60">每条判断只对应一个竞品页面，不代表整个市场。</p></div>
+    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">当前经营决定</p><h2 className="mt-1 text-xl font-bold">竞品做了什么，{clientName} 这周怎么跟进</h2><p className="mt-1 text-sm text-me-charcoal/60">只展示有证据支持、且与 {clientName} 经营范围相关的变化。</p></div>
     {productScope.applies && productScope.evidence_status === 'failed' && <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">客户产品范围读取失败，本页暂不提供经营行动建议。</p>}
     {productScope.applies && productScope.evidence_status === 'available' && productScope.status === 'unknown' && <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">客户产品范围尚未配置或推断，本页只保留待确认线索，不提供经营行动建议。</p>}
-    {productScope.applies && productScope.evidence_status === 'available' && productScope.status !== 'unknown' && <p className="rounded-lg bg-me-ivory px-3 py-2 text-sm">当前只分析<strong>{productScope.labels.join('、')}</strong>产品 · 依据：{productScope.source}{productScope.basis.length ? `（${productScope.basis.join('、')}）` : ''}{productScope.status === 'inferred' ? ' · 待用主力产品确认' : ''}</p>}
+    {productScope.applies && productScope.evidence_status === 'available' && productScope.status !== 'unknown' && <details className="rounded-lg bg-me-ivory px-3 py-2 text-sm"><summary className="cursor-pointer"><strong>分析范围：{productScope.labels.join('、')}团</strong>{productScope.status === 'inferred' ? ' · 来自客户现有业务资料' : ''}</summary><p className="mt-2 text-xs text-me-charcoal/60">判断依据：{productScope.source}{productScope.basis.length ? `（${productScope.basis.join('、')}）` : ''}</p></details>}
     {inScope.length === 0 && <div className={card}><p className="font-bold">{latest.length ? '本次采集尚未找到匹配产品变化' : emptyTitle}</p><p className="text-sm">{latest.length ? `已保留 ${excluded.length} 条当前业务范围外的变化记录；这不代表市场没有竞争。` : emptyCopy}</p></div>}
     {primary && <SignalCard signal={primary} evidence={evidence} asOf={asOf} clientName={clientName} productScope={productScope} featured />}
     <p className="text-xs text-me-charcoal/60">本次监控覆盖：{completed}/{scope} 个页面证据有效{stale ? ` · ${stale} 个已过期` : ''}{pending ? ` · ${pending} 个处理中` : ''}{failed ? ` · ${failed} 个未完成` : ''}{untouched ? ` · ${untouched} 个尚未运行` : ''}</p>
