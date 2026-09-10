@@ -130,6 +130,11 @@ describe('Website scope, budget and evidence contracts', () => {
     expect(deriveTravelScope([], ['cts china travel service'])).toMatchObject({ status: 'inferred', market_ids: ['china'], source: '主关键词' })
     expect(deriveTravelScope([{ name: 'Signature Journey', usp: 'China specialist' }], ['japan tours'])).toMatchObject({ status: 'configured', market_ids: ['china'] })
     expect(deriveTravelScope([{ name: 'China' }, { name: 'Japan' }, { name: 'Vietnam' }, { name: 'India' }], [])).toMatchObject({ market_ids: ['china', 'vietnam', 'japan', 'india'] })
+    expect(deriveTravelScope([], ['china travel service', 'cts auckland'])).toMatchObject({ market_ids: ['china'], basis: ['china travel service'] })
+    expect(deriveTravelScope([], ['china tours', 'travel agency auckland'])).toMatchObject({ market_ids: ['china'], basis: ['china tours'] })
+    expect(deriveTravelScope([], ['china tours', 'auckland travel agency'])).toMatchObject({ market_ids: ['china'], basis: ['china tours'] })
+    expect(deriveTravelScope([], ['china travel service auckland'])).toMatchObject({ market_ids: ['china'] })
+    expect(deriveTravelScope([], ['china tours', 'japan holidays'])).toMatchObject({ market_ids: ['china', 'japan'] })
   })
   it('matches a China tour, excludes foreign tours and holds mixed destinations for confirmation', () => {
     const scope = deriveTravelScope([], ['china tours from nz'])

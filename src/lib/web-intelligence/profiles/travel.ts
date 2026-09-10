@@ -55,6 +55,8 @@ const TRAVEL_MARKETS = [
 const marketById = new Map<string, (typeof TRAVEL_MARKETS)[number]>(TRAVEL_MARKETS.map(market => [market.id, market]))
 const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const containsAlias = (text: string, alias: string) => new RegExp(`(?:^|[^a-z])${escaped(alias)}(?:$|[^a-z])`, 'i').test(text)
+const PRODUCT_INTENT = /\b(?:tours?|travel|holidays?|vacations?|trips?|journeys?|cruises?|adventures?|packages?|itinerar(?:y|ies)|destinations?|services?)\b/i
+const BUSINESS_LOCATION_QUERY = /\b(?:travel\s+agenc(?:y|ies)|agenc(?:y|ies)|offices?|branches?|stores?|locations?)\b/i
 
 export function travelMarketsIn(text: string): string[] {
   // A customer's origin/sales market is not necessarily a Tour destination.
@@ -65,11 +67,20 @@ export function travelMarketsIn(text: string): string[] {
   return TRAVEL_MARKETS.filter(market => market.aliases.some(alias => containsAlias(destinationText, alias))).map(market => market.id)
 }
 
+function scopeKeywordText(text: string): string {
+  return TRAVEL_MARKETS.flatMap(market => [...market.aliases])
+    .sort((a, b) => b.length - a.length)
+    .reduce((value, alias) => value.replace(new RegExp(`\\b(?:travel\\s+agenc(?:y|ies)|agenc(?:y|ies)|offices?|branches?|stores?|locations?|services?)\\s+(?:in\\s+)?${escaped(alias)}\\b`, 'gi'), ' '), text)
+}
+
 export function deriveTravelScope(products: { name: string; usp?: string }[], keywords: string[]): TravelScope {
   const productBasis = products.filter(product => travelMarketsIn(`${product.name} ${product.usp ?? ''}`).length > 0).map(product => product.name).slice(0, 3)
-  const keywordBasis = keywords.filter(keyword => travelMarketsIn(keyword).length > 0).slice(0, 3)
+  // Location/brand queries such as "cts auckland" identify a branch or sales
+  // market, not a Tour destination. Only product-intent keywords infer scope.
+  const scopedKeywords = keywords.filter(keyword => !BUSINESS_LOCATION_QUERY.test(keyword) && PRODUCT_INTENT.test(keyword) && travelMarketsIn(scopeKeywordText(keyword)).length > 0)
+  const keywordBasis = scopedKeywords.slice(0, 3)
   const productMarkets = travelMarketsIn(products.map(product => `${product.name} ${product.usp ?? ''}`).join('\n'))
-  const keywordMarkets = travelMarketsIn(keywords.join('\n'))
+  const keywordMarkets = travelMarketsIn(scopedKeywords.map(scopeKeywordText).join('\n'))
   const marketIds = productMarkets.length ? productMarkets : keywordMarkets
   return {
     status: productMarkets.length ? 'configured' : keywordMarkets.length ? 'inferred' : 'unknown',
