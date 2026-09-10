@@ -149,7 +149,7 @@ export function buildCompetitionBrief(input: BriefInput): CompetitionBrief {
   const dimensions = [product, search, reputation, ai]
   const readyCount = dimensions.filter(item => item.status === 'ready').length
   const limitedCount = dimensions.filter(item => item.status === 'limited').length
-  const travelProfile = current.some(row => row.projection_version?.startsWith('me-travel'))
+  const travelProfile = current.some(row => row.projection_version?.startsWith('me-travel')) || facts.length > 0
   const subject = travelProfile ? 'Tour' : '产品'
   const hasBusinessFacts = facts.length > 0
   const headline = hasBusinessFacts
