@@ -3,7 +3,7 @@ import type { BusinessContentProfile, BusinessPageRole } from '../content-projec
 const PRICE = /^(\d+)\s+days?\s+from\s+(.+?)(?:\s*)$/i
 const IGNORE_TITLE = /^(?:\*|display map|view tour|early bird sale)$/i
 
-type TourRecord = {
+export type TourRecord = {
   name: string
   durationDays: number
   price: string
@@ -11,6 +11,121 @@ type TourRecord = {
   reviews: string
   includes: string
   route: string
+}
+
+export type TravelScope = {
+  status: 'configured' | 'inferred' | 'unknown'
+  market_ids: string[]
+  labels: string[]
+  basis: string[]
+  source: '主力产品' | '主关键词' | '尚无可靠范围'
+  rule_version: 'travel-market-v1'
+}
+
+export type TravelScopeMatch = {
+  status: 'matched' | 'outside' | 'unknown'
+  matched: string[]
+  outside: string[]
+}
+
+const TRAVEL_MARKETS = [
+  { id: 'china', label: '中国', aliases: ['china', 'chinese', 'beijing', 'shanghai', 'xian', "xi'an", 'chengdu', 'guilin', 'yangtze', 'zhangjiajie', 'lhasa', 'tibet', 'silk road', 'dunhuang', 'kashgar', 'suzhou', 'hangzhou'] },
+  { id: 'mongolia', label: '蒙古', aliases: ['mongolia', 'mongolian', 'naadam', 'gobi', 'ulaanbaatar'] },
+  { id: 'cambodia', label: '柬埔寨', aliases: ['cambodia', 'angkor', 'siem reap', 'phnom penh'] },
+  { id: 'indonesia', label: '印度尼西亚 / 巴厘岛', aliases: ['indonesia', 'bali'] },
+  { id: 'malaysia', label: '马来西亚', aliases: ['malaysia', 'malaysian', 'borneo'] },
+  { id: 'singapore', label: '新加坡', aliases: ['singapore'] },
+  { id: 'nepal', label: '尼泊尔', aliases: ['nepal', 'nepalese', 'kathmandu'] },
+  { id: 'bhutan', label: '不丹', aliases: ['bhutan'] },
+  { id: 'vietnam', label: '越南', aliases: ['vietnam', 'hanoi', 'ho chi minh', 'saigon', 'halong'] },
+  { id: 'laos', label: '老挝', aliases: ['laos', 'luang prabang'] },
+  { id: 'thailand', label: '泰国', aliases: ['thailand', 'bangkok', 'chiang mai'] },
+  { id: 'myanmar', label: '缅甸', aliases: ['myanmar', 'burma', 'bagan', 'yangon'] },
+  { id: 'japan', label: '日本', aliases: ['japan', 'japanese', 'tokyo', 'kyoto', 'osaka'] },
+  { id: 'south-korea', label: '韩国', aliases: ['south korea', 'korea', 'seoul', 'busan'] },
+  { id: 'india', label: '印度', aliases: ['india', 'indian', 'delhi', 'rajasthan', 'agra'] },
+  { id: 'sri-lanka', label: '斯里兰卡', aliases: ['sri lanka', 'ceylon', 'colombo'] },
+  { id: 'taiwan', label: '台湾', aliases: ['taiwan', 'taipei'] },
+  { id: 'hong-kong', label: '香港', aliases: ['hong kong'] },
+  { id: 'central-asia', label: '中亚', aliases: ['uzbekistan', 'kazakhstan', 'kyrgyzstan', 'turkmenistan', 'tajikistan', 'samarkand'] },
+  { id: 'australia', label: '澳大利亚', aliases: ['australia', 'australian', 'sydney', 'melbourne'] },
+  { id: 'new-zealand', label: '新西兰', aliases: ['new zealand', 'auckland', 'queenstown'] },
+] as const
+
+const marketById = new Map<string, (typeof TRAVEL_MARKETS)[number]>(TRAVEL_MARKETS.map(market => [market.id, market]))
+const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const containsAlias = (text: string, alias: string) => new RegExp(`(?:^|[^a-z])${escaped(alias)}(?:$|[^a-z])`, 'i').test(text)
+
+export function travelMarketsIn(text: string): string[] {
+  // A customer's origin/sales market is not necessarily a Tour destination.
+  // Remove every known market alias when it follows an origin phrase.
+  const destinationText = TRAVEL_MARKETS.flatMap(market => [...market.aliases])
+    .sort((a, b) => b.length - a.length)
+    .reduce((value, alias) => value.replace(new RegExp(`\\b(?:depart(?:ing|ures?)?\\s+)?from\\s+${escaped(alias)}\\b`, 'gi'), ' '), text)
+  return TRAVEL_MARKETS.filter(market => market.aliases.some(alias => containsAlias(destinationText, alias))).map(market => market.id)
+}
+
+export function deriveTravelScope(products: { name: string; usp?: string }[], keywords: string[]): TravelScope {
+  const productBasis = products.filter(product => travelMarketsIn(`${product.name} ${product.usp ?? ''}`).length > 0).map(product => product.name).slice(0, 3)
+  const keywordBasis = keywords.filter(keyword => travelMarketsIn(keyword).length > 0).slice(0, 3)
+  const productMarkets = travelMarketsIn(products.map(product => `${product.name} ${product.usp ?? ''}`).join('\n'))
+  const keywordMarkets = travelMarketsIn(keywords.join('\n'))
+  const marketIds = productMarkets.length ? productMarkets : keywordMarkets
+  return {
+    status: productMarkets.length ? 'configured' : keywordMarkets.length ? 'inferred' : 'unknown',
+    market_ids: marketIds,
+    labels: marketIds.map(id => marketById.get(id)?.label ?? id),
+    basis: productMarkets.length ? productBasis : keywordBasis,
+    source: productMarkets.length ? '主力产品' : keywordMarkets.length ? '主关键词' : '尚无可靠范围',
+    rule_version: 'travel-market-v1',
+  }
+}
+
+/** Strictly excludes only a clearly identified market outside the client's scope. */
+export function matchTravelScope(text: string, sourceUrl: string, scope: TravelScope): TravelScopeMatch {
+  if (scope.status === 'unknown' || scope.market_ids.length === 0) return { status: 'unknown', matched: [], outside: [] }
+  const explicit = travelMarketsIn(text)
+  const allowed = new Set<string>(scope.market_ids)
+  const matched = explicit.filter(id => allowed.has(id))
+  const outside = explicit.filter(id => !allowed.has(id))
+  // A multi-destination product spanning both the client's scope and another
+  // market needs human confirmation; it is not a like-for-like comparison.
+  if (matched.length && outside.length) return { status: 'unknown', matched, outside }
+  if (outside.length) return { status: 'outside', matched: [], outside }
+  if (matched.length) return { status: 'matched', matched, outside: [] }
+  // A named Tour with an unrecognised destination must not inherit the market
+  // from its surrounding listing-page URL.
+  if (/(?:^|[|;])\s*tour\s*:/i.test(text)) return { status: 'unknown', matched: [], outside: [] }
+  const fromUrl = travelMarketsIn(sourceUrl).filter(id => allowed.has(id))
+  return fromUrl.length ? { status: 'matched', matched: fromUrl, outside: [] } : { status: 'unknown', matched: [], outside: [] }
+}
+
+const canonicalTourLine = (line: string) => line.trim().toLowerCase().replace(/\s+/g, ' ')
+
+/** Evaluate every changed canonical Tour record; display truncation must not change the gate. */
+export function matchChangedToursScope(before: string, after: string, sourceUrl: string, scope: TravelScope): TravelScopeMatch {
+  if (scope.status === 'unknown') return { status: 'unknown', matched: [], outside: [] }
+  const tourLines = (value: string) => value.split('\n').filter(line => /(?:^|[|;])\s*tour\s*:/i.test(line))
+  const beforeLines = tourLines(before)
+  const afterLines = tourLines(after)
+  const beforeSet = new Set(beforeLines.map(canonicalTourLine))
+  const afterSet = new Set(afterLines.map(canonicalTourLine))
+  const changed = [
+    ...beforeLines.filter(line => !afterSet.has(canonicalTourLine(line))),
+    ...afterLines.filter(line => !beforeSet.has(canonicalTourLine(line))),
+  ]
+  if (!changed.length) return { status: 'unknown', matched: [], outside: [] }
+  const matches = changed.map(line => matchTravelScope(line, sourceUrl, scope))
+  const statuses = new Set(matches.map(match => match.status))
+  return {
+    status: statuses.size === 1 ? matches[0].status : 'unknown',
+    matched: [...new Set(matches.flatMap(match => match.matched))],
+    outside: [...new Set(matches.flatMap(match => match.outside))],
+  }
+}
+
+export function travelMarketLabels(ids: string[]): string[] {
+  return ids.map(id => marketById.get(id)?.label ?? id)
 }
 
 const clean = (value: string) => value.trim().replace(/^[*#-]+\s*/, '').replace(/\s+/g, ' ')

@@ -6,6 +6,8 @@ const input = {
   snapshots: { failed: false, data: [{ domain: 'wendywutours.co.nz', url: 'https://wendywutours.co.nz/china/tours/', page_role: 'product_listing', projection_version: 'me-travel-v2', captured_at: '2026-09-09T00:00:00Z', projection_content: 'Tour: Wonders of China | Duration: 17 days | Price: NZ$9,030 | Promotion: Early Bird | Reviews: 428 | Route: Shanghai - Xian - Chengdu' }] },
   baselines: { failed: false, data: [{ domain: 'ctstours.co.nz', seo_score: 26, last_collected_at: '2026-09-01', is_client: true }, { domain: 'wendywutours.co.nz', seo_score: 22, last_collected_at: '2026-09-01', is_client: false }] },
   reputation: { failed: false, data: [] }, ai: { failed: false, data: null },
+  productScope: { status: 'inferred' as const, market_ids: ['china'], labels: ['中国'], basis: ['cts china'], source: '主关键词' as const, rule_version: 'travel-market-v1' as const },
+  hasConfiguredProducts: false,
   now: new Date('2026-09-10T00:00:00Z'),
 }
 
@@ -28,6 +30,41 @@ describe('buildCompetitionBrief', () => {
     })
     expect(brief.subject).toBe('Tour')
     expect(brief.headline).toContain('竞品Tour盘面')
+  })
+
+  it('shows only products inside the client travel market and reports excluded products', () => {
+    const brief = buildCompetitionBrief({
+      ...input, configuredPageCount: 1,
+      snapshots: { failed: false, data: [{
+        ...input.snapshots.data[0], projection_content: [
+          'Tour: Angkor to Bali | Duration: 24 days | Price: $18,680pp | Route: Siem Reap - Bali',
+          'Tour: China & Mongolia Heartlands | Duration: 21 days | Price: $14,480pp | Route: Beijing - Gobi',
+          'Tour: Wonders of China | Duration: 17 days | Price: $9,030pp | Route: Shanghai - Xian',
+        ].join('\n'),
+      }] },
+    })
+    const product = brief.dimensions.find(item => item.key === 'product')
+    expect(product?.items).toEqual(['wendywutours.co.nz · Wonders of China · 17 days · $9,030pp'])
+    expect(product?.detail).toContain('1 个范围外、1 个目的地待确认')
+    expect(product?.coverage).toContain('匹配 1、范围外 1、待确认 1')
+  })
+
+  it('does not expose competitor products when the client scope is unknown', () => {
+    const brief = buildCompetitionBrief({
+      ...input,
+      productScope: { status: 'unknown', market_ids: [], labels: [], basis: [], source: '尚无可靠范围', rule_version: 'travel-market-v1' },
+    })
+    const product = brief.dimensions.find(item => item.key === 'product')
+    expect(product?.items).toEqual([])
+    expect(product?.detail).toContain('已暂停展示竞品代表产品')
+  })
+
+  it('does not expose matched products when a product-scope source failed', () => {
+    const brief = buildCompetitionBrief({ ...input, productScopeFailed: true })
+    const product = brief.dimensions.find(item => item.key === 'product')
+    expect(product?.items).toEqual([])
+    expect(product?.detail).toContain('已暂停展示竞品代表产品')
+    expect(brief.product_scope.evidence_status).toBe('failed')
   })
 
   it('does not call single-sided dimensions directly comparable', () => {

@@ -7,7 +7,7 @@ vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { rpc: mocks.rpc } }))
 vi.mock('../targets', () => ({ assertEligibleTarget: mocks.eligible, validatePublicTarget: mocks.dns }))
 vi.mock('../store', () => ({ claim: mocks.claim, readRun: mocks.read, updateRun: mocks.update, reserve: mocks.reserve, settle: mocks.settle, loadInterpretationInput: mocks.input, updateSignal: mocks.signal }))
 vi.mock('../interpret', () => ({ interpretChange: mocks.interpret, validateInterpretation: mocks.validate, interpretationPrompt: vi.fn(), MODEL_SONNET: 'test', PROMPT_VERSION: 'v1' }))
-import { authorize, startCapture, collectCapture, understand, normaliseContent } from '../runner'
+import { authorize, startCapture, collectCapture, guardInterpretationByProductScope, understand, normaliseContent } from '../runner'
 import type { Run, CaptureRequest } from '../contracts'
 const id = '00000000-0000-4000-8000-000000000001'
 const run = { id, client_id: id, domain: 'example.com', url: 'https://example.com/', actor_build: '1.2.3', capture_limit_usd: 0.1, provider_run_id: null } as Run
@@ -47,6 +47,26 @@ describe('durable provider boundaries', () => {
     mocks.claim.mockRejectedValue(new Error('execution_disabled'))
     await understand(run); expect(mocks.interpret).not.toHaveBeenCalled()
     expect(mocks.update).toHaveBeenCalledWith(id, id, expect.objectContaining({ interpretation_cost_usd: 0 }))
+  })
+  it('fails closed and preserves unknown cost when the configured target cannot be read', async () => {
+    mocks.input.mockResolvedValue({ signal: { id: 's', interpretation_status: 'pending' }, evidence: [], context: '' })
+    mocks.eligible.mockRejectedValue(new Error('target_read_failed'))
+    await understand(run)
+    expect(mocks.interpret).not.toHaveBeenCalled()
+    expect(mocks.claim).not.toHaveBeenCalled()
+    expect(mocks.signal).not.toHaveBeenCalled()
+    expect(mocks.update).toHaveBeenCalledWith(id, id, { status: 'reconciliation', error_code: 'target_unavailable_interpretation_state_unknown' })
+    expect(mocks.update).not.toHaveBeenCalledWith(id, id, expect.objectContaining({ interpretation_cost_usd: 0 }))
+  })
+  it('does not trust a stale pre-claim run when target lookup fails on retry', async () => {
+    const staleRun = { ...run, interpretation_claimed: false, interpretation_cost_usd: null }
+    mocks.input.mockResolvedValue({ signal: { id: 's', interpretation_status: 'pending' }, evidence: [], context: '' })
+    mocks.eligible.mockRejectedValue(new Error('target_read_failed'))
+    await understand(staleRun)
+    expect(mocks.interpret).not.toHaveBeenCalled()
+    expect(mocks.signal).not.toHaveBeenCalled()
+    expect(mocks.update).toHaveBeenCalledWith(id, id, { status: 'reconciliation', error_code: 'target_unavailable_interpretation_state_unknown' })
+    expect(mocks.update).not.toHaveBeenCalledWith(id, id, expect.objectContaining({ interpretation_cost_usd: 0 }))
   })
   it('does not retry a transport-ambiguous paid start', async () => {
     mocks.start.mockRejectedValue(new Error('timeout'))
@@ -105,13 +125,34 @@ describe('durable provider boundaries', () => {
     expect(mocks.interpret).not.toHaveBeenCalled(); expect(mocks.update).toHaveBeenCalledWith(id, id, { interpretation_cost_usd: 0 })
   })
   it('passes travel comparison rules to the model only for a travel target', async () => {
-    const pendingSignal = { id: 's', interpretation_status: 'pending' }
-    mocks.input.mockResolvedValue({ signal: pendingSignal, evidence: [], context: '' })
+    const pendingSignal = { id: 's', interpretation_status: 'pending', before_evidence_id: 'before', after_evidence_id: 'after' }
+    const productScope = { status: 'inferred', market_ids: ['china'], labels: ['中国'], basis: ['china tours'], source: '主关键词', rule_version: 'travel-market-v1' }
+    const evidence = [
+      { id: 'before', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: $1' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Wonders of China | Price: $2' },
+    ]
+    mocks.input.mockResolvedValue({ signal: pendingSignal, evidence, context: '', productScope, productScopeAvailable: true })
     mocks.eligible.mockResolvedValue({ tags: ['industry:travel'] })
     mocks.interpret.mockResolvedValue({ text: '{}', cost_usd: 0.01, stop_reason: 'end_turn' })
     mocks.validate.mockReturnValue({ classification: 'ignore', recommended_action: '无需采取行动。' })
     await understand(run)
-    expect(mocks.interpret).toHaveBeenCalledWith(pendingSignal, [], '', expect.stringContaining('exact Tour name'))
+    expect(mocks.interpret).toHaveBeenCalledWith(pendingSignal, evidence, '', expect.stringContaining('exact Tour name'), productScope)
+  })
+  it('overrides a model action when the changed Tour is outside the client product scope', () => {
+    const scope = { status: 'inferred' as const, market_ids: ['china'], labels: ['中国'], basis: ['china tours'], source: '主关键词' as const, rule_version: 'travel-market-v1' as const }
+    const s = { before_evidence_id: 'before', after_evidence_id: 'after' }
+    const ev = [
+      { id: 'before', source_url: run.url, excerpt: 'Tour: Japan Explorer | Price: $1' },
+      { id: 'after', source_url: run.url, excerpt: 'Tour: Japan Explorer | Price: $2' },
+    ]
+    const guarded = guardInterpretationByProductScope({ classification: 'threat' as const, recommended_action: '降价。' }, s as never, ev as never, scope, true)
+    expect(guarded).toEqual({ classification: 'ignore', recommended_action: '无需采取行动。' })
+  })
+  it('overrides a model action when product-scope evidence could not be read', () => {
+    const scope = { status: 'inferred' as const, market_ids: ['china'], labels: ['中国'], basis: ['china tours'], source: '主关键词' as const, rule_version: 'travel-market-v1' as const }
+    const guarded = guardInterpretationByProductScope({ classification: 'opportunity' as const, recommended_action: '投放。' }, { before_evidence_id: 'before', after_evidence_id: 'after' } as never, [] as never, scope, false)
+    expect(guarded.classification).toBe('ignore')
+    expect(guarded.recommended_action).toBe('无需采取行动。')
   })
   it('an uncertain interpretation attempt does not create another paid call', async () => {
     mocks.input.mockResolvedValue({ signal: { id: 's', interpretation_status: 'pending' }, evidence: [], context: '' }); mocks.claim.mockResolvedValue(false)

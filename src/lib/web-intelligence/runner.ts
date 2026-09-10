@@ -7,7 +7,7 @@ import { assertEligibleTarget, validatePublicTarget } from './targets'
 import { claim, readRun, updateRun, reserve, settle, loadInterpretationInput, updateSignal } from './store'
 import { interpretChange, validateInterpretation, interpretationPrompt, MODEL_SONNET, PROMPT_VERSION } from './interpret'
 import { BUSINESS_PROJECTION_VERSION, classifyBusinessPage, projectBusinessContent } from './content-projection'
-import { profileForTags } from './profiles/travel'
+import { matchChangedToursScope, profileForTags } from './profiles/travel'
 
 export async function authorize(req: CaptureRequest): Promise<Run> {
   if (!allowedClient(req.client_id)) throw new Error('client_not_in_rollout')
@@ -93,9 +93,15 @@ export async function understand(run: Run): Promise<void> {
   try {
     const target = await assertEligibleTarget(run.client_id, run.domain, run.url)
     industryGuidance = profileForTags(target.tags)?.interpretationGuidance ?? ''
-  } catch { /* Evidence remains readable if a target is archived after capture. */ }
+  } catch {
+    // The Inngest step may replay a cached pre-claim Run. Preserve unknown cost
+    // rather than trusting its interpretation_claimed value and releasing budget.
+    await updateRun(run.id, run.client_id, { status: 'reconciliation', error_code: 'target_unavailable_interpretation_state_unknown' })
+    return
+  }
+  const productScope = industryGuidance ? input.productScope : undefined
   // Validate bounded input before claiming a paid attempt.
-  interpretationPrompt(input.signal, input.evidence, input.context, industryGuidance)
+  interpretationPrompt(input.signal, input.evidence, input.context, industryGuidance, productScope)
   const permission = await claimPaid(run, 'interpretation_claimed')
   if (permission === 'disabled') return
   if (permission === 'unknown') {
@@ -108,18 +114,37 @@ async function invokeInterpretation(run: Run, input: Awaited<ReturnType<typeof l
   const signal = input.signal!
   let failureCode = 'interpretation_failed'
   try {
-    const result = await interpretChange(signal, input.evidence, input.context, industryGuidance)
+    const result = await interpretChange(signal, input.evidence, input.context, industryGuidance, industryGuidance ? input.productScope : undefined)
     await updateRun(run.id, run.client_id, { interpretation_cost_usd: knownCost(result.cost_usd) })
     failureCode = 'interpretation_truncated'
     if (result.stop_reason === 'max_tokens') throw new Error(failureCode)
     failureCode = 'interpretation_invalid_result'
-    const interpretation = validateInterpretation(result.text, signal)
+    const modelInterpretation = validateInterpretation(result.text, signal)
+    const interpretation = industryGuidance
+      ? guardInterpretationByProductScope(modelInterpretation, signal, input.evidence, input.productScope, input.productScopeAvailable)
+      : modelInterpretation
     failureCode = 'interpretation_persist_failed'
     await updateSignal(signal.id, run.client_id, { interpretation_status: 'complete', classification: interpretation.classification, interpretation: { ...interpretation, input_tokens: result.input_tokens, output_tokens: result.output_tokens }, recommended_action: interpretation.recommended_action, model: MODEL_SONNET, prompt_version: PROMPT_VERSION })
   } catch {
     await updateSignal(signal.id, run.client_id, { interpretation_status: 'failed' })
     await updateRun(run.id, run.client_id, { status: 'failed', error_code: failureCode })
   }
+}
+
+export function guardInterpretationByProductScope<T extends { classification: 'threat' | 'opportunity' | 'ignore'; recommended_action: string }>(
+  interpretation: T,
+  signal: NonNullable<Awaited<ReturnType<typeof loadInterpretationInput>>['signal']>,
+  evidence: Awaited<ReturnType<typeof loadInterpretationInput>>['evidence'],
+  scope: Awaited<ReturnType<typeof loadInterpretationInput>>['productScope'],
+  scopeAvailable: boolean,
+): T {
+  const before = evidence.find(item => item.id === signal.before_evidence_id)
+  const after = evidence.find(item => item.id === signal.after_evidence_id)
+  const match = scopeAvailable && before && after
+    ? matchChangedToursScope(before.excerpt, after.excerpt, after.source_url, scope)
+    : { status: 'unknown' as const }
+  if (match.status === 'matched') return interpretation
+  return { ...interpretation, classification: 'ignore', recommended_action: '无需采取行动。' }
 }
 async function claimPaid(run: Run, stage: 'capture_claimed' | 'interpretation_claimed'): Promise<'claimed' | 'unknown' | 'disabled'> {
   try {
