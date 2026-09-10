@@ -58,18 +58,6 @@
     window.fbq('init', META_PIXEL_ID);
     window.fbq('track', 'PageView');
     window.__meMetaPixelConfigured = true;
-
-    // This fallback is also consent-gated. It never exists for denied visitors.
-    if (document.body && !document.getElementById('me-meta-pixel-fallback')) {
-      var img = document.createElement('img');
-      img.id = 'me-meta-pixel-fallback';
-      img.height = 1;
-      img.width = 1;
-      img.alt = '';
-      img.style.display = 'none';
-      img.src = 'https://www.facebook.com/tr?id=' + META_PIXEL_ID + '&ev=PageView&noscript=1';
-      document.body.appendChild(img);
-    }
   }
 
   function revokePixel() {
