@@ -3,6 +3,7 @@ import type { CaptureRequest, Run, Signal, Evidence, Settings } from './contract
 import { getClientKeywords } from '@/lib/keywords/resolver'
 import { normalizeProducts } from '@/lib/brief/products'
 import { deriveTravelScope, type TravelScope } from './profiles/travel'
+import { resolveCurrentOperatingGoal, type OperatingGoalCandidate } from './operating-brief'
 
 export async function readRun(id: string, clientId: string): Promise<Run> {
   const r = await db.from('web_intelligence_runs').select('*').eq('id', id).eq('client_id', clientId).single()
@@ -34,18 +35,26 @@ export async function loadInterpretationInput(run: Run): Promise<{ signal: Signa
   if (signal.error) throw new Error('signal_read_failed')
   if (!signal.data) return { signal: null, evidence: [], context: '', productScope: unknownScope, productScopeAvailable: false }
   const s = signal.data as Signal
-  const [evidence, settings, products, keywords] = await Promise.all([
+  const [evidence, settings, products, keywords, goals] = await Promise.all([
     db.from('market_evidence').select('*').eq('client_id', run.client_id).in('id', [s.before_evidence_id, s.after_evidence_id]),
     db.from('web_intelligence_settings').select('*').eq('client_id', run.client_id).single(),
     db.from('master_briefs').select('products').eq('client_id', run.client_id)
       .or('status.eq.active,is_active.eq.true').order('version', { ascending: false }).limit(1).maybeSingle(),
     getClientKeywords(run.client_id, 100, { strict: true }).then(data => ({ data, failed: false })).catch(() => ({ data: { keywords: [], sources: {} }, failed: true })),
+    db.from('goals').select('title,status,primary_metric_label,target_value,period_start,period_end').eq('client_id', run.client_id).order('updated_at', { ascending: false }).limit(20),
   ])
   if (evidence.error || settings.error || evidence.data?.length !== 2) throw new Error('evidence_read_failed')
   const productScope = products.error
     ? unknownScope
     : deriveTravelScope(normalizeProducts(products.data?.products), keywords.data.keywords)
-  return { signal: s, evidence: evidence.data as Evidence[], context: (settings.data as Settings).context, productScope, productScopeAvailable: !products.error && !keywords.failed }
+  const currentGoal = goals.error ? null : resolveCurrentOperatingGoal((goals.data ?? []) as OperatingGoalCandidate[], new Date())
+  const context = [
+    (settings.data as Settings).context,
+    currentGoal
+      ? `当前有效经营目标：${currentGoal.title}；指标：${currentGoal.metric}；目标周期：${currentGoal.period_start} 至 ${currentGoal.period_end}。`
+      : '当前没有有效经营目标；不要把历史目标当作当前经营压力。',
+  ].filter(Boolean).join('\n')
+  return { signal: s, evidence: evidence.data as Evidence[], context, productScope, productScopeAvailable: !products.error && !keywords.failed }
 }
 export async function updateSignal(id: string, clientId: string, patch: Record<string, unknown>): Promise<void> {
   const result = await db.from('market_signals').update(patch).eq('id', id).eq('client_id', clientId).select('id').single()
