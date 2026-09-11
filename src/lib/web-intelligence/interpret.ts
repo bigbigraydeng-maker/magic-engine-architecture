@@ -1,4 +1,4 @@
-import { callClaudeChat, MODEL_SONNET, parseJsonResponse } from '@/lib/anthropic/client'
+import { callClaudeChat, MODEL_HAIKU, parseJsonResponse } from '@/lib/anthropic/client'
 import { interpretationSchema, type Evidence, type Signal } from './contracts'
 import type { TravelScope } from './profiles/travel'
 
@@ -96,7 +96,7 @@ function businessWeight(line: string): number {
   return /(?:[$€£]\s?\d|\b(?:price|from|save|offer|available|availability|depart|days?|reviews?|new)\b)/i.test(line) ? 2 : 1
 }
 export async function interpretChange(signal: Signal, evidence: Evidence[], context: string, industryGuidance = '', productScope?: TravelScope) {
-  return callClaudeChat({ systemPrompt: SYSTEM, messages: [{ role: 'user', content: interpretationPrompt(signal, evidence, context, industryGuidance, productScope) }], maxOutputTokens: 1000, singleAttempt: true })
+  return callClaudeChat({ model: MODEL_HAIKU, systemPrompt: SYSTEM, messages: [{ role: 'user', content: interpretationPrompt(signal, evidence, context, industryGuidance, productScope) }], maxOutputTokens: 1000, singleAttempt: true })
 }
 export function validateInterpretation(text: string, signal: Signal) {
   const value = interpretationSchema.parse(parseJsonResponse<unknown>(text))
@@ -104,4 +104,4 @@ export function validateInterpretation(text: string, signal: Signal) {
   if (ids.size !== 2 || !ids.has(signal.before_evidence_id) || !ids.has(signal.after_evidence_id)) throw new Error('invented_evidence_reference')
   return value
 }
-export { MODEL_SONNET }
+export const INTERPRETATION_MODEL = MODEL_HAIKU
