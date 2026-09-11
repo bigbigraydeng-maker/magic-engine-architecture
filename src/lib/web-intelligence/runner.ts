@@ -26,6 +26,14 @@ export async function startCapture(run: Run): Promise<string | null> {
     await updateRun(run.id, run.client_id, { status: 'reconciliation', error_code: 'capture_start_unknown' })
     return null
   }
+  // The target may be edited after the pre-claim check. Once budget is claimed,
+  // re-read eligibility immediately before the paid provider call; an invalid
+  // post-claim state is reconciled rather than silently starting the old URL.
+  try { await assertEligibleTarget(run.client_id, run.domain, run.url) }
+  catch {
+    await updateRun(run.id, run.client_id, { status: 'reconciliation', error_code: 'target_changed_before_capture' })
+    return null
+  }
   try {
     const started = await startWebsiteCapture({ url: run.url, build: run.actor_build, maxChargeUsd: run.capture_limit_usd })
     if (!started.id) throw new Error('provider_receipt_missing')
