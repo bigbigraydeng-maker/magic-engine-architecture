@@ -14,6 +14,9 @@ export function approvedUrl(raw: string, domain: string): string {
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || canonicalDomain(url.hostname) !== canonicalDomain(domain)) throw new Error('url_outside_approved_scope')
   return url.href
 }
+function isTourDetailPath(raw: string): boolean {
+  try { return /(?:^|\/)tours?\/[^/]+(?:\/|$)|(?:^|\/)escorted-tours\/[^/]+|(?:^|\/)private-tours\/[^/]+/i.test(new URL(raw).pathname) } catch { return false }
+}
 export async function validatePublicTarget(url: string): Promise<void> {
   await resolveValidatedAddress(new URL(url).hostname)
 }
@@ -65,6 +68,9 @@ export async function assertEligibleTarget(clientId: string, domain: string, url
   const canonical = canonicalDomain(domain)
   const target = (await loadCompetitors(clientId)).find(c => c.domain === canonical)
   if (!target || target.status === 'archive') throw new Error('target_not_eligible')
-  if (!target.urls.includes(approvedUrl(url, canonical))) throw new Error('url_not_configured')
+  const safeUrl = approvedUrl(url, canonical)
+  const configured = target.urls.includes(safeUrl)
+  const discoveredTour = target.tags.includes('industry:travel') && isTourDetailPath(safeUrl)
+  if (!configured && !discoveredTour) throw new Error('url_not_configured')
   return target
 }

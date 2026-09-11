@@ -14,7 +14,10 @@ export type TourRecord = {
   departureWindow?: string
   positioning?: string
   audience?: string
+  itinerary?: string[]
 }
+
+export type DiscoveredTourLink = { name: string; url: string }
 
 export type TravelScope = {
   status: 'configured' | 'inferred' | 'unknown'
@@ -125,6 +128,8 @@ function tourRecordLine(record: TourRecord): string {
     `Reviews: ${record.reviews}`,
     `Includes: ${record.includes}`,
     `Route: ${record.route}`,
+    ...(record.departureWindow ? [`Departure: ${record.departureWindow}`] : []),
+    ...(record.itinerary?.length ? [`Itinerary: ${record.itinerary.join(' || ')}`] : []),
   ].join(' | ')
 }
 
@@ -168,6 +173,10 @@ export function travelMarketLabels(ids: string[]): string[] {
 
 const clean = (value: string) => value.trim().replace(/^[*#-]+\s*/, '').replace(/\s+/g, ' ')
 
+function itineraryHeadings(lines: string[]): string[] {
+  return lines.map(clean).filter(line => /^(?:day\s*\d+|d\d+)\b\s*[:–-]?/i.test(line)).slice(0, 60)
+}
+
 function precedingTitle(lines: string[], priceIndex: number): string | null {
   for (let index = priceIndex - 1; index >= Math.max(0, priceIndex - 4); index--) {
     const candidate = clean(lines[index] ?? '')
@@ -201,13 +210,34 @@ export function extractTourRecords(raw: string): TourRecord[] {
       reviews: followingValue(lines, index, /^\d+ reviews?$/i),
       includes: followingValue(lines, index, /^includes /i),
       route: routeValue(lines, index),
+      itinerary: itineraryHeadings(lines),
     }]
   })
   return records.sort((a, b) => a.name.localeCompare(b.name, 'en-NZ'))
 }
 
+/** Discover only same-origin Tour detail links from a captured listing page. */
+export function extractTourLinks(raw: string, sourceUrl: string): DiscoveredTourLink[] {
+  let base: URL
+  try { base = new URL(sourceUrl) } catch { return [] }
+  const links: DiscoveredTourLink[] = []
+  const markdown = /\[([^\]]{2,180})\]\((https?:\/\/[^)\s]+|\/[^)\s]+)\)/gi
+  for (const match of raw.matchAll(markdown)) {
+    const name = clean(match[1])
+    if (/^(?:view|read|learn|see)\s+(?:tour|more|details?)$/i.test(name)) continue
+    let url: URL
+    try { url = new URL(match[2], base) } catch { continue }
+    if (url.protocol !== 'https:' || url.hostname !== base.hostname) continue
+    if (!/(?:^|\/)tours?\/[^/]+(?:\/|$)|(?:^|\/)escorted-tours\/[^/]+|(?:^|\/)private-tours\/[^/]+/i.test(url.pathname)) continue
+    url.hash = ''
+    const canonical = url.href
+    if (!links.some(item => item.url === canonical)) links.push({ name, url: canonical })
+  }
+  return links.slice(0, 100)
+}
+
 export function projectTravelContent(raw: string, role: BusinessPageRole): string | null {
-  if (role !== 'product_listing' && role !== 'offers') return null
+  if (role !== 'product_listing' && role !== 'product_detail' && role !== 'offers') return null
   const records = extractTourRecords(raw)
   if (records.length === 0) return null
   return records.map(tourRecordLine).join('\n')

@@ -7,7 +7,7 @@ import { canonicalDomain, approvedUrl } from '../targets'
 import { allowedClient, requestSchema, settingsSchema, metadataSchema, periodKey, type Signal, type Evidence } from '../contracts'
 import { interpretationPrompt, validateInterpretation, changedWindow } from '../interpret'
 import { classifyBusinessPage, projectBusinessContent } from '../content-projection'
-import { deriveTravelScope, extractTourRecords, matchChangedToursScope, matchTravelScope, projectTravelContent, TRAVEL_BUSINESS_PROFILE, TRAVEL_INTERPRETATION_GUIDANCE, profileForTags, travelMarketsIn } from '../profiles/travel'
+import { deriveTravelScope, extractTourLinks, extractTourRecords, matchChangedToursScope, matchTravelScope, projectTravelContent, TRAVEL_BUSINESS_PROFILE, TRAVEL_INTERPRETATION_GUIDANCE, profileForTags, travelMarketsIn } from '../profiles/travel'
 const a = '00000000-0000-4000-8000-000000000001'
 const b = '00000000-0000-4000-8000-000000000002'
 const c = '00000000-0000-4000-8000-000000000003'
@@ -119,6 +119,17 @@ describe('Website scope, budget and evidence contracts', () => {
     const after = 'Display Map\nTour A\n10 days from $5,500pp\nIncludes flights\nA - B\nView Tour'
     expect(projectTravelContent(before, 'product_listing')).toContain('Tour: Tour A | Duration: 10 days | Price: $5,000pp')
     expect(projectTravelContent(after, 'product_listing')).toContain('Tour: Tour A | Duration: 10 days | Price: $5,500pp')
+  })
+  it('projects itinerary headings from a Tour detail page', () => {
+    const detail = `Classic China\n22 days from $10,580pp\nDay 1: Arrive in Beijing\nDay 2: Great Wall and city tour\nDay 3: Beijing to Xian\nIncludes international airfares`
+    expect(projectTravelContent(detail, 'product_detail')).toContain('Itinerary: Day 1: Arrive in Beijing || Day 2: Great Wall and city tour || Day 3: Beijing to Xian')
+  })
+  it('discovers only same-origin Tour detail links', () => {
+    const raw = '[Classic China](https://wendywutours.co.nz/tours/classic-china)\n[Japan](https://wendywutours.co.nz/tours/japan)\n[Blog](https://other.example/tours/blog)\n[Contact](/contact)'
+    expect(extractTourLinks(raw, 'https://wendywutours.co.nz/china/tours/')).toEqual([
+      { name: 'Classic China', url: 'https://wendywutours.co.nz/tours/classic-china' },
+      { name: 'Japan', url: 'https://wendywutours.co.nz/tours/japan' },
+    ])
   })
   it('places Tour comparison rules in the industry guidance, not the shared prompt', () => {
     const prompt = interpretationPrompt(signal, evidence, '', TRAVEL_INTERPRETATION_GUIDANCE)

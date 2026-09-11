@@ -5,6 +5,7 @@ import { allowedClient, requestSchema } from '@/lib/web-intelligence/contracts'
 import { readRun } from '@/lib/web-intelligence/store'
 import { loadCompetitors } from '@/lib/web-intelligence/targets'
 import { authorize, startCapture, collectCapture, stopUnfinishedCapture, understand, settle } from '@/lib/web-intelligence/runner'
+import { discoverTourDetailRequests } from '@/lib/web-intelligence/detail-discovery'
 
 export const WEB_CAPTURE_EVENT = 'web_intelligence.website.capture.requested'
 export const webIntelligenceCapture = inngest.createFunction({
@@ -20,6 +21,10 @@ export const webIntelligenceCapture = inngest.createFunction({
     const state = await step.run(`collect-${i}`, () => collectCapture(run, providerId))
     if (state === 'failed') return { request_id: run.id, status: (await step.run('capture-status', () => readRun(run.id, run.client_id))).status, no_execute: true }
     if (state === 'captured') {
+      const detailRequests = await step.run('discover-tour-details', () => discoverTourDetailRequests(run))
+      if (detailRequests.length) {
+        await step.sendEvent('queue-tour-details', detailRequests.map(request => ({ id: request.request_id, name: WEB_CAPTURE_EVENT, data: request })))
+      }
       await step.run('understand-and-recommend', () => understand(run))
       const receipt = await step.run('settle-known-costs', () => settle(run.id, run.client_id))
       return { request_id: run.id, status: receipt.status, no_execute: true }
