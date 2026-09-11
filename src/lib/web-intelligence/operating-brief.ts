@@ -44,7 +44,7 @@ export type OperatingBrief = {
   as_of: string
   client_id: string
   client_name: string
-  goal: { title: string; status: string; metric: string; target: number | null } | null
+  goal: { title: string; status: string; metric: string; target: number | null; period_start: string; period_end: string } | null
   product_scope: TravelScope
   matches: ProductMatch[]
   decision: OperatingDecision
@@ -59,6 +59,24 @@ export type OperatingBriefInput = {
   competitor_products: Array<{ domain: string; source_url: string; observed_at: string | null; records: TourRecord[] }>
   evidence: OperatingEvidence[]
   now?: Date
+}
+
+export type OperatingGoalCandidate = {
+  title: string
+  status: string
+  primary_metric_label: string
+  target_value: number | null
+  period_start: string
+  period_end: string
+}
+
+export function resolveCurrentOperatingGoal(goals: OperatingGoalCandidate[], now: Date): OperatingBrief['goal'] {
+  const today = now.toISOString().slice(0, 10)
+  const current = goals.find(goal => goal.status === 'active' && goal.period_start <= today && goal.period_end >= today)
+  return current ? {
+    title: current.title, status: current.status, metric: current.primary_metric_label,
+    target: current.target_value, period_start: current.period_start, period_end: current.period_end,
+  } : null
 }
 
 export function normalizeOperatingProducts(raw: unknown): OperatingBriefInput['client_products'] {
@@ -177,7 +195,7 @@ export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief 
     ? '暂不调价、改促销或改变产品。先补齐 CTS 主力 Tour 的已验证产品事实，再对 Wendy Wu 的同类路线做逐项对位。'
     : '将已匹配的 Tour 交由负责人复核日期、价格口径、包含项目和销售周期；在复核前不执行任何外部动作。'
   const context = input.goal
-    ? [`当前目标：${input.goal.title}（${input.goal.status}）`, `目标指标：${input.goal.metric}${input.goal.target == null ? '' : `，目标 ${input.goal.target}`}`]
+    ? [`当前目标：${input.goal.title}（${input.goal.status}）`, `目标指标：${input.goal.metric}${input.goal.target == null ? '' : `，目标 ${input.goal.target}`}`, `目标周期：${input.goal.period_start} 至 ${input.goal.period_end}`]
     : ['当前没有可确认的有效经营目标。']
   if (input.product_scope.labels.length) context.push(`客户产品范围：${input.product_scope.labels.join('、')}（来源：${input.product_scope.source}）`)
   return {

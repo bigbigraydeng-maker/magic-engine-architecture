@@ -37,6 +37,13 @@ describe('durable provider boundaries', () => {
     expect(await startCapture(run)).toBeNull(); expect(mocks.start).not.toHaveBeenCalled()
     expect(mocks.update).toHaveBeenCalledWith(id, id, expect.objectContaining({ status: 'reconciliation' }))
   })
+  it('rechecks the configured target after claiming budget', async () => {
+    mocks.eligible.mockResolvedValueOnce({ tags: [] }).mockRejectedValueOnce(new Error('url_not_configured'))
+    expect(await startCapture(run)).toBeNull()
+    expect(mocks.claim).toHaveBeenCalledWith(id, id, 'capture_claimed')
+    expect(mocks.start).not.toHaveBeenCalled()
+    expect(mocks.update).toHaveBeenCalledWith(id, id, { status: 'reconciliation', error_code: 'target_changed_before_capture' })
+  })
   it('does not start a paid request after settings were disabled', async () => {
     mocks.claim.mockRejectedValue(new Error('execution_disabled'))
     expect(await startCapture(run)).toBeNull(); expect(mocks.start).not.toHaveBeenCalled()
