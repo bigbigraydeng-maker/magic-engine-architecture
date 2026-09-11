@@ -39,6 +39,17 @@
 - [x] Implementation merged (#1500); production migration and CTS-only pilot explicitly approved and enabled. Existing Industry Baselines UI → Inngest → Apify → immutable snapshot/evidence → actual cost settlement verified on Wendy Wu homepage. Compatibility fixes #1506/#1507 deployed. [Implementation / rollout receipt](./specs/2026-09-09-web-intelligence-v01.md).
 - [ ] Verify an actual later website change through LLM classification/recommendation; do not manufacture live evidence. Keep the three PM-accepted P2 findings deferred (UI draft refresh, queued-run reconciliation recheck, content-limit failure settlement). Hiring/People/Partnership/Reviews/Technology remain future extensions. No automatic action.
 
+## ME Web Intelligence 多管道外部情报 [ME-WI.0.2]
+
+> **新需求登记（2026-09-11）**：WI 是面向高级客户的外部市场情报与竞争预警能力，不能收窄成竞品官网抓取。范围新增主流新闻媒体、行业新闻、行业杂志、招聘信息，并逐步接入 SERP、公开广告库、AI 可见度和口碑。完整需求与分期见 [多管道外部情报需求 v1](./specs/2026-09-11-me-wi-multichannel-intelligence-v1.md)。
+
+- [ ] **ME-WI.0.2-A**：统一 source / observation / evidence / event 契约、来源等级、新鲜度、去重、运行状态与结果呈现。
+- [ ] **ME-WI.0.2-B**：主流新闻、行业新闻、行业杂志采集与事件抽取。
+- [ ] **ME-WI.0.2-C**：公开招聘信息采集，识别组织与战略领先信号，并明确不等同于已发生业务事实。
+- [ ] **ME-WI.0.2-D**：SERP、公开广告库、AI 可见度、口碑接入统一事件模型，复用既有 provider，不恢复已退役 `ai-tracker`。
+- [ ] **ME-WI.0.2-E**：跨来源事件聚合、高级客户预警与周度情报摘要。
+- [ ] 每条管道必须完成“采集 → 证据 → 时效 → 变化分析 → 结果呈现”，保持只读、建议型、人工复核；不自动执行外部经营动作。
+
 ## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）
 
 > **新窗口开工前必读**：[WP00 契约冻结 v1.0](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)。
