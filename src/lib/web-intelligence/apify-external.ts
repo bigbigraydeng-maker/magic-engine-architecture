@@ -19,6 +19,17 @@ function text(item: RawExternalItem, keys: string[]): string {
   return ''
 }
 
+function jobExcerpt(item: RawExternalItem): string {
+  const parts = [
+    ['职位', text(item, ['title', 'name'])],
+    ['公司', text(item, ['company', 'companyName'])],
+    ['地点', text(item, ['location'])],
+    ['薪资', text(item, ['salaryText', 'salary'])],
+    ['简介', text(item, ['teaser', 'descriptionText', 'description'])],
+  ]
+  return parts.filter(([, value]) => value).map(([label, value]) => `${label}：${value}`).join('\n')
+}
+
 function optionalText(item: RawExternalItem, keys: string[]): string | null {
   return text(item, keys) || null
 }
@@ -57,7 +68,8 @@ export async function collectApifyExternalObservations(input: {
   for (const item of result.data) {
     const sourceUrl = text(item, ['url', 'sourceUrl', 'source_url', 'link', 'articleUrl', 'jobUrl'])
     const title = text(item, ['title', 'name', 'headline'])
-    const excerpt = text(item, ['excerpt', 'description', 'text', 'content', 'summary', 'snippet'])
+    const excerpt = text(item, ['excerpt', 'description', 'descriptionText', 'teaser', 'text', 'content', 'summary', 'snippet'])
+      || (input.sourceId === 'seek-nz' ? jobExcerpt(item) : '')
     if (!validUrl(sourceUrl) || !excerpt) {
       rejected += 1
       continue
@@ -70,7 +82,7 @@ export async function collectApifyExternalObservations(input: {
         title,
         excerpt,
         competitor_domain: optionalText(item, ['competitorDomain', 'competitor_domain', 'domain']),
-        published_at: optionalText(item, ['publishedAt', 'published_at', 'datePublished', 'date', 'postedAt']),
+        published_at: optionalText(item, ['publishedAt', 'published_at', 'publishedDate', 'pub_date', 'datePublished', 'date', 'postedAt', 'postedDate']),
         observed_at: input.observedAt,
         valid_until: input.validUntil,
         authorization_confirmed: input.sourceId === 'facebook-group-authorized' ? item.authorizationConfirmed === true : undefined,
@@ -80,4 +92,51 @@ export async function collectApifyExternalObservations(input: {
     }
   }
   return { observations, rejected, runId: result.runId }
+}
+
+/** Actor IDs and input shapes verified against their current Apify Store pages.
+ * Keep these in one place so a provider replacement does not spread through WI.
+ */
+export const WI_APIFY_ACTORS = {
+  rssFeed: 'ef12/rss-scraper',
+  articleExtractor: 'automation-lab/news-article-extractor',
+  seekNz: 'corvuslab/seek-scraper',
+} as const
+
+export function collectRssFeed(input: {
+  sourceId: string; clientId: string; feedUrl: string; observedAt: string; maxResults?: number
+}): Promise<ApifyExternalCollection> {
+  return collectApifyExternalObservations({
+    actorId: WI_APIFY_ACTORS.rssFeed,
+    actorInput: { feed_url: input.feedUrl, max_results: Math.min(input.maxResults ?? 25, 200) },
+    sourceId: input.sourceId, clientId: input.clientId, observedAt: input.observedAt,
+  })
+}
+
+export function collectIndustryWebsite(input: {
+  sourceId: string; clientId: string; siteUrl: string; observedAt: string; maxArticles?: number
+}): Promise<ApifyExternalCollection> {
+  return collectApifyExternalObservations({
+    actorId: WI_APIFY_ACTORS.articleExtractor,
+    actorInput: {
+      startUrls: [input.siteUrl], maxArticles: Math.min(input.maxArticles ?? 20, 50),
+      extractFullContent: true, includeImages: false,
+    },
+    sourceId: input.sourceId, clientId: input.clientId, observedAt: input.observedAt,
+  })
+}
+
+export function collectSeekNzJobs(input: {
+  clientId: string; query?: string; queries?: string[]; location?: string; observedAt: string; maxResults?: number
+}): Promise<ApifyExternalCollection> {
+  return collectApifyExternalObservations({
+    actorId: WI_APIFY_ACTORS.seekNz,
+    actorInput: {
+      ...(input.query ? { query: input.query } : {}), ...(input.queries?.length ? { queries: input.queries } : {}),
+      country: 'NZ', ...(input.location ? { location: input.location } : {}),
+      dateRange: '7', sortMode: 'date', maxResults: Math.min(input.maxResults ?? 50, 100),
+      includeDetails: true, incrementalMode: true, compact: false, excludeEmptyFields: true,
+    },
+    sourceId: 'seek-nz', clientId: input.clientId, observedAt: input.observedAt,
+  })
 }
