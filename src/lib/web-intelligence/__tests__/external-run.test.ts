@@ -1,0 +1,38 @@
+import { describe, expect, it, vi } from 'vitest'
+
+const collect = vi.hoisted(() => vi.fn())
+vi.mock('../apify-external', () => ({ collectApifyExternalObservations: collect }))
+vi.mock('../store', () => ({ recordExternalObservation: vi.fn() }))
+
+import { collectAndRecordExternalObservations } from '../external-run'
+
+const observation = (url: string) => ({
+  client_id: '00000000-0000-0000-0000-000000000001', source_type: 'industry_media', source_tier: 'B',
+  source_name: 'Travel Today', source_url: url, canonical_url: url, title: 'Story', excerpt: 'Evidence',
+  competitor_domain: null, published_at: null, observed_at: '2026-09-11T00:00:00.000Z', valid_until: null,
+  content_hash: 'a'.repeat(64), status: 'observed',
+})
+
+describe('external observation run orchestration', () => {
+  it('persists every valid row and counts duplicate retries separately', async () => {
+    collect.mockResolvedValue({ observations: [observation('https://example.com/1'), observation('https://example.com/2')], rejected: 1, runId: 'run-1' })
+    const persist = vi.fn()
+      .mockResolvedValueOnce('id-1')
+      .mockRejectedValueOnce(new Error('external_observation_duplicate'))
+    const result = await collectAndRecordExternalObservations({
+      actorId: 'actor/news', actorInput: {}, sourceId: 'travel-today', clientId: observation('').client_id,
+      observedAt: '2026-09-11T00:00:00Z', persist,
+    })
+    expect(result).toMatchObject({ runId: 'run-1', rejected: 1, persisted: 1, duplicates: 1, writeFailures: 0 })
+    expect(persist).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports storage failures without hiding a successful provider run', async () => {
+    collect.mockResolvedValue({ observations: [observation('https://example.com/1')], rejected: 0, runId: 'run-2' })
+    const result = await collectAndRecordExternalObservations({
+      actorId: 'actor/news', actorInput: {}, sourceId: 'travel-today', clientId: observation('').client_id,
+      observedAt: '2026-09-11T00:00:00Z', persist: vi.fn().mockRejectedValue(new Error('db down')),
+    })
+    expect(result).toMatchObject({ runId: 'run-2', persisted: 0, duplicates: 0, writeFailures: 1 })
+  })
+})
