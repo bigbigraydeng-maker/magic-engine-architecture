@@ -25,6 +25,7 @@ export type ProductMatch = {
   status: ProductMatchStatus
   client_product: string | null
   competitor_product: string | null
+  match_score?: number
   reason: string
 }
 
@@ -148,15 +149,21 @@ function completeCompetitorProduct(record: TourRecord): boolean {
 }
 
 const comparableText = (value: string | undefined) => (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-const samePriceBasis = (left: string, right: string) => comparableText(left).replace(/\d+/g, '') === comparableText(right).replace(/\d+/g, '')
-const sameTourShape = (client: OperatingBriefInput['client_products'][number], competitor: TourRecord) =>
-  comparableText(client.route) === comparableText(competitor.route) &&
-  client.duration_days === competitor.durationDays &&
-  samePriceBasis(client.price!, competitor.price) &&
-  comparableText(client.departure_window) === comparableText(competitor.departureWindow) &&
-  comparableText(client.includes) === comparableText(competitor.includes) &&
-  comparableText(client.positioning) === comparableText(competitor.positioning) &&
-  comparableText(client.audience) === comparableText(competitor.audience)
+const tokens = (value: string | undefined) => new Set(comparableText(value).split(' ').filter(token => token.length > 2))
+const overlap = (left: string | undefined, right: string | undefined) => {
+  const a = tokens(left), b = tokens(right)
+  if (!a.size || !b.size) return 0
+  return [...a].filter(token => b.has(token)).length / Math.max(a.size, b.size)
+}
+function tourSimilarity(client: OperatingBriefInput['client_products'][number], competitor: TourRecord): number {
+  const route = overlap(client.route, competitor.route)
+  const includes = overlap(client.includes, competitor.includes)
+  const positioning = overlap(client.positioning, competitor.positioning)
+  const audience = overlap(client.audience, competitor.audience)
+  const duration = Math.max(0, 1 - Math.abs((client.duration_days ?? 0) - competitor.durationDays) / Math.max(client.duration_days ?? 1, competitor.durationDays))
+  const departure = overlap(client.departure_window, competitor.departureWindow)
+  return Math.round((route * 40 + duration * 20 + includes * 15 + positioning * 10 + audience * 10 + departure * 5) * 100)
+}
 
 function matchesFor(input: OperatingBriefInput): ProductMatch[] {
   const competitorRecords = input.competitor_products.flatMap(item => item.records.map(record => ({ item, record })))
@@ -171,26 +178,25 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
       }
     })
   }
-  const usedCompetitorKeys = new Set<string>()
-  const recordKey = (item: typeof competitorRecords[number]) => `${item.item.domain}\n${item.item.source_url}\n${item.record.name}`
   return input.client_products.map(product => {
     const scoped = competitorRecords.filter(({ record }) => matchTravelScope(`${record.name} ${record.route}`, '', input.product_scope).status === 'matched')
     const complete = scoped.filter(({ record }) => completeCompetitorProduct(record))
-    const shapeMatch = complete.find(item => sameTourShape(product, item.record))
-    const exact = shapeMatch && !usedCompetitorKeys.has(recordKey(shapeMatch)) ? shapeMatch : undefined
-    const sameScope = exact ?? shapeMatch ?? scoped[0]
-    if (!exact || !completeClientProduct(product)) return {
+    const ranked = complete.map(item => ({ ...item, score: tourSimilarity(product, item.record) })).sort((a, b) => b.score - a.score)
+    const candidate = ranked[0] ?? scoped[0]
+    const comparable = completeClientProduct(product) && Boolean(candidate) && (ranked[0]?.score ?? 0) >= 35
+    if (!comparable) return {
       status: 'insufficient_evidence' as const,
       client_product: product.name,
-      competitor_product: sameScope ? `${sameScope.item.domain}：${productLabel(sameScope.record)}` : null,
-      reason: !completeClientProduct(product) ? '客户产品缺少目的地、路线、天数、价格口径、出发窗口、包含项目、定位或目标客群。' : !sameScope ? '没有找到同时满足客户产品范围和可比较路线的竞品记录。' : !completeCompetitorProduct(sameScope.record) ? '竞品记录缺少路线、天数、价格、出发窗口、包含项目、定位或目标客群。' : shapeMatch ? '该竞品记录已与另一个客户产品占用，当前无法建立唯一的一一对应。' : '路线、天数、价格口径、出发窗口、包含项目、定位或目标客群未完成逐项对位。',
+      competitor_product: candidate ? `${candidate.item.domain}：${productLabel(candidate.record)}` : null,
+      match_score: candidate && 'score' in candidate ? candidate.score : undefined,
+      reason: !completeClientProduct(product) ? '客户产品缺少目的地、路线、天数、价格口径、出发窗口、包含项目、定位或目标客群，无法让 AI 可靠解释优劣势。' : !candidate ? '没有找到同一目的地范围内、且有足够字段的竞品候选。' : !completeCompetitorProduct(candidate.record) ? '竞品候选缺少路线、天数、价格、出发窗口、包含项目、定位或目标客群。' : '现有候选与客户产品的路线或产品形状相似度不足，不能让 AI 把它当作主要竞争对照。',
     }
-    usedCompetitorKeys.add(recordKey(exact))
     return {
       status: 'comparable' as const,
       client_product: product.name,
-      competitor_product: `${exact.item.domain}：${productLabel(exact.record)}`,
-      reason: '已完成路线、天数、价格口径、出发窗口、包含项目、定位和目标客群的一对一字段对位；仍需人工核对来源页面。',
+      competitor_product: `${candidate.item.domain}：${productLabel(candidate.record)}`,
+      match_score: candidate.score,
+      reason: '这是按目的地范围和产品形状找到的最接近竞品候选，不代表两团相同；价格、城市、天数、日期、包含项目和定位差异交由 AI 解释优劣势。',
     }
   })
 }

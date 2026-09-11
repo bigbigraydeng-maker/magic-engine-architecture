@@ -27,24 +27,25 @@ describe('buildOperatingBrief', () => {
     expect(brief.matches[0].reason).toContain('客户产品缺少')
   })
 
-  it('does not compare tours with a different route, duration, or price basis', () => {
+  it('keeps a similar but different Tour as a candidate for AI comparison', () => {
     const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [{ name: 'China Highlights', destination: 'China', route: 'Beijing Shanghai', duration_days: 12, price: 'NZD 4999 pp', departure_window: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [{ ...record, route: 'Beijing Xian', durationDays: 14, price: 'AUD 9030 pp', departureWindow: 'November 2026', includes: 'Flights hotels', positioning: 'large group', audience: 'NZ travellers' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
-    expect(brief.matches[0].status).toBe('insufficient_evidence')
-    expect(brief.matches[0].reason).toContain('逐项对位')
+    expect(brief.matches[0].status).toBe('comparable')
+    expect(brief.matches[0].reason).toContain('优劣势')
   })
 
-  it('does not reuse one competitor Tour for two client products', () => {
+  it('allows the same competitor Tour to be a candidate for multiple client products', () => {
     const product = { name: 'China Highlights', destination: 'China', route: 'Beijing Shanghai', duration_days: 12, price: 'NZD 4999 pp', departure_window: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }
     const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [product, { ...product, name: 'China Highlights duplicate' }], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [{ ...record, route: 'Beijing Shanghai', durationDays: 12, price: 'NZD 4999 pp', departureWindow: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }] }], evidence })
-    expect(brief.matches.map(match => match.status)).toEqual(['comparable', 'insufficient_evidence'])
-    expect(brief.matches[1].reason).toContain('唯一')
+    expect(brief.matches.map(match => match.status)).toEqual(['comparable', 'comparable'])
+    expect(brief.matches[1].reason).toContain('最接近竞品候选')
   })
 
-  it('selects a later exact Tour instead of stopping at the first same-scope candidate', () => {
+  it('selects the closest Tour candidate instead of requiring exact equality', () => {
     const client = { name: 'China Highlights', destination: 'China', route: 'Beijing Shanghai', duration_days: 12, price: 'NZD 4999 pp', departure_window: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }
     const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [client], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record, { ...record, name: 'Exact China Highlights', route: client.route, durationDays: client.duration_days, price: 'NZD 4999 pp', departureWindow: client.departure_window, includes: client.includes, positioning: client.positioning, audience: client.audience }] }], evidence })
     expect(brief.matches[0].status).toBe('comparable')
     expect(brief.matches[0].competitor_product).toContain('Exact China Highlights')
+    expect(brief.matches[0].match_score).toBeGreaterThan(35)
   })
 
   it('keeps an explicit out-of-scope tour out of the decision', () => {
