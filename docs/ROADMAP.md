@@ -48,6 +48,7 @@
 - [ ] **ME-WI.0.2-C**：首期接入新西兰 SEEK、Indeed 公开招聘信息，识别组织与战略领先信号，并明确不等同于已发生业务事实。
 - [ ] **ME-WI.0.2-D**：SERP、公开广告库、AI 可见度、口碑接入统一事件模型，复用既有 provider，不恢复已退役 `ai-tracker`。
 - [ ] **ME-WI.0.2-E**：跨来源事件聚合、高级客户预警与周度情报摘要。
+- [x] **ME-WI.0.2-F0**：登记 Facebook Group 受控情报源契约；仅支持客户授权导出或 Meta 审批后的接入，不实现绕过权限的社交抓取。
 - [ ] 每条管道必须完成“采集 → 证据 → 时效 → 变化分析 → 结果呈现”，保持只读、建议型、人工复核；不自动执行外部经营动作。
 
 ## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）

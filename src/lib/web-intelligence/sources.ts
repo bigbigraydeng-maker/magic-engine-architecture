@@ -3,6 +3,7 @@ import { externalSourceTierSchema, externalSourceTypeSchema, type ExternalObserv
 
 export type ExternalSourceDefinition = {
   id: string; name: string; type: ExternalSourceType; tier: ExternalSourceTier; market: string
+  requires_authorization?: boolean
 }
 
 /** Initial source registry. Domains and selectors remain provider configuration, not runtime assumptions. */
@@ -10,6 +11,8 @@ export const externalSourceRegistry: readonly ExternalSourceDefinition[] = [
   { id: 'seek-nz', name: 'SEEK', type: 'jobs', tier: 'B', market: 'NZ' },
   { id: 'indeed-nz', name: 'Indeed', type: 'jobs', tier: 'B', market: 'NZ' },
   { id: 'travel-today', name: 'Travel Today', type: 'industry_media', tier: 'B', market: 'NZ/AU' },
+  // Controlled source only: authorised export or Meta-approved integration.
+  { id: 'facebook-group-authorized', name: 'Facebook Group（授权）', type: 'facebook_group', tier: 'C', market: 'customer-authorized', requires_authorization: true },
 ]
 
 export function sourceDefinition(id: string): ExternalSourceDefinition | null {
@@ -39,9 +42,11 @@ export function normalisePublishedAt(value: string | null | undefined): string |
 export function buildExternalObservation(input: {
   client_id: string; source_id: string; source_url: string; title?: string; excerpt: string
   competitor_domain?: string | null; published_at?: string | null; observed_at: string; valid_until?: string | null
+  authorization_confirmed?: boolean
 }): ExternalObservation {
   const source = sourceDefinition(input.source_id)
   if (!source) throw new Error('unknown_external_source')
+  if (source.requires_authorization && input.authorization_confirmed !== true) throw new Error('source_authorization_required')
   const canonical_url = canonicalExternalUrl(input.source_url)
   const title = input.title?.trim() ?? ''
   const excerpt = input.excerpt.trim()

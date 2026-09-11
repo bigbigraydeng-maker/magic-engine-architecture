@@ -8,6 +8,7 @@ describe('external source registry', () => {
     expect(sourceDefinition('seek-nz')).toMatchObject({ name: 'SEEK', type: 'jobs', market: 'NZ' })
     expect(sourceDefinition('indeed-nz')).toMatchObject({ name: 'Indeed', type: 'jobs', market: 'NZ' })
     expect(sourceDefinition('travel-today')).toMatchObject({ name: 'Travel Today', type: 'industry_media' })
+    expect(sourceDefinition('facebook-group-authorized')).toMatchObject({ name: 'Facebook Group（授权）', type: 'facebook_group', tier: 'C', requires_authorization: true })
   })
 
   it('canonicalises tracking variants to the same URL', () => {
@@ -31,5 +32,16 @@ describe('external source registry', () => {
 
   it('fails closed for an unregistered source', () => {
     expect(() => buildExternalObservation({ client_id: clientId, source_id: 'unknown', source_url: 'https://example.com', excerpt: 'x', observed_at: '2026-09-11T00:00:00Z' })).toThrow('unknown_external_source')
+  })
+
+  it('fails closed when a controlled Facebook source has no authorization receipt', () => {
+    expect(() => buildExternalObservation({
+      client_id: clientId, source_id: 'facebook-group-authorized', source_url: 'https://facebook.com/groups/example/posts/1',
+      excerpt: 'A discussion signal', observed_at: '2026-09-11T00:00:00Z',
+    })).toThrow('source_authorization_required')
+    expect(buildExternalObservation({
+      client_id: clientId, source_id: 'facebook-group-authorized', source_url: 'https://facebook.com/groups/example/posts/1',
+      excerpt: 'A discussion signal', observed_at: '2026-09-11T00:00:00Z', authorization_confirmed: true,
+    })).toMatchObject({ source_type: 'facebook_group', source_tier: 'C' })
   })
 })
