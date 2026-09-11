@@ -190,7 +190,7 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
       status: scopeMatch.status === 'outside' ? 'out_of_scope' : 'insufficient_evidence',
       client_product: null,
       competitor_product: `${item.domain}：${productLabel(record)}`,
-      reason: scopeMatch.status === 'outside' ? '该 Tour 明确属于客户当前产品范围之外，保留为外围市场情报，不进入当前经营建议。' : '客户当前没有已验证的产品记录，无法判断路线、天数、价格口径、包含项目或目标客群是否可比。',
+      reason: scopeMatch.status === 'outside' ? '这条团属于客户这次关注范围之外，所以不拿来做经营比较。' : 'CTS 自己的产品资料还没有准备好，暂时无法判断这条竞品团是否值得比较。',
       }
     })
   }
@@ -204,7 +204,7 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
       client_product: product.name,
       competitor_product: candidate ? `${candidate.item.domain}：${productLabel(candidate.record)}` : null,
       match_score: candidate && 'score' in candidate ? candidate.score : undefined,
-      reason: !completeClientProduct(product) ? '客户产品缺少目的地、路线、天数、价格口径、出发窗口、包含项目、定位或目标客群，无法让 AI 可靠解释优劣势。' : !candidate ? '没有找到同一目的地范围内、且有足够字段的竞品候选。' : !completeCompetitorProduct(candidate.record) ? '竞品候选缺少路线、天数、价格、出发窗口、包含项目、定位或目标客群。' : '现有候选与客户产品的路线或产品形状相似度不足，不能让 AI 把它当作主要竞争对照。',
+      reason: !completeClientProduct(product) ? '客户产品缺少必要资料，AI 还不能可靠说明它和竞品各自的优劣势。' : !candidate ? '暂时没找到路线和产品内容足够接近的竞品团。' : !completeCompetitorProduct(candidate.record) ? '这条竞品团的资料还不完整，暂时无法公平比较。' : '虽然目的地范围相近，但路线、天数或产品内容差异较大，先不把它当作主要对手。',
     }
     return {
       status: 'comparable' as const,
@@ -234,14 +234,14 @@ export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief 
   const allInsufficient = matches.length === 0 || matches.every(match => match.status === 'insufficient_evidence')
   const evidence = input.evidence.filter(item => item.scope === 'client' || item.scope === 'competitor')
   const unknowns = [
-    ...(input.client_products.length ? [] : ['CTS 产品目录、路线、天数、价格、包含项目、出发日期和余位尚未进入已验证数据源。']),
-    ...(input.goal ? [] : ['没有当前有效经营目标，不能把历史目标当作当前目标。']),
-    ...(competitorSignal.length ? [] : ['没有未过期的竞品快照，不能把历史记录当作当前情报。']),
-    '没有 CTS 与竞品同类产品的询盘、成交或转化对照，不能估计经营影响或建议调价。',
+    ...(input.client_products.length ? [] : ['我们还没有 CTS 自己每条团的完整资料（路线、天数、价格、出发日期和余位）。']),
+    ...(input.goal ? [] : ['目前没有明确的经营目标，所以暂时不能判断哪项变化最重要。']),
+    ...(competitorSignal.length ? [] : ['竞品最近没有可用的新资料，旧资料不能代表现在。']),
+    '目前没有 CTS 和竞品之间的询盘、成交或转化数据，所以还不能判断哪一条团真正卖得更好。',
   ]
   const recommendation = allInsufficient
-    ? '暂不调价、改促销或改变产品。先补齐 CTS 主力 Tour 的已验证产品事实，再对 Wendy Wu 的同类路线做逐项对位。'
-    : '将已匹配的 Tour 交由负责人复核日期、价格口径、包含项目和销售周期；在复核前不执行任何外部动作。'
+    ? '先暂不调价或改促销。我们还缺 CTS 自己这条团的完整资料，补齐后再和竞品比较。'
+    : '我们找到了一条比较接近的竞品团。先人工核对城市、天数、价格和包含内容，再决定要不要调整。'
   const context = input.goal
     ? [`当前目标：${input.goal.title}（${input.goal.status}）`, `目标指标：${input.goal.metric}${input.goal.target == null ? '' : `，目标 ${input.goal.target}`}`, `目标周期：${input.goal.period_start} 至 ${input.goal.period_end}`]
     : ['当前没有可确认的有效经营目标。']
@@ -257,9 +257,9 @@ export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief 
     decision: {
       question: '当前是否需要跟进主要竞品的中国团价格或促销？',
       context, external_signal: competitorSignal,
-      impact: allInsufficient ? '目前只能确认竞品正在销售并促销，不能确认 CTS 的同类产品受到价格或需求压力。' : '候选对位存在，但尚未完成客户侧结果和价格口径验证。',
+      impact: allInsufficient ? '现在只能确认竞品在卖什么，还不能说明 CTS 受到了影响。' : '现在有一条比较接近的竞品团，但还不能只凭网页资料判断谁更有优势。',
       recommendation, authorization: 'review_required', evidence,
-      unknowns, check_and_tune: '补齐 CTS 产品事实后，建立同类 Tour baseline；下一次采集比较价格、档期、余位和促销，再用询盘/成交数据检查建议是否改变结果。',
+      unknowns, check_and_tune: '下一步先补齐 CTS 产品资料。之后每次更新竞品页面时，比较城市、天数、价格、出发日期和余位，再结合询盘和成交情况决定是否调整。',
     },
     data_gaps: unknowns,
   }

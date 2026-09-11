@@ -4,7 +4,7 @@ import { loadCompetitors } from './targets'
 import { loadCompetitionBrief } from './competition-sources'
 import { latestFreshSnapshots, latestSnapshots } from './competition-brief'
 import { buildOperatingBrief, normalizeOperatingProducts, parseTourRecordLine, resolveCurrentOperatingGoal, type OperatingBrief, type OperatingEvidence, type OperatingGoalCandidate } from './operating-brief'
-import { extractTourLinks } from './profiles/travel'
+import { extractTourLinks, matchTravelScope } from './profiles/travel'
 
 export async function saveSettings(clientId: string, raw: unknown): Promise<void> {
   const settings = settingsSchema.parse(raw)
@@ -65,7 +65,10 @@ export async function readView(clientId: string, canEdit: boolean) {
     goal: activeGoal,
     product_scope: brief.product_scope,
     client_products: normalizeOperatingProducts(masterBrief.data?.products),
-    competitor_products: competitorProducts,
+    competitor_products: competitorProducts.map(item => ({ ...item, records: item.records.filter(record => {
+      if (brief.product_scope.status === 'unknown' || brief.product_scope.market_ids.length === 0) return false
+      return matchTravelScope(`Tour: ${record.name} | Route: ${record.route}`, '', brief.product_scope).status === 'matched'
+    }) })),
     evidence: operatingEvidence, now: asOf,
   })
   return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, budget: budget.data, brief, operating, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }

@@ -7,9 +7,9 @@ type Payload = { operating: OperatingBrief }
 type ComparisonResult = { summary: string; client_strengths: string[]; competitor_strengths: string[]; differences: string[]; recommendations: string[]; unknowns: string[]; confidence: number; evidence_urls: string[] }
 
 const statusLabel = {
-  comparable: '候选可比',
-  out_of_scope: '范围外',
-  insufficient_evidence: '证据不足',
+  comparable: '找到相近竞品',
+  out_of_scope: '不在本次范围',
+  insufficient_evidence: '资料还不够',
 } as const
 
 export default function OperatingAgentPage({ params }: { params: { id: string } }) {
@@ -64,7 +64,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
 
     <section className="grid gap-4 lg:grid-cols-2">
       <EvidenceCard title="证据" evidence={decision.evidence} />
-      <article className="rounded-2xl border border-black/10 bg-white p-5"><h2 className="text-lg font-bold">未知与回流</h2><ul className="mt-3 space-y-2 text-sm leading-6">{decision.unknowns.map(item => <li key={item} className="rounded-lg bg-black/[0.03] p-3">{item}</li>)}</ul><p className="mt-4 border-t border-black/5 pt-4 text-sm leading-6"><strong>Check / Tune：</strong>{decision.check_and_tune}</p></article>
+      <article className="rounded-2xl border border-black/10 bg-white p-5"><h2 className="text-lg font-bold">还缺什么信息？下一步怎么做</h2><ul className="mt-3 space-y-2 text-sm leading-6">{decision.unknowns.map(item => <li key={item} className="rounded-lg bg-black/[0.03] p-3">{item}</li>)}</ul><p className="mt-4 border-t border-black/5 pt-4 text-sm leading-6"><strong>下一步：</strong>{decision.check_and_tune}</p></article>
     </section>
     <p className="text-xs text-me-charcoal/45">截至 {new Date(data.as_of).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}（Pacific/Auckland）· 事实、推断、建议和未知已分开显示。</p>
   </main>
@@ -106,5 +106,5 @@ function ContextCard({ title, values }: { title: string; values: string[] }) {
 }
 
 function EvidenceCard({ title, evidence }: Pick<{ title: string; evidence: OperatingBrief['decision']['evidence'] }, 'title' | 'evidence'>) {
-  return <article className="rounded-2xl border border-black/10 bg-white p-5"><h2 className="text-lg font-bold">{title}</h2>{evidence.length ? <ul className="mt-3 space-y-2 text-sm leading-6">{evidence.map(item => <li key={item.id} className="rounded-lg bg-me-ivory p-3"><p>{item.statement}</p><p className="mt-1 text-xs text-me-charcoal/50">{item.source} · {item.observed_at ? new Date(item.observed_at).toLocaleDateString('en-NZ') : '时间未知'} · {item.confidence}</p></li>)}</ul> : <p className="mt-3 text-sm text-me-charcoal/60">尚无可展示的证据。</p>}</article>
+  return <article className="rounded-2xl border border-black/10 bg-white p-5"><h2 className="text-lg font-bold">{title}</h2>{evidence.length ? <ul className="mt-3 space-y-2 text-sm leading-6">{evidence.map(item => <li key={item.id} className="rounded-lg bg-me-ivory p-3"><p>{item.statement}</p><p className="mt-1 text-xs text-me-charcoal/50">{/^https?:\/\//i.test(item.source) ? <a className="font-bold underline" href={item.source} target="_blank" rel="noreferrer">打开竞品产品页面</a> : item.source} · {item.observed_at ? new Date(item.observed_at).toLocaleDateString('en-NZ') : '时间未知'} · {item.confidence}</p></li>)}</ul> : <p className="mt-3 text-sm text-me-charcoal/60">尚无可展示的证据。</p>}</article>
 }
