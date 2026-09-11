@@ -120,6 +120,10 @@ describe('Website scope, budget and evidence contracts', () => {
     expect(projectTravelContent(before, 'product_listing')).toContain('Tour: Tour A | Duration: 10 days | Price: $5,000pp')
     expect(projectTravelContent(after, 'product_listing')).toContain('Tour: Tour A | Duration: 10 days | Price: $5,500pp')
   })
+  it('projects itinerary headings from a Tour detail page', () => {
+    const detail = `Classic China\n22 days from $10,580pp\nDay 1: Arrive in Beijing\nDay 2: Great Wall and city tour\nDay 3: Beijing to Xian\nIncludes international airfares`
+    expect(projectTravelContent(detail, 'product_detail')).toContain('Itinerary: Day 1: Arrive in Beijing || Day 2: Great Wall and city tour || Day 3: Beijing to Xian')
+  })
   it('places Tour comparison rules in the industry guidance, not the shared prompt', () => {
     const prompt = interpretationPrompt(signal, evidence, '', TRAVEL_INTERPRETATION_GUIDANCE)
     expect(prompt).toContain('exact Tour name plus before and after values')

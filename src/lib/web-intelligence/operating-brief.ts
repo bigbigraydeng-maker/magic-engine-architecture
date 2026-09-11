@@ -124,6 +124,7 @@ export function parseTourRecordLine(line: string): TourRecord | null {
     departureWindow: values.get('departure') ?? values.get('departure_window'),
     positioning: values.get('positioning'),
     audience: values.get('audience'),
+    itinerary: values.get('itinerary')?.split(' || ').map(value => value.trim()).filter(Boolean),
   }
 }
 

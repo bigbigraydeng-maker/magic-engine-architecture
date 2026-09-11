@@ -292,8 +292,9 @@ function TourCatalog({ tours }: { tours: TourCatalogItem[] }) {
           <TourField label="评价" value={item.record.reviews} />
           <TourField label="路线摘要" value={item.record.route} wide />
           <TourField label="包含项目" value={item.record.includes} wide />
-          <TourField label="逐日行程" value="来源页面未提供逐日安排" wide muted />
+          <TourField label="逐日行程" value={item.record.itinerary?.length ? `${item.record.itinerary.length} 个行程日已读取` : '来源页面未提供逐日安排'} wide muted />
         </dl>
+        {item.record.itinerary?.length ? <details className="mt-3 rounded-lg bg-me-ivory p-3"><summary className="cursor-pointer text-sm font-bold">展开逐日行程</summary><ol className="mt-3 space-y-2 text-sm leading-6">{item.record.itinerary.map((day, dayIndex) => <li key={`${day}-${dayIndex}`}><span className="mr-2 font-bold text-me-ochre">{dayIndex + 1}.</span>{day}</li>)}</ol></details> : null}
         <div className="mt-4 border-t border-black/5 pt-3 text-xs leading-5 text-me-charcoal/55"><p>观察于 {item.observed_at ? date(item.observed_at) : '时间未知'} NZ</p><a className="break-all underline" href={item.source_url} target="_blank" rel="noopener noreferrer">打开来源页面</a></div>
       </article>)}
     </div>

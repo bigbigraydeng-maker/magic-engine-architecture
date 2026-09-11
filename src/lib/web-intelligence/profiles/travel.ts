@@ -14,6 +14,7 @@ export type TourRecord = {
   departureWindow?: string
   positioning?: string
   audience?: string
+  itinerary?: string[]
 }
 
 export type TravelScope = {
@@ -125,6 +126,8 @@ function tourRecordLine(record: TourRecord): string {
     `Reviews: ${record.reviews}`,
     `Includes: ${record.includes}`,
     `Route: ${record.route}`,
+    ...(record.departureWindow ? [`Departure: ${record.departureWindow}`] : []),
+    ...(record.itinerary?.length ? [`Itinerary: ${record.itinerary.join(' || ')}`] : []),
   ].join(' | ')
 }
 
@@ -168,6 +171,10 @@ export function travelMarketLabels(ids: string[]): string[] {
 
 const clean = (value: string) => value.trim().replace(/^[*#-]+\s*/, '').replace(/\s+/g, ' ')
 
+function itineraryHeadings(lines: string[]): string[] {
+  return lines.map(clean).filter(line => /^(?:day\s*\d+|d\d+)\b\s*[:–-]?/i.test(line)).slice(0, 60)
+}
+
 function precedingTitle(lines: string[], priceIndex: number): string | null {
   for (let index = priceIndex - 1; index >= Math.max(0, priceIndex - 4); index--) {
     const candidate = clean(lines[index] ?? '')
@@ -201,13 +208,14 @@ export function extractTourRecords(raw: string): TourRecord[] {
       reviews: followingValue(lines, index, /^\d+ reviews?$/i),
       includes: followingValue(lines, index, /^includes /i),
       route: routeValue(lines, index),
+      itinerary: itineraryHeadings(lines),
     }]
   })
   return records.sort((a, b) => a.name.localeCompare(b.name, 'en-NZ'))
 }
 
 export function projectTravelContent(raw: string, role: BusinessPageRole): string | null {
-  if (role !== 'product_listing' && role !== 'offers') return null
+  if (role !== 'product_listing' && role !== 'product_detail' && role !== 'offers') return null
   const records = extractTourRecords(raw)
   if (records.length === 0) return null
   return records.map(tourRecordLine).join('\n')
