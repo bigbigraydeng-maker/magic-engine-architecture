@@ -29,14 +29,20 @@ export async function readView(clientId: string, canEdit: boolean) {
   if (evidence.error) throw new Error('evidence_read_failed')
   const config: Settings | null = settings.data ? settingsSchema.strip().parse(settings.data) : null
   const brief = await loadCompetitionBrief(clientId, client.data, competitors)
+  const domains = competitors.filter(item => item.status !== 'archive').map(item => item.domain)
   const urls = competitors.filter(item => item.status !== 'archive').flatMap(item => item.urls)
   const snapshots = urls.length ? await db.from('market_snapshots').select('run_id,domain,url,content,projection_content,captured_at').eq('client_id', clientId).in('url', urls).order('captured_at', { ascending: false }).limit(urls.length) : { data: [], error: null }
   if (snapshots.error) throw new Error('operating_snapshot_read_failed')
+  const detailSnapshots = domains.length ? await db.from('market_snapshots').select('run_id,domain,url,content,projection_content,captured_at,page_role').eq('client_id', clientId).in('domain', domains).eq('page_role', 'product_detail').order('captured_at', { ascending: false }).limit(200) : { data: [], error: null }
+  if (detailSnapshots.error) throw new Error('operating_detail_snapshot_read_failed')
   const asOf = new Date()
-  const snapshotRows = (snapshots.data ?? []) as Array<{ run_id: string; domain: string; url: string; content: string; projection_content: string | null; captured_at: string }>
+  const snapshotRows = (snapshots.data ?? []) as Array<{ run_id: string; domain: string; url: string; content: string; projection_content: string | null; captured_at: string; page_role?: string | null }>
+  const detailRows = (detailSnapshots.data ?? []) as typeof snapshotRows
   const currentSnapshots = latestFreshSnapshots(snapshotRows, asOf)
+  const allCurrentSnapshots = latestFreshSnapshots([...snapshotRows, ...detailRows], asOf)
   const observations = latestSnapshots(snapshotRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
-  const competitorProducts = currentSnapshots.map(row => ({ domain: row.domain, source_url: row.url, observed_at: row.captured_at, records: (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null) }))
+  const detailObservations = latestSnapshots(detailRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
+  const competitorProducts = allCurrentSnapshots.map(row => ({ domain: row.domain, source_url: row.url, observed_at: row.captured_at, records: (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null) }))
   const discoveredTours = currentSnapshots.flatMap(row => extractTourLinks(row.content ?? '', row.url).map(link => ({ ...link, domain: row.domain, listing_url: row.url, observed_at: row.captured_at })))
   const activeGoal = resolveCurrentOperatingGoal((goals.data ?? []) as OperatingGoalCandidate[], asOf)
   const operatingEvidence: OperatingEvidence[] = (evidence.data ?? []).map(item => ({ id: item.id, client_id: item.client_id, source: item.source_url, scope: 'competitor', statement: item.excerpt.split('\n').slice(0, 3).join(' '), observed_at: item.observed_at, fact_type: 'fact', confidence: 'high' }))
@@ -48,5 +54,5 @@ export async function readView(clientId: string, canEdit: boolean) {
     competitor_products: competitorProducts,
     evidence: operatingEvidence, now: asOf,
   })
-  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations, discovered_tours: discoveredTours, budget: budget.data, brief, operating, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
+  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, budget: budget.data, brief, operating, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
 }
