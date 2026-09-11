@@ -109,6 +109,19 @@ export function normalizeOperatingProducts(raw: unknown): OperatingBriefInput['c
   })
 }
 
+export function operatingProductFromTour(record: TourRecord): OperatingBriefInput['client_products'][number] {
+  return {
+    name: record.name,
+    route: record.route || undefined,
+    duration_days: record.durationDays || undefined,
+    price: record.price || undefined,
+    departure_window: record.departureWindow || undefined,
+    includes: record.includes || undefined,
+    positioning: record.positioning || undefined,
+    audience: record.audience || undefined,
+  }
+}
+
 function productLabel(product: TourRecord): string {
   return `${product.name} · ${product.durationDays} 天 · ${product.price}`
 }

@@ -1,9 +1,9 @@
 import { supabaseAdmin as db } from '@/lib/supabase'
 import { allowedClient, settingsSchema, type Settings, type Signal } from './contracts'
-import { loadCompetitors } from './targets'
+import { canonicalDomain, loadCompetitors } from './targets'
 import { loadCompetitionBrief } from './competition-sources'
 import { latestFreshSnapshots, latestSnapshots } from './competition-brief'
-import { buildOperatingBrief, normalizeOperatingProducts, parseTourRecordLine, resolveCurrentOperatingGoal, type OperatingBrief, type OperatingEvidence, type OperatingGoalCandidate } from './operating-brief'
+import { buildOperatingBrief, normalizeOperatingProducts, operatingProductFromTour, parseTourRecordLine, resolveCurrentOperatingGoal, type OperatingBrief, type OperatingEvidence, type OperatingGoalCandidate } from './operating-brief'
 import { extractTourLinks, matchTravelScope } from './profiles/travel'
 
 export async function saveSettings(clientId: string, raw: unknown): Promise<void> {
@@ -31,7 +31,10 @@ export async function readView(clientId: string, canEdit: boolean) {
   const brief = await loadCompetitionBrief(clientId, client.data, competitors)
   const domains = competitors.filter(item => item.status !== 'archive').map(item => item.domain)
   const urls = competitors.filter(item => item.status !== 'archive').flatMap(item => item.urls)
-  const snapshots = urls.length ? await db.from('market_snapshots').select('run_id,domain,url,content,projection_content,captured_at').eq('client_id', clientId).in('url', urls).order('captured_at', { ascending: false }).limit(urls.length) : { data: [], error: null }
+  const ownDomain = client.data.domain ? canonicalDomain(client.data.domain) : null
+  const ownUrl = ownDomain ? `https://${ownDomain}/` : null
+  const snapshotUrls = [...new Set([...urls, ...(ownUrl ? [ownUrl] : [])])]
+  const snapshots = snapshotUrls.length ? await db.from('market_snapshots').select('run_id,domain,url,content,projection_content,captured_at').eq('client_id', clientId).in('url', snapshotUrls).order('captured_at', { ascending: false }).limit(snapshotUrls.length) : { data: [], error: null }
   if (snapshots.error) throw new Error('operating_snapshot_read_failed')
   const detailSnapshots = domains.length ? await db.from('market_snapshots').select('run_id,domain,url,content,projection_content,captured_at,page_role').eq('client_id', clientId).in('domain', domains).eq('page_role', 'product_detail').order('captured_at', { ascending: false }).limit(200) : { data: [], error: null }
   if (detailSnapshots.error) throw new Error('operating_detail_snapshot_read_failed')
@@ -39,6 +42,8 @@ export async function readView(clientId: string, canEdit: boolean) {
   const snapshotRows = (snapshots.data ?? []) as Array<{ run_id: string; domain: string; url: string; content: string; projection_content: string | null; captured_at: string; page_role?: string | null }>
   const detailRows = (detailSnapshots.data ?? []) as typeof snapshotRows
   const currentSnapshots = latestFreshSnapshots(snapshotRows, asOf)
+  const ownRows = currentSnapshots.filter(row => ownDomain && canonicalDomain(row.domain) === ownDomain)
+  const ownProducts = ownRows.flatMap(row => (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null)).map(operatingProductFromTour)
   const allCurrentSnapshots = latestFreshSnapshots([...snapshotRows, ...detailRows], asOf)
   const observations = latestSnapshots(snapshotRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
   const detailObservations = latestSnapshots(detailRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
@@ -46,7 +51,7 @@ export async function readView(clientId: string, canEdit: boolean) {
   const latestRunByUrl = new Map([...((runs.data ?? []) as Array<{ url: string; created_at: string; status: string }>)]
     .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
     .map(run => [run.url, run]))
-  const competitorProducts = allCurrentSnapshots.map(row => ({ domain: row.domain, source_url: row.url, observed_at: row.captured_at, records: (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null) }))
+  const competitorProducts = allCurrentSnapshots.filter(row => !ownDomain || canonicalDomain(row.domain) !== ownDomain).map(row => ({ domain: row.domain, source_url: row.url, observed_at: row.captured_at, records: (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null) }))
   const discoveredTours = currentSnapshots.flatMap(row => extractTourLinks(row.content ?? '', row.url).map(link => {
     const detail = latestDetailByUrl.get(link.url)
     const run = latestRunByUrl.get(link.url)
@@ -64,7 +69,7 @@ export async function readView(clientId: string, canEdit: boolean) {
     client: { id: client.data.id, name: client.data.name },
     goal: activeGoal,
     product_scope: brief.product_scope,
-    client_products: normalizeOperatingProducts(masterBrief.data?.products),
+    client_products: normalizeOperatingProducts(masterBrief.data?.products).length ? normalizeOperatingProducts(masterBrief.data?.products) : ownProducts,
     competitor_products: competitorProducts.map(item => ({ ...item, records: item.records.filter(record => {
       if (brief.product_scope.status === 'unknown' || brief.product_scope.market_ids.length === 0) return false
       return matchTravelScope(`Tour: ${record.name} | Route: ${record.route}`, '', brief.product_scope).status === 'matched'
