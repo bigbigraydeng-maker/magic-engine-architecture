@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { OperatingBrief } from '@/lib/web-intelligence/operating-brief'
 
-type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
+type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; client_product_source?: { kind: 'master_brief' | 'first_party_feed' | 'web_snapshot' | 'none'; count: number }; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
 type ComparisonResult = { summary: string; client_strengths: string[]; competitor_strengths: string[]; differences: string[]; recommendations: string[]; unknowns: string[]; confidence: number; evidence_urls: string[] }
 type CapturePhase = 'idle' | 'queued' | 'capturing' | 'analysing' | 'complete' | 'failed'
 
@@ -15,11 +15,13 @@ const statusLabel = {
 
 export default function OperatingAgentPage({ params }: { params: { id: string } }) {
   const [data, setData] = useState<OperatingBrief | null>(null)
+  const [clientProductSource, setClientProductSource] = useState<Payload['client_product_source']>()
   const [clientDomain, setClientDomain] = useState<string | null>(null)
   const [canRun, setCanRun] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [captureRequestId, setCaptureRequestId] = useState<string | null>(null)
   const [capturePhase, setCapturePhase] = useState<CapturePhase>('idle')
+  const [completionReloaded, setCompletionReloaded] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
     fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence`, { cache: 'no-store' })
@@ -28,7 +30,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
         return response.json() as Promise<Payload>
       })
       .then(value => {
-        setData(value.operating); setClientDomain(value.client.domain); setCanRun(value.can_run)
+        setData(value.operating); setClientProductSource(value.client_product_source); setClientDomain(value.client.domain); setCanRun(value.can_run)
         if (captureRequestId) {
           const run = value.runs?.find(item => item.id === captureRequestId)
           if (run?.status === 'complete') setCapturePhase('complete')
@@ -47,8 +49,16 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     return () => window.clearTimeout(timer)
   }, [captureRequestId, capturePhase, refresh])
 
+  useEffect(() => {
+    if (capturePhase !== 'complete' || completionReloaded) return
+    setCompletionReloaded(true)
+    const timer = window.setTimeout(() => setRefresh(value => value + 1), 750)
+    return () => window.clearTimeout(timer)
+  }, [capturePhase, completionReloaded])
+
   async function captureClientProducts() {
     if (!clientDomain) return
+    setCompletionReloaded(false)
     setCapturePhase('capturing')
     try {
       const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence`, {
@@ -83,6 +93,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
       <ContextCard title="客户产品范围" values={data.product_scope.labels.length ? [`${data.product_scope.labels.join('、')}（${data.product_scope.source}）`] : ['尚无可靠产品范围']} />
       <ContextCard title="授权边界" values={['本页只提供建议', '不调价、不改广告、不发布']} />
     </section>
+    <ProductSourceStatus source={clientProductSource} />
 
     <section className="rounded-2xl border border-me-ochre/30 bg-me-ochre/10 p-5">
       <p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">本轮经营问题</p>
@@ -100,7 +111,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
       </article>
       <article className="rounded-2xl border border-black/10 bg-white p-5">
         <h2 className="text-lg font-bold">同类产品判断</h2>
-        <div className="mt-3 space-y-2">{data.matches.length ? data.matches.map(match => <div key={`${match.client_product ?? 'missing'}-${match.competitor_product ?? 'missing'}`} className="rounded-lg border border-black/5 p-3 text-sm"><div className="flex items-start justify-between gap-3"><strong>{match.client_product ?? 'CTS 产品未提供'}</strong><span className="shrink-0 rounded-full bg-amber-50 px-2 py-1 text-xs font-bold text-amber-800">{statusLabel[match.status]}</span></div><p className="mt-1 text-me-charcoal/65">{match.competitor_product ?? '没有可确认的竞品对位'}</p><p className="mt-2 text-xs leading-5 text-me-charcoal/55">{match.reason}</p></div>) : <p className="text-sm text-me-charcoal/60">尚无可判断的产品记录。</p>}</div>
+        <div className="mt-3 space-y-2">{data.matches.length ? data.matches.map(match => <div key={`${match.client_product ?? 'missing'}-${match.competitor_product ?? 'missing'}`} className="rounded-lg border border-black/5 p-3 text-sm"><div className="flex items-start justify-between gap-3"><strong>{match.client_product ?? 'CTS 产品未提供'}</strong><span className="shrink-0 rounded-full bg-amber-50 px-2 py-1 text-xs font-bold text-amber-800">{statusLabel[match.status]}</span></div>{match.client_product && <p className="mt-2 text-xs text-me-charcoal/60">CTS：{match.client_duration_days ? `${match.client_duration_days} 天` : '天数待补'} · {match.client_price ?? '价格待补'}</p>}<p className="mt-2 text-xs font-bold text-me-charcoal/55">竞品候选（不是 CTS 产品）</p><p className="mt-1 text-me-charcoal/65">{match.competitor_product ?? '没有可确认的竞品对位'}</p>{match.competitor_domain && <p className="mt-1 text-xs text-me-charcoal/60">竞品：{match.competitor_domain} · {match.competitor_duration_days ? `${match.competitor_duration_days} 天` : '天数未知'} · {match.competitor_price ?? '价格未知'}</p>}<p className="mt-2 text-xs leading-5 text-me-charcoal/55">{match.reason}</p></div>) : <p className="text-sm text-me-charcoal/60">尚无可判断的产品记录。</p>}</div>
       </article>
     </section>
 
@@ -126,6 +137,17 @@ function CaptureProgress({ phase }: { phase: Exclude<CapturePhase, 'idle'> }) {
     <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/15" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={detail.width} aria-valuetext={detail.label}><div className={`h-full rounded-full transition-all duration-500 ${phase === 'failed' ? 'bg-red-300' : phase === 'complete' ? 'bg-green-300' : 'animate-pulse bg-me-gold'}`} style={{ width: `${detail.width}%` }} /></div>
     <p className="mt-2 text-xs leading-5 text-white/75">{detail.copy}</p>
   </div>
+}
+
+function ProductSourceStatus({ source }: { source?: Payload['client_product_source'] }) {
+  const details = {
+    master_brief: { label: '客户已确认产品资料', copy: '当前经营判断使用客户已确认的产品资料。', tone: 'border-green-200 bg-green-50 text-green-900' },
+    first_party_feed: { label: '已读取 CTS 第一方产品库', copy: `已读到 ${source?.count ?? 0} 条 active Tour；页面不需要再手动刷新。`, tone: 'border-green-200 bg-green-50 text-green-900' },
+    web_snapshot: { label: '当前使用官网网页快照', copy: `已读到 ${source?.count ?? 0} 条产品；第一方产品库尚未成为当前来源。`, tone: 'border-amber-200 bg-amber-50 text-amber-900' },
+    none: { label: '尚未读到 CTS 产品', copy: '当前没有可用于经营比较的 CTS 产品资料。', tone: 'border-amber-200 bg-amber-50 text-amber-900' },
+  } as const
+  const detail = details[source?.kind ?? 'none']
+  return <section className={`rounded-xl border p-4 ${detail.tone}`} role="status"><div className="flex flex-wrap items-center justify-between gap-2"><strong>{detail.label}</strong><span className="text-xs font-bold">{source?.count ?? 0} 条</span></div><p className="mt-1 text-sm">{detail.copy}</p></section>
 }
 
 function TourComparisonSection({ clientId, candidates, marketScope }: { clientId: string; candidates: OperatingBrief['comparison_candidates']; marketScope: string[] }) {

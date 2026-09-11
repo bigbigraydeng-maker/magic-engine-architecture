@@ -46,6 +46,9 @@ export async function readView(clientId: string, canEdit: boolean) {
   const ownRows = currentSnapshots.filter(row => ownDomain && canonicalDomain(row.domain) === ownDomain)
   const ownProducts = ownRows.flatMap(row => (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null)).map(operatingProductFromTour)
   const firstPartyProducts = await loadFirstPartyTourProducts(ownDomain)
+  const masterProducts = normalizeOperatingProducts(masterBrief.data?.products)
+  const clientProducts = masterProducts.length ? masterProducts : firstPartyProducts.length ? firstPartyProducts : ownProducts
+  const clientProductSource = masterProducts.length ? 'master_brief' : firstPartyProducts.length ? 'first_party_feed' : ownProducts.length ? 'web_snapshot' : 'none'
   const allCurrentSnapshots = latestFreshSnapshots([...snapshotRows, ...detailRows], asOf)
   const observations = latestSnapshots(snapshotRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
   const detailObservations = latestSnapshots(detailRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
@@ -71,12 +74,12 @@ export async function readView(clientId: string, canEdit: boolean) {
     client: { id: client.data.id, name: client.data.name },
     goal: activeGoal,
     product_scope: brief.product_scope,
-    client_products: normalizeOperatingProducts(masterBrief.data?.products).length ? normalizeOperatingProducts(masterBrief.data?.products) : firstPartyProducts.length ? firstPartyProducts : ownProducts,
+    client_products: clientProducts,
     competitor_products: competitorProducts.map(item => ({ ...item, records: item.records.filter(record => {
       if (brief.product_scope.status === 'unknown' || brief.product_scope.market_ids.length === 0) return false
       return matchTravelScope(`Tour: ${record.name} | Route: ${record.route}`, '', brief.product_scope).status === 'matched'
     }) })),
     evidence: operatingEvidence, now: asOf,
   })
-  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, budget: budget.data, brief, operating, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
+  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, budget: budget.data, brief, operating, client_product_source: { kind: clientProductSource, count: clientProducts.length }, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
 }
