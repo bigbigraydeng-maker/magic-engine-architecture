@@ -66,6 +66,16 @@ const dateRange = (values: (string | null)[]) => {
   return first === last ? first : `${first} 至 ${last}`
 }
 const isStale = (value: string | null, days: number, now: Date) => !value || now.getTime() - Date.parse(value) > days * DAY
+export function latestSnapshots<T extends { url: string; captured_at: string }>(rows: T[]): T[] {
+  const latest = new Map<string, T>()
+  for (const row of [...rows].sort((a, b) => Date.parse(b.captured_at) - Date.parse(a.captured_at))) {
+    if (!latest.has(row.url)) latest.set(row.url, row)
+  }
+  return [...latest.values()]
+}
+export function latestFreshSnapshots<T extends { url: string; captured_at: string }>(rows: T[], now: Date, days = 8): T[] {
+  return latestSnapshots(rows).filter(row => !isStale(row.captured_at, days, now))
+}
 const businessFacts = (text: string) => text.split('\n').filter(line => /Tour:/i.test(line)).slice(0, 100).map(line => {
   const fields = new Map(line.split('|').map(part => {
     const [key, ...value] = part.trim().split(':')
@@ -83,15 +93,13 @@ export function buildCompetitionBrief(input: BriefInput): CompetitionBrief {
   const now = input.now ?? new Date()
   const scopeApplies = input.productScopeApplies !== false
   const warnings: string[] = []
-  const latestByUrl = new Map<string, MarketSnapshot>()
-  for (const row of input.snapshots.data) if (!latestByUrl.has(row.url)) latestByUrl.set(row.url, row)
-  const current = [...latestByUrl.values()]
+  const current = latestSnapshots(input.snapshots.data)
   const snapshotAt = latestDate(current.map(row => row.captured_at))
   const productIncomplete = current.length < input.configuredPageCount
   const productHasStale = current.some(row => isStale(row.captured_at, 8, now))
   const productStatus: BriefStatus = input.snapshots.failed ? 'failed' : !input.configuredPageCount ? 'unconfigured' : !current.length ? 'no_observation' : productIncomplete || productHasStale ? 'stale' : 'limited'
   if (!['ready', 'limited'].includes(productStatus)) warnings.push(productStatus === 'failed' ? '竞品业务页面读取失败。' : productStatus === 'stale' ? '竞品业务页面存在缺失或超过 8 天的记录。' : '竞品业务页面尚未形成可用快照。')
-  const fresh = current.filter(row => !isStale(row.captured_at, 8, now))
+  const fresh = latestFreshSnapshots(input.snapshots.data, now, 8)
   const allFacts = fresh.flatMap(row => businessFacts(row.projection_content ?? '').map(fact => {
     const match = scopeApplies ? matchTravelScope(fact.raw, row.url, input.productScope) : { status: 'matched' as const, matched: [], outside: [] }
     return { ...fact, domain: row.domain, match }
