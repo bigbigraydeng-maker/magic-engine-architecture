@@ -1,0 +1,35 @@
+import { describe, expect, it } from 'vitest'
+import { buildExternalObservation, canonicalExternalUrl, normalisePublishedAt, observationContentHash, sourceDefinition } from '../sources'
+
+const clientId = '00000000-0000-0000-0000-000000000001'
+
+describe('external source registry', () => {
+  it('registers the initial NZ jobs and travel industry sources', () => {
+    expect(sourceDefinition('seek-nz')).toMatchObject({ name: 'SEEK', type: 'jobs', market: 'NZ' })
+    expect(sourceDefinition('indeed-nz')).toMatchObject({ name: 'Indeed', type: 'jobs', market: 'NZ' })
+    expect(sourceDefinition('travel-today')).toMatchObject({ name: 'Travel Today', type: 'industry_media' })
+  })
+
+  it('canonicalises tracking variants to the same URL', () => {
+    expect(canonicalExternalUrl('https://example.com/story/?utm_source=newsletter&ref=homepage#top')).toBe('https://example.com/story?ref=homepage')
+  })
+
+  it('normalises invalid publication dates to unknown', () => {
+    expect(normalisePublishedAt('2026-09-11T01:00:00+12:00')).toBe('2026-09-10T13:00:00.000Z')
+    expect(normalisePublishedAt('not-a-date')).toBeNull()
+  })
+
+  it('builds a source-backed observation with a stable content hash', () => {
+    const result = buildExternalObservation({
+      client_id: clientId, source_id: 'travel-today', source_url: 'https://example.com/story?utm_medium=email',
+      title: ' New route announced ', excerpt: ' The operator announced a new route. ', competitor_domain: 'example.com',
+      published_at: '2026-09-11T00:00:00Z', observed_at: '2026-09-11T01:00:00Z',
+    })
+    expect(result).toMatchObject({ source_name: 'Travel Today', canonical_url: 'https://example.com/story', status: 'observed' })
+    expect(result.content_hash).toBe(observationContentHash('New route announced', 'The operator announced a new route.'))
+  })
+
+  it('fails closed for an unregistered source', () => {
+    expect(() => buildExternalObservation({ client_id: clientId, source_id: 'unknown', source_url: 'https://example.com', excerpt: 'x', observed_at: '2026-09-11T00:00:00Z' })).toThrow('unknown_external_source')
+  })
+})
