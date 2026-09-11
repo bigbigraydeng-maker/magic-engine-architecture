@@ -52,8 +52,9 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
   useEffect(() => {
     if (capturePhase !== 'complete' || completionReloaded) return
     setCompletionReloaded(true)
-    const timer = window.setTimeout(() => setRefresh(value => value + 1), 750)
-    return () => window.clearTimeout(timer)
+    const first = window.setTimeout(() => setRefresh(value => value + 1), 750)
+    const second = window.setTimeout(() => setRefresh(value => value + 1), 4000)
+    return () => { window.clearTimeout(first); window.clearTimeout(second) }
   }, [capturePhase, completionReloaded])
 
   async function captureClientProducts() {
