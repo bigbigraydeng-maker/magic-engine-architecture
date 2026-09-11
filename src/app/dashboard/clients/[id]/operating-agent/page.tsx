@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import type { OperatingBrief } from '@/lib/web-intelligence/operating-brief'
+import type { TourLandscape } from '@/lib/web-intelligence/tour-landscape'
 
 type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; client_product_source?: { kind: 'master_brief' | 'first_party_feed' | 'web_snapshot' | 'none'; count: number }; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
 type ComparisonResult = { summary: string; client_strengths: string[]; competitor_strengths: string[]; differences: string[]; recommendations: string[]; unknowns: string[]; confidence: number; evidence_urls: string[] }
@@ -52,8 +53,9 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
   useEffect(() => {
     if (capturePhase !== 'complete' || completionReloaded) return
     setCompletionReloaded(true)
-    const timer = window.setTimeout(() => setRefresh(value => value + 1), 750)
-    return () => window.clearTimeout(timer)
+    const first = window.setTimeout(() => setRefresh(value => value + 1), 750)
+    const second = window.setTimeout(() => setRefresh(value => value + 1), 4000)
+    return () => { window.clearTimeout(first); window.clearTimeout(second) }
   }, [capturePhase, completionReloaded])
 
   async function captureClientProducts() {
@@ -111,7 +113,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
       </article>
       <article className="rounded-2xl border border-black/10 bg-white p-5">
         <h2 className="text-lg font-bold">同类产品判断</h2>
-        <div className="mt-3 space-y-2">{data.matches.length ? data.matches.map(match => <div key={`${match.client_product ?? 'missing'}-${match.competitor_product ?? 'missing'}`} className="rounded-lg border border-black/5 p-3 text-sm"><div className="flex items-start justify-between gap-3"><strong>{match.client_product ?? 'CTS 产品未提供'}</strong><span className="shrink-0 rounded-full bg-amber-50 px-2 py-1 text-xs font-bold text-amber-800">{statusLabel[match.status]}</span></div>{match.client_product && <p className="mt-2 text-xs text-me-charcoal/60">CTS：{match.client_duration_days ? `${match.client_duration_days} 天` : '天数待补'} · {match.client_price ?? '价格待补'}</p>}<p className="mt-2 text-xs font-bold text-me-charcoal/55">竞品候选（不是 CTS 产品）</p><p className="mt-1 text-me-charcoal/65">{match.competitor_product ?? '没有可确认的竞品对位'}</p>{match.competitor_domain && <p className="mt-1 text-xs text-me-charcoal/60">竞品：{match.competitor_domain} · {match.competitor_duration_days ? `${match.competitor_duration_days} 天` : '天数未知'} · {match.competitor_price ?? '价格未知'}</p>}<p className="mt-2 text-xs leading-5 text-me-charcoal/55">{match.reason}</p></div>) : <p className="text-sm text-me-charcoal/60">尚无可判断的产品记录。</p>}</div>
+        <ProductMatches matches={data.matches} />
       </article>
     </section>
 
@@ -150,11 +152,18 @@ function ProductSourceStatus({ source }: { source?: Payload['client_product_sour
   return <section className={`rounded-xl border p-4 ${detail.tone}`} role="status"><div className="flex flex-wrap items-center justify-between gap-2"><strong>{detail.label}</strong><span className="text-xs font-bold">{source?.count ?? 0} 条</span></div><p className="mt-1 text-sm">{detail.copy}</p></section>
 }
 
+function ProductMatches({ matches }: { matches: OperatingBrief['matches'] }) {
+  return <details className="mt-3 rounded-lg bg-black/[0.03] p-3"><summary className="cursor-pointer text-sm font-bold">查看逐条候选（{matches.length} 条，仅作证据参考）</summary><div className="mt-3 space-y-2">{matches.length ? matches.map(match => <div key={`${match.client_product ?? 'missing'}-${match.competitor_product ?? 'missing'}`} className="rounded-lg border border-black/5 bg-white p-3 text-sm"><div className="flex items-start justify-between gap-3"><strong>{match.client_product ?? 'CTS 产品未提供'}</strong><span className="shrink-0 rounded-full bg-amber-50 px-2 py-1 text-xs font-bold text-amber-800">{statusLabel[match.status]}</span></div>{match.client_product && <p className="mt-2 text-xs text-me-charcoal/60">CTS：{match.client_duration_days ? `${match.client_duration_days} 天` : '天数待补'} · {match.client_price ?? '价格待补'}</p>}<p className="mt-2 text-xs font-bold text-me-charcoal/55">竞品候选（不是 CTS 产品）</p><p className="mt-1 text-me-charcoal/65">{match.competitor_product ?? '没有可确认的竞品对位'}</p>{match.competitor_domain && <p className="mt-1 text-xs text-me-charcoal/60">竞品：{match.competitor_domain} · {match.competitor_duration_days ? `${match.competitor_duration_days} 天` : '天数未知'} · {match.competitor_price ?? '价格未知'}</p>}<p className="mt-2 text-xs leading-5 text-me-charcoal/55">{match.reason}</p></div>) : <p className="text-sm text-me-charcoal/60">尚无可判断的产品记录。</p>}</div></details>
+}
+
 function TourComparisonSection({ clientId, candidates, marketScope }: { clientId: string; candidates: OperatingBrief['comparison_candidates']; marketScope: string[] }) {
   const [selected, setSelected] = useState<number | null>(null)
   const [results, setResults] = useState<Record<number, ComparisonResult>>({})
   const [busy, setBusy] = useState<number | null>(null)
   const [error, setError] = useState('')
+  const [landscape, setLandscape] = useState<TourLandscape | null>(null)
+  const [landscapeBusy, setLandscapeBusy] = useState(false)
+  const [landscapeError, setLandscapeError] = useState('')
   if (!candidates.length) return <section className="rounded-2xl border border-black/10 bg-white p-5"><p className="text-xs font-bold text-me-charcoal/55">AI 产品对比</p><h2 className="mt-1 text-lg font-bold">暂时没有足够接近的竞品候选</h2><p className="mt-2 text-sm text-me-charcoal/65">需要先读取 CTS 产品和竞品 Tour 的路线、天数、价格及包含项目，才能进行可靠的优劣势分析。</p></section>
   async function analyse(index: number) {
     const candidate = candidates[index]
@@ -168,9 +177,18 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
     finally { setBusy(null) }
   }
   const result = selected == null ? null : results[selected]
-  return <section className="space-y-4 rounded-2xl border border-me-ochre/30 bg-me-ochre/5 p-5" aria-label="AI Tour 产品对比">
-    <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">AI 产品对比</p><h2 className="mt-1 text-xl font-bold">我们的团，和最接近的竞品团各自强在哪里？</h2><p className="mt-2 text-sm leading-6 text-me-charcoal/70">先由规则找到相似候选，再由 AI 解释消费者真正能感知的差异。价格和路线不同不是错误，而是比较内容。</p></div>
-    <div className="grid gap-3 lg:grid-cols-2">{candidates.map((candidate, index) => <button type="button" key={`${candidate.client_product.name}-${candidate.competitor_product.source_url}`} onClick={() => void analyse(index)} disabled={busy !== null} className={`text-left rounded-xl border bg-white p-4 transition ${selected === index ? 'border-me-ochre ring-2 ring-me-ochre/20' : 'border-black/10 hover:border-me-ochre/50'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">CTS：{candidate.client_product.name}</p><p className="mt-1 font-black">竞品：{candidate.competitor_product.name}</p></div><span className="shrink-0 rounded-full bg-me-ivory px-2 py-1 text-[11px] font-bold">相似度 {candidate.match_score}</span></div><p className="mt-3 text-xs font-bold text-me-ochre">{busy === index ? '正在分析…' : results[index] ? '重新生成对比' : '点击查看优劣势对比 →'}</p></button>)}</div>
+  async function summariseLandscape() {
+    setLandscapeBusy(true); setLandscapeError('')
+    try { const response = await fetch(`/api/clients/${encodeURIComponent(clientId)}/web-intelligence/tour-landscape`, { method: 'POST' }); const payload = await response.json() as { landscape?: TourLandscape; error?: string }; if (!response.ok || !payload.landscape) throw new Error(payload.error ?? '总览生成失败'); setLandscape(payload.landscape) }
+    catch (reason) { setLandscapeError(reason instanceof Error ? reason.message : '暂时无法生成竞品总览。') }
+    finally { setLandscapeBusy(false) }
+  }
+  return <section className="space-y-4 rounded-2xl border border-me-ochre/30 bg-me-ochre/5 p-5" aria-label="AI Tour 产品总览">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">AI 竞品总览</p><h2 className="mt-1 text-xl font-bold">市场上正在卖什么，CTS 该关注什么？</h2><p className="mt-2 text-sm leading-6 text-me-charcoal/70">AI 会综合多个竞品的城市、天数、价格和定位，给出消费者视角的整体判断，不强行把不同 Tour 一一配对。</p></div><button type="button" onClick={() => void summariseLandscape()} disabled={landscapeBusy} className="rounded-lg bg-me-ochre px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{landscapeBusy ? '正在汇总…' : landscape ? '重新生成总览' : '生成竞品总览'}</button></div>
+    {landscapeError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{landscapeError}</p>}
+    {landscape && <article className="space-y-4 rounded-xl border border-black/10 bg-white p-5"><div><p className="text-xs font-bold text-me-charcoal/55">整体结论</p><h3 className="mt-1 text-lg font-black">{landscape.headline}</h3><p className="mt-2 text-sm leading-6">{landscape.market_summary}</p></div><div className="grid gap-3 md:grid-cols-2"><ComparisonList title="CTS 可以利用的机会" items={landscape.client_opportunities} tone="green" /><ComparisonList title="需要留意的风险" items={landscape.client_risks} tone="amber" /><ComparisonList title="建议优先关注" items={landscape.recommended_focus} tone="ochre" /><ComparisonList title="还缺什么证据" items={landscape.unknowns} tone="muted" /></div><p className="border-t border-black/5 pt-3 text-xs text-me-charcoal/50">Haiku 汇总 · 置信度 {Math.round(landscape.confidence * 100)}% · 仅供人工复核</p></article>}
+    {!landscape && <p className="rounded-xl bg-white/70 p-4 text-sm text-me-charcoal/65">点击“生成竞品总览”，查看当前市场组合的整体判断。</p>}
+    <details className="rounded-xl border border-black/10 bg-white p-4"><summary className="cursor-pointer text-sm font-bold">查看逐条候选证据（{candidates.length} 条）</summary><div className="mt-4 grid gap-3 lg:grid-cols-2">{candidates.map((candidate, index) => <button type="button" key={`${candidate.client_product.name}-${candidate.competitor_product.source_url}`} onClick={() => void analyse(index)} disabled={busy !== null} className={`text-left rounded-xl border bg-white p-4 transition ${selected === index ? 'border-me-ochre ring-2 ring-me-ochre/20' : 'border-black/10 hover:border-me-ochre/50'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">CTS：{candidate.client_product.name}</p><p className="mt-1 font-black">竞品：{candidate.competitor_product.name}</p></div><span className="shrink-0 rounded-full bg-me-ivory px-2 py-1 text-[11px] font-bold">相似度 {candidate.match_score}</span></div><p className="mt-3 text-xs font-bold text-me-ochre">{busy === index ? '正在分析…' : results[index] ? '重新生成对比' : '点击查看优劣势对比 →'}</p></button>)}</div></details>
     {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     {result && <article className="space-y-4 rounded-xl border border-black/10 bg-white p-5"><div><p className="text-xs font-bold text-me-charcoal/55">结论</p><h3 className="mt-1 text-lg font-black leading-7">{result.summary}</h3><p className="mt-2 text-xs text-me-charcoal/55">AI 置信度 {Math.round(result.confidence * 100)}% · 来源已锁定为客户与竞品页面</p></div><div className="grid gap-3 md:grid-cols-2"><ComparisonList title="CTS 的优势" items={result.client_strengths} tone="green" /><ComparisonList title="竞品的优势" items={result.competitor_strengths} tone="amber" /></div><ComparisonList title="消费者能感知的差异" items={result.differences} /><ComparisonList title="可以考虑的方向" items={result.recommendations} tone="ochre" />{result.unknowns.length > 0 && <ComparisonList title="仍需补证的信息" items={result.unknowns} tone="muted" />}<div className="border-t border-black/5 pt-3 text-xs text-me-charcoal/55">仅供人工评估，不代表已调整产品或执行营销动作。{result.evidence_urls.map(url => <a key={url} className="ml-3 underline" href={url} target="_blank" rel="noreferrer">查看来源</a>)}</div></article>}
   </section>
