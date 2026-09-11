@@ -1,4 +1,5 @@
 import { runActorAndGetResults } from '@/lib/apify/client'
+import { scrapeSeek } from '@/lib/prospecting/job-boards/scrapers'
 import { buildExternalObservation, sourceDefinition, sourceDefaultUrls } from './sources'
 import type { ExternalObservation } from './contracts'
 
@@ -100,7 +101,6 @@ export async function collectApifyExternalObservations(input: {
 export const WI_APIFY_ACTORS = {
   rssFeed: 'ef12/rss-scraper',
   articleExtractor: 'automation-lab/news-article-extractor',
-  seekNz: 'corvuslab/seek-scraper',
 } as const
 
 export function collectRssFeed(input: {
@@ -137,14 +137,23 @@ export function collectConfiguredIndustrySource(input: {
 export function collectSeekNzJobs(input: {
   clientId: string; query?: string; queries?: string[]; location?: string; observedAt: string; maxResults?: number
 }): Promise<ApifyExternalCollection> {
-  return collectApifyExternalObservations({
-    actorId: WI_APIFY_ACTORS.seekNz,
-    actorInput: {
-      ...(input.query ? { query: input.query } : {}), ...(input.queries?.length ? { queries: input.queries } : {}),
-      country: 'NZ', ...(input.location ? { location: input.location } : {}),
-      dateRange: '7', sortMode: 'date', maxResults: Math.min(input.maxResults ?? 50, 100),
-      includeDetails: true, incrementalMode: true, compact: false, excludeEmptyFields: true,
-    },
-    sourceId: 'seek-nz', clientId: input.clientId, observedAt: input.observedAt,
+  const keywords = [...(input.queries ?? []), ...(input.query ? [input.query] : [])].filter(Boolean)
+  return scrapeSeek(keywords, Math.min(input.maxResults ?? 50, 100)).then(postings => {
+    const location = input.location?.trim().toLowerCase()
+    const scopedPostings = location ? postings.filter(posting => posting.location_raw.toLowerCase().includes(location)) : postings
+    const observations: ExternalObservation[] = []
+    let rejected = 0
+    for (const posting of scopedPostings) {
+      if (!posting.url) { rejected += 1; continue }
+      try {
+        observations.push(buildExternalObservation({
+          client_id: input.clientId, source_id: 'seek-nz', source_url: posting.url,
+          title: posting.title,
+          excerpt: [`职位：${posting.title}`, `公司：${posting.company}`, posting.location_raw && `地点：${posting.location_raw}`, posting.classification && `分类：${posting.classification}`].filter(Boolean).join('\n'),
+          published_at: posting.posted_at, observed_at: input.observedAt,
+        }))
+      } catch { rejected += 1 }
+    }
+    return { observations, rejected, runId: null }
   })
 }

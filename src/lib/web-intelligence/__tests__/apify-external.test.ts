@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 const { runActorAndGetResults } = vi.hoisted(() => ({ runActorAndGetResults: vi.fn() }))
 vi.mock('@/lib/apify/client', () => ({ runActorAndGetResults }))
+const { scrapeSeek } = vi.hoisted(() => ({ scrapeSeek: vi.fn() }))
+vi.mock('@/lib/prospecting/job-boards/scrapers', () => ({ scrapeSeek }))
 
 import { collectApifyExternalObservations, collectConfiguredIndustrySource, collectIndustryWebsite, collectRssFeed, collectSeekNzJobs, WI_APIFY_ACTORS } from '../apify-external'
 
@@ -62,8 +64,10 @@ describe('Apify external observation adapter', () => {
     runActorAndGetResults.mockResolvedValue({ success: true, runId: 'generic-1', data: [] })
     await collectIndustryWebsite({ sourceId: 'travel-today', clientId, siteUrl: 'https://travel.example', observedAt: '2026-09-11T01:00:00Z', maxArticles: 100 })
     expect(runActorAndGetResults).toHaveBeenCalledWith(WI_APIFY_ACTORS.articleExtractor, expect.objectContaining({ startUrls: ['https://travel.example'], maxArticles: 50, extractFullContent: true }), undefined)
-    await collectSeekNzJobs({ clientId, queries: ['tour manager'], location: 'Auckland', observedAt: '2026-09-11T01:00:00Z', maxResults: 500 })
-    expect(runActorAndGetResults).toHaveBeenCalledWith(WI_APIFY_ACTORS.seekNz, expect.objectContaining({ country: 'NZ', queries: ['tour manager'], location: 'Auckland', maxResults: 100, incrementalMode: true }), undefined)
+    scrapeSeek.mockResolvedValue([{ board: 'seek', company: 'Example Tours', title: 'Tour Manager', location_raw: 'Auckland', classification: null, url: 'https://www.seek.co.nz/job/1', posted_at: '2026-09-11T00:00:00Z', keyword_matched: 'tour manager' }])
+    const seek = await collectSeekNzJobs({ clientId, queries: ['tour manager'], location: 'Auckland', observedAt: '2026-09-11T01:00:00Z', maxResults: 500 })
+    expect(scrapeSeek).toHaveBeenCalledWith(['tour manager'], 100)
+    expect(seek.observations[0]).toMatchObject({ source_type: 'jobs', source_name: 'SEEK', title: 'Tour Manager' })
   })
 
   it('uses the registered Travel Today URL when no override is supplied', async () => {
