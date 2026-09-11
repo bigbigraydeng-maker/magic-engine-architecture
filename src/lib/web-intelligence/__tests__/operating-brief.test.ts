@@ -7,6 +7,13 @@ const record = { name: 'Wonders of China', durationDays: 17, price: 'from $9,030
 const evidence = [{ id: '00000000-0000-0000-0000-000000000001', client_id: 'client', source: 'competitor website', scope: 'competitor' as const, statement: 'Wendy Wu has a China Tour', observed_at: '2026-09-10T00:00:00Z', fact_type: 'fact' as const, confidence: 'high' as const }]
 
 describe('buildOperatingBrief', () => {
+  it('exposes every current Tour as a separately viewable catalog item', () => {
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record, { ...record, name: 'China by Rail' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
+    expect(brief.tour_catalog).toHaveLength(2)
+    expect(brief.tour_catalog.map(item => item.record.name)).toEqual(['Wonders of China', 'China by Rail'])
+    expect(brief.tour_catalog[0]).toMatchObject({ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at })
+  })
+
   it('refuses price advice when the client product source is missing', () => {
     const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
     expect(brief.matches[0].status).toBe('insufficient_evidence')

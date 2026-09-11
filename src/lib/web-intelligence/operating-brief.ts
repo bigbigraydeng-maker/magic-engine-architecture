@@ -28,6 +28,13 @@ export type ProductMatch = {
   reason: string
 }
 
+export type TourCatalogItem = {
+  domain: string
+  source_url: string
+  observed_at: string | null
+  record: TourRecord
+}
+
 export type OperatingDecision = {
   question: string
   context: string[]
@@ -46,6 +53,7 @@ export type OperatingBrief = {
   client_name: string
   goal: { title: string; status: string; metric: string; target: number | null; period_start: string; period_end: string } | null
   product_scope: TravelScope
+  tour_catalog: TourCatalogItem[]
   matches: ProductMatch[]
   decision: OperatingDecision
   data_gaps: string[]
@@ -200,7 +208,11 @@ export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief 
   if (input.product_scope.labels.length) context.push(`客户产品范围：${input.product_scope.labels.join('、')}（来源：${input.product_scope.source}）`)
   return {
     as_of: now.toISOString(), client_id: input.client.id, client_name: input.client.name,
-    goal: input.goal, product_scope: input.product_scope, matches,
+    goal: input.goal, product_scope: input.product_scope,
+    tour_catalog: input.competitor_products.flatMap(item => item.records.map(record => ({
+      domain: item.domain, source_url: item.source_url, observed_at: item.observed_at, record,
+    }))),
+    matches,
     decision: {
       question: '当前是否需要跟进主要竞品的中国团价格或促销？',
       context, external_signal: competitorSignal,

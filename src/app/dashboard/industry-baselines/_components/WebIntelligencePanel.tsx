@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import type { CompetitionBrief as CompetitionBriefData } from '@/lib/web-intelligence/competition-brief'
+import type { OperatingBrief, TourCatalogItem } from '@/lib/web-intelligence/operating-brief'
 import { CompetitionBrief } from './CompetitionBrief'
 import { matchChangedToursScope, projectTravelContent, travelMarketLabels, type TravelScopeMatch } from '@/lib/web-intelligence/profiles/travel'
 
@@ -34,6 +35,7 @@ type Payload = {
   client: { id: string; name: string }; settings: Settings | null; competitors: Competitor[]
   signals: Signal[]; evidence: Evidence[]; runs: Run[]; observations: Observation[]
   brief: CompetitionBriefData
+  operating?: OperatingBrief
   budget: { accounted_nzd: number; reserved_nzd: number }; can_edit: boolean; can_run: boolean
 }
 type AnalysisTarget = { domain: string; url: string; tier: Competitor['tier'] }
@@ -243,7 +245,10 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
       <Signals signals={data.signals} evidence={data.evidence} runs={data.runs} targets={targets} batch={batch} asOf={data.brief.as_of} clientName={data.client.name} productScope={data.brief.product_scope} />
       <details className="rounded-xl border border-black/10 bg-white p-4">
         <summary className="cursor-pointer text-sm font-bold">查看完整产品盘面与数据限制</summary>
-        <div className="mt-4"><CompetitionBrief brief={data.brief} /></div>
+        <div className="mt-4 space-y-5">
+          <TourCatalog tours={data.operating?.tour_catalog ?? []} />
+          <CompetitionBrief brief={data.brief} />
+        </div>
       </details>
       <details className="rounded-xl border border-black/10 bg-white p-4">
         <summary className="cursor-pointer text-sm font-bold">重新采集与系统运行说明</summary>
@@ -271,6 +276,32 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
       </details>
     </>}
   </div>
+}
+
+function TourCatalog({ tours }: { tours: TourCatalogItem[] }) {
+  if (tours.length === 0) return <section className="rounded-xl border border-black/10 bg-me-ivory p-4" aria-label="Tour 明细"><h3 className="font-bold">逐个 Tour 查看</h3><p className="mt-2 text-sm text-me-charcoal/65">当前有效快照中还没有识别出可单独展示的 Tour。</p></section>
+  return <section className="space-y-3" aria-label="Tour 明细">
+    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">产品明细</p><h3 className="mt-1 text-lg font-bold">逐个 Tour 查看 · {tours.length} 条</h3><p className="mt-1 text-sm text-me-charcoal/65">以下是最近一次有效网页快照识别出的字段。它表示竞品页面公开展示的内容，不代表客户真实访问量。</p></div>
+    <div className="grid gap-3 lg:grid-cols-2">
+      {tours.map((item, index) => <article className="rounded-xl border border-black/10 bg-white p-4" key={`${item.domain}-${item.record.name}-${item.source_url}-${index}`}>
+        <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-xs font-bold text-me-charcoal/55">{item.domain}</p><h4 className="mt-1 text-base font-black">{item.record.name}</h4></div><span className="rounded-full bg-green-50 px-2 py-1 text-[11px] font-bold text-green-800">已读取</span></div>
+        <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+          <TourField label="总天数" value={`${item.record.durationDays} 天`} />
+          <TourField label="价格" value={item.record.price} />
+          <TourField label="促销" value={item.record.promotion} />
+          <TourField label="评价" value={item.record.reviews} />
+          <TourField label="路线摘要" value={item.record.route} wide />
+          <TourField label="包含项目" value={item.record.includes} wide />
+          <TourField label="逐日行程" value="来源页面未提供逐日安排" wide muted />
+        </dl>
+        <div className="mt-4 border-t border-black/5 pt-3 text-xs leading-5 text-me-charcoal/55"><p>观察于 {item.observed_at ? date(item.observed_at) : '时间未知'} NZ</p><a className="break-all underline" href={item.source_url} target="_blank" rel="noopener noreferrer">打开来源页面</a></div>
+      </article>)}
+    </div>
+  </section>
+}
+
+function TourField({ label, value, wide = false, muted = false }: { label: string; value: string; wide?: boolean; muted?: boolean }) {
+  return <div className={wide ? 'col-span-2' : ''}><dt className="text-xs font-bold text-me-charcoal/55">{label}</dt><dd className={`mt-1 break-words leading-5 ${muted ? 'text-me-charcoal/50' : ''}`}>{value || '页面未提供'}</dd></div>
 }
 
 function MonitoringOverview({ targets, runs, observations, batch }: { targets: AnalysisTarget[]; runs: Run[]; observations: Observation[]; batch: BatchTarget[] }) {
