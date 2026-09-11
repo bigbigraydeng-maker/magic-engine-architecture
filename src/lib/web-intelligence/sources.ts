@@ -15,6 +15,7 @@ export const externalSourceRegistry: readonly ExternalSourceDefinition[] = [
   { id: 'travel-today', name: 'Travel Today', type: 'industry_media', tier: 'B', market: 'NZ/AU', default_urls: ['https://traveltoday.co.nz/news/'], validity_hours: 168 },
   { id: 'travelinc-memo', name: 'TRAVELinc Memo', type: 'industry_media', tier: 'B', market: 'NZ/AU', default_urls: ['https://travelinc.co.nz/'], validity_hours: 168 },
   { id: 'tourism-new-zealand-news', name: 'Tourism New Zealand News', type: 'industry_news', tier: 'B', market: 'NZ', default_urls: ['https://www.tourismnewzealand.com/news-and-activity/'], validity_hours: 168 },
+  { id: 'facebook-group-public', name: 'Facebook Group（公开）', type: 'facebook_group', tier: 'B', market: 'public-only', validity_hours: 72 },
   // Controlled source only: authorised export or Meta-approved integration.
   { id: 'facebook-group-authorized', name: 'Facebook Group（授权）', type: 'facebook_group', tier: 'C', market: 'customer-authorized', requires_authorization: true, validity_hours: 72 },
 ]

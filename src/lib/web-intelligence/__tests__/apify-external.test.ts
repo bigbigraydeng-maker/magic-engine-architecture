@@ -5,7 +5,7 @@ vi.mock('@/lib/apify/client', () => ({ runActorAndGetResults }))
 const { scrapeSeek } = vi.hoisted(() => ({ scrapeSeek: vi.fn() }))
 vi.mock('@/lib/prospecting/job-boards/scrapers', () => ({ scrapeSeek }))
 
-import { collectApifyExternalObservations, collectConfiguredIndustrySource, collectIndustryWebsite, collectRssFeed, collectSeekNzJobs, WI_APIFY_ACTORS } from '../apify-external'
+import { collectApifyExternalObservations, collectConfiguredIndustrySource, collectFacebookPublicGroupPosts, collectIndustryWebsite, collectRssFeed, collectSeekNzJobs, WI_APIFY_ACTORS } from '../apify-external'
 
 const clientId = '00000000-0000-0000-0000-000000000001'
 
@@ -74,5 +74,24 @@ describe('Apify external observation adapter', () => {
     runActorAndGetResults.mockResolvedValue({ success: true, runId: 'configured-1', data: [] })
     await collectConfiguredIndustrySource({ sourceId: 'travel-today', clientId, observedAt: '2026-09-11T01:00:00Z' })
     expect(runActorAndGetResults).toHaveBeenCalledWith(WI_APIFY_ACTORS.articleExtractor, expect.objectContaining({ startUrls: ['https://traveltoday.co.nz/news/'] }), undefined)
+  })
+
+  it('collects only bounded public Facebook group URLs without login credentials', async () => {
+    runActorAndGetResults.mockResolvedValue({ success: true, runId: 'fb-1', data: [{
+      postUrl: 'https://www.facebook.com/groups/123/posts/456', text: 'Discussion about China tours', postedAt: '2026-09-11T00:00:00Z',
+    }] })
+    const result = await collectFacebookPublicGroupPosts({
+      clientId, groupUrls: ['https://www.facebook.com/groups/123/', 'https://facebook.com/groups/private-slug'],
+      searchTerms: ['China'], observedAt: '2026-09-11T01:00:00Z', maxItems: 500, maxPagesPerGroup: 50,
+    })
+    expect(runActorAndGetResults).toHaveBeenCalledWith(WI_APIFY_ACTORS.facebookPublicGroupPosts, expect.objectContaining({
+      startUrls: [{ url: 'https://www.facebook.com/groups/123/' }], maxItems: 100, searchTerms: ['China'], maxPagesPerGroup: 20,
+    }), undefined)
+    expect(result.observations[0]).toMatchObject({ source_type: 'facebook_group', source_name: 'Facebook Group（公开）', title: '', excerpt: 'Discussion about China tours' })
+  })
+
+  it('fails closed when no numeric public group URL is supplied', async () => {
+    await expect(collectFacebookPublicGroupPosts({ clientId, groupUrls: ['https://www.facebook.com/groups/private-slug'], observedAt: '2026-09-11T01:00:00Z' }))
+      .rejects.toThrow('public_facebook_group_url_required')
   })
 })

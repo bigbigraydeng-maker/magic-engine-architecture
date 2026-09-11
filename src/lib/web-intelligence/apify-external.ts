@@ -67,7 +67,7 @@ export async function collectApifyExternalObservations(input: {
   const observations: ExternalObservation[] = []
   let rejected = 0
   for (const item of result.data) {
-    const sourceUrl = text(item, ['url', 'sourceUrl', 'source_url', 'link', 'articleUrl', 'jobUrl'])
+    const sourceUrl = text(item, ['url', 'sourceUrl', 'source_url', 'link', 'articleUrl', 'jobUrl', 'postUrl', 'post_url', 'permalink'])
     const title = text(item, ['title', 'name', 'headline'])
     const excerpt = text(item, ['excerpt', 'description', 'descriptionText', 'teaser', 'text', 'content', 'summary', 'snippet'])
       || (input.sourceId === 'seek-nz' ? jobExcerpt(item) : '')
@@ -101,6 +101,7 @@ export async function collectApifyExternalObservations(input: {
 export const WI_APIFY_ACTORS = {
   rssFeed: 'ef12/rss-scraper',
   articleExtractor: 'automation-lab/news-article-extractor',
+  facebookPublicGroupPosts: 'automation-lab/facebook-group-posts-scraper',
 } as const
 
 export function collectRssFeed(input: {
@@ -132,6 +133,35 @@ export function collectConfiguredIndustrySource(input: {
   const siteUrl = input.siteUrl ?? sourceDefaultUrls(input.sourceId)[0]
   if (!siteUrl) throw new Error('source_url_required')
   return collectIndustryWebsite({ ...input, siteUrl })
+}
+
+function publicFacebookGroupUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'https:' || url.protocol === 'http:')
+      && ['facebook.com', 'www.facebook.com'].includes(url.hostname.toLowerCase())
+      && /^\/groups\/\d+\/?$/.test(url.pathname)
+  } catch {
+    return false
+  }
+}
+
+export async function collectFacebookPublicGroupPosts(input: {
+  clientId: string; groupUrls: string[]; observedAt: string; searchTerms?: string[]; since?: string; maxItems?: number; maxPagesPerGroup?: number
+}): Promise<ApifyExternalCollection> {
+  const groupUrls = [...new Set(input.groupUrls.filter(publicFacebookGroupUrl))].slice(0, 10)
+  if (!groupUrls.length) throw new Error('public_facebook_group_url_required')
+  return collectApifyExternalObservations({
+    actorId: WI_APIFY_ACTORS.facebookPublicGroupPosts,
+    actorInput: {
+      startUrls: groupUrls.map(url => ({ url })),
+      maxItems: Math.min(input.maxItems ?? 25, 100),
+      ...(input.searchTerms?.length ? { searchTerms: input.searchTerms.slice(0, 20) } : {}),
+      ...(input.since ? { since: input.since } : {}),
+      maxPagesPerGroup: Math.min(input.maxPagesPerGroup ?? 2, 20),
+    },
+    sourceId: 'facebook-group-public', clientId: input.clientId, observedAt: input.observedAt,
+  })
 }
 
 export function collectSeekNzJobs(input: {
