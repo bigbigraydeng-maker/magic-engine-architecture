@@ -31,11 +31,13 @@ type Run = {
   interpretation_cost_usd: number | null; accounted_nzd: number | null; reserved_nzd: number
 }
 type Observation = { run_id: string; domain: string; url: string; observed_at: string }
+type DiscoveredTour = { name: string; url: string; domain: string; listing_url: string; observed_at: string }
 type Payload = {
   client: { id: string; name: string }; settings: Settings | null; competitors: Competitor[]
   signals: Signal[]; evidence: Evidence[]; runs: Run[]; observations: Observation[]
   brief: CompetitionBriefData
   operating?: OperatingBrief
+  discovered_tours?: DiscoveredTour[]
   budget: { accounted_nzd: number; reserved_nzd: number }; can_edit: boolean; can_run: boolean
 }
 type AnalysisTarget = { domain: string; url: string; tier: Competitor['tier'] }
@@ -247,6 +249,7 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
         <summary className="cursor-pointer text-sm font-bold">查看完整产品盘面与数据限制</summary>
         <div className="mt-4 space-y-5">
           <TourCatalog tours={data.operating?.tour_catalog ?? []} />
+          <DiscoveredTourLinks tours={data.discovered_tours ?? []} />
           <CompetitionBrief brief={data.brief} />
         </div>
       </details>
@@ -276,6 +279,14 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
       </details>
     </>}
   </div>
+}
+
+function DiscoveredTourLinks({ tours }: { tours: DiscoveredTour[] }) {
+  if (tours.length === 0) return null
+  return <section className="space-y-3" aria-label="已发现的 Tour 详情页">
+    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">详情页发现</p><h3 className="mt-1 text-lg font-bold">已发现 {tours.length} 个 Tour detail 页面</h3><p className="mt-1 text-sm text-me-charcoal/65">这些链接来自最近一次有效的产品列表页。当前先展示发现结果，抓取详情内容会逐个经过预算控制。</p></div>
+    <div className="divide-y divide-black/5 rounded-xl border border-black/10 bg-white px-4">{tours.map((tour, index) => <div className="flex flex-wrap items-center justify-between gap-3 py-3" key={`${tour.url}-${index}`}><div className="min-w-0"><p className="font-bold">{tour.name}</p><p className="break-all text-xs text-me-charcoal/55">{tour.domain} · 发现于 {date(tour.observed_at)} NZ</p></div><a className="shrink-0 rounded-lg border border-black/15 px-3 py-2 text-xs font-bold underline" href={tour.url} target="_blank" rel="noopener noreferrer">打开详情页</a></div>)}</div>
+  </section>
 }
 
 function TourCatalog({ tours }: { tours: TourCatalogItem[] }) {

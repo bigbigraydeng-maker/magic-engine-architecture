@@ -17,6 +17,8 @@ export type TourRecord = {
   itinerary?: string[]
 }
 
+export type DiscoveredTourLink = { name: string; url: string }
+
 export type TravelScope = {
   status: 'configured' | 'inferred' | 'unknown'
   market_ids: string[]
@@ -212,6 +214,26 @@ export function extractTourRecords(raw: string): TourRecord[] {
     }]
   })
   return records.sort((a, b) => a.name.localeCompare(b.name, 'en-NZ'))
+}
+
+/** Discover only same-origin Tour detail links from a captured listing page. */
+export function extractTourLinks(raw: string, sourceUrl: string): DiscoveredTourLink[] {
+  let base: URL
+  try { base = new URL(sourceUrl) } catch { return [] }
+  const links: DiscoveredTourLink[] = []
+  const markdown = /\[([^\]]{2,180})\]\((https?:\/\/[^)\s]+|\/[^)\s]+)\)/gi
+  for (const match of raw.matchAll(markdown)) {
+    const name = clean(match[1])
+    if (/^(?:view|read|learn|see)\s+(?:tour|more|details?)$/i.test(name)) continue
+    let url: URL
+    try { url = new URL(match[2], base) } catch { continue }
+    if (url.protocol !== 'https:' || url.hostname !== base.hostname) continue
+    if (!/(?:^|\/)tours?\/[^/]+(?:\/|$)|(?:^|\/)escorted-tours\/[^/]+|(?:^|\/)private-tours\/[^/]+/i.test(url.pathname)) continue
+    url.hash = ''
+    const canonical = url.href
+    if (!links.some(item => item.url === canonical)) links.push({ name, url: canonical })
+  }
+  return links.slice(0, 100)
 }
 
 export function projectTravelContent(raw: string, role: BusinessPageRole): string | null {
