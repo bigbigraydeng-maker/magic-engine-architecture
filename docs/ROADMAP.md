@@ -45,6 +45,7 @@
 
 - [ ] **ME-WI.0.2-A**：统一 source / observation / evidence / event 契约、来源等级、新鲜度、去重、运行状态与结果呈现。
 - [ ] **ME-WI.0.2-B**：主流新闻、行业新闻、行业杂志/行业网站采集与事件抽取；旅游行业首批纳入 Travel Today 等垂直来源。
+- [x] **ME-WI.0.2-B0**：完成首批 Apify Actor 适配和 Travel Today、TRAVELinc、Tourism New Zealand 来源登记；待生产 migration、真实小样本和调度验收。
 - [ ] **ME-WI.0.2-C**：首期接入新西兰 SEEK、Indeed 公开招聘信息，识别组织与战略领先信号，并明确不等同于已发生业务事实。
 - [ ] **ME-WI.0.2-D**：SERP、公开广告库、AI 可见度、口碑接入统一事件模型，复用既有 provider，不恢复已退役 `ai-tracker`。
 - [ ] **ME-WI.0.2-E**：跨来源事件聚合、高级客户预警与周度情报摘要。
