@@ -117,7 +117,7 @@ function CaptureProgress({ phase }: { phase: Exclude<CapturePhase, 'idle'> }) {
     queued: { label: '已排队', copy: '请求已提交，等待读取服务开始。页面会自动检查状态。', width: 20, tone: 'text-amber-100' },
     capturing: { label: '正在读取网页', copy: '正在读取 CTS 官网内容，暂时不用手动刷新。', width: 48, tone: 'text-amber-100' },
     analysing: { label: '正在整理产品资料', copy: '网页已读到，正在整理 Tour、路线、天数和价格。', width: 78, tone: 'text-amber-100' },
-    complete: { label: '已完成', copy: 'CTS 产品资料已更新，下面的经营判断已使用最新结果。', width: 100, tone: 'text-green-200' },
+    complete: { label: '本次官网读取已完成', copy: '网页读取已完成。若 CTS 第一方产品源已部署，刷新后产品盘面会使用它；否则暂时沿用已有资料。', width: 100, tone: 'text-green-200' },
     failed: { label: '读取未完成', copy: '这次没有完成读取，可以稍后点击按钮重试。', width: 100, tone: 'text-red-200' },
   }
   const detail = details[phase]
