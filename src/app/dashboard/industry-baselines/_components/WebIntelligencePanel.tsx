@@ -236,11 +236,15 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
     {error && !data && <button className={button} onClick={reload} disabled={loading}>重新读取</button>}
     {data && <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-me-ivory p-4">
-        <div><h2 className="font-bold">{data.client.name} · 竞争简报</h2><p className="mt-1 text-sm">{monitored} 家竞品 · {targets.length} 个业务页面 · 本月已用 NZ${money(data.budget.accounted_nzd)}</p></div>
+        <div><h2 className="font-bold">{data.client.name} · 竞争监控</h2><p className="mt-1 text-sm">{monitored} 家竞品 · {targets.length} 个监控页面 · 本月已用 NZ${money(data.budget.accounted_nzd)}</p></div>
         <button className="rounded-lg border border-black/15 bg-white px-3 py-2 text-sm disabled:opacity-40" onClick={reload} disabled={loading}>刷新结果</button>
       </div>
+      <MonitoringOverview targets={targets} runs={data.runs} observations={data.observations ?? []} batch={batch} />
       <Signals signals={data.signals} evidence={data.evidence} runs={data.runs} targets={targets} batch={batch} asOf={data.brief.as_of} clientName={data.client.name} productScope={data.brief.product_scope} />
-      <CompetitionBrief brief={data.brief} />
+      <details className="rounded-xl border border-black/10 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-bold">查看完整产品盘面与数据限制</summary>
+        <div className="mt-4"><CompetitionBrief brief={data.brief} /></div>
+      </details>
       <details className="rounded-xl border border-black/10 bg-white p-4">
         <summary className="cursor-pointer text-sm font-bold">重新采集与系统运行说明</summary>
         <div className="mt-4"><AnalysisLauncher targets={targets} endpoint={endpoint} canRun={data.can_run} batch={batch} setBatch={setBatch} onProgress={reload} /></div>
@@ -267,6 +271,24 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
       </details>
     </>}
   </div>
+}
+
+function MonitoringOverview({ targets, runs, observations, batch }: { targets: AnalysisTarget[]; runs: Run[]; observations: Observation[]; batch: BatchTarget[] }) {
+  const latestRuns = latestRunsForTargets(runs, targets)
+  const finished = latestRuns.filter(run => run.status === 'complete').length
+  const running = latestRuns.some(run => !['complete', 'failed', 'reconciliation'].includes(run.status))
+  const failed = latestRuns.filter(run => ['failed', 'reconciliation'].includes(run.status)).length + batch.filter(item => item.status === 'failed').length
+  const latestObserved = observations.map(item => Date.parse(item.observed_at)).filter(Number.isFinite).sort((a, b) => b - a)[0]
+  const status = running ? '正在更新' : failed > 0 ? '部分页面未完成' : finished === targets.length && targets.length > 0 ? '已完成更新' : '等待首次采集'
+  const statusStyle = running || failed > 0 ? 'bg-amber-50 text-amber-900' : status === '已完成更新' ? 'bg-green-50 text-green-900' : 'bg-black/5 text-me-charcoal/70'
+  return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="监控概览">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">监控概览</p><h2 className="mt-1 text-xl font-black">这周有没有需要你关注的竞争变化？</h2><p className="mt-1 text-sm text-me-charcoal/65">ME 只读取公开页面，发现可靠变化后提醒你人工核对；不会自动改价或发布内容。</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusStyle}`}>{status}</span></div>
+    <div className="mt-5 grid gap-3 sm:grid-cols-3">
+      <div className="rounded-xl bg-me-ivory p-4"><p className="text-xs text-me-charcoal/60">监控覆盖</p><p className="mt-1 text-2xl font-black">{finished}<span className="text-base font-bold text-me-charcoal/45"> / {targets.length}</span></p><p className="mt-1 text-xs text-me-charcoal/60">个页面已完成最近一次读取</p></div>
+      <div className="rounded-xl bg-me-ivory p-4"><p className="text-xs text-me-charcoal/60">最近观察</p><p className="mt-1 text-lg font-black">{latestObserved ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Pacific/Auckland', month: 'short', day: 'numeric' }).format(new Date(latestObserved)) : '尚未采集'}</p><p className="mt-1 text-xs text-me-charcoal/60">以来源页面实际观察时间为准</p></div>
+      <div className="rounded-xl bg-me-ivory p-4"><p className="text-xs text-me-charcoal/60">当前结论</p><p className="mt-1 text-lg font-black">{running ? '等待分析' : failed > 0 ? '需要补采' : finished === 0 ? '尚无结论' : '查看下方变化'}</p><p className="mt-1 text-xs text-me-charcoal/60">没有可靠变化也会明确告诉你</p></div>
+    </div>
+  </section>
 }
 
 function AnalysisLauncher({ targets, endpoint, canRun, batch, setBatch, onProgress }: { targets: AnalysisTarget[]; endpoint: string; canRun: boolean; batch: BatchTarget[]; setBatch: (batch: BatchTarget[]) => void; onProgress: () => void }) {
@@ -512,7 +534,7 @@ function Signals({ signals, evidence, runs, targets, batch, asOf, clientName, pr
   const primary = inScope[0]
   const additional = inScope.slice(1)
   return <section className="space-y-4" aria-label="竞品情报">
-    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">当前经营决定</p><h2 className="mt-1 text-xl font-bold">竞品做了什么，{clientName} 这周怎么跟进</h2><p className="mt-1 text-sm text-me-charcoal/60">只展示有证据支持、且与 {clientName} 经营范围相关的变化。</p></div>
+    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">需要关注的变化</p><h2 className="mt-1 text-xl font-bold">{latest.length ? '最近一次读取发现了什么？' : '目前还没有可查看的竞争变化'}</h2><p className="mt-1 text-sm text-me-charcoal/60">只有证据、时间和业务范围都清楚的变化，才会出现在这里。</p></div>
     {productScope.applies && productScope.evidence_status === 'failed' && <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">客户产品范围读取失败，本页暂不提供经营行动建议。</p>}
     {productScope.applies && productScope.evidence_status === 'available' && productScope.status === 'unknown' && <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">客户产品范围尚未配置或推断，本页只保留待确认线索，不提供经营行动建议。</p>}
     {productScope.applies && productScope.evidence_status === 'available' && productScope.status !== 'unknown' && <details className="rounded-lg bg-me-ivory px-3 py-2 text-sm"><summary className="cursor-pointer"><strong>分析范围：{productScope.labels.join('、')}团</strong>{productScope.status === 'inferred' ? ' · 来自客户现有业务资料' : ''}</summary><p className="mt-2 text-xs text-me-charcoal/60">判断依据：{productScope.source}{productScope.basis.length ? `（${productScope.basis.join('、')}）` : ''}</p></details>}
