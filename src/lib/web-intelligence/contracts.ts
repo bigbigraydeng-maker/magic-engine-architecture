@@ -29,7 +29,7 @@ export type CaptureRequest = z.infer<typeof requestSchema>
 /** Shared vocabulary for website, media, jobs and other external intelligence feeds. */
 export const externalSourceTypeSchema = z.enum([
   'website', 'mainstream_news', 'industry_news', 'industry_media', 'jobs',
-  'serp', 'public_ads', 'ai_visibility', 'reputation',
+  'facebook_group', 'serp', 'public_ads', 'ai_visibility', 'reputation',
 ])
 export type ExternalSourceType = z.infer<typeof externalSourceTypeSchema>
 export const externalSourceTierSchema = z.enum(['A', 'B', 'C'])

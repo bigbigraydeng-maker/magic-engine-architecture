@@ -1,5 +1,5 @@
 import { supabaseAdmin as db } from '@/lib/supabase'
-import type { CaptureRequest, Run, Signal, Evidence, Settings } from './contracts'
+import type { CaptureRequest, ExternalObservation, Run, Signal, Evidence, Settings } from './contracts'
 import { getClientKeywords } from '@/lib/keywords/resolver'
 import { normalizeProducts } from '@/lib/brief/products'
 import { deriveTravelScope, type TravelScope } from './profiles/travel'
@@ -59,4 +59,20 @@ export async function loadInterpretationInput(run: Run): Promise<{ signal: Signa
 export async function updateSignal(id: string, clientId: string, patch: Record<string, unknown>): Promise<void> {
   const result = await db.from('market_signals').update(patch).eq('id', id).eq('client_id', clientId).select('id').single()
   if (result.error || !result.data) throw new Error('signal_write_failed')
+}
+
+/**
+ * Persist one normalized observation. The database uniqueness key makes
+ * retries idempotent without allowing one client's evidence to be reused by
+ * another client's read path.
+ */
+export async function recordExternalObservation(observation: ExternalObservation): Promise<string> {
+  const result = await db
+    .from('web_intelligence_external_observations')
+    .insert(observation)
+    .select('id')
+    .single()
+  if (!result.error && result.data) return result.data.id as string
+  if (result.error?.code === '23505') throw new Error('external_observation_duplicate')
+  throw new Error('external_observation_write_failed')
 }
