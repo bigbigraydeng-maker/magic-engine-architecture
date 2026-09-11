@@ -261,7 +261,7 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
         <summary className="cursor-pointer text-sm font-bold">成本、运行记录与证据</summary>
         <div className="mt-4 space-y-5">
           <p className="text-sm">月度目标 NZ${money(data.settings?.target_nzd ?? 30)} · 停止上限 NZ${money(data.settings?.hard_stop_nzd ?? 50)}{data.budget.reserved_nzd > 0 && ` · 待结算 NZ$${money(data.budget.reserved_nzd)}`}。</p>
-          <Runs runs={data.runs} signals={data.signals} observations={data.observations} />
+          <Runs runs={data.runs} signals={data.signals} observations={data.observations ?? []} />
           <SettingsForm key={`settings-${revision}`} settings={data.settings} canEdit={data.can_edit} endpoint={endpoint} onSaved={reload} />
         </div>
       </details>
