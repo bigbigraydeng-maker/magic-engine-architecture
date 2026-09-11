@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildExternalObservation, canonicalExternalUrl, normalisePublishedAt, observationContentHash, sourceDefinition, sourceDefaultUrls } from '../sources'
+import { buildExternalObservation, canonicalExternalUrl, normalisePublishedAt, observationContentHash, sourceDefinition, sourceDefaultUrls, sourceDefaultValidUntil } from '../sources'
 
 const clientId = '00000000-0000-0000-0000-000000000001'
 
@@ -23,6 +23,12 @@ describe('external source registry', () => {
     expect(sourceDefaultUrls('unknown')).toEqual([])
   })
 
+  it('assigns a bounded default validity window while preserving explicit unknown', () => {
+    expect(sourceDefaultValidUntil('travel-today', '2026-09-11T00:00:00Z')).toBe('2026-09-18T00:00:00.000Z')
+    expect(sourceDefaultValidUntil('facebook-group-authorized', '2026-09-11T00:00:00Z')).toBe('2026-09-14T00:00:00.000Z')
+    expect(sourceDefaultValidUntil('unknown', '2026-09-11T00:00:00Z')).toBeNull()
+  })
+
   it('normalises invalid publication dates to unknown', () => {
     expect(normalisePublishedAt('2026-09-11T01:00:00+12:00')).toBe('2026-09-10T13:00:00.000Z')
     expect(normalisePublishedAt('not-a-date')).toBeNull()
@@ -34,7 +40,7 @@ describe('external source registry', () => {
       title: ' New route announced ', excerpt: ' The operator announced a new route. ', competitor_domain: 'example.com',
       published_at: '2026-09-11T00:00:00Z', observed_at: '2026-09-11T01:00:00Z',
     })
-    expect(result).toMatchObject({ source_name: 'Travel Today', canonical_url: 'https://example.com/story', status: 'observed' })
+    expect(result).toMatchObject({ source_name: 'Travel Today', canonical_url: 'https://example.com/story', status: 'observed', valid_until: '2026-09-18T01:00:00.000Z' })
     expect(result.content_hash).toBe(observationContentHash('New route announced', 'The operator announced a new route.'))
   })
 
