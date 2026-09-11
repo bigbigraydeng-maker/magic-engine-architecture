@@ -29,9 +29,10 @@ type Run = {
   error_code: string | null; created_at: string; capture_cost_usd: number | null
   interpretation_cost_usd: number | null; accounted_nzd: number | null; reserved_nzd: number
 }
+type Observation = { run_id: string; domain: string; url: string; observed_at: string }
 type Payload = {
   client: { id: string; name: string }; settings: Settings | null; competitors: Competitor[]
-  signals: Signal[]; evidence: Evidence[]; runs: Run[]
+  signals: Signal[]; evidence: Evidence[]; runs: Run[]; observations: Observation[]
   brief: CompetitionBriefData
   budget: { accounted_nzd: number; reserved_nzd: number }; can_edit: boolean; can_run: boolean
 }
@@ -260,7 +261,7 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
         <summary className="cursor-pointer text-sm font-bold">成本、运行记录与证据</summary>
         <div className="mt-4 space-y-5">
           <p className="text-sm">月度目标 NZ${money(data.settings?.target_nzd ?? 30)} · 停止上限 NZ${money(data.settings?.hard_stop_nzd ?? 50)}{data.budget.reserved_nzd > 0 && ` · 待结算 NZ$${money(data.budget.reserved_nzd)}`}。</p>
-          <Runs runs={data.runs} signals={data.signals} />
+          <Runs runs={data.runs} signals={data.signals} observations={data.observations} />
           <SettingsForm key={`settings-${revision}`} settings={data.settings} canEdit={data.can_edit} endpoint={endpoint} onSaved={reload} />
         </div>
       </details>
@@ -524,9 +525,10 @@ function Signals({ signals, evidence, runs, targets, batch, asOf, clientName, pr
   </section>
 }
 
-function Runs({ runs, signals }: { runs: Run[]; signals: Signal[] }) {
+function Runs({ runs, signals, observations = [] }: { runs: Run[]; signals: Signal[]; observations?: Observation[] }) {
   const labels: Record<string, string> = { complete: '已完成', failed: '未完成', reserved: '排队中', capturing: '采集中', captured: '已采集', reconciliation: '费用待核对' }
   const signalByRun = new Map(signals.map(signal => [signal.run_id, signal]))
+  const observationByRun = new Map(observations.map(observation => [observation.run_id, observation]))
   const analysis = (run: Run) => {
     if (run.status !== 'complete') return null
     const signal = signalByRun.get(run.id)
@@ -542,6 +544,7 @@ function Runs({ runs, signals }: { runs: Run[]; signals: Signal[] }) {
       return <article className={card} key={r.id}>
         <p className="break-all text-sm font-bold">{r.domain} · {labels[r.status] ?? '处理中'}</p>
         <p className="text-sm">{date(r.created_at)} NZ · {r.accounted_nzd == null ? `待结算 NZ$${money(r.reserved_nzd)}` : `已结算 NZ$${money(r.accounted_nzd)}`}</p>
+        {observationByRun.get(r.id) && <p className="break-all text-xs text-me-charcoal/65">成功观察：{date(observationByRun.get(r.id)!.observed_at)} NZ · <a className="underline" href={observationByRun.get(r.id)!.url} target="_blank" rel="noopener noreferrer">查看来源网页</a></p>}
         {state && <p className={`text-sm font-bold ${state.tone}`}>分析：{state.label}<span className="ml-2 font-normal">{state.copy}</span></p>}
         {r.error_code && <p className="text-sm text-status-rej">{r.error_code.startsWith('interpretation_') ? '网页已采集，但分析结果未完成。' : r.status === 'reconciliation' ? '费用需要核对后才能继续采集。' : '本次采集未完成。'}</p>}
         <details className="text-xs"><summary className="cursor-pointer">查看诊断信息</summary><div className="mt-2 space-y-2 break-all"><p>{r.url}</p><p>请求编号：{r.id}</p><p>采集状态：{r.provider_status ?? '等待中'} · 采集 US${money(r.capture_cost_usd)} · 分析 US${money(r.interpretation_cost_usd)}</p>{r.error_code && <p>{r.error_code}</p>}</div></details>
