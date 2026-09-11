@@ -4,7 +4,7 @@ import { loadCompetitors } from './targets'
 import { loadCompetitionBrief } from './competition-sources'
 import { latestFreshSnapshots, latestSnapshots } from './competition-brief'
 import { buildOperatingBrief, normalizeOperatingProducts, parseTourRecordLine, resolveCurrentOperatingGoal, type OperatingBrief, type OperatingEvidence, type OperatingGoalCandidate } from './operating-brief'
-import { extractTourLinks } from './profiles/travel'
+import { extractTourLinks, matchTravelScope } from './profiles/travel'
 
 export async function saveSettings(clientId: string, raw: unknown): Promise<void> {
   const settings = settingsSchema.parse(raw)
@@ -42,8 +42,22 @@ export async function readView(clientId: string, canEdit: boolean) {
   const allCurrentSnapshots = latestFreshSnapshots([...snapshotRows, ...detailRows], asOf)
   const observations = latestSnapshots(snapshotRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
   const detailObservations = latestSnapshots(detailRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
+  const latestDetailByUrl = new Map(latestSnapshots(detailRows).map(row => [row.url, row]))
+  const latestRunByUrl = new Map([...((runs.data ?? []) as Array<{ url: string; created_at: string; status: string }>)]
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+    .map(run => [run.url, run]))
   const competitorProducts = allCurrentSnapshots.map(row => ({ domain: row.domain, source_url: row.url, observed_at: row.captured_at, records: (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null) }))
-  const discoveredTours = currentSnapshots.flatMap(row => extractTourLinks(row.content ?? '', row.url).map(link => ({ ...link, domain: row.domain, listing_url: row.url, observed_at: row.captured_at })))
+  const discoveredTours = currentSnapshots.flatMap(row => extractTourLinks(row.content ?? '', row.url).map(link => {
+    const detail = latestDetailByUrl.get(link.url)
+    const run = latestRunByUrl.get(link.url)
+    const fresh = detail && asOf.getTime() - Date.parse(detail.captured_at) <= 8 * 86_400_000
+    const detailStatus = fresh ? 'ready' : run && !['complete', 'failed', 'reconciliation'].includes(run.status) ? 'capturing' : run?.status === 'failed' || run?.status === 'reconciliation' ? 'failed' : detail ? 'stale' : 'not_started'
+    return {
+      ...link, domain: row.domain, listing_url: row.url, observed_at: row.captured_at,
+      detail_status: detailStatus,
+      detail_observed_at: detail?.captured_at ?? null,
+    }
+  }))
   const activeGoal = resolveCurrentOperatingGoal((goals.data ?? []) as OperatingGoalCandidate[], asOf)
   const operatingEvidence: OperatingEvidence[] = (evidence.data ?? []).map(item => ({ id: item.id, client_id: item.client_id, source: item.source_url, scope: 'competitor', statement: item.excerpt.split('\n').slice(0, 3).join(' '), observed_at: item.observed_at, fact_type: 'fact', confidence: 'high' }))
   const operating: OperatingBrief = buildOperatingBrief({
@@ -51,7 +65,10 @@ export async function readView(clientId: string, canEdit: boolean) {
     goal: activeGoal,
     product_scope: brief.product_scope,
     client_products: normalizeOperatingProducts(masterBrief.data?.products),
-    competitor_products: competitorProducts,
+    competitor_products: competitorProducts.map(item => ({ ...item, records: item.records.filter(record => {
+      if (brief.product_scope.status === 'unknown' || brief.product_scope.market_ids.length === 0) return false
+      return matchTravelScope(`Tour: ${record.name} | Route: ${record.route}`, '', brief.product_scope).status === 'matched'
+    }) })),
     evidence: operatingEvidence, now: asOf,
   })
   return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, budget: budget.data, brief, operating, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }

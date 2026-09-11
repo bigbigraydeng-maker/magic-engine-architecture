@@ -5,7 +5,7 @@ import { supabaseAdmin as db } from '@/lib/supabase'
 import { allowedClient, type CaptureRequest, type Run } from './contracts'
 import { assertEligibleTarget, validatePublicTarget } from './targets'
 import { claim, readRun, updateRun, reserve, settle, loadInterpretationInput, updateSignal } from './store'
-import { interpretChange, validateInterpretation, interpretationPrompt, MODEL_SONNET, PROMPT_VERSION } from './interpret'
+import { interpretChange, validateInterpretation, interpretationPrompt, INTERPRETATION_MODEL, PROMPT_VERSION } from './interpret'
 import { BUSINESS_PROJECTION_VERSION, classifyBusinessPage, projectBusinessContent } from './content-projection'
 import { matchChangedToursScope, profileForTags } from './profiles/travel'
 
@@ -132,7 +132,7 @@ async function invokeInterpretation(run: Run, input: Awaited<ReturnType<typeof l
       ? guardInterpretationByProductScope(modelInterpretation, signal, input.evidence, input.productScope, input.productScopeAvailable)
       : modelInterpretation
     failureCode = 'interpretation_persist_failed'
-    await updateSignal(signal.id, run.client_id, { interpretation_status: 'complete', classification: interpretation.classification, interpretation: { ...interpretation, input_tokens: result.input_tokens, output_tokens: result.output_tokens }, recommended_action: interpretation.recommended_action, model: MODEL_SONNET, prompt_version: PROMPT_VERSION })
+    await updateSignal(signal.id, run.client_id, { interpretation_status: 'complete', classification: interpretation.classification, interpretation: { ...interpretation, input_tokens: result.input_tokens, output_tokens: result.output_tokens }, recommended_action: interpretation.recommended_action, model: INTERPRETATION_MODEL, prompt_version: PROMPT_VERSION })
   } catch {
     await updateSignal(signal.id, run.client_id, { interpretation_status: 'failed' })
     await updateRun(run.id, run.client_id, { status: 'failed', error_code: failureCode })

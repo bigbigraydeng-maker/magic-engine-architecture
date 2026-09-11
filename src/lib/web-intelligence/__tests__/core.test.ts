@@ -2,7 +2,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: {} }))
 vi.mock('@/lib/competitors/resolver', () => ({ normaliseDomain: (s: string) => s.trim().toLowerCase().replace(/^https?:\/\//, '').split(/[/?#]/)[0], getClientCompetitors: vi.fn() }))
-vi.mock('@/lib/anthropic/client', () => ({ MODEL_SONNET: 'test-model', callClaudeChat: vi.fn(), parseJsonResponse: JSON.parse }))
+vi.mock('@/lib/anthropic/client', () => ({ MODEL_SONNET: 'test-model', MODEL_HAIKU: 'test-haiku', callClaudeChat: vi.fn(), parseJsonResponse: JSON.parse }))
 import { canonicalDomain, approvedUrl } from '../targets'
 import { allowedClient, requestSchema, settingsSchema, metadataSchema, periodKey, type Signal, type Evidence } from '../contracts'
 import { interpretationPrompt, validateInterpretation, changedWindow } from '../interpret'

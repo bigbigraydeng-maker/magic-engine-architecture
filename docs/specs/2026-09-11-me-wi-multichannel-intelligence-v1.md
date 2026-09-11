@@ -49,6 +49,20 @@ Facebook Group 不按普通公开网站批量抓取处理。首期只登记受�
 
 分析层必须先做来源和时间校验，再做变化判断。单一招聘启事、转载新闻或搜索结果不能直接升级为客户经营结论；跨来源一致时才提高置信度。
 
+## Apify 采集实现登记
+
+当前实现复用 `src/lib/apify/client.ts` 的 Actor 启动、轮询、dataset 读取和失败处理，并由 `src/lib/web-intelligence/apify-external.ts` 做统一字段转换。已核验的首批 Actor 配置如下：
+
+| 用途 | Actor | 首批输入边界 | 输出处理 |
+|---|---|---|---|
+| RSS / Atom 新闻 | `ef12/rss-scraper` | 单 feed、最多 200 条 | 标题、链接、摘要、发布时间；缺 URL 或正文拒绝 |
+| 行业网站 / 新闻网站 | `automation-lab/news-article-extractor` | 每站最多 50 篇，首期关闭图片 | 公开文章正文/摘要进入 observation，不保存作者身份作判断 |
+| SEEK NZ 招聘 | `corvuslab/seek-scraper` | NZ、最多 100 条、近 7 日、带详情和增量字段 | 职位、公司、地点、薪资、职位描述、发布时间；作为组织领先信号 |
+
+这些 Actor 都是 Apify Marketplace 的第三方 Actor，正式上线前必须完成一次小样本真实运行，记录 Actor run id、实际字段、费用和失败行为；Actor 页面或字段发生变化时不得静默继续写入。采集器不绕过登录、不读取求职者/群组成员私密数据，也不把完整受版权保护正文直接展示给客户。
+
+线上启用顺序固定为：生产 migration 单独批准 → 配置真实来源 URL/关键词 → 小样本验收 → 才能建立调度。未完成前，官网竞争监控旧路径保持不变。
+
 ## 分阶段开发
 
 ### ME-WI.0.2-A：多管道基础层

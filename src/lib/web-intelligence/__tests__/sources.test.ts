@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildExternalObservation, canonicalExternalUrl, normalisePublishedAt, observationContentHash, sourceDefinition } from '../sources'
+import { buildExternalObservation, canonicalExternalUrl, normalisePublishedAt, observationContentHash, sourceDefinition, sourceDefaultUrls, sourceDefaultValidUntil } from '../sources'
 
 const clientId = '00000000-0000-0000-0000-000000000001'
 
@@ -8,11 +8,25 @@ describe('external source registry', () => {
     expect(sourceDefinition('seek-nz')).toMatchObject({ name: 'SEEK', type: 'jobs', market: 'NZ' })
     expect(sourceDefinition('indeed-nz')).toMatchObject({ name: 'Indeed', type: 'jobs', market: 'NZ' })
     expect(sourceDefinition('travel-today')).toMatchObject({ name: 'Travel Today', type: 'industry_media' })
+    expect(sourceDefinition('travelinc-memo')).toMatchObject({ name: 'TRAVELinc Memo', type: 'industry_media' })
+    expect(sourceDefinition('tourism-new-zealand-news')).toMatchObject({ name: 'Tourism New Zealand News', type: 'industry_news' })
     expect(sourceDefinition('facebook-group-authorized')).toMatchObject({ name: 'Facebook Group（授权）', type: 'facebook_group', tier: 'C', requires_authorization: true })
   })
 
   it('canonicalises tracking variants to the same URL', () => {
     expect(canonicalExternalUrl('https://example.com/story/?utm_source=newsletter&ref=homepage#top')).toBe('https://example.com/story?ref=homepage')
+  })
+
+  it('keeps verified default source URLs in the registry', () => {
+    expect(sourceDefaultUrls('travel-today')).toEqual(['https://traveltoday.co.nz/news/'])
+    expect(sourceDefaultUrls('travelinc-memo')).toEqual(['https://travelinc.co.nz/'])
+    expect(sourceDefaultUrls('unknown')).toEqual([])
+  })
+
+  it('assigns a bounded default validity window while preserving explicit unknown', () => {
+    expect(sourceDefaultValidUntil('travel-today', '2026-09-11T00:00:00Z')).toBe('2026-09-18T00:00:00.000Z')
+    expect(sourceDefaultValidUntil('facebook-group-authorized', '2026-09-11T00:00:00Z')).toBe('2026-09-14T00:00:00.000Z')
+    expect(sourceDefaultValidUntil('unknown', '2026-09-11T00:00:00Z')).toBeNull()
   })
 
   it('normalises invalid publication dates to unknown', () => {
@@ -26,7 +40,7 @@ describe('external source registry', () => {
       title: ' New route announced ', excerpt: ' The operator announced a new route. ', competitor_domain: 'example.com',
       published_at: '2026-09-11T00:00:00Z', observed_at: '2026-09-11T01:00:00Z',
     })
-    expect(result).toMatchObject({ source_name: 'Travel Today', canonical_url: 'https://example.com/story', status: 'observed' })
+    expect(result).toMatchObject({ source_name: 'Travel Today', canonical_url: 'https://example.com/story', status: 'observed', valid_until: '2026-09-18T01:00:00.000Z' })
     expect(result.content_hash).toBe(observationContentHash('New route announced', 'The operator announced a new route.'))
   })
 

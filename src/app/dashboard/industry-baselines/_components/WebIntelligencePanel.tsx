@@ -31,7 +31,7 @@ type Run = {
   interpretation_cost_usd: number | null; accounted_nzd: number | null; reserved_nzd: number
 }
 type Observation = { run_id: string; domain: string; url: string; observed_at: string }
-type DiscoveredTour = { name: string; url: string; domain: string; listing_url: string; observed_at: string }
+type DiscoveredTour = { name: string; url: string; domain: string; listing_url: string; observed_at: string; detail_status?: 'not_started' | 'capturing' | 'ready' | 'stale' | 'failed'; detail_observed_at?: string | null }
 type Payload = {
   client: { id: string; name: string }; settings: Settings | null; competitors: Competitor[]
   signals: Signal[]; evidence: Evidence[]; runs: Run[]; observations: Observation[]
@@ -283,9 +283,18 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
 
 function DiscoveredTourLinks({ tours }: { tours: DiscoveredTour[] }) {
   if (tours.length === 0) return null
+  const status = (value: DiscoveredTour['detail_status']) => value === 'ready'
+    ? { label: '详情已读取', style: 'bg-green-50 text-green-800' }
+    : value === 'capturing'
+      ? { label: '正在读取详情', style: 'bg-amber-50 text-amber-800' }
+      : value === 'failed'
+        ? { label: '详情读取失败', style: 'bg-red-50 text-red-800' }
+        : value === 'stale'
+          ? { label: '详情已过期', style: 'bg-amber-50 text-amber-800' }
+          : { label: '等待读取详情', style: 'bg-black/5 text-me-charcoal/60' }
   return <section className="space-y-3" aria-label="已发现的 Tour 详情页">
-    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">详情页发现</p><h3 className="mt-1 text-lg font-bold">已发现 {tours.length} 个 Tour detail 页面</h3><p className="mt-1 text-sm text-me-charcoal/65">这些链接来自最近一次有效的产品列表页。当前先展示发现结果，抓取详情内容会逐个经过预算控制。</p></div>
-    <div className="divide-y divide-black/5 rounded-xl border border-black/10 bg-white px-4">{tours.map((tour, index) => <div className="flex flex-wrap items-center justify-between gap-3 py-3" key={`${tour.url}-${index}`}><div className="min-w-0"><p className="font-bold">{tour.name}</p><p className="break-all text-xs text-me-charcoal/55">{tour.domain} · 发现于 {date(tour.observed_at)} NZ</p></div><a className="shrink-0 rounded-lg border border-black/15 px-3 py-2 text-xs font-bold underline" href={tour.url} target="_blank" rel="noopener noreferrer">打开详情页</a></div>)}</div>
+    <div><p className="text-xs font-bold tracking-wide text-me-charcoal/55">详情页发现</p><h3 className="mt-1 text-lg font-bold">已发现 {tours.length} 个 Tour detail 页面</h3><p className="mt-1 text-sm text-me-charcoal/65">链接来自最近一次有效的产品列表页。每个详情页的读取状态和最近观察时间单独显示。</p></div>
+    <div className="divide-y divide-black/5 rounded-xl border border-black/10 bg-white px-4">{tours.map((tour, index) => { const badge = status(tour.detail_status); return <div className="flex flex-wrap items-center justify-between gap-3 py-3" key={`${tour.url}-${index}`}><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="font-bold">{tour.name}</p><span className={`rounded-full px-2 py-1 text-[11px] font-bold ${badge.style}`}>{badge.label}</span></div><p className="break-all text-xs text-me-charcoal/55">{tour.domain} · 从列表页发现于 {date(tour.observed_at)} NZ{tour.detail_observed_at ? ` · 详情观察于 ${date(tour.detail_observed_at)} NZ` : ''}</p></div><a className="shrink-0 rounded-lg border border-black/15 px-3 py-2 text-xs font-bold underline" href={tour.url} target="_blank" rel="noopener noreferrer">打开详情页</a></div> })}</div>
   </section>
 }
 

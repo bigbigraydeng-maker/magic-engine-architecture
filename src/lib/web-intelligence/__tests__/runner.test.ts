@@ -6,7 +6,7 @@ vi.mock('@/lib/apify/client', () => ({ abortRun: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { rpc: mocks.rpc } }))
 vi.mock('../targets', () => ({ assertEligibleTarget: mocks.eligible, validatePublicTarget: mocks.dns }))
 vi.mock('../store', () => ({ claim: mocks.claim, readRun: mocks.read, updateRun: mocks.update, reserve: mocks.reserve, settle: mocks.settle, loadInterpretationInput: mocks.input, updateSignal: mocks.signal }))
-vi.mock('../interpret', () => ({ interpretChange: mocks.interpret, validateInterpretation: mocks.validate, interpretationPrompt: vi.fn(), MODEL_SONNET: 'test', PROMPT_VERSION: 'v1' }))
+vi.mock('../interpret', () => ({ interpretChange: mocks.interpret, validateInterpretation: mocks.validate, interpretationPrompt: vi.fn(), INTERPRETATION_MODEL: 'test', PROMPT_VERSION: 'v1' }))
 import { authorize, startCapture, collectCapture, guardInterpretationByProductScope, understand, normaliseContent } from '../runner'
 import type { Run, CaptureRequest } from '../contracts'
 const id = '00000000-0000-4000-8000-000000000001'

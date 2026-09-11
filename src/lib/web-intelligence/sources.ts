@@ -4,19 +4,35 @@ import { externalSourceTierSchema, externalSourceTypeSchema, type ExternalObserv
 export type ExternalSourceDefinition = {
   id: string; name: string; type: ExternalSourceType; tier: ExternalSourceTier; market: string
   requires_authorization?: boolean
+  default_urls?: readonly string[]
+  validity_hours?: number
 }
 
 /** Initial source registry. Domains and selectors remain provider configuration, not runtime assumptions. */
 export const externalSourceRegistry: readonly ExternalSourceDefinition[] = [
-  { id: 'seek-nz', name: 'SEEK', type: 'jobs', tier: 'B', market: 'NZ' },
-  { id: 'indeed-nz', name: 'Indeed', type: 'jobs', tier: 'B', market: 'NZ' },
-  { id: 'travel-today', name: 'Travel Today', type: 'industry_media', tier: 'B', market: 'NZ/AU' },
+  { id: 'seek-nz', name: 'SEEK', type: 'jobs', tier: 'B', market: 'NZ', validity_hours: 168 },
+  { id: 'indeed-nz', name: 'Indeed', type: 'jobs', tier: 'B', market: 'NZ', validity_hours: 168 },
+  { id: 'travel-today', name: 'Travel Today', type: 'industry_media', tier: 'B', market: 'NZ/AU', default_urls: ['https://traveltoday.co.nz/news/'], validity_hours: 168 },
+  { id: 'travelinc-memo', name: 'TRAVELinc Memo', type: 'industry_media', tier: 'B', market: 'NZ/AU', default_urls: ['https://travelinc.co.nz/'], validity_hours: 168 },
+  { id: 'tourism-new-zealand-news', name: 'Tourism New Zealand News', type: 'industry_news', tier: 'B', market: 'NZ', default_urls: ['https://www.tourismnewzealand.com/news-and-activity/'], validity_hours: 168 },
+  { id: 'facebook-group-public', name: 'Facebook Group（公开）', type: 'facebook_group', tier: 'B', market: 'public-only', validity_hours: 72 },
   // Controlled source only: authorised export or Meta-approved integration.
-  { id: 'facebook-group-authorized', name: 'Facebook Group（授权）', type: 'facebook_group', tier: 'C', market: 'customer-authorized', requires_authorization: true },
+  { id: 'facebook-group-authorized', name: 'Facebook Group（授权）', type: 'facebook_group', tier: 'C', market: 'customer-authorized', requires_authorization: true, validity_hours: 72 },
 ]
 
 export function sourceDefinition(id: string): ExternalSourceDefinition | null {
   return externalSourceRegistry.find(source => source.id === id) ?? null
+}
+
+export function sourceDefaultUrls(id: string): readonly string[] {
+  return sourceDefinition(id)?.default_urls ?? []
+}
+
+export function sourceDefaultValidUntil(id: string, observedAt: string): string | null {
+  const hours = sourceDefinition(id)?.validity_hours
+  if (!hours) return null
+  const observed = Date.parse(observedAt)
+  return Number.isFinite(observed) ? new Date(observed + hours * 60 * 60 * 1000).toISOString() : null
 }
 
 export function canonicalExternalUrl(value: string): string {
@@ -54,7 +70,8 @@ export function buildExternalObservation(input: {
     client_id: input.client_id, source_type: externalSourceTypeSchema.parse(source.type), source_tier: externalSourceTierSchema.parse(source.tier),
     source_name: source.name, source_url: input.source_url, canonical_url, title, excerpt,
     competitor_domain: input.competitor_domain ?? null, published_at: normalisePublishedAt(input.published_at),
-    observed_at: new Date(input.observed_at).toISOString(), valid_until: normalisePublishedAt(input.valid_until),
+    observed_at: new Date(input.observed_at).toISOString(),
+    valid_until: input.valid_until === undefined ? sourceDefaultValidUntil(input.source_id, input.observed_at) : normalisePublishedAt(input.valid_until),
     content_hash: observationContentHash(title, excerpt), status: 'observed',
   }
 }
