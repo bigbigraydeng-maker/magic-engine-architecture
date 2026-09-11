@@ -24,7 +24,12 @@ export type OperatingSignal = {
 export type ProductMatch = {
   status: ProductMatchStatus
   client_product: string | null
+  client_duration_days?: number
+  client_price?: string
   competitor_product: string | null
+  competitor_domain?: string
+  competitor_duration_days?: number
+  competitor_price?: string
   match_score?: number
   reason: string
 }
@@ -215,14 +220,24 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
     if (!comparable) return {
       status: 'insufficient_evidence' as const,
       client_product: product.name,
+      client_duration_days: product.duration_days,
+      client_price: product.price,
       competitor_product: candidate ? `${candidate.item.domain}：${productLabel(candidate.record)}` : null,
+      competitor_domain: candidate?.item.domain,
+      competitor_duration_days: candidate?.record.durationDays,
+      competitor_price: candidate?.record.price,
       match_score: candidate && 'score' in candidate ? candidate.score : undefined,
       reason: !completeClientProduct(product) ? '客户产品缺少必要资料，AI 还不能可靠说明它和竞品各自的优劣势。' : !candidate ? '暂时没找到路线和产品内容足够接近的竞品团。' : !completeCompetitorProduct(candidate.record) ? '这条竞品团的资料还不完整，暂时无法公平比较。' : '虽然目的地范围相近，但路线、天数或产品内容差异较大，先不把它当作主要对手。',
     }
     return {
       status: 'comparable' as const,
       client_product: product.name,
+      client_duration_days: product.duration_days,
+      client_price: product.price,
       competitor_product: `${candidate.item.domain}：${productLabel(candidate.record)}`,
+      competitor_domain: candidate.item.domain,
+      competitor_duration_days: candidate.record.durationDays,
+      competitor_price: candidate.record.price,
       match_score: candidate.score,
       reason: '这是按目的地范围和产品形状找到的最接近竞品候选，不代表两团相同；价格、城市、天数、日期、包含项目和定位差异交由 AI 解释优劣势。',
     }
