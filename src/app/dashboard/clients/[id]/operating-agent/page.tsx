@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { OperatingBrief } from '@/lib/web-intelligence/operating-brief'
 
-type Payload = { operating: OperatingBrief }
+type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean }
 type ComparisonResult = { summary: string; client_strengths: string[]; competitor_strengths: string[]; differences: string[]; recommendations: string[]; unknowns: string[]; confidence: number; evidence_urls: string[] }
 
 const statusLabel = {
@@ -14,6 +14,10 @@ const statusLabel = {
 
 export default function OperatingAgentPage({ params }: { params: { id: string } }) {
   const [data, setData] = useState<OperatingBrief | null>(null)
+  const [clientDomain, setClientDomain] = useState<string | null>(null)
+  const [canRun, setCanRun] = useState(false)
+  const [refresh, setRefresh] = useState(0)
+  const [captureState, setCaptureState] = useState('')
   const [error, setError] = useState('')
   useEffect(() => {
     fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence`, { cache: 'no-store' })
@@ -21,9 +25,24 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
         if (!response.ok) throw new Error('暂时无法读取经营上下文。')
         return response.json() as Promise<Payload>
       })
-      .then(value => setData(value.operating))
+      .then(value => { setData(value.operating); setClientDomain(value.client.domain); setCanRun(value.can_run) })
       .catch(reason => setError(reason instanceof Error ? reason.message : '暂时无法读取经营上下文。'))
-  }, [params.id])
+  }, [params.id, refresh])
+
+  async function captureClientProducts() {
+    if (!clientDomain) return
+    setCaptureState('正在读取 CTS 官网…')
+    try {
+      const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: clientDomain, url: `https://${clientDomain}/` }),
+      })
+      const payload = await response.json() as { error?: string }
+      if (!response.ok) throw new Error(payload.error ?? '暂时无法读取 CTS 官网。')
+      setCaptureState('已开始读取，稍后刷新即可看到 CTS 产品。')
+      window.setTimeout(() => setRefresh(value => value + 1), 8000)
+    } catch (reason) { setCaptureState(reason instanceof Error ? reason.message : '暂时无法读取 CTS 官网。') }
+  }
 
   if (error) return <main className="mx-auto max-w-5xl p-6"><p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-800">{error}</p></main>
   if (!data) return <main className="mx-auto max-w-5xl p-6"><p role="status" className="text-sm text-me-charcoal/60">正在整理客户经营上下文…</p></main>
@@ -33,7 +52,8 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     <header className="rounded-2xl bg-me-charcoal p-6 text-white">
       <p className="text-xs font-bold uppercase tracking-[0.16em] text-me-gold">经营 Agent · Detect / Understand / Recommend</p>
       <h1 className="mt-2 text-2xl font-bold">{data.client_name} 当前该关注什么</h1>
-      <p className="mt-2 max-w-3xl text-sm leading-6 text-white/75">先看客户目标与产品范围，再看主要竞品，最后只给有证据支持的下一步。所有动作仍需人工复核。</p>
+      <p className="mt-2 max-w-3xl text-sm leading-6 text-white/75">先把 CTS 自己的 Tour 资料读出来，再和主要竞品比较。所有动作仍需人工复核。</p>
+      <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" onClick={() => void captureClientProducts()} disabled={!canRun || !clientDomain || captureState.startsWith('正在')} className="rounded-lg bg-me-gold px-3 py-2 text-sm font-bold text-me-charcoal disabled:opacity-50">{captureState.startsWith('正在') ? captureState : '读取 CTS 官网产品'}</button>{captureState && !captureState.startsWith('正在') && <span className="text-xs text-white/75">{captureState}</span>}</div>
     </header>
 
     <section className="grid gap-4 md:grid-cols-3" aria-label="客户上下文">

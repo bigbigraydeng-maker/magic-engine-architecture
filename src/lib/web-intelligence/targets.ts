@@ -66,6 +66,15 @@ export async function saveMetadata(clientId: string, raw: unknown): Promise<void
 }
 export async function assertEligibleTarget(clientId: string, domain: string, url: string): Promise<MonitorCompetitor> {
   const canonical = canonicalDomain(domain)
+  const ownClient = await db.from('clients').select('domain').eq('id', clientId).single()
+  if (ownClient.error) throw new Error('client_read_failed')
+  if (ownClient.data?.domain && canonical === canonicalDomain(String(ownClient.data.domain))) {
+    const safeUrl = approvedUrl(url, canonical)
+    return metadataSchema.parse({
+      domain: canonical, tier: 'watch', status: 'active',
+      sources: ['manual'], tags: ['industry:travel'], urls: [safeUrl], interval_hours: 168,
+    })
+  }
   const target = (await loadCompetitors(clientId)).find(c => c.domain === canonical)
   if (!target || target.status === 'archive') throw new Error('target_not_eligible')
   const safeUrl = approvedUrl(url, canonical)
