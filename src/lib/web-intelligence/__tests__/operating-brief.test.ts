@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildOperatingBrief } from '../operating-brief'
+import { buildOperatingBrief, resolveCurrentOperatingGoal } from '../operating-brief'
 import type { TravelScope } from '../profiles/travel'
 
 const scope: TravelScope = { status: 'configured', market_ids: ['china'], labels: ['中国'], basis: ['China'], source: '主力产品', rule_version: 'travel-market-v1' }
@@ -15,7 +15,7 @@ describe('buildOperatingBrief', () => {
   })
 
   it('fails closed when the client product lacks comparison fields', () => {
-    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: { title: 'Grow leads', status: 'active', metric: 'leads/mo', target: 30 }, product_scope: scope, client_products: [{ name: 'China Highlights' }], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record] }], evidence })
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: { title: 'Grow leads', status: 'active', metric: 'leads/mo', target: 30, period_start: '2026-09-01', period_end: '2026-10-01' }, product_scope: scope, client_products: [{ name: 'China Highlights' }], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record] }], evidence })
     expect(brief.matches[0].status).toBe('insufficient_evidence')
     expect(brief.matches[0].reason).toContain('客户产品缺少')
   })
@@ -30,5 +30,13 @@ describe('buildOperatingBrief', () => {
     const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/japan', observed_at: null, records: [{ ...record, name: 'Japan Discovery', route: 'Japan Tokyo Kyoto' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
     expect(brief.matches[0].status).toBe('out_of_scope')
     expect(brief.matches[0].reason).toContain('范围之外')
+  })
+
+  it('does not treat an active but expired goal as current', () => {
+    expect(resolveCurrentOperatingGoal([{ title: 'Expired', status: 'active', primary_metric_label: 'leads', target_value: 30, period_start: '2026-08-01', period_end: '2026-09-02' }], new Date('2026-09-11T00:00:00Z'))).toBeNull()
+  })
+
+  it('returns an active goal only when its period includes today', () => {
+    expect(resolveCurrentOperatingGoal([{ title: 'Current', status: 'active', primary_metric_label: 'leads', target_value: 30, period_start: '2026-09-01', period_end: '2026-10-01' }], new Date('2026-09-11T00:00:00Z'))?.title).toBe('Current')
   })
 })

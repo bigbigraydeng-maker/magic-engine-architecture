@@ -3,7 +3,7 @@ import { allowedClient, settingsSchema, type Settings, type Signal } from './con
 import { loadCompetitors } from './targets'
 import { loadCompetitionBrief } from './competition-sources'
 import { latestFreshSnapshots } from './competition-brief'
-import { buildOperatingBrief, normalizeOperatingProducts, parseTourRecordLine, type OperatingBrief, type OperatingEvidence } from './operating-brief'
+import { buildOperatingBrief, normalizeOperatingProducts, parseTourRecordLine, resolveCurrentOperatingGoal, type OperatingBrief, type OperatingEvidence, type OperatingGoalCandidate } from './operating-brief'
 
 export async function saveSettings(clientId: string, raw: unknown): Promise<void> {
   const settings = settingsSchema.parse(raw)
@@ -20,7 +20,7 @@ export async function readView(clientId: string, canEdit: boolean) {
     db.from('web_intelligence_runs').select('*').eq('client_id', clientId).order('created_at', { ascending: false }).limit(50),
     db.rpc('web_intelligence_budget', { p_client_id: clientId }),
     db.from('master_briefs').select('products,primary_audience,buying_trigger,keyword_seeds,competitor_domains,status,is_active,version').eq('client_id', clientId).or('status.eq.active,is_active.eq.true').order('version', { ascending: false }).limit(1).maybeSingle(),
-    db.from('goals').select('title,status,primary_metric_label,target_value,updated_at').eq('client_id', clientId).order('updated_at', { ascending: false }).limit(20),
+    db.from('goals').select('title,status,primary_metric_label,target_value,period_start,period_end,updated_at').eq('client_id', clientId).order('updated_at', { ascending: false }).limit(20),
   ])
   if (client.error || settings.error || signals.error || runs.error || budget.error || masterBrief.error || goals.error) throw new Error('web_intelligence_read_failed')
   const ids = (signals.data as Signal[]).flatMap(s => [s.before_evidence_id, s.after_evidence_id])
@@ -34,11 +34,11 @@ export async function readView(clientId: string, canEdit: boolean) {
   const asOf = new Date()
   const currentSnapshots = latestFreshSnapshots((snapshots.data ?? []) as Array<{ domain: string; url: string; projection_content: string | null; captured_at: string }>, asOf)
   const competitorProducts = currentSnapshots.map(row => ({ domain: row.domain, source_url: row.url, observed_at: row.captured_at, records: (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null) }))
-  const activeGoal = (goals.data ?? []).find(goal => goal.status === 'active') ?? null
+  const activeGoal = resolveCurrentOperatingGoal((goals.data ?? []) as OperatingGoalCandidate[], asOf)
   const operatingEvidence: OperatingEvidence[] = (evidence.data ?? []).map(item => ({ id: item.id, client_id: item.client_id, source: item.source_url, scope: 'competitor', statement: item.excerpt.split('\n').slice(0, 3).join(' '), observed_at: item.observed_at, fact_type: 'fact', confidence: 'high' }))
   const operating: OperatingBrief = buildOperatingBrief({
     client: { id: client.data.id, name: client.data.name },
-    goal: activeGoal ? { title: activeGoal.title, status: activeGoal.status, metric: activeGoal.primary_metric_label, target: activeGoal.target_value } : null,
+    goal: activeGoal,
     product_scope: brief.product_scope,
     client_products: normalizeOperatingProducts(masterBrief.data?.products),
     competitor_products: competitorProducts,
