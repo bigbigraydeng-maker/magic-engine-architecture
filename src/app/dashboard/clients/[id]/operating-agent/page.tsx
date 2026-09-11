@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react'
 import type { OperatingBrief } from '@/lib/web-intelligence/operating-brief'
 
-type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean }
+type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
 type ComparisonResult = { summary: string; client_strengths: string[]; competitor_strengths: string[]; differences: string[]; recommendations: string[]; unknowns: string[]; confidence: number; evidence_urls: string[] }
+type CapturePhase = 'idle' | 'queued' | 'capturing' | 'analysing' | 'complete' | 'failed'
 
 const statusLabel = {
   comparable: '找到相近竞品',
@@ -17,7 +18,8 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
   const [clientDomain, setClientDomain] = useState<string | null>(null)
   const [canRun, setCanRun] = useState(false)
   const [refresh, setRefresh] = useState(0)
-  const [captureState, setCaptureState] = useState('')
+  const [captureRequestId, setCaptureRequestId] = useState<string | null>(null)
+  const [capturePhase, setCapturePhase] = useState<CapturePhase>('idle')
   const [error, setError] = useState('')
   useEffect(() => {
     fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence`, { cache: 'no-store' })
@@ -25,23 +27,40 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
         if (!response.ok) throw new Error('暂时无法读取经营上下文。')
         return response.json() as Promise<Payload>
       })
-      .then(value => { setData(value.operating); setClientDomain(value.client.domain); setCanRun(value.can_run) })
+      .then(value => {
+        setData(value.operating); setClientDomain(value.client.domain); setCanRun(value.can_run)
+        if (captureRequestId) {
+          const run = value.runs?.find(item => item.id === captureRequestId)
+          if (run?.status === 'complete') setCapturePhase('complete')
+          else if (run?.status === 'failed' || run?.status === 'reconciliation') setCapturePhase('failed')
+          else if (run?.provider_status) setCapturePhase('analysing')
+          else if (run) setCapturePhase('capturing')
+          else setCapturePhase('queued')
+        }
+      })
       .catch(reason => setError(reason instanceof Error ? reason.message : '暂时无法读取经营上下文。'))
-  }, [params.id, refresh])
+  }, [params.id, refresh, captureRequestId])
+
+  useEffect(() => {
+    if (!captureRequestId || capturePhase === 'complete' || capturePhase === 'failed') return
+    const timer = window.setTimeout(() => setRefresh(value => value + 1), 4000)
+    return () => window.clearTimeout(timer)
+  }, [captureRequestId, capturePhase, refresh])
 
   async function captureClientProducts() {
     if (!clientDomain) return
-    setCaptureState('正在读取 CTS 官网…')
+    setCapturePhase('capturing')
     try {
       const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain: clientDomain, url: `https://${clientDomain}/` }),
       })
-      const payload = await response.json() as { error?: string }
+      const payload = await response.json() as { error?: string; request_id?: string }
       if (!response.ok) throw new Error(payload.error ?? '暂时无法读取 CTS 官网。')
-      setCaptureState('已开始读取，稍后刷新即可看到 CTS 产品。')
-      window.setTimeout(() => setRefresh(value => value + 1), 8000)
-    } catch (reason) { setCaptureState(reason instanceof Error ? reason.message : '暂时无法读取 CTS 官网。') }
+      setCaptureRequestId(payload.request_id ?? null)
+      setCapturePhase('queued')
+      setRefresh(value => value + 1)
+    } catch { setCaptureRequestId(null); setCapturePhase('failed') }
   }
 
   if (error) return <main className="mx-auto max-w-5xl p-6"><p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-800">{error}</p></main>
@@ -53,7 +72,10 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
       <p className="text-xs font-bold uppercase tracking-[0.16em] text-me-gold">经营 Agent · Detect / Understand / Recommend</p>
       <h1 className="mt-2 text-2xl font-bold">{data.client_name} 当前该关注什么</h1>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-white/75">先把 CTS 自己的 Tour 资料读出来，再和主要竞品比较。所有动作仍需人工复核。</p>
-      <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" onClick={() => void captureClientProducts()} disabled={!canRun || !clientDomain || captureState.startsWith('正在')} className="rounded-lg bg-me-gold px-3 py-2 text-sm font-bold text-me-charcoal disabled:opacity-50">{captureState.startsWith('正在') ? captureState : '读取 CTS 官网产品'}</button>{captureState && !captureState.startsWith('正在') && <span className="text-xs text-white/75">{captureState}</span>}</div>
+      <div className="mt-4 space-y-3">
+        <button type="button" onClick={() => void captureClientProducts()} disabled={!canRun || !clientDomain || ['queued', 'capturing', 'analysing'].includes(capturePhase)} className="rounded-lg bg-me-gold px-3 py-2 text-sm font-bold text-me-charcoal disabled:opacity-50">{['queued', 'capturing', 'analysing'].includes(capturePhase) ? '正在读取…' : capturePhase === 'complete' ? '重新读取 CTS 产品' : '读取 CTS 官网产品'}</button>
+        {capturePhase !== 'idle' && <CaptureProgress phase={capturePhase} />}
+      </div>
     </header>
 
     <section className="grid gap-4 md:grid-cols-3" aria-label="客户上下文">
@@ -88,6 +110,22 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     </section>
     <p className="text-xs text-me-charcoal/45">截至 {new Date(data.as_of).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}（Pacific/Auckland）· 事实、推断、建议和未知已分开显示。</p>
   </main>
+}
+
+function CaptureProgress({ phase }: { phase: Exclude<CapturePhase, 'idle'> }) {
+  const details: Record<Exclude<CapturePhase, 'idle'>, { label: string; copy: string; width: number; tone: string }> = {
+    queued: { label: '已排队', copy: '请求已提交，等待读取服务开始。页面会自动检查状态。', width: 20, tone: 'text-amber-100' },
+    capturing: { label: '正在读取网页', copy: '正在读取 CTS 官网内容，暂时不用手动刷新。', width: 48, tone: 'text-amber-100' },
+    analysing: { label: '正在整理产品资料', copy: '网页已读到，正在整理 Tour、路线、天数和价格。', width: 78, tone: 'text-amber-100' },
+    complete: { label: '已完成', copy: 'CTS 产品资料已更新，下面的经营判断已使用最新结果。', width: 100, tone: 'text-green-200' },
+    failed: { label: '读取未完成', copy: '这次没有完成读取，可以稍后点击按钮重试。', width: 100, tone: 'text-red-200' },
+  }
+  const detail = details[phase]
+  return <div role="status" className="max-w-2xl rounded-xl border border-white/15 bg-white/10 p-3">
+    <div className="flex items-center justify-between gap-3 text-xs font-bold"><span className={detail.tone}>{detail.label}</span><span className="text-white/60">{phase === 'complete' || phase === 'failed' ? '无需等待' : '自动更新中'}</span></div>
+    <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/15" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={detail.width} aria-valuetext={detail.label}><div className={`h-full rounded-full transition-all duration-500 ${phase === 'failed' ? 'bg-red-300' : phase === 'complete' ? 'bg-green-300' : 'animate-pulse bg-me-gold'}`} style={{ width: `${detail.width}%` }} /></div>
+    <p className="mt-2 text-xs leading-5 text-white/75">{detail.copy}</p>
+  </div>
 }
 
 function TourComparisonSection({ clientId, candidates, marketScope }: { clientId: string; candidates: OperatingBrief['comparison_candidates']; marketScope: string[] }) {
