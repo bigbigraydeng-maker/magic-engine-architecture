@@ -33,6 +33,20 @@ describe('buildOperatingBrief', () => {
     expect(brief.matches[0].reason).toContain('逐项对位')
   })
 
+  it('does not reuse one competitor Tour for two client products', () => {
+    const product = { name: 'China Highlights', destination: 'China', route: 'Beijing Shanghai', duration_days: 12, price: 'NZD 4999 pp', departure_window: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [product, { ...product, name: 'China Highlights duplicate' }], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [{ ...record, route: 'Beijing Shanghai', durationDays: 12, price: 'NZD 4999 pp', departureWindow: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }] }], evidence })
+    expect(brief.matches.map(match => match.status)).toEqual(['comparable', 'insufficient_evidence'])
+    expect(brief.matches[1].reason).toContain('唯一')
+  })
+
+  it('selects a later exact Tour instead of stopping at the first same-scope candidate', () => {
+    const client = { name: 'China Highlights', destination: 'China', route: 'Beijing Shanghai', duration_days: 12, price: 'NZD 4999 pp', departure_window: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [client], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record, { ...record, name: 'Exact China Highlights', route: client.route, durationDays: client.duration_days, price: 'NZD 4999 pp', departureWindow: client.departure_window, includes: client.includes, positioning: client.positioning, audience: client.audience }] }], evidence })
+    expect(brief.matches[0].status).toBe('comparable')
+    expect(brief.matches[0].competitor_product).toContain('Exact China Highlights')
+  })
+
   it('keeps an explicit out-of-scope tour out of the decision', () => {
     const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/japan', observed_at: null, records: [{ ...record, name: 'Japan Discovery', route: 'Japan Tokyo Kyoto' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
     expect(brief.matches[0].status).toBe('out_of_scope')

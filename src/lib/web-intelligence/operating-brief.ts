@@ -171,19 +171,26 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
       }
     })
   }
+  const usedCompetitorKeys = new Set<string>()
+  const recordKey = (item: typeof competitorRecords[number]) => `${item.item.domain}\n${item.item.source_url}\n${item.record.name}`
   return input.client_products.map(product => {
-    const sameScope = competitorRecords.find(({ record }) => matchTravelScope(`${record.name} ${record.route}`, '', input.product_scope).status === 'matched')
-    if (!sameScope || !completeClientProduct(product) || !completeCompetitorProduct(sameScope.record) || !sameTourShape(product, sameScope.record)) return {
+    const scoped = competitorRecords.filter(({ record }) => matchTravelScope(`${record.name} ${record.route}`, '', input.product_scope).status === 'matched')
+    const complete = scoped.filter(({ record }) => completeCompetitorProduct(record))
+    const shapeMatch = complete.find(item => sameTourShape(product, item.record))
+    const exact = shapeMatch && !usedCompetitorKeys.has(recordKey(shapeMatch)) ? shapeMatch : undefined
+    const sameScope = exact ?? shapeMatch ?? scoped[0]
+    if (!exact || !completeClientProduct(product)) return {
       status: 'insufficient_evidence' as const,
       client_product: product.name,
       competitor_product: sameScope ? `${sameScope.item.domain}：${productLabel(sameScope.record)}` : null,
-      reason: !completeClientProduct(product) ? '客户产品缺少目的地、路线、天数、价格口径、出发窗口、包含项目、定位或目标客群。' : !sameScope ? '没有找到同时满足客户产品范围和可比较路线的竞品记录。' : !completeCompetitorProduct(sameScope.record) ? '竞品记录缺少路线、天数、价格、出发窗口、包含项目、定位或目标客群。' : '路线、天数、价格口径、出发窗口、包含项目、定位或目标客群未完成逐项对位。',
+      reason: !completeClientProduct(product) ? '客户产品缺少目的地、路线、天数、价格口径、出发窗口、包含项目、定位或目标客群。' : !sameScope ? '没有找到同时满足客户产品范围和可比较路线的竞品记录。' : !completeCompetitorProduct(sameScope.record) ? '竞品记录缺少路线、天数、价格、出发窗口、包含项目、定位或目标客群。' : shapeMatch ? '该竞品记录已与另一个客户产品占用，当前无法建立唯一的一一对应。' : '路线、天数、价格口径、出发窗口、包含项目、定位或目标客群未完成逐项对位。',
     }
+    usedCompetitorKeys.add(recordKey(exact))
     return {
       status: 'comparable' as const,
       client_product: product.name,
-      competitor_product: `${sameScope.item.domain}：${productLabel(sameScope.record)}`,
-      reason: '已找到同一目的地范围的候选对位；仍需补齐出发窗口、价格口径和包含项目后才能形成价格判断。',
+      competitor_product: `${exact.item.domain}：${productLabel(exact.record)}`,
+      reason: '已完成路线、天数、价格口径、出发窗口、包含项目、定位和目标客群的一对一字段对位；仍需人工核对来源页面。',
     }
   })
 }
