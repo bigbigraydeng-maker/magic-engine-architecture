@@ -260,7 +260,7 @@ function ClientIntelligence({ clientId }: { clientId: string }) {
         <summary className="cursor-pointer text-sm font-bold">成本、运行记录与证据</summary>
         <div className="mt-4 space-y-5">
           <p className="text-sm">月度目标 NZ${money(data.settings?.target_nzd ?? 30)} · 停止上限 NZ${money(data.settings?.hard_stop_nzd ?? 50)}{data.budget.reserved_nzd > 0 && ` · 待结算 NZ$${money(data.budget.reserved_nzd)}`}。</p>
-          <Runs runs={data.runs} />
+          <Runs runs={data.runs} signals={data.signals} />
           <SettingsForm key={`settings-${revision}`} settings={data.settings} canEdit={data.can_edit} endpoint={endpoint} onSaved={reload} />
         </div>
       </details>
@@ -524,15 +524,28 @@ function Signals({ signals, evidence, runs, targets, batch, asOf, clientName, pr
   </section>
 }
 
-function Runs({ runs }: { runs: Run[] }) {
+function Runs({ runs, signals }: { runs: Run[]; signals: Signal[] }) {
   const labels: Record<string, string> = { complete: '已完成', failed: '未完成', reserved: '排队中', capturing: '采集中', captured: '已采集', reconciliation: '费用待核对' }
+  const signalByRun = new Map(signals.map(signal => [signal.run_id, signal]))
+  const analysis = (run: Run) => {
+    if (run.status !== 'complete') return null
+    const signal = signalByRun.get(run.id)
+    if (!signal) return { label: '无变化信号', copy: '网页已采集，未发现足够可靠的业务变化；本次只更新了基线。', tone: 'text-me-charcoal/70' }
+    if (signal.interpretation_status === 'complete') return { label: '分析已完成', copy: '网页已采集，变化分析已生成。', tone: 'text-green-800' }
+    if (signal.interpretation_status === 'failed') return { label: '分析未完成', copy: '网页已采集，但这次没有形成有效分析，当前不能据此决策。', tone: 'text-status-rej' }
+    return { label: '正在分析', copy: '网页已采集，变化分析仍在处理中。完成前不建议采取行动。', tone: 'text-amber-800' }
+  }
   return <section className="space-y-3" aria-label="采集记录">
     {runs.length === 0 && <p className="text-sm">暂无采集记录。</p>}
-    {runs.map(r => <article className={card} key={r.id}>
-      <p className="break-all text-sm font-bold">{r.domain} · {labels[r.status] ?? '处理中'}</p>
-      <p className="text-sm">{date(r.created_at)} NZ · {r.accounted_nzd == null ? `待结算 NZ$${money(r.reserved_nzd)}` : `已结算 NZ$${money(r.accounted_nzd)}`}</p>
-      {r.error_code && <p className="text-sm text-status-rej">{r.error_code.startsWith('interpretation_') ? '网页已采集，但分析结果未完成。' : r.status === 'reconciliation' ? '费用需要核对后才能继续采集。' : '本次采集未完成。'}</p>}
-      <details className="text-xs"><summary className="cursor-pointer">查看诊断信息</summary><div className="mt-2 space-y-2 break-all"><p>{r.url}</p><p>请求编号：{r.id}</p><p>采集状态：{r.provider_status ?? '等待中'} · 采集 US${money(r.capture_cost_usd)} · 分析 US${money(r.interpretation_cost_usd)}</p>{r.error_code && <p>{r.error_code}</p>}</div></details>
-    </article>)}
+    {runs.map(r => {
+      const state = analysis(r)
+      return <article className={card} key={r.id}>
+        <p className="break-all text-sm font-bold">{r.domain} · {labels[r.status] ?? '处理中'}</p>
+        <p className="text-sm">{date(r.created_at)} NZ · {r.accounted_nzd == null ? `待结算 NZ$${money(r.reserved_nzd)}` : `已结算 NZ$${money(r.accounted_nzd)}`}</p>
+        {state && <p className={`text-sm font-bold ${state.tone}`}>分析：{state.label}<span className="ml-2 font-normal">{state.copy}</span></p>}
+        {r.error_code && <p className="text-sm text-status-rej">{r.error_code.startsWith('interpretation_') ? '网页已采集，但分析结果未完成。' : r.status === 'reconciliation' ? '费用需要核对后才能继续采集。' : '本次采集未完成。'}</p>}
+        <details className="text-xs"><summary className="cursor-pointer">查看诊断信息</summary><div className="mt-2 space-y-2 break-all"><p>{r.url}</p><p>请求编号：{r.id}</p><p>采集状态：{r.provider_status ?? '等待中'} · 采集 US${money(r.capture_cost_usd)} · 分析 US${money(r.interpretation_cost_usd)}</p>{r.error_code && <p>{r.error_code}</p>}</div></details>
+      </article>
+    })}
   </section>
 }
