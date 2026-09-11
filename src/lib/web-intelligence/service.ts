@@ -5,6 +5,7 @@ import { loadCompetitionBrief } from './competition-sources'
 import { latestFreshSnapshots, latestSnapshots } from './competition-brief'
 import { buildOperatingBrief, normalizeOperatingProducts, operatingProductFromTour, parseTourRecordLine, resolveCurrentOperatingGoal, type OperatingBrief, type OperatingEvidence, type OperatingGoalCandidate } from './operating-brief'
 import { extractTourLinks, matchTravelScope } from './profiles/travel'
+import { loadFirstPartyTourProducts } from './first-party-tours'
 
 export async function saveSettings(clientId: string, raw: unknown): Promise<void> {
   const settings = settingsSchema.parse(raw)
@@ -44,6 +45,7 @@ export async function readView(clientId: string, canEdit: boolean) {
   const currentSnapshots = latestFreshSnapshots(snapshotRows, asOf)
   const ownRows = currentSnapshots.filter(row => ownDomain && canonicalDomain(row.domain) === ownDomain)
   const ownProducts = ownRows.flatMap(row => (row.projection_content ?? '').split('\n').map(parseTourRecordLine).filter((value): value is NonNullable<ReturnType<typeof parseTourRecordLine>> => value !== null)).map(operatingProductFromTour)
+  const firstPartyProducts = await loadFirstPartyTourProducts(ownDomain)
   const allCurrentSnapshots = latestFreshSnapshots([...snapshotRows, ...detailRows], asOf)
   const observations = latestSnapshots(snapshotRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
   const detailObservations = latestSnapshots(detailRows).map(row => ({ run_id: row.run_id, domain: row.domain, url: row.url, observed_at: row.captured_at }))
@@ -69,7 +71,7 @@ export async function readView(clientId: string, canEdit: boolean) {
     client: { id: client.data.id, name: client.data.name },
     goal: activeGoal,
     product_scope: brief.product_scope,
-    client_products: normalizeOperatingProducts(masterBrief.data?.products).length ? normalizeOperatingProducts(masterBrief.data?.products) : ownProducts,
+    client_products: normalizeOperatingProducts(masterBrief.data?.products).length ? normalizeOperatingProducts(masterBrief.data?.products) : firstPartyProducts.length ? firstPartyProducts : ownProducts,
     competitor_products: competitorProducts.map(item => ({ ...item, records: item.records.filter(record => {
       if (brief.product_scope.status === 'unknown' || brief.product_scope.market_ids.length === 0) return false
       return matchTravelScope(`Tour: ${record.name} | Route: ${record.route}`, '', brief.product_scope).status === 'matched'
