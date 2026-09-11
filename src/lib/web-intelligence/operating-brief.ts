@@ -36,6 +36,12 @@ export type TourCatalogItem = {
   record: TourRecord
 }
 
+export type TourComparisonCandidate = {
+  client_product: OperatingBriefInput['client_products'][number]
+  competitor_product: { name: string; source_url: string; observed_at: string | null; record: TourRecord }
+  match_score: number
+}
+
 export type OperatingDecision = {
   question: string
   context: string[]
@@ -55,6 +61,7 @@ export type OperatingBrief = {
   goal: { title: string; status: string; metric: string; target: number | null; period_start: string; period_end: string } | null
   product_scope: TravelScope
   tour_catalog: TourCatalogItem[]
+  comparison_candidates: TourComparisonCandidate[]
   matches: ProductMatch[]
   decision: OperatingDecision
   data_gaps: string[]
@@ -165,6 +172,15 @@ function tourSimilarity(client: OperatingBriefInput['client_products'][number], 
   return Math.round((route * 40 + duration * 20 + includes * 15 + positioning * 10 + audience * 10 + departure * 5) * 100)
 }
 
+function rankedCandidates(input: OperatingBriefInput, product: OperatingBriefInput['client_products'][number]) {
+  const records = input.competitor_products.flatMap(item => item.records.map(record => ({ item, record })))
+  return records
+    .filter(({ record }) => matchTravelScope(`${record.name} ${record.route}`, '', input.product_scope).status === 'matched')
+    .filter(({ record }) => completeCompetitorProduct(record))
+    .map(item => ({ ...item, score: tourSimilarity(product, item.record) }))
+    .sort((a, b) => b.score - a.score)
+}
+
 function matchesFor(input: OperatingBriefInput): ProductMatch[] {
   const competitorRecords = input.competitor_products.flatMap(item => item.records.map(record => ({ item, record })))
   if (!input.client_products.length) {
@@ -180,8 +196,7 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
   }
   return input.client_products.map(product => {
     const scoped = competitorRecords.filter(({ record }) => matchTravelScope(`${record.name} ${record.route}`, '', input.product_scope).status === 'matched')
-    const complete = scoped.filter(({ record }) => completeCompetitorProduct(record))
-    const ranked = complete.map(item => ({ ...item, score: tourSimilarity(product, item.record) })).sort((a, b) => b.score - a.score)
+    const ranked = rankedCandidates(input, product)
     const candidate = ranked[0] ?? scoped[0]
     const comparable = completeClientProduct(product) && Boolean(candidate) && (ranked[0]?.score ?? 0) >= 35
     if (!comparable) return {
@@ -198,6 +213,17 @@ function matchesFor(input: OperatingBriefInput): ProductMatch[] {
       match_score: candidate.score,
       reason: '这是按目的地范围和产品形状找到的最接近竞品候选，不代表两团相同；价格、城市、天数、日期、包含项目和定位差异交由 AI 解释优劣势。',
     }
+  })
+}
+
+function comparisonCandidates(input: OperatingBriefInput): TourComparisonCandidate[] {
+  return input.client_products.flatMap(product => {
+    const candidate = rankedCandidates(input, product)[0]
+    return candidate && completeClientProduct(product) && candidate.score >= 35 ? [{
+      client_product: product,
+      competitor_product: { name: candidate.record.name, source_url: candidate.item.source_url, observed_at: candidate.item.observed_at, record: candidate.record },
+      match_score: candidate.score,
+    }] : []
   })
 }
 
@@ -223,6 +249,7 @@ export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief 
   return {
     as_of: now.toISOString(), client_id: input.client.id, client_name: input.client.name,
     goal: input.goal, product_scope: input.product_scope,
+    comparison_candidates: comparisonCandidates(input),
     tour_catalog: input.competitor_products.flatMap(item => item.records.map(record => ({
       domain: item.domain, source_url: item.source_url, observed_at: item.observed_at, record,
     }))),
