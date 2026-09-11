@@ -1,5 +1,5 @@
 import { runActorAndGetResults } from '@/lib/apify/client'
-import { buildExternalObservation, sourceDefinition } from './sources'
+import { buildExternalObservation, sourceDefinition, sourceDefaultUrls } from './sources'
 import type { ExternalObservation } from './contracts'
 
 type RawExternalItem = Record<string, unknown>
@@ -124,6 +124,14 @@ export function collectIndustryWebsite(input: {
     },
     sourceId: input.sourceId, clientId: input.clientId, observedAt: input.observedAt,
   })
+}
+
+export function collectConfiguredIndustrySource(input: {
+  sourceId: string; clientId: string; observedAt: string; siteUrl?: string; maxArticles?: number
+}): Promise<ApifyExternalCollection> {
+  const siteUrl = input.siteUrl ?? sourceDefaultUrls(input.sourceId)[0]
+  if (!siteUrl) throw new Error('source_url_required')
+  return collectIndustryWebsite({ ...input, siteUrl })
 }
 
 export function collectSeekNzJobs(input: {

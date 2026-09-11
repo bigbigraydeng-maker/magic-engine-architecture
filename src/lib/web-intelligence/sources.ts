@@ -4,19 +4,26 @@ import { externalSourceTierSchema, externalSourceTypeSchema, type ExternalObserv
 export type ExternalSourceDefinition = {
   id: string; name: string; type: ExternalSourceType; tier: ExternalSourceTier; market: string
   requires_authorization?: boolean
+  default_urls?: readonly string[]
 }
 
 /** Initial source registry. Domains and selectors remain provider configuration, not runtime assumptions. */
 export const externalSourceRegistry: readonly ExternalSourceDefinition[] = [
   { id: 'seek-nz', name: 'SEEK', type: 'jobs', tier: 'B', market: 'NZ' },
   { id: 'indeed-nz', name: 'Indeed', type: 'jobs', tier: 'B', market: 'NZ' },
-  { id: 'travel-today', name: 'Travel Today', type: 'industry_media', tier: 'B', market: 'NZ/AU' },
+  { id: 'travel-today', name: 'Travel Today', type: 'industry_media', tier: 'B', market: 'NZ/AU', default_urls: ['https://traveltoday.co.nz/news/'] },
+  { id: 'travelinc-memo', name: 'TRAVELinc Memo', type: 'industry_media', tier: 'B', market: 'NZ/AU', default_urls: ['https://travelinc.co.nz/'] },
+  { id: 'tourism-new-zealand-news', name: 'Tourism New Zealand News', type: 'industry_news', tier: 'B', market: 'NZ', default_urls: ['https://www.tourismnewzealand.com/news-and-activity/'] },
   // Controlled source only: authorised export or Meta-approved integration.
   { id: 'facebook-group-authorized', name: 'Facebook Group（授权）', type: 'facebook_group', tier: 'C', market: 'customer-authorized', requires_authorization: true },
 ]
 
 export function sourceDefinition(id: string): ExternalSourceDefinition | null {
   return externalSourceRegistry.find(source => source.id === id) ?? null
+}
+
+export function sourceDefaultUrls(id: string): readonly string[] {
+  return sourceDefinition(id)?.default_urls ?? []
 }
 
 export function canonicalExternalUrl(value: string): string {

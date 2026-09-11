@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 const { runActorAndGetResults } = vi.hoisted(() => ({ runActorAndGetResults: vi.fn() }))
 vi.mock('@/lib/apify/client', () => ({ runActorAndGetResults }))
 
-import { collectApifyExternalObservations, collectIndustryWebsite, collectRssFeed, collectSeekNzJobs, WI_APIFY_ACTORS } from '../apify-external'
+import { collectApifyExternalObservations, collectConfiguredIndustrySource, collectIndustryWebsite, collectRssFeed, collectSeekNzJobs, WI_APIFY_ACTORS } from '../apify-external'
 
 const clientId = '00000000-0000-0000-0000-000000000001'
 
@@ -64,5 +64,11 @@ describe('Apify external observation adapter', () => {
     expect(runActorAndGetResults).toHaveBeenCalledWith(WI_APIFY_ACTORS.articleExtractor, expect.objectContaining({ startUrls: ['https://travel.example'], maxArticles: 50, extractFullContent: true }), undefined)
     await collectSeekNzJobs({ clientId, queries: ['tour manager'], location: 'Auckland', observedAt: '2026-09-11T01:00:00Z', maxResults: 500 })
     expect(runActorAndGetResults).toHaveBeenCalledWith(WI_APIFY_ACTORS.seekNz, expect.objectContaining({ country: 'NZ', queries: ['tour manager'], location: 'Auckland', maxResults: 100, incrementalMode: true }), undefined)
+  })
+
+  it('uses the registered Travel Today URL when no override is supplied', async () => {
+    runActorAndGetResults.mockResolvedValue({ success: true, runId: 'configured-1', data: [] })
+    await collectConfiguredIndustrySource({ sourceId: 'travel-today', clientId, observedAt: '2026-09-11T01:00:00Z' })
+    expect(runActorAndGetResults).toHaveBeenCalledWith(WI_APIFY_ACTORS.articleExtractor, expect.objectContaining({ startUrls: ['https://traveltoday.co.nz/news/'] }), undefined)
   })
 })
