@@ -59,4 +59,27 @@ describe('buildModifications', () => {
     const scenes = [scene({ index: 0 }), scene({ index: 1 })]
     expect(() => buildModifications(scenes, contract)).toThrow(/2 段.*1 个/)
   })
+
+  it('staticOverrides 铺底进 modifications，供品牌固定层(如 EndLogo)使用', () => {
+    const contract: CreatomateTemplateContract = {
+      templateId: 'tmpl-1',
+      sceneFieldMap: [{ visual: 'Video-1' }],
+      staticOverrides: { EndLogo: 'https://cdn.example.com/logo.png' },
+    }
+    const mods = buildModifications([scene()], contract)
+    expect(mods).toEqual({
+      EndLogo: 'https://cdn.example.com/logo.png',
+      'Video-1': scene().visualUrl,
+    })
+  })
+
+  it('镜头槽位名跟 staticOverrides 撞名时，镜头内容赢，不能被品牌图静默吃掉', () => {
+    const contract: CreatomateTemplateContract = {
+      templateId: 'tmpl-1',
+      sceneFieldMap: [{ visual: 'Video-1' }],
+      staticOverrides: { 'Video-1': 'https://cdn.example.com/should-be-overridden.png' },
+    }
+    const mods = buildModifications([scene({ visualUrl: 'https://cdn/real-scene.mp4' })], contract)
+    expect(mods['Video-1']).toBe('https://cdn/real-scene.mp4')
+  })
 })
