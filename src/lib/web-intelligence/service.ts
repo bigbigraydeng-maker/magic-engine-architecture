@@ -6,6 +6,7 @@ import { latestFreshSnapshots, latestSnapshots } from './competition-brief'
 import { buildOperatingBrief, normalizeOperatingProducts, operatingProductFromTour, parseTourRecordLine, resolveCurrentOperatingGoal, type OperatingBrief, type OperatingEvidence, type OperatingGoalCandidate } from './operating-brief'
 import { extractTourLinks, matchTravelScope } from './profiles/travel'
 import { loadFirstPartyTourProducts } from './first-party-tours'
+import { projectTrafficDirectionSignals } from './traffic-direction'
 
 export async function saveSettings(clientId: string, raw: unknown): Promise<void> {
   const settings = settingsSchema.parse(raw)
@@ -82,11 +83,6 @@ export async function readView(clientId: string, canEdit: boolean) {
     }) })),
     evidence: operatingEvidence, now: asOf,
   })
-  const latestTrafficByDomain = new Map<string, { domain: string; source_url: string; observed_at: string; valid_until: string | null; excerpt: string }>()
-  for (const row of trafficDirection.data ?? []) {
-    const domain = typeof row.competitor_domain === 'string' ? row.competitor_domain : null
-    if (!domain || latestTrafficByDomain.has(domain)) continue
-    latestTrafficByDomain.set(domain, { domain, source_url: row.source_url, observed_at: row.observed_at, valid_until: row.valid_until, excerpt: row.excerpt })
-  }
-  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, traffic_direction: [...latestTrafficByDomain.values()], budget: budget.data, brief, operating, client_product_source: { kind: clientProductSource, count: clientProducts.length }, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
+  const trafficRows = (trafficDirection.data ?? []).flatMap(row => typeof row.competitor_domain === 'string' ? [{ domain: row.competitor_domain, source_url: row.source_url, observed_at: row.observed_at, valid_until: row.valid_until, excerpt: row.excerpt }] : [])
+  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, traffic_direction: projectTrafficDirectionSignals(trafficRows), budget: budget.data, brief, operating, client_product_source: { kind: clientProductSource, count: clientProducts.length }, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
 }
