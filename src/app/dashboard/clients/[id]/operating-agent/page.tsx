@@ -154,7 +154,12 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
 
 function TrafficDirectionSection({ clientId, signals, busy, message, onRun }: { clientId: string; signals: TrafficDirection[]; busy: boolean; message: string; onRun: () => Promise<void> }) {
   const [showAll, setShowAll] = useState(false)
-  const latest = showAll ? signals : signals.slice(0, 6)
+  const orderedSignals = [...signals].sort((a, b) => {
+    const aHasEstimate = a.estimated_visits !== null ? 1 : 0
+    const bHasEstimate = b.estimated_visits !== null ? 1 : 0
+    return bHasEstimate - aHasEstimate || Date.parse(b.observed_at) - Date.parse(a.observed_at)
+  })
+  const latest = showAll ? orderedSignals : orderedSignals.slice(0, 6)
   return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="竞品网站流量方向">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-charcoal/50">外部市场信号</p><h2 className="mt-1 text-lg font-bold">竞品网站流量方向</h2><p className="mt-1 text-sm leading-6 text-me-charcoal/65">只看公开估算的变化方向，不能代表竞品真实访问量、订单或销售影响。</p></div>
