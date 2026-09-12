@@ -11,6 +11,26 @@
  *
  * BUG-FMT-S04 — closes the only "must open Supabase" gap in the ads pillar.
  * Mirrors src/app/api/clients/[id]/brand-aliases/route.ts.
+ *
+ * 2026-09-13: also mirrors the write into `client_meta_ad_accounts` (the new
+ * multi-account table — see src/lib/meta/client-ad-accounts.ts) as the
+ * `is_primary=true` row, so this stays the single place PM/FDE change the
+ * primary account and the new table never drifts from it. This route still
+ * only ever manages ONE account (the primary) — adding a UI to register a
+ * SECOND account for a client is out of scope here; today that's a one-time
+ * data seed in the migration (see 20260913000001_client_meta_ad_accounts.sql).
+ * Clearing the primary (PATCH with null) only demotes any existing
+ * `is_primary` row to false — it does not delete it, so an already-registered
+ * secondary/former-primary account keeps being covered by the daily SAFETY
+ * SWEEP (readback-sweep.ts's sweepAllClients, via
+ * getActiveClientsWithMetaAccounts — checks both this column and the new
+ * table). The daily ANALYTICS cron (google-data-pullback-daily/route.ts)
+ * still gates its whole per-client Meta block on this column being non-null,
+ * so a client with only secondary accounts left after clearing the primary
+ * will stop getting ad_daily_insights/health/digest until either the primary
+ * is restored or that cron is updated the same way (tracked in ROADMAP —
+ * 2026-09-13 review, lower priority since it only loses analytics, not the
+ * safety gate).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -117,6 +137,44 @@ export async function PATCH(
       { error: `Failed to update meta_ad_account_id: ${updateErr.message}` },
       { status: 500 },
     )
+  }
+
+  // Mirror into client_meta_ad_accounts so multi-account readers
+  // (getClientAdAccounts) never see a stale/absent primary row.
+  // Best-effort: this table is a read-side convenience for sync/readback, the
+  // `clients` column above is still the authoritative write — a failure here
+  // must not turn a successful primary-account update into a 500.
+  const { error: demoteErr } = await supabaseAdmin
+    .from('client_meta_ad_accounts')
+    .update({ is_primary: false })
+    .eq('client_id', clientId)
+    .eq('is_primary', true)
+  if (demoteErr) {
+    console.error('[meta-ad-account] failed to demote old primary row:', demoteErr.message)
+  }
+  if (next) {
+    // 2026-09-13 fix: if this account is already registered (e.g. the CTS
+    // second-account seed row, or a previously-demoted former primary) it may
+    // carry a real label like "CTStours 官方账户" — read it first so promoting
+    // it to primary doesn't silently stomp that label back to the generic
+    // default (魏征 review finding).
+    const { data: existingRow } = await supabaseAdmin
+      .from('client_meta_ad_accounts')
+      .select('label')
+      .eq('client_id', clientId)
+      .eq('ad_account_id', next)
+      .maybeSingle()
+    const label = (existingRow as { label?: string | null } | null)?.label ?? '主账户'
+
+    const { error: upsertErr } = await supabaseAdmin
+      .from('client_meta_ad_accounts')
+      .upsert(
+        { client_id: clientId, ad_account_id: next, is_primary: true, label },
+        { onConflict: 'client_id,ad_account_id' },
+      )
+    if (upsertErr) {
+      console.error('[meta-ad-account] failed to upsert primary row:', upsertErr.message)
+    }
   }
 
   try {

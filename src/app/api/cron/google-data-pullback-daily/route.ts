@@ -13,10 +13,36 @@
  *   - GSC:        anchor='gsc',  status='connected', config.site_url
  *   - GA4:        anchor='ga4',  status='connected', config.property_id
  *   - Meta Ads:   clients.meta_ad_account_id + META_SYSTEM_USER_TOKEN env
+ *                 (30-day snapshot + MetaAdsAdapter feed — primary account only,
+ *                 see 2026-09-13 note below)
+ *   - Ad Strategy Engine daily series (ad_daily_insights, health, digest):
+ *                 ALL of the client's registered accounts —
+ *                 `client_meta_ad_accounts` (2026-09-13, see note below)
  *   - Google Ads: platform_oauth_connections (provider='google_ads', status='active')
  *                 + GOOGLE_ADS_DEVELOPER_TOKEN / CLIENT_ID / CLIENT_SECRET /
  *                 REFRESH_TOKEN env
  *
+ * 2026-09-13 multi-account fix: CTS runs a second Meta ad account
+ * (act_2202695063810470, "CTStours 官方账户") that `meta_ad_account_id` never
+ * captured — its ThruPlay spend was invisible to ad_daily_insights, the health
+ * engine, and the daily digest. The 30-day `meta_ads_snapshots` pull above
+ * (`syncMeta`) still only covers the primary account — extending that table
+ * to multi-account is a separate, larger change not needed to close this gap;
+ * `ad_daily_insights` is what the health/digest/readback-sweep pipeline
+ * actually reads, so that's the loop that now covers every registered account.
+ * See src/lib/meta/client-ad-accounts.ts.
+ *
+ * Known scope boundary (2026-09-13 review): the client candidate list above
+ * (`metaClients`/`work`) still keys off `clients.meta_ad_account_id` alone —
+ * a client with ONLY a secondary account registered (e.g. its primary was
+ * cleared via the settings route) won't enter this loop at all, so it gets no
+ * ad_daily_insights/health/digest until the primary is restored. The daily
+ * SAFETY sweep (readback-sweep.ts) does not have this gap — it checks both
+ * the old column and the new table. This one is lower priority (loses
+ * analytics, not the safety gate) and is tracked in ROADMAP rather than fixed
+ * here, to avoid rushing a change into this route's per-client loop.
+ *
+
  * Reference: ROADMAP.md P17.A.4, P17.B.3, P18.B.1
  */
 
@@ -31,6 +57,7 @@ import { adsMetricKeysWrittenBy } from '@/lib/flywheel/metric-registry'
 import { MetaAdsAdapter } from '@/lib/flywheel/adapters/MetaAdsAdapter'
 import { startCronRun } from '@/lib/cron/run-logger'
 import { domainToEnvKey } from '@/lib/meta/token-manager'
+import { getClientAdAccountIds } from '@/lib/meta/client-ad-accounts'
 import { syncAdDailyInsights, syncCampaignDailyInsights } from '@/lib/ads-strategy/daily-insights'
 import { evaluateClientAdHealth } from '@/lib/ads-strategy/evaluate'
 import { sendAdHealthDigest } from '@/lib/ads-strategy/digest'
@@ -74,6 +101,17 @@ interface ClientResult {
   ad_health?: { success: boolean; overall_verdict?: string; campaigns_evaluated?: number; error?: string }
   /** P21.K.4 daily email digest decision + send outcome. */
   ad_digest?: { sent: boolean; decision: string; error?: string }
+  /**
+   * 2026-09-13: `ad_daily`/`ad_level` above stay the PRIMARY account's result
+   * (unchanged shape, unchanged tallying). Any additional registered accounts
+   * (client_meta_ad_accounts) land here instead — purely additive, so nothing
+   * that reads `ad_daily`/`ad_level` needs to change.
+   */
+  ad_daily_secondary?: Array<{
+    ad_account_id: string
+    ad_daily?: { success: boolean; rows_written?: number; error?: string }
+    ad_level?:  { success: boolean; rows_written?: number; error?: string }
+  }>
 }
 
 // ─── Route ───────────────────────────────────────────────────────────────────
@@ -247,8 +285,39 @@ export async function GET(req: NextRequest) {
             metaToken,
           )
 
+          // 2026-09-13: any OTHER accounts this client has registered
+          // (client_meta_ad_accounts) get the same two syncs, so their
+          // campaigns/ads land in ad_daily_insights too — that table has no
+          // account filter downstream (evaluateClientAdHealth, the digest,
+          // readback-sweep all just query by client_id), so this is the one
+          // change needed for those to start seeing every account.
+          // Non-fatal per account: one account's failure must not skip the rest.
+          const allAccountIds = await getClientAdAccountIds(client.client_id)
+          const secondaryAccountIds = allAccountIds.filter(id => id !== client.meta_ad_account_id)
+          if (secondaryAccountIds.length > 0) {
+            result.ad_daily_secondary = []
+            for (const secondaryAccountId of secondaryAccountIds) {
+              const secondaryResult: NonNullable<ClientResult['ad_daily_secondary']>[number] = {
+                ad_account_id: secondaryAccountId,
+              }
+              secondaryResult.ad_daily = await syncCampaignDailyInsights(
+                client.client_id,
+                secondaryAccountId,
+                metaToken,
+              )
+              secondaryResult.ad_level = await syncAdDailyInsights(
+                client.client_id,
+                secondaryAccountId,
+                metaToken,
+              )
+              result.ad_daily_secondary.push(secondaryResult)
+            }
+          }
+
           // P21.K.2: judge each campaign against its own baseline and store the
-          // day's account-health narrative. Reads the series just written above.
+          // day's account-health narrative. Reads the series just written above
+          // PLUS any secondary accounts synced just above — evaluateClientAdHealth
+          // queries ad_daily_insights by client_id only, no account filter.
           // Non-fatal — a judging failure must not affect data collection.
           if (result.ad_daily?.success) {
             const insightDate = new Date()
@@ -323,7 +392,7 @@ export async function GET(req: NextRequest) {
   // Collect per-client errors so postmortem is possible without Render logs.
   // Diagnostic only — no behavior change.
   const errors = results.flatMap(r => {
-    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'|'ad_daily'|'ad_level'|'ad_health'|'ad_digest'; error: string }> = []
+    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'|'ad_daily'|'ad_level'|'ad_health'|'ad_digest'|'ad_daily_secondary'; error: string }> = []
     if (r.gsc?.success === false && r.gsc.error)               out.push({ client_id: r.client_id, source: 'gsc',        error: r.gsc.error })
     if (r.ga4?.success === false && r.ga4.error)               out.push({ client_id: r.client_id, source: 'ga4',        error: r.ga4.error })
     if (r.meta?.success === false && r.meta.error)             out.push({ client_id: r.client_id, source: 'meta',       error: r.meta.error })
@@ -332,14 +401,29 @@ export async function GET(req: NextRequest) {
     if (r.ad_level?.success === false && r.ad_level.error)     out.push({ client_id: r.client_id, source: 'ad_level',   error: r.ad_level.error })
     if (r.ad_health?.success === false && r.ad_health.error)   out.push({ client_id: r.client_id, source: 'ad_health', error: r.ad_health.error })
     if (r.ad_digest && !r.ad_digest.sent && r.ad_digest.error)  out.push({ client_id: r.client_id, source: 'ad_digest', error: r.ad_digest.error })
+    // 2026-09-13 (魏征 review): a secondary account's sync failure used to be
+    // completely invisible — not in `failed`, not here, not console.error'd —
+    // the exact "looks fine, actually never worked" shape this whole PR is
+    // trying to close, just one level down. Not counted in `failed`/the email
+    // headline (best-effort like ad_level), but must show up in a manual read
+    // of cron_run_logs instead of vanishing without a trace.
+    for (const secondary of r.ad_daily_secondary ?? []) {
+      if (secondary.ad_daily?.success === false && secondary.ad_daily.error) {
+        out.push({ client_id: r.client_id, source: 'ad_daily_secondary', error: `[${secondary.ad_account_id}] ${secondary.ad_daily.error}` })
+      }
+      if (secondary.ad_level?.success === false && secondary.ad_level.error) {
+        out.push({ client_id: r.client_id, source: 'ad_daily_secondary', error: `[${secondary.ad_account_id}] ${secondary.ad_level.error}` })
+      }
+    }
     return out
   })
 
   // The failure email renders `error_message`, not the summary JSONB, so
   // without this the PM's alert reads "2 failed · —" and says nothing. Only the
-  // errors that actually count as failures belong here — ad_level is excluded
-  // above and must not become the headline of an email it never triggered.
-  const headlineError = errors.find(e => e.source !== 'ad_level')
+  // errors that actually count as failures belong here — ad_level and
+  // ad_daily_secondary are excluded (both best-effort, neither triggers `failed`)
+  // and must not become the headline of an email they never triggered.
+  const headlineError = errors.find(e => e.source !== 'ad_level' && e.source !== 'ad_daily_secondary')
   const errorMessage = failed > 0 && headlineError
     ? `${headlineError.source}: ${headlineError.error}${errors.length > 1 ? ` (+${errors.length - 1} more)` : ''}`
     : undefined
