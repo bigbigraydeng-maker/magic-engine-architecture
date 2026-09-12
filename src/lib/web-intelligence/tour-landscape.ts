@@ -1,7 +1,7 @@
 import { callClaudeChat, MODEL_HAIKU, parseJsonResponse } from '@/lib/anthropic/client'
 
 export const TOUR_LANDSCAPE_MODEL = MODEL_HAIKU
-export const TOUR_LANDSCAPE_PROMPT_VERSION = 'tour-landscape-v1'
+export const TOUR_LANDSCAPE_PROMPT_VERSION = 'tour-landscape-v2'
 
 export type TourLandscape = {
   headline: string
@@ -13,7 +13,7 @@ export type TourLandscape = {
   confidence: number
 }
 
-const SYSTEM = '你是旅游产品竞争情报分析师。只根据输入事实做整体市场判断，不把不同旅行社的 Tour 强行视为一一对应产品。不得编造价格、日期、城市或余位。输出严格 JSON。'
+const SYSTEM = '你是旅游产品竞争情报分析师。只根据输入事实做整体市场判断，不把不同旅行社的 Tour 强行视为一一对应产品。不得编造价格、日期、城市或余位。输出严格 JSON。结论必须具体到已提供的产品、城市、天数或价格事实；如果事实不足，就明确说缺什么，不要用空泛的行业术语填充。'
 
 export function tourLandscapePrompt(input: { client_name: string; market_scope?: string[]; client_products: unknown[]; competitor_products: unknown[]; memory_context?: string }): string {
   return `请为 ${input.client_name} 做竞品产品组合总览，而不是逐团横向配对。
@@ -29,9 +29,10 @@ ${JSON.stringify(input.client_products).slice(0, 12000)}
 ${JSON.stringify(input.competitor_products).slice(0, 18000)}
 
 客户已确认的历史偏好与决策（只能作为背景，不能替代当前证据）：
-${input.memory_context || '暂无已确认的客户 Memory。'}
+${input.memory_context ? input.memory_context.slice(0, 5000) : '暂无已确认的客户 Memory。'}
 
-输出字段：headline（不超过40字）、market_summary（2-4句，必须包含明确判断）、client_opportunities（最多4条，每条都要是“建议现在做”的具体动作）、client_risks（最多4条，每条都要是“暂时不要做”的具体动作或风险）、recommended_focus（最多4条，每条都要是下一步先确认的事项）、unknowns（最多4条，列出缺失的关键证据）、confidence（0到1）。
+输出字段：headline（不超过40字，直接说现在最重要的经营判断）、market_summary（2-4句，必须引用至少2个输入中的具体事实，例如产品数量、产品名、城市、天数或价格带，并给出明确判断）、client_opportunities（最多4条，每条都要是“建议现在做”的具体动作，尽量点名 CTS 产品或产品层级）、client_risks（最多4条，每条都要是“暂时不要做”的具体动作或风险，并说明依据）、recommended_focus（最多4条，每条都要是下一步先确认的事项）、unknowns（最多4条，列出缺失的关键证据）、confidence（0到1）。
+不要输出“加强竞争力”“优化产品”“关注市场”等无法执行的空话。不要为了凑满字段而编造事实；但只要输入中有证据，就必须把证据写进结论和建议。每个数组最多3条，优先保留最影响经营决策的内容。
 必须返回以上全部字段；没有证据时对应字段返回 []，不要省略字段。只返回 JSON，不要 Markdown 代码块。`
 }
 
@@ -76,7 +77,7 @@ export async function summarizeTourLandscape(input: Parameters<typeof tourLandsc
   // Use the shared gateway path. This keeps the aggregate call observable and
   // consistent with the other Web Intelligence AI workflows in production.
   try {
-    const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1400 })
+    const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1800 })
     return { landscape: validateTourLandscape(result.text), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION, degraded: false }
   } catch (error) {
     console.warn('[wi-tour-landscape] AI unavailable; using evidence-bound fallback', error instanceof Error ? error.message : 'unknown_error')

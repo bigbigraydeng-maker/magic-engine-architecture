@@ -11,4 +11,10 @@ describe('tour landscape summary', () => {
   it('asks the model for a portfolio view rather than one-to-one matching', () => {
     expect(tourLandscapePrompt({ client_name: 'Example', client_products: [], competitor_products: [] })).toContain('而不是逐团横向配对')
   })
+
+  it('bounds injected client memory so it cannot overwhelm the analysis prompt', () => {
+    const prompt = tourLandscapePrompt({ client_name: 'Example', client_products: [], competitor_products: [], memory_context: 'x'.repeat(10000) })
+    expect(prompt).not.toContain('x'.repeat(5001))
+    expect(prompt).toContain('x'.repeat(5000))
+  })
 })
