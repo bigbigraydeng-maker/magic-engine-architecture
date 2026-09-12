@@ -36,6 +36,21 @@ function cleanList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 4) : []
 }
 
+function fallbackTourLandscape(input: Parameters<typeof tourLandscapePrompt>[0]): TourLandscape {
+  const scope = input.market_scope?.length ? input.market_scope.join('、') : '当前监控范围'
+  const clientCount = input.client_products.length
+  const competitorCount = input.competitor_products.length
+  return {
+    headline: competitorCount ? `${scope}已有竞品样本，先验证再调整产品` : `${scope}目前缺少足够竞品样本`,
+    market_summary: `当前纳入分析的 CTS 产品有 ${clientCount} 个，重点监控样本有 ${competitorCount} 个。现有资料可以帮助发现城市、天数和价格带的方向，但不能代表竞品完整产品线或整个市场。`,
+    client_opportunities: clientCount ? ['先选一个最重要的 CTS 产品，核对它与监控样本在城市、天数和包含项目上的消费者差异。'] : [],
+    client_risks: ['暂时不要仅凭当前监控样本做全线降价或改动全部产品的决定。'],
+    recommended_focus: ['先确认重点产品的完整路线、出发日期、余位和价格包含项目，再决定是否调整。'],
+    unknowns: ['竞品完整产品线、真实出发窗口、余位和询盘转化数据仍未纳入。'],
+    confidence: competitorCount > 0 && clientCount > 0 ? 0.35 : 0.2,
+  }
+}
+
 export function validateTourLandscape(value: unknown): TourLandscape {
   const parsed = typeof value === 'string' ? parseJsonResponse(value) as unknown : value
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid_tour_landscape')
@@ -57,8 +72,13 @@ export function validateTourLandscape(value: unknown): TourLandscape {
 export async function summarizeTourLandscape(input: Parameters<typeof tourLandscapePrompt>[0]) {
   // Use the shared gateway path. This keeps the aggregate call observable and
   // consistent with the other Web Intelligence AI workflows in production.
-  const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1800 })
-  return { landscape: validateTourLandscape(result.text), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION }
+  try {
+    const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1400 })
+    return { landscape: validateTourLandscape(result.text), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION, degraded: false }
+  } catch (error) {
+    console.warn('[wi-tour-landscape] AI unavailable; using evidence-bound fallback', error instanceof Error ? error.message : 'unknown_error')
+    return { landscape: fallbackTourLandscape(input), cost_usd: 0, model: 'rules-fallback', prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION, degraded: true }
+  }
 }
 
 export async function chatAboutTourLandscape(input: {
