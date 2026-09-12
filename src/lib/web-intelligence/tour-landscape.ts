@@ -15,9 +15,11 @@ export type TourLandscape = {
 
 const SYSTEM = '你是旅游产品竞争情报分析师。只根据输入事实做整体市场判断，不把不同旅行社的 Tour 强行视为一一对应产品。不得编造价格、日期、城市或余位。输出严格 JSON。'
 
-export function tourLandscapePrompt(input: { client_name: string; client_products: unknown[]; competitor_products: unknown[] }): string {
+export function tourLandscapePrompt(input: { client_name: string; market_scope?: string[]; client_products: unknown[]; competitor_products: unknown[] }): string {
   return `请为 ${input.client_name} 做竞品产品组合总览，而不是逐团横向配对。
 
+本次分析范围：${input.market_scope?.length ? input.market_scope.join('、') : '客户当前配置的市场范围'}。
+注意：竞品资料只来自客户指定的重点监控对象和页面，不代表这些竞品的完整产品线，也不代表整个市场全貌。不要使用“市场上所有”“竞品全部产品”等表述。CTS 产品资料是当前纳入本次分析的客户产品，不要据此声称 CTS 没有其他产品。
 分析重点：消费者能感知的城市覆盖、行程长度、价格带、产品定位、出发季节和包含项目；最终告诉经营负责人现在应该做什么、暂时不要做什么、下一步先确认什么。不同路线和天数可以并存，不要把它们误判成同一产品。
 
 客户产品事实：
@@ -63,14 +65,15 @@ export async function chatAboutTourLandscape(input: {
   client_name: string
   client_products: unknown[]
   competitor_products: unknown[]
+  market_scope?: string[]
   landscape: TourLandscape | null
   history: Array<{ role: 'user' | 'assistant'; content: string }>
   question: string
 }) {
   const systemPrompt = `${SYSTEM} 你现在是一个经营决策对话助手。回答要直接、具体、少讲术语。
-回答固定使用以下顺序：结论：一句话直接回答；依据：列出1-3条输入资料支持的事实；建议：给出一个下一步动作。只能使用提供的客户产品、竞品资料和当前总览；资料没有写的内容必须明确说“目前无法判断”。
+回答固定使用以下顺序：结论：一句话直接回答；依据：列出1-3条输入资料支持的事实；建议：给出一个下一步动作。只能使用提供的客户产品、竞品资料和当前总览；资料没有写的内容必须明确说“目前无法判断”。竞品资料是重点监控样本，不是竞品完整产品线；不要把样本结论扩大成整个市场结论。
 不要把不同旅行社的 Tour 强行一一对应，不要建议自动调价、发布或执行外部动作。`
-  const context = `当前总览：${JSON.stringify(input.landscape)}\n\n${tourLandscapePrompt({ client_name: input.client_name, client_products: input.client_products, competitor_products: input.competitor_products })}`
+  const context = `当前总览：${JSON.stringify(input.landscape)}\n\n${tourLandscapePrompt({ client_name: input.client_name, market_scope: input.market_scope, client_products: input.client_products, competitor_products: input.competitor_products })}`
   const result = await callClaudeChat({
     model: TOUR_LANDSCAPE_MODEL,
     systemPrompt,
