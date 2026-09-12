@@ -26,7 +26,8 @@ ${JSON.stringify(input.client_products).slice(0, 12000)}
 竞品产品事实：
 ${JSON.stringify(input.competitor_products).slice(0, 18000)}
 
-输出字段：headline（不超过40字）、market_summary（2-4句）、client_opportunities（最多4条）、client_risks（最多4条）、recommended_focus（最多4条）、unknowns（最多4条）、confidence（0到1）。`
+输出字段：headline（不超过40字）、market_summary（2-4句）、client_opportunities（最多4条）、client_risks（最多4条）、recommended_focus（最多4条）、unknowns（最多4条）、confidence（0到1）。
+必须返回以上全部字段；没有证据时对应字段返回 []，不要省略字段。只返回 JSON，不要 Markdown 代码块。`
 }
 
 function cleanList(value: unknown): string[] {
@@ -37,14 +38,23 @@ export function validateTourLandscape(value: unknown): TourLandscape {
   const parsed = typeof value === 'string' ? parseJsonResponse(value) as unknown : value
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid_tour_landscape')
   const item = parsed as Record<string, unknown>
-  const confidence = typeof item.confidence === 'number' && Number.isFinite(item.confidence) ? Math.max(0, Math.min(1, item.confidence)) : 0
+  const confidenceValue = item.confidence ?? item.confidence_score
+  const confidence = typeof confidenceValue === 'number' && Number.isFinite(confidenceValue) ? Math.max(0, Math.min(1, confidenceValue)) : 0
   if (typeof item.headline !== 'string' || typeof item.market_summary !== 'string') throw new Error('invalid_tour_landscape')
-  return { headline: item.headline.slice(0, 120), market_summary: item.market_summary.slice(0, 1200), client_opportunities: cleanList(item.client_opportunities), client_risks: cleanList(item.client_risks), recommended_focus: cleanList(item.recommended_focus), unknowns: cleanList(item.unknowns), confidence }
+  return {
+    headline: item.headline.slice(0, 120),
+    market_summary: item.market_summary.slice(0, 1200),
+    client_opportunities: cleanList(item.client_opportunities ?? item.opportunities),
+    client_risks: cleanList(item.client_risks ?? item.risks),
+    recommended_focus: cleanList(item.recommended_focus ?? item.recommendations),
+    unknowns: cleanList(item.unknowns ?? item.missing_evidence),
+    confidence,
+  }
 }
 
 export async function summarizeTourLandscape(input: Parameters<typeof tourLandscapePrompt>[0]) {
   // Use the shared gateway path. This keeps the aggregate call observable and
   // consistent with the other Web Intelligence AI workflows in production.
-  const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1200 })
+  const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1800 })
   return { landscape: validateTourLandscape(result.text), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION }
 }
