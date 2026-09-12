@@ -126,6 +126,29 @@ export function parseNzDdMmYyyy(raw: string): Date | null {
   return date
 }
 
+/**
+ * Google Sheets 对没被设成"纯文本"格式的日期单元格，`UNFORMATTED_VALUE` 读出来
+ * 是一个数字（从 1899-12-30 起的天数），不是字符串——这张表新旧行格式不统一：
+ * 老行是人手打的 "DD/MM/YYYY" 文本，2026-09 起新增的行是原生日期格式。**实测
+ * 发现**（不是猜的）：2026-09-12/13 那几行的"进线日期"读出来是 `46276`/`46277`
+ * 这样的数字，换算正是 2026-09-12/13——用文本正则解析会判定"看不懂"，把当天
+ * 最新的咨询全部漏掉，而这些恰恰是唯一还落在 Meta 7 天窗口内、真正有用的记录。
+ */
+export function parseSheetsSerialDate(raw: string): Date | null {
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) return null
+  const serial = Number(trimmed)
+  if (!Number.isFinite(serial) || serial <= 0) return null
+  const utcDays = Math.floor(serial - 25569) // 1899-12-30 → 1970-01-01 的天数差
+  const date = new Date(utcDays * 86_400_000)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/** 两种日期格式都要认：老行的 "DD/MM/YYYY" 文本，新行的 Sheets 原生日期序列号。 */
+export function parseSheetDateCell(raw: string): Date | null {
+  return parseNzDdMmYyyy(raw) ?? parseSheetsSerialDate(raw)
+}
+
 /** '4-已订金' / '5-已出行归来' → 算成交；其余（含空白）都不算。 */
 export function stageIsPurchase(stage: string | null): boolean {
   if (!stage) return false
@@ -207,7 +230,7 @@ export function classifyCtsCrmPerson(
         reason: '阶段标了已订金/已出行，但表格里"阶段更新日"是空的，没有真实成交日期，需要人工补一个',
       }
     }
-    const stageDate = parseNzDdMmYyyy(crmRow.stageUpdatedDate)
+    const stageDate = parseSheetDateCell(crmRow.stageUpdatedDate)
     if (!stageDate) {
       return {
         kind: 'purchase_missing_date',
@@ -247,7 +270,7 @@ export function classifyCtsCrmPerson(
     }
   }
   if (crmRow.entryDate) {
-    const parsed = parseNzDdMmYyyy(crmRow.entryDate)
+    const parsed = parseSheetDateCell(crmRow.entryDate)
     if (parsed) {
       return {
         kind: 'qualified_lead',
