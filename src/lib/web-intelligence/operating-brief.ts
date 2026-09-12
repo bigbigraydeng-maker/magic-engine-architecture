@@ -261,15 +261,21 @@ export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief 
   const matches = matchesFor(input)
   const competitorSignal = competitorFacts(input, now)
   const allInsufficient = matches.length === 0 || matches.every(match => match.status === 'insufficient_evidence')
+  const incompleteClientProducts = input.client_products.filter(product => !completeClientProduct(product)).length
   const evidence = input.evidence.filter(item => item.scope === 'client' || item.scope === 'competitor')
   const unknowns = [
     ...(input.client_products.length ? [] : ['我们还没有 CTS 自己每条团的完整资料（路线、天数、价格、出发日期和余位）。']),
+    ...(incompleteClientProducts && input.client_products.length ? [`有 ${incompleteClientProducts} 个 CTS 产品仍缺少路线、价格、日期或包含项目等对比字段。`] : []),
     ...(input.goal ? [] : ['目前没有明确的经营目标，所以暂时不能判断哪项变化最重要。']),
     ...(competitorSignal.length ? [] : ['竞品最近没有可用的新资料，旧资料不能代表现在。']),
     '目前没有 CTS 和竞品之间的询盘、成交或转化数据，所以还不能判断哪一条团真正卖得更好。',
   ]
   const recommendation = allInsufficient
-    ? '先暂不调价或改促销。我们还缺 CTS 自己这条团的完整资料，补齐后再和竞品比较。'
+    ? !input.client_products.length
+      ? '先暂不调价或改促销。我们还缺 CTS 自己这条团的完整资料，补齐后再和竞品比较。'
+      : incompleteClientProducts
+        ? '先暂不调价或改促销。CTS 产品已进入分析，但仍有部分产品缺少公平比较所需字段；先补齐重点产品，再和竞品比较。'
+        : '先暂不调价或改促销。CTS 产品资料已经进入分析，但当前没有找到路线、天数和产品内容都足够接近的竞品对位；先核对重点样本，再决定是否调整。'
     : '我们找到了一条比较接近的竞品团。先人工核对城市、天数、价格和包含内容，再决定要不要调整。'
   const context = input.goal
     ? [`当前目标：${input.goal.title}（${input.goal.status}）`, `目标指标：${input.goal.metric}${input.goal.target == null ? '' : `，目标 ${input.goal.target}`}`, `目标周期：${input.goal.period_start} 至 ${input.goal.period_end}`]
@@ -288,7 +294,7 @@ export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief 
       context, external_signal: competitorSignal,
       impact: allInsufficient ? '现在只能确认竞品在卖什么，还不能说明 CTS 受到了影响。' : '现在有一条比较接近的竞品团，但还不能只凭网页资料判断谁更有优势。',
       recommendation, authorization: 'review_required', evidence,
-      unknowns, check_and_tune: '下一步先补齐 CTS 产品资料。之后每次更新竞品页面时，比较城市、天数、价格、出发日期和余位，再结合询盘和成交情况决定是否调整。',
+      unknowns, check_and_tune: `${input.client_products.length && !incompleteClientProducts ? '下一步先核对重点 CTS 产品与竞品样本的城市、天数、价格和包含项目。' : '下一步先补齐重点 CTS 产品资料。'} 之后每次更新竞品页面时，再结合询盘和成交情况决定是否调整。`,
     },
     data_gaps: unknowns,
   }
