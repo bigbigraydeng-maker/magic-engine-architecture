@@ -6,6 +6,7 @@ import type { TourLandscape } from '@/lib/web-intelligence/tour-landscape'
 
 type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; client_product_source?: { kind: 'master_brief' | 'first_party_feed' | 'web_snapshot' | 'none'; count: number }; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
 type ComparisonResult = { summary: string; client_strengths: string[]; competitor_strengths: string[]; differences: string[]; recommendations: string[]; unknowns: string[]; confidence: number; evidence_urls: string[] }
+type LandscapeChatMessage = { role: 'user' | 'assistant'; content: string }
 type CapturePhase = 'idle' | 'queued' | 'capturing' | 'analysing' | 'complete' | 'failed'
 
 const statusLabel = {
@@ -166,6 +167,10 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
   const [landscape, setLandscape] = useState<TourLandscape | null>(null)
   const [landscapeBusy, setLandscapeBusy] = useState(false)
   const [landscapeError, setLandscapeError] = useState('')
+  const [chatMessages, setChatMessages] = useState<LandscapeChatMessage[]>([])
+  const [chatQuestion, setChatQuestion] = useState('')
+  const [chatBusy, setChatBusy] = useState(false)
+  const [chatError, setChatError] = useState('')
   async function analyse(index: number) {
     const candidate = candidates[index]
     setSelected(index); setBusy(index); setError('')
@@ -176,6 +181,19 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
       setResults(previous => ({ ...previous, [index]: payload.comparison! }))
     } catch (reason) { setError(reason instanceof Error ? reason.message : '暂时无法生成对比。') }
     finally { setBusy(null) }
+  }
+  async function askLandscape() {
+    const question = chatQuestion.trim()
+    if (!question || chatBusy) return
+    const nextMessages = [...chatMessages, { role: 'user' as const, content: question }]
+    setChatMessages(nextMessages); setChatQuestion(''); setChatBusy(true); setChatError('')
+    try {
+      const response = await fetch(`/api/clients/${encodeURIComponent(clientId)}/web-intelligence/tour-landscape/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, history: chatMessages, landscape }) })
+      const payload = await response.json() as { text?: string; error?: string }
+      if (!response.ok || !payload.text) throw new Error(payload.error ?? '对话分析暂时不可用，请稍后重试。')
+      setChatMessages([...nextMessages, { role: 'assistant', content: payload.text }])
+    } catch (reason) { setChatError(reason instanceof Error ? reason.message : '对话分析暂时不可用，请稍后重试。'); setChatMessages(chatMessages) }
+    finally { setChatBusy(false) }
   }
   const result = selected == null ? null : results[selected]
   async function summariseLandscape() {
@@ -194,7 +212,7 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
   return <section className="space-y-4 rounded-2xl border border-me-ochre/30 bg-me-ochre/5 p-5" aria-label="AI Tour 产品总览">
     <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">AI 竞品总览</p><h2 className="mt-1 text-xl font-bold">市场上正在卖什么，CTS 该关注什么？</h2><p className="mt-2 text-sm leading-6 text-me-charcoal/70">AI 会综合多个竞品的城市、天数、价格和定位，给出消费者视角的整体判断，不强行把不同 Tour 一一配对。</p></div><button type="button" onClick={() => void summariseLandscape()} disabled={landscapeBusy} className="rounded-lg bg-me-ochre px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{landscapeBusy ? '正在汇总…' : landscape ? '重新生成总览' : '生成竞品总览'}</button></div>
     {landscapeError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{landscapeError}</p>}
-    {landscape && <article className="space-y-4 rounded-xl border border-black/10 bg-white p-5"><div><p className="text-xs font-bold text-me-charcoal/55">整体结论</p><h3 className="mt-1 text-lg font-black">{landscape.headline}</h3><p className="mt-2 text-sm leading-6">{landscape.market_summary}</p></div><div className="grid gap-3 md:grid-cols-2"><ComparisonList title="CTS 可以利用的机会" items={landscape.client_opportunities} tone="green" /><ComparisonList title="需要留意的风险" items={landscape.client_risks} tone="amber" /><ComparisonList title="建议优先关注" items={landscape.recommended_focus} tone="ochre" /><ComparisonList title="还缺什么证据" items={landscape.unknowns} tone="muted" /></div><p className="border-t border-black/5 pt-3 text-xs text-me-charcoal/50">Haiku 汇总 · 置信度 {Math.round(landscape.confidence * 100)}% · 仅供人工复核</p></article>}
+    {landscape && <article className="space-y-4 rounded-xl border border-black/10 bg-white p-5"><div><p className="text-xs font-bold text-me-charcoal/55">整体结论</p><h3 className="mt-1 text-lg font-black">{landscape.headline}</h3><p className="mt-2 text-sm leading-6">{landscape.market_summary}</p></div><div className="grid gap-3 md:grid-cols-2"><ComparisonList title="CTS 可以利用的机会" items={landscape.client_opportunities} tone="green" /><ComparisonList title="需要留意的风险" items={landscape.client_risks} tone="amber" /><ComparisonList title="建议优先关注" items={landscape.recommended_focus} tone="ochre" /><ComparisonList title="还缺什么证据" items={landscape.unknowns} tone="muted" /></div><p className="border-t border-black/5 pt-3 text-xs text-me-charcoal/50">Haiku 汇总 · 置信度 {Math.round(landscape.confidence * 100)}% · 仅供人工复核</p><div className="border-t border-black/5 pt-4"><p className="text-sm font-bold">继续问 Agent</p><p className="mt-1 text-xs text-me-charcoal/55">可以问：现在最该调整哪个产品？为什么不建议降价？还缺哪条证据？</p>{chatMessages.length > 0 && <div className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-lg bg-me-ivory p-3">{chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={message.role === 'user' ? 'text-right' : 'text-left'}><span className={`inline-block max-w-[90%] rounded-lg px-3 py-2 text-sm leading-6 ${message.role === 'user' ? 'bg-me-ochre text-white' : 'bg-white'}`}>{message.content}</span></div>)}</div>}<div className="mt-3 flex gap-2"><input aria-label="询问竞品总览 Agent" value={chatQuestion} onChange={event => setChatQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void askLandscape() }} placeholder="例如：CTS现在最应该先改哪个产品？" className="min-w-0 flex-1 rounded-lg border border-black/15 bg-white px-3 py-2 text-sm" disabled={chatBusy} /><button type="button" onClick={() => void askLandscape()} disabled={!chatQuestion.trim() || chatBusy} className="rounded-lg border border-me-ochre px-3 py-2 text-sm font-bold text-me-ochre disabled:opacity-50">{chatBusy ? '分析中…' : '发送'}</button></div>{chatError && <p role="alert" className="mt-2 text-sm text-red-700">{chatError}</p>}</div></article>}
     {!landscape && <p className="rounded-xl bg-white/70 p-4 text-sm text-me-charcoal/65">点击“生成竞品总览”，查看当前市场组合的整体判断。</p>}
     {candidates.length > 0 ? <details className="rounded-xl border border-black/10 bg-white p-4"><summary className="cursor-pointer text-sm font-bold">查看逐条候选证据（{candidates.length} 条）</summary><div className="mt-4 grid gap-3 lg:grid-cols-2">{candidates.map((candidate, index) => <button type="button" key={`${candidate.client_product.name}-${candidate.competitor_product.source_url}`} onClick={() => void analyse(index)} disabled={busy !== null} className={`text-left rounded-xl border bg-white p-4 transition ${selected === index ? 'border-me-ochre ring-2 ring-me-ochre/20' : 'border-black/10 hover:border-me-ochre/50'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">CTS：{candidate.client_product.name}</p><p className="mt-1 font-black">竞品：{candidate.competitor_product.name}</p></div><span className="shrink-0 rounded-full bg-me-ivory px-2 py-1 text-[11px] font-bold">相似度 {candidate.match_score}</span></div><p className="mt-3 text-xs font-bold text-me-ochre">{busy === index ? '正在分析…' : results[index] ? '重新生成对比' : '点击查看优劣势对比 →'}</p></button>)}</div></details> : <p className="rounded-xl bg-white/70 p-4 text-sm text-me-charcoal/65">当前没有逐团明细可供核对；仍可生成整体竞品总览。</p>}
     {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
