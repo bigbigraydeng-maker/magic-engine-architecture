@@ -43,6 +43,8 @@ export function validateTourLandscape(value: unknown): TourLandscape {
 }
 
 export async function summarizeTourLandscape(input: Parameters<typeof tourLandscapePrompt>[0]) {
-  const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1200, singleAttempt: true })
+  // Use the shared gateway path. This keeps the aggregate call observable and
+  // consistent with the other Web Intelligence AI workflows in production.
+  const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1200 })
   return { landscape: validateTourLandscape(result.text), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION }
 }
