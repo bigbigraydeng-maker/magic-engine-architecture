@@ -11,7 +11,7 @@ export async function POST(_req: Request, { params }: Context) {
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status })
   try {
     const view = await readView(id, access.role === 'admin')
-    const clientProducts = view.operating.matches.map(match => ({ name: match.client_product, duration_days: match.client_duration_days, price: match.client_price }))
+    const clientProducts = view.operating.client_products.map(product => ({ name: product.name, destination: product.destination, route: product.route, duration_days: product.duration_days, price: product.price, departure_window: product.departure_window, includes: product.includes, positioning: product.positioning }))
     const competitorProducts = view.operating.tour_catalog.map(item => ({ domain: item.domain, source_url: item.source_url, observed_at: item.observed_at, name: item.record.name, route: item.record.route, duration_days: item.record.durationDays, price: item.record.price, departure_window: item.record.departureWindow, includes: item.record.includes, positioning: item.record.positioning }))
     const result = await summarizeTourLandscape({ client_name: view.operating.client_name, client_products: clientProducts, competitor_products: competitorProducts })
     return NextResponse.json(result)

@@ -65,6 +65,7 @@ export type OperatingBrief = {
   client_name: string
   goal: { title: string; status: string; metric: string; target: number | null; period_start: string; period_end: string } | null
   product_scope: TravelScope
+  client_products: OperatingBriefInput['client_products']
   tour_catalog: TourCatalogItem[]
   comparison_candidates: TourComparisonCandidate[]
   matches: ProductMatch[]
@@ -276,7 +277,7 @@ export function buildOperatingBrief(input: OperatingBriefInput): OperatingBrief 
   if (input.product_scope.labels.length) context.push(`客户产品范围：${input.product_scope.labels.join('、')}（来源：${input.product_scope.source}）`)
   return {
     as_of: now.toISOString(), client_id: input.client.id, client_name: input.client.name,
-    goal: input.goal, product_scope: input.product_scope,
+    goal: input.goal, product_scope: input.product_scope, client_products: input.client_products,
     comparison_candidates: comparisonCandidates(input),
     tour_catalog: input.competitor_products.flatMap(item => item.records.map(record => ({
       domain: item.domain, source_url: item.source_url, observed_at: item.observed_at, record,
