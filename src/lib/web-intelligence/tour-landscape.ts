@@ -18,7 +18,7 @@ const SYSTEM = '你是旅游产品竞争情报分析师。只根据输入事实�
 export function tourLandscapePrompt(input: { client_name: string; client_products: unknown[]; competitor_products: unknown[] }): string {
   return `请为 ${input.client_name} 做竞品产品组合总览，而不是逐团横向配对。
 
-分析重点：消费者能感知的城市覆盖、行程长度、价格带、产品定位、出发季节和包含项目；说明 CTS 可能的优势、短板和值得进一步验证的方向。不同路线和天数可以并存，不要把它们误判成同一产品。
+分析重点：消费者能感知的城市覆盖、行程长度、价格带、产品定位、出发季节和包含项目；最终告诉经营负责人现在应该做什么、暂时不要做什么、下一步先确认什么。不同路线和天数可以并存，不要把它们误判成同一产品。
 
 客户产品事实：
 ${JSON.stringify(input.client_products).slice(0, 12000)}
@@ -26,7 +26,7 @@ ${JSON.stringify(input.client_products).slice(0, 12000)}
 竞品产品事实：
 ${JSON.stringify(input.competitor_products).slice(0, 18000)}
 
-输出字段：headline（不超过40字）、market_summary（2-4句）、client_opportunities（最多4条）、client_risks（最多4条）、recommended_focus（最多4条）、unknowns（最多4条）、confidence（0到1）。
+输出字段：headline（不超过40字）、market_summary（2-4句，必须包含明确判断）、client_opportunities（最多4条，每条都要是“建议现在做”的具体动作）、client_risks（最多4条，每条都要是“暂时不要做”的具体动作或风险）、recommended_focus（最多4条，每条都要是下一步先确认的事项）、unknowns（最多4条，列出缺失的关键证据）、confidence（0到1）。
 必须返回以上全部字段；没有证据时对应字段返回 []，不要省略字段。只返回 JSON，不要 Markdown 代码块。`
 }
 
