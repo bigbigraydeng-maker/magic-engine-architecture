@@ -258,8 +258,8 @@ export async function runCtsCrmSync(deps: RunCtsCrmSyncDeps = {}): Promise<CtsCr
   const summary = emptySummary()
 
   const [sheet1Raw, crmRaw] = await Promise.all([
-    readSheetValues(SPREADSHEET_ID, SHEET1_RANGE),
-    readSheetValues(SPREADSHEET_ID, CRM_MANAGEMENT_RANGE),
+    readSheetValues(CTS_CLIENT_ID, SPREADSHEET_ID, SHEET1_RANGE),
+    readSheetValues(CTS_CLIENT_ID, SPREADSHEET_ID, CRM_MANAGEMENT_RANGE),
   ])
 
   const sheet1ByPhone = indexSheet1ByPhone(sheet1Raw.map(parseSheet1Row))

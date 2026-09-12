@@ -11,7 +11,7 @@ const sheet1Fixture = vi.fn()
 const crmFixture = vi.fn()
 
 vi.mock('@/lib/google-sheets/client', () => ({
-  readSheetValues: (_id: string, range: string) => {
+  readSheetValues: (_clientId: string, _spreadsheetId: string, range: string) => {
     if (range.startsWith('Sheet1')) return Promise.resolve(sheet1Fixture())
     return Promise.resolve(crmFixture())
   },
