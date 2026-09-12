@@ -21,6 +21,8 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
   const [clientProductSource, setClientProductSource] = useState<Payload['client_product_source']>()
   const [clientDomain, setClientDomain] = useState<string | null>(null)
   const [trafficDirection, setTrafficDirection] = useState<TrafficDirection[]>([])
+  const [trafficBusy, setTrafficBusy] = useState(false)
+  const [trafficMessage, setTrafficMessage] = useState('')
   const [canRun, setCanRun] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [captureRequestId, setCaptureRequestId] = useState<string | null>(null)
@@ -99,7 +101,17 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
       <ContextCard title="授权边界" values={['本页只提供建议', '不调价、不改广告、不发布']} />
     </section>
     <ProductSourceStatus source={clientProductSource} />
-    <TrafficDirectionSection signals={trafficDirection} />
+    <TrafficDirectionSection clientId={params.id} signals={trafficDirection} busy={trafficBusy} message={trafficMessage} onRun={async () => {
+      setTrafficBusy(true); setTrafficMessage('')
+      try {
+        const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence/traffic-direction`, { method: 'POST' })
+        const payload = await response.json() as { error?: string; persisted?: number; duplicates?: number; domains?: number }
+        if (!response.ok) throw new Error(payload.error ?? '竞品流量方向读取失败。')
+        setTrafficMessage(`本次已完成 ${payload.domains ?? 0} 个竞品网站读取，新增 ${payload.persisted ?? 0} 条结果。`)
+        setRefresh(value => value + 1)
+      } catch (reason) { setTrafficMessage(reason instanceof Error ? reason.message : '竞品流量方向读取失败。') }
+      finally { setTrafficBusy(false) }
+    }} />
 
     <section className="rounded-2xl border border-me-ochre/30 bg-me-ochre/10 p-5">
       <p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">本轮经营问题</p>
@@ -131,13 +143,14 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
   </main>
 }
 
-function TrafficDirectionSection({ signals }: { signals: TrafficDirection[] }) {
+function TrafficDirectionSection({ clientId, signals, busy, message, onRun }: { clientId: string; signals: TrafficDirection[]; busy: boolean; message: string; onRun: () => Promise<void> }) {
   const latest = signals.slice(0, 6)
   return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="竞品网站流量方向">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-charcoal/50">外部市场信号</p><h2 className="mt-1 text-lg font-bold">竞品网站流量方向</h2><p className="mt-1 text-sm leading-6 text-me-charcoal/65">只看公开估算的变化方向，不能代表竞品真实访问量、订单或销售影响。</p></div>
-      <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">低置信度</span>
+      <div className="flex items-center gap-2"><span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">低置信度</span><button type="button" onClick={() => void onRun()} disabled={busy} aria-label={`读取 ${clientId} 竞品流量方向`} className="rounded-lg border border-me-ochre px-3 py-1.5 text-xs font-bold text-me-ochre disabled:opacity-50">{busy ? '读取中…' : '立即读取'}</button></div>
     </div>
+    {message && <p role="status" className="mt-3 rounded-lg bg-me-ivory px-3 py-2 text-sm">{message}</p>}
     {latest.length ? <div className="mt-4 grid gap-3 md:grid-cols-2">{latest.map(signal => {
       const facts = signal.excerpt.split('\n').filter(line => !line.startsWith('数据性质：')).slice(0, 4)
       const trend = signal.snapshot_change_pct === null ? signal.observation_count > 1 ? '暂无法比较上一期' : '仅有一次观察' : `较上次估算 ${signal.snapshot_change_pct > 0 ? '+' : ''}${signal.snapshot_change_pct}%`
