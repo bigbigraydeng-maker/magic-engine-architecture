@@ -24,6 +24,12 @@ export type SourceKind =
   | 'api'
   /** 外部 CRM 同步（PM 2026-09-05：一个月内上 HubSpot）。source_ref 存对方的交易编号。 */
   | 'crm_hubspot'
+  /**
+   * 读取一张人工维护的表格（Google Sheet / Excel），不是正式 CRM 系统的 API 对接。
+   * 跟 `crm_hubspot` 分开：那个专留给未来接入真正的 CRM API，可信度和这个不一样，
+   * 混在一起以后没法按来源筛问题记录（CTS Meta CAPI 项目，2026-09-13，待 PM 确认命名）。
+   */
+  | 'crm_sheet_sync'
 
 export const OUTCOME_KINDS: readonly OutcomeKind[] = ['purchase', 'balance', 'lead']
 export const SOURCE_KINDS: readonly SourceKind[] = [
@@ -33,6 +39,7 @@ export const SOURCE_KINDS: readonly SourceKind[] = [
   'meta_lead_form',
   'api',
   'crm_hubspot',
+  'crm_sheet_sync',
 ]
 
 export type IntakeInput = {
