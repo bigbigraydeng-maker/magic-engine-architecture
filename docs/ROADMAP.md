@@ -743,6 +743,18 @@ Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说�
 - [ ] **1 条 `rendered` 旧单**(CTS 07-12,有 caption)永久卡住:交付直连修复只对新单生效,这条旧单需手动迁 `in_review` 或归档(PM 判断)
 - [ ] **P21.K.7 ad 级数据脊柱**(登记 2026-07-25,PM 拍板):日度 cron 补拉 **ad 级**(每条广告每天一行,复用 `ad_daily_insights` 的 `level='ad'`),让「某天新增了哪条广告 / 哪条在拖后腿」可被系统自查,不依赖 Meta MCP(Oztop 账户未开通)也不用人翻广告后台。**背书案例**:Oztop Lead Form Cold Broad 的 CPL 7/17 起翻倍,campaign 级只能定位到「填表率腰斩 + 出现出站点击」。含 `parent_id` 列(ad→campaign 归属,**migration 待 PM `go apply`**)+ 首拉 30 天回补 + 分页完整性守卫。顺带铺好 34.B Creative Lifecycle 要的作品层日度基础设施
 - [ ] **P21.K.8 objective 感知 + 视频疲劳正向检测**(登记 2026-07-26,PM 拍板 `排`):把 P21.K 止血从「不误判视频广告」升级到「真正体检视频广告好不好」。需 ① `ad_daily_insights` 加 `objective` 列 + 采集时拉 campaign 节点 objective(**migration 待 PM `go apply`**)② 脊柱补拉视频完播指标(ThruPlay 完播成本 / CPM / video_p100)③ 按 objective 切换判定指标:视频/播放量目标用完播成本或 CPM,表单/流量目标保留 ctr+cost_per_result,拿不到 objective 或样本太少判 `insufficient_history`。价值:CTS 这类主打视频的客户,看完成本涨→主动提醒换素材。半天到一天。附:止血注释已在 `baseline.ts` 登记本项为 follow-up
+- [ ] **P21.K.9 每日分析 cron 的候选客户名单仍只看主账户**(2026-09-13 子牙+魏征复审
+      PR [#1595](https://github.com/bigbigraydeng-maker/magic-engine/pull/1595) 发现,同批
+      发现的另一半已修):`readback-sweep.ts` 的每日安全巡检已改成同时看
+      `clients.meta_ad_account_id` 和 `client_meta_ad_accounts`(见
+      `getActiveClientsWithMetaAccounts`),但 `google-data-pullback-daily/route.ts`
+      的每日分析/健康摘要 cron 没跟着改——如果某客户的主账户被清空、只剩登记在
+      新表里的次账户,这条 cron 会把这个客户整个漏掉,`ad_daily_insights`/健康检查
+      /每日摘要全部停摆(安全巡检不受影响,已经修好)。触发条件:今天 CTS 主账户
+      还在,不会发生;一旦有人清空某客户主账户就会撞上。修法应该是这条 cron 的候选
+      客户查询也换成 `getActiveClientsWithMetaAccounts`,并把主账户专属逻辑
+      (30 天快照、token 解析里用到的域名/客户名)在"无主账户但有次账户"时优雅退化。
+      未修原因:改动涉及这条 900 行 cron 的主循环结构,复审当天为控制风险没有仓促改
 - [ ] **多视角对抗复盘工作流**(1-2 天,可后置):battle-plan §8 方法论固化成可复用 Workflow/agent(N 视角互相证伪前提 → 作战计划 → 喂鲁班),异常触发非每日跑
 - [ ] **开放项**:三张新表 migration 逐次 PM `go apply`(`ad_daily_insights` / `ad_strategy_configs`+`_triggers` / `ad_health_narratives`)· P5 泛化首批客户(Oztop?)· 姊妹 spec Creative Lifecycle 同一 GHA 笔误待独立小 PR 修
 
