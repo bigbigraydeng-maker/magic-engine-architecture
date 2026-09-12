@@ -47,6 +47,7 @@ describe('buildOperatingBrief', () => {
     expect(brief.matches[0].competitor_product).toContain('Exact China Highlights')
     expect(brief.matches[0].match_score).toBeGreaterThan(35)
     expect(brief.comparison_candidates[0].competitor_product.name).toBe('Exact China Highlights')
+    expect(brief.client_products[0].route).toBe(client.route)
   })
 
   it('keeps an explicit out-of-scope tour out of the decision', () => {
