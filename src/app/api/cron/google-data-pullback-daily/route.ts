@@ -32,6 +32,17 @@
  * actually reads, so that's the loop that now covers every registered account.
  * See src/lib/meta/client-ad-accounts.ts.
  *
+ * Known scope boundary (2026-09-13 review): the client candidate list above
+ * (`metaClients`/`work`) still keys off `clients.meta_ad_account_id` alone —
+ * a client with ONLY a secondary account registered (e.g. its primary was
+ * cleared via the settings route) won't enter this loop at all, so it gets no
+ * ad_daily_insights/health/digest until the primary is restored. The daily
+ * SAFETY sweep (readback-sweep.ts) does not have this gap — it checks both
+ * the old column and the new table. This one is lower priority (loses
+ * analytics, not the safety gate) and is tracked in ROADMAP rather than fixed
+ * here, to avoid rushing a change into this route's per-client loop.
+ *
+
  * Reference: ROADMAP.md P17.A.4, P17.B.3, P18.B.1
  */
 
@@ -381,7 +392,7 @@ export async function GET(req: NextRequest) {
   // Collect per-client errors so postmortem is possible without Render logs.
   // Diagnostic only — no behavior change.
   const errors = results.flatMap(r => {
-    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'|'ad_daily'|'ad_level'|'ad_health'|'ad_digest'; error: string }> = []
+    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'|'ad_daily'|'ad_level'|'ad_health'|'ad_digest'|'ad_daily_secondary'; error: string }> = []
     if (r.gsc?.success === false && r.gsc.error)               out.push({ client_id: r.client_id, source: 'gsc',        error: r.gsc.error })
     if (r.ga4?.success === false && r.ga4.error)               out.push({ client_id: r.client_id, source: 'ga4',        error: r.ga4.error })
     if (r.meta?.success === false && r.meta.error)             out.push({ client_id: r.client_id, source: 'meta',       error: r.meta.error })
@@ -390,14 +401,29 @@ export async function GET(req: NextRequest) {
     if (r.ad_level?.success === false && r.ad_level.error)     out.push({ client_id: r.client_id, source: 'ad_level',   error: r.ad_level.error })
     if (r.ad_health?.success === false && r.ad_health.error)   out.push({ client_id: r.client_id, source: 'ad_health', error: r.ad_health.error })
     if (r.ad_digest && !r.ad_digest.sent && r.ad_digest.error)  out.push({ client_id: r.client_id, source: 'ad_digest', error: r.ad_digest.error })
+    // 2026-09-13 (魏征 review): a secondary account's sync failure used to be
+    // completely invisible — not in `failed`, not here, not console.error'd —
+    // the exact "looks fine, actually never worked" shape this whole PR is
+    // trying to close, just one level down. Not counted in `failed`/the email
+    // headline (best-effort like ad_level), but must show up in a manual read
+    // of cron_run_logs instead of vanishing without a trace.
+    for (const secondary of r.ad_daily_secondary ?? []) {
+      if (secondary.ad_daily?.success === false && secondary.ad_daily.error) {
+        out.push({ client_id: r.client_id, source: 'ad_daily_secondary', error: `[${secondary.ad_account_id}] ${secondary.ad_daily.error}` })
+      }
+      if (secondary.ad_level?.success === false && secondary.ad_level.error) {
+        out.push({ client_id: r.client_id, source: 'ad_daily_secondary', error: `[${secondary.ad_account_id}] ${secondary.ad_level.error}` })
+      }
+    }
     return out
   })
 
   // The failure email renders `error_message`, not the summary JSONB, so
   // without this the PM's alert reads "2 failed · —" and says nothing. Only the
-  // errors that actually count as failures belong here — ad_level is excluded
-  // above and must not become the headline of an email it never triggered.
-  const headlineError = errors.find(e => e.source !== 'ad_level')
+  // errors that actually count as failures belong here — ad_level and
+  // ad_daily_secondary are excluded (both best-effort, neither triggers `failed`)
+  // and must not become the headline of an email they never triggered.
+  const headlineError = errors.find(e => e.source !== 'ad_level' && e.source !== 'ad_daily_secondary')
   const errorMessage = failed > 0 && headlineError
     ? `${headlineError.source}: ${headlineError.error}${errors.length > 1 ? ` (+${errors.length - 1} more)` : ''}`
     : undefined

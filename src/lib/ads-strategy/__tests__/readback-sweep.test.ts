@@ -15,21 +15,24 @@ vi.mock('@/lib/meta/readback', () => ({
   listActiveAdSets: vi.fn(),
   fetchAdCreativesReadback: vi.fn(),
 }))
-// 2026-09-13：sweepAllClients 现在还要查每个客户名下的完整账户列表。
+// 2026-09-13：sweepAllClients 现在还要查每个客户名下的完整账户列表，候选客户
+// 名单也换成同时看老列 + 新表的 getActiveClientsWithMetaAccounts。
 // 默认给一个账户，让改动前就有的测试不用逐个改期望值。
 vi.mock('@/lib/meta/client-ad-accounts', () => ({
   getClientAdAccountIds: vi.fn(),
+  getActiveClientsWithMetaAccounts: vi.fn(),
 }))
 
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { listActiveAdSets, fetchAdCreativesReadback } from '@/lib/meta/readback'
-import { getClientAdAccountIds } from '@/lib/meta/client-ad-accounts'
+import { getClientAdAccountIds, getActiveClientsWithMetaAccounts } from '@/lib/meta/client-ad-accounts'
 import { sweepClient, sweepAllClients, blockerSummary } from '../readback-sweep'
 
 const mockToken = vi.mocked(getMetaTokenForClient)
 const mockList = vi.mocked(listActiveAdSets)
 const mockCreatives = vi.mocked(fetchAdCreativesReadback)
 const mockAccountIds = vi.mocked(getClientAdAccountIds)
+const mockActiveClients = vi.mocked(getActiveClientsWithMetaAccounts)
 
 const CLIENT = { id: 'c1', name: 'Roman', meta_ad_account_id: 'act_123' }
 
@@ -127,52 +130,38 @@ describe('sweepClient — 真的把闸门跑起来了', () => {
 })
 
 describe('sweepAllClients — 一个客户炸了不能拖累其他客户', () => {
-  function fakeSupabase(rows: unknown[]): SupabaseClient {
-    return {
-      from: () => ({
-        select: () => ({
-          eq: () => ({ not: () => Promise.resolve({ data: rows, error: null }) }),
-        }),
-      }),
-    } as unknown as SupabaseClient
-  }
+  // 候选客户名单现在整个来自 getActiveClientsWithMetaAccounts（已单独测过），
+  // 这里直接 mock 它的返回值，不用再手搭 supabase 调用链假客户端。
+  const dummySupabase = {} as SupabaseClient
 
   it('第一个客户抛异常，第二个照扫', async () => {
+    mockActiveClients.mockResolvedValue([
+      { id: 'c1', name: 'A', meta_ad_account_id: 'act_1' },
+      { id: 'c2', name: 'B', meta_ad_account_id: 'act_2' },
+    ])
     mockToken.mockImplementation(async (id: string) => {
       if (id === 'c1') throw new Error('boom')
       return 'tok'
     })
     mockList.mockResolvedValue([])
 
-    const results = await sweepAllClients(
-      fakeSupabase([
-        { id: 'c1', name: 'A', meta_ad_account_id: 'act_1' },
-        { id: 'c2', name: 'B', meta_ad_account_id: 'act_2' },
-      ]),
-    )
+    const results = await sweepAllClients(dummySupabase)
     expect(results).toHaveLength(2)
     expect(results[0].error).toContain('boom')
     expect(results[1].error).toBeUndefined()
   })
 
   it('读客户列表本身失败 → 抛出去，让 cron 记成失败而不是「今天 0 个问题」', async () => {
-    const bad = {
-      from: () => ({
-        select: () => ({
-          eq: () => ({ not: () => Promise.resolve({ data: null, error: { message: 'db down' } }) }),
-        }),
-      }),
-    } as unknown as SupabaseClient
-    await expect(sweepAllClients(bad)).rejects.toThrow('db down')
+    mockActiveClients.mockRejectedValue(new Error('db down'))
+    await expect(sweepAllClients(dummySupabase)).rejects.toThrow('db down')
   })
 
   it('一个客户登记了两个账户 → 各产出一条结果，两个都真的被扫过', async () => {
+    mockActiveClients.mockResolvedValue([{ id: 'c1', name: 'CTS', meta_ad_account_id: 'act_1' }])
     mockAccountIds.mockResolvedValue(['act_1', 'act_2'])
     mockList.mockResolvedValue([])
 
-    const results = await sweepAllClients(
-      fakeSupabase([{ id: 'c1', name: 'CTS', meta_ad_account_id: 'act_1' }]),
-    )
+    const results = await sweepAllClients(dummySupabase)
 
     expect(results).toHaveLength(2)
     expect(results.map((r) => r.adAccountId).sort()).toEqual(['act_1', 'act_2'])
@@ -181,21 +170,33 @@ describe('sweepAllClients — 一个客户炸了不能拖累其他客户', () =>
   })
 
   it('第二个账户扫描炸了，不影响第一个账户已经扫出的结果', async () => {
+    mockActiveClients.mockResolvedValue([{ id: 'c1', name: 'CTS', meta_ad_account_id: 'act_1' }])
     mockAccountIds.mockResolvedValue(['act_1', 'act_2'])
     mockList.mockImplementation(async (accountId: string) => {
       if (accountId === 'act_2') throw new Error('rate limited')
       return []
     })
 
-    const results = await sweepAllClients(
-      fakeSupabase([{ id: 'c1', name: 'CTS', meta_ad_account_id: 'act_1' }]),
-    )
+    const results = await sweepAllClients(dummySupabase)
 
     expect(results).toHaveLength(2)
     const ok = results.find((r) => r.adAccountId === 'act_1')
     const bad2 = results.find((r) => r.adAccountId === 'act_2')
     expect(ok?.error).toBeUndefined()
     expect(bad2?.error).toContain('rate limited')
+  })
+
+  it('客户只在新表登记了账户、老列（主账户）是空的 → 照样被列进来扫（主账户被清空后的样子）', async () => {
+    mockActiveClients.mockResolvedValue([{ id: 'c3', name: 'CTS', meta_ad_account_id: null }])
+    mockAccountIds.mockResolvedValue(['act_9'])
+    mockList.mockResolvedValue([])
+
+    const results = await sweepAllClients(dummySupabase)
+
+    expect(results).toHaveLength(1)
+    expect(results[0].clientId).toBe('c3')
+    expect(results[0].adAccountId).toBe('act_9')
+    expect(results[0].error).toBeUndefined()
   })
 })
 

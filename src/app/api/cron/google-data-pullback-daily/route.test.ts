@@ -71,8 +71,12 @@ vi.mock('@/lib/supabase', () => ({
 
 // The route opens a cron_run_logs row first; the supabaseAdmin stub above has
 // no chain for that table, so without this every test dies in startCronRun.
+// `mockCronFinish` is hoisted out so tests can assert on what actually got
+// written into cron_run_logs.summary (e.g. whether a secondary-account
+// failure made it into `errors`), not just on the HTTP response shape.
+const { mockCronFinish } = vi.hoisted(() => ({ mockCronFinish: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@/lib/cron/run-logger', () => ({
-  startCronRun: vi.fn().mockResolvedValue({ finish: vi.fn().mockResolvedValue(undefined) }),
+  startCronRun: vi.fn().mockResolvedValue({ finish: mockCronFinish }),
 }))
 
 vi.mock('@/lib/gsc/client', () => ({
@@ -338,5 +342,22 @@ describe('GET /api/cron/google-data-pullback-daily — 多账户 ad_daily_insigh
     // that tally only reads `ad_daily`/`ad_level` (primary), matching how
     // ad_level itself is already excluded (see comment above `failed` in route.ts)
     expect(json.failed).toBe(0)
+
+    // 2026-09-13 (魏征 review fix): even though it's not a `failed` tally hit,
+    // it must not vanish without a trace either — it has to land in
+    // cron_run_logs.summary.errors so a manual read can find it.
+    expect(mockCronFinish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        summary: expect.objectContaining({
+          errors: expect.arrayContaining([
+            expect.objectContaining({
+              client_id: CLIENT_ID,
+              source: 'ad_daily_secondary',
+              error: expect.stringContaining('Meta returned no usable page'),
+            }),
+          ]),
+        }),
+      }),
+    )
   })
 })

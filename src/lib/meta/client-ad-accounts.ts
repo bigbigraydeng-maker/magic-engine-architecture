@@ -14,12 +14,19 @@
  * invisible to reporting and health checks).
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase'
 
 export interface ClientAdAccount {
   adAccountId: string
   label: string | null
   isPrimary: boolean
+}
+
+export interface ActiveMetaClient {
+  id: string
+  name: string
+  meta_ad_account_id: string | null
 }
 
 /**
@@ -64,4 +71,55 @@ export async function getClientAdAccounts(clientId: string): Promise<ClientAdAcc
 /** Just the account id strings, primary first. Convenience for sync loops. */
 export async function getClientAdAccountIds(clientId: string): Promise<string[]> {
   return (await getClientAdAccounts(clientId)).map(a => a.adAccountId)
+}
+
+/**
+ * Active clients with at least one Meta ad account on file — checking BOTH
+ * the legacy `meta_ad_account_id` column and `client_meta_ad_accounts`.
+ *
+ * Why not just filter on `meta_ad_account_id IS NOT NULL`: a client's primary
+ * account can be cleared via the settings route (`meta-ad-account/route.ts`)
+ * while a secondary account stays registered in `client_meta_ad_accounts`.
+ * Filtering on the old column alone would silently drop that client from
+ * every daily sync/scan that calls this — exactly the invisibility bug this
+ * table exists to close, just triggered a different way (2026-09-13 review,
+ * 子牙 + 魏征). Callers: `readback-sweep.ts`'s daily safety scan.
+ *
+ * Unlike `getClientAdAccounts`, this throws on a query error rather than
+ * degrading to an empty list — callers here are the "candidate list" step
+ * for a full sweep, and a silent empty result here would read as "no active
+ * clients have ads" instead of "couldn't check."
+ */
+export async function getActiveClientsWithMetaAccounts(
+  supabase: SupabaseClient,
+): Promise<ActiveMetaClient[]> {
+  const { data: legacyClients, error: legacyError } = await supabase
+    .from('clients')
+    .select('id, name, meta_ad_account_id')
+    .eq('client_status', 'active')
+    .not('meta_ad_account_id', 'is', null)
+  if (legacyError) throw new Error(`读客户列表失败：${legacyError.message}`)
+
+  const { data: registeredRows, error: registeredError } = await supabase
+    .from('client_meta_ad_accounts')
+    .select('client_id')
+  if (registeredError) throw new Error(`读多账户登记表失败：${registeredError.message}`)
+
+  const known = new Set(((legacyClients ?? []) as ActiveMetaClient[]).map(c => c.id))
+  const extraIds = [
+    ...new Set(((registeredRows ?? []) as Array<{ client_id: string }>).map(r => r.client_id)),
+  ].filter(id => !known.has(id))
+
+  let extraClients: ActiveMetaClient[] = []
+  if (extraIds.length > 0) {
+    const { data: extraData, error: extraError } = await supabase
+      .from('clients')
+      .select('id, name, meta_ad_account_id')
+      .eq('client_status', 'active')
+      .in('id', extraIds)
+    if (extraError) throw new Error(`读客户列表失败：${extraError.message}`)
+    extraClients = (extraData ?? []) as ActiveMetaClient[]
+  }
+
+  return [...((legacyClients ?? []) as ActiveMetaClient[]), ...extraClients]
 }

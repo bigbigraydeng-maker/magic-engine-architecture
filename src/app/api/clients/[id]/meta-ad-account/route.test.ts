@@ -9,10 +9,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { clientsUpdate, accountsUpdateEq2, accountsUpsert } = vi.hoisted(() => ({
+const { clientsUpdate, accountsUpdateEq2, accountsUpsert, accountsSelectMaybeSingle } = vi.hoisted(() => ({
   clientsUpdate: vi.fn(),
   accountsUpdateEq2: vi.fn(),
   accountsUpsert: vi.fn(),
+  accountsSelectMaybeSingle: vi.fn(),
 }))
 
 vi.mock('@/lib/auth/client-access', () => ({
@@ -31,6 +32,8 @@ vi.mock('@/lib/supabase', () => ({
           // 降级旧主账户：.update({is_primary:false}).eq('client_id',x).eq('is_primary',true)
           update: () => ({ eq: () => ({ eq: accountsUpdateEq2 }) }),
           upsert: accountsUpsert,
+          // 提升前先读一次已有 label：.select('label').eq('client_id',x).eq('ad_account_id',y).maybeSingle()
+          select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: accountsSelectMaybeSingle }) }) }),
         }
       }
       return {}
@@ -53,6 +56,7 @@ beforeEach(() => {
   clientsUpdate.mockResolvedValue({ error: null })
   accountsUpdateEq2.mockResolvedValue({ error: null })
   accountsUpsert.mockResolvedValue({ error: null })
+  accountsSelectMaybeSingle.mockResolvedValue({ data: null, error: null })
 })
 
 describe('PATCH meta-ad-account — 镜像写 client_meta_ad_accounts', () => {
@@ -63,6 +67,18 @@ describe('PATCH meta-ad-account — 镜像写 client_meta_ad_accounts', () => {
     expect(accountsUpdateEq2).toHaveBeenCalledWith('is_primary', true)
     expect(accountsUpsert).toHaveBeenCalledWith(
       { client_id: 'c1', ad_account_id: 'act_2202695063810470', is_primary: true, label: '主账户' },
+      { onConflict: 'client_id,ad_account_id' },
+    )
+  })
+
+  it('已注册过、带自定义标签的账户被设为主账户 → 保留原有标签，不覆盖成默认值', async () => {
+    accountsSelectMaybeSingle.mockResolvedValue({ data: { label: 'CTStours 官方账户（ThruPlay）' }, error: null })
+
+    const res = await PATCH(makeReq({ ad_account_id: 'act_2202695063810470' }), { params })
+    expect(res.status).toBe(200)
+
+    expect(accountsUpsert).toHaveBeenCalledWith(
+      { client_id: 'c1', ad_account_id: 'act_2202695063810470', is_primary: true, label: 'CTStours 官方账户（ThruPlay）' },
       { onConflict: 'client_id,ad_account_id' },
     )
   })
