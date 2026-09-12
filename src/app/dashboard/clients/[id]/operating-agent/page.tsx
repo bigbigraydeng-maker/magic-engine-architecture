@@ -180,7 +180,14 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
   const result = selected == null ? null : results[selected]
   async function summariseLandscape() {
     setLandscapeBusy(true); setLandscapeError('')
-    try { const response = await fetch(`/api/clients/${encodeURIComponent(clientId)}/web-intelligence/tour-landscape`, { method: 'POST' }); const payload = await response.json() as { landscape?: TourLandscape; error?: string }; if (!response.ok || !payload.landscape) throw new Error(payload.error ?? '总览生成失败'); setLandscape(payload.landscape) }
+    try {
+      const response = await fetch(`/api/clients/${encodeURIComponent(clientId)}/web-intelligence/tour-landscape`, { method: 'POST' })
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!contentType.includes('application/json')) throw new Error(`总览服务暂时不可用（HTTP ${response.status}），请稍后重试。`)
+      const payload = await response.json() as { landscape?: TourLandscape; error?: string }
+      if (!response.ok || !payload.landscape) throw new Error(payload.error ?? '总览生成失败，请稍后重试。')
+      setLandscape(payload.landscape)
+    }
     catch (reason) { setLandscapeError(reason instanceof Error ? reason.message : '暂时无法生成竞品总览。') }
     finally { setLandscapeBusy(false) }
   }
