@@ -93,12 +93,23 @@ export function validateTourLandscape(value: unknown): TourLandscape {
   }
 }
 
+export function ensureActionableTourLandscape(landscape: TourLandscape, input: Parameters<typeof tourLandscapePrompt>[0]): TourLandscape {
+  const fallback = fallbackTourLandscape(input)
+  return {
+    ...landscape,
+    client_opportunities: landscape.client_opportunities.length ? landscape.client_opportunities : fallback.client_opportunities,
+    client_risks: landscape.client_risks.length ? landscape.client_risks : fallback.client_risks,
+    recommended_focus: landscape.recommended_focus.length ? landscape.recommended_focus : fallback.recommended_focus,
+    unknowns: landscape.unknowns.length ? landscape.unknowns : fallback.unknowns,
+  }
+}
+
 export async function summarizeTourLandscape(input: Parameters<typeof tourLandscapePrompt>[0]) {
   // Use the shared gateway path. This keeps the aggregate call observable and
   // consistent with the other Web Intelligence AI workflows in production.
   try {
     const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1800 })
-    return { landscape: validateTourLandscape(result.text), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION, degraded: false }
+    return { landscape: ensureActionableTourLandscape(validateTourLandscape(result.text), input), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION, degraded: false }
   } catch (error) {
     console.warn('[wi-tour-landscape] AI unavailable; using evidence-bound fallback', error instanceof Error ? error.message : 'unknown_error')
     return { landscape: fallbackTourLandscape(input), cost_usd: 0, model: 'rules-fallback', prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION, degraded: true }
