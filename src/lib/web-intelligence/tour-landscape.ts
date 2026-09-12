@@ -68,7 +68,7 @@ export async function chatAboutTourLandscape(input: {
   question: string
 }) {
   const systemPrompt = `${SYSTEM} 你现在是一个经营决策对话助手。回答要直接、具体、少讲术语。
-先回答用户的问题，再给出下一步建议。只能使用提供的客户产品、竞品资料和当前总览；资料没有写的内容必须明确说“目前无法判断”。
+回答固定使用以下顺序：结论：一句话直接回答；依据：列出1-3条输入资料支持的事实；建议：给出一个下一步动作。只能使用提供的客户产品、竞品资料和当前总览；资料没有写的内容必须明确说“目前无法判断”。
 不要把不同旅行社的 Tour 强行一一对应，不要建议自动调价、发布或执行外部动作。`
   const context = `当前总览：${JSON.stringify(input.landscape)}\n\n${tourLandscapePrompt({ client_name: input.client_name, client_products: input.client_products, competitor_products: input.competitor_products })}`
   const result = await callClaudeChat({
