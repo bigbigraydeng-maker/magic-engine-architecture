@@ -155,15 +155,16 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
 function TrafficDirectionSection({ clientId, signals, busy, message, onRun }: { clientId: string; signals: TrafficDirection[]; busy: boolean; message: string; onRun: () => Promise<void> }) {
   const [showAll, setShowAll] = useState(false)
   const orderedSignals = [...signals].sort((a, b) => {
+    if (a.is_client !== b.is_client) return a.is_client ? -1 : 1
     const aHasEstimate = a.estimated_visits !== null ? 1 : 0
     const bHasEstimate = b.estimated_visits !== null ? 1 : 0
     return bHasEstimate - aHasEstimate || Date.parse(b.observed_at) - Date.parse(a.observed_at)
   })
   const latest = showAll ? orderedSignals : orderedSignals.slice(0, 6)
-  return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="竞品网站流量方向">
+  return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="网站流量方向">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-charcoal/50">外部市场信号</p><h2 className="mt-1 text-lg font-bold">竞品网站流量方向</h2><p className="mt-1 text-sm leading-6 text-me-charcoal/65">只看公开估算的变化方向，不能代表竞品真实访问量、订单或销售影响。</p></div>
-      <div className="flex items-center gap-2"><span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">低置信度</span><button type="button" onClick={() => void onRun()} disabled={busy} aria-label={`读取 ${clientId} 竞品流量方向`} className="rounded-lg border border-me-ochre px-3 py-1.5 text-xs font-bold text-me-ochre disabled:opacity-50">{busy ? '读取中…' : '立即读取'}</button></div>
+      <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-charcoal/50">网站市场信号</p><h2 className="mt-1 text-lg font-bold">网站流量方向</h2><p className="mt-1 text-sm leading-6 text-me-charcoal/65">先看 CTS 自己的网站，再看竞品公开估算的变化方向；不代表真实访问量、订单或销售影响。</p></div>
+      <div className="flex items-center gap-2"><span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">公开估算·低置信度</span><button type="button" onClick={() => void onRun()} disabled={busy} aria-label={`读取 ${clientId} 网站流量方向`} className="rounded-lg border border-me-ochre px-3 py-1.5 text-xs font-bold text-me-ochre disabled:opacity-50">{busy ? '读取中…' : '立即读取'}</button></div>
     </div>
     {message && <p role="status" className="mt-3 rounded-lg bg-me-ivory px-3 py-2 text-sm">{message}</p>}
     {latest.length ? <div className="mt-4 grid gap-3 md:grid-cols-2">{latest.map(signal => {
