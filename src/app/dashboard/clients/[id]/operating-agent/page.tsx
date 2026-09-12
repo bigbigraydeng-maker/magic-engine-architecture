@@ -153,7 +153,8 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
 }
 
 function TrafficDirectionSection({ clientId, signals, busy, message, onRun }: { clientId: string; signals: TrafficDirection[]; busy: boolean; message: string; onRun: () => Promise<void> }) {
-  const latest = signals.slice(0, 6)
+  const [showAll, setShowAll] = useState(false)
+  const latest = showAll ? signals : signals.slice(0, 6)
   return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="竞品网站流量方向">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-charcoal/50">外部市场信号</p><h2 className="mt-1 text-lg font-bold">竞品网站流量方向</h2><p className="mt-1 text-sm leading-6 text-me-charcoal/65">只看公开估算的变化方向，不能代表竞品真实访问量、订单或销售影响。</p></div>
@@ -165,6 +166,7 @@ function TrafficDirectionSection({ clientId, signals, busy, message, onRun }: { 
       const trend = signal.snapshot_change_pct === null ? signal.observation_count > 1 ? '暂无法比较上一期' : '仅有一次观察' : `较上次估算 ${signal.snapshot_change_pct > 0 ? '+' : ''}${signal.snapshot_change_pct}%`
       return <article key={`${signal.domain}-${signal.observed_at}`} className="rounded-xl border border-black/5 bg-me-ivory/60 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-bold">{signal.domain}</h3><p className={`mt-1 text-sm font-bold ${signal.snapshot_change_pct === null ? 'text-me-charcoal/55' : signal.snapshot_change_pct > 0 ? 'text-red-700' : 'text-green-800'}`}>{trend}</p></div><a className="shrink-0 text-xs font-bold underline" href={signal.source_url} target="_blank" rel="noreferrer">查看来源</a></div><ul className="mt-3 space-y-1 text-sm leading-6">{facts.map(fact => <li key={fact}>{fact}</li>)}</ul><p className="mt-3 text-xs text-me-charcoal/50">观察于 {new Date(signal.observed_at).toLocaleDateString('zh-CN')} · {signal.observation_count} 次观察 · 有效至 {signal.valid_until ? new Date(signal.valid_until).toLocaleDateString('zh-CN') : '未知'}</p></article>
     })}</div> : <p className="mt-4 rounded-xl bg-me-ivory p-4 text-sm text-me-charcoal/60">尚未测量竞品网站流量方向；完成首轮 Apify 采集后，这里只显示每个竞品最新结果。</p>}
+    {signals.length > 6 && <button type="button" onClick={() => setShowAll(value => !value)} className="mt-4 text-sm font-bold text-me-ochre underline">{showAll ? '收起其他竞品' : `查看其余 ${signals.length - 6} 个竞品`}</button>}
   </section>
 }
 
