@@ -37,22 +37,32 @@
 - [ ] `pickRealPhoto` 内部调用 `rankAssetsByPrompt` 时如果素材池 > topN 会真的花一次 `gpt-4o-mini`（分钱级），这笔钱目前没有计入 `content_factory_render_jobs.cost_usd`，需要补计费
 - [ ] 每一套 Creatomate 模板的图片槽位是否真的在编辑器里配置了入场/推拉动画——代码测不出来，必须人工在 Creatomate 编辑器里逐个槽位确认一遍并记录，不能假设"能配=已配"（否则片子出来还是静态照片，团队却以为"真实照片+动态混剪"已完成）
 
-## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
+## CTS Meta CAPI — CRM 表格数据源接入（PR #1597 已合并，dry_run 已真实跑通）
 
 > 背景：`me_sale_outcomes`/`me_conversion_writebacks` 表结构（Issue #1397）2026-09-05 已定稿，
-> 本次会话（2026-09-13）apply 到生产库并跑完 5 项自验。这条待办是给它接第一个真实数据源：
+> 2026-09-13 apply 到生产库并跑完 5 项自验。这条给它接了第一个真实数据源：
 > CTS 人工维护的 Google Sheet（FB 即时表单留资 + 员工跟进记录）。设计经子牙+魏征两轮独立
-> 复审后实施，详见 PR #1597 描述。
+> 复审后实施，详见 PR #1597 描述。**鉴权最终没有用服务账号**——PM 实测生产环境根本没有配置
+> `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS`，改成复用 CTS 已有的 Google OAuth 连接
+> （`google_oauth_tokens`，多要一个 `spreadsheets.readonly` 权限）。
 
-- [ ] PM 确认 `source_kind='crm_sheet_sync'` 命名（或改用别的名字）——迁移
-      `supabase/migrations/20260913000001_conversion_source_kind_crm_sheet_sync.sql` 已写好未 apply
-- [ ] PM/FDE 把 Google Sheet 分享给 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` 里的 `client_email`（查看者权限即可），
-      并把分享设置从"任何人可查看"改成限定名单（顺手修的安全问题，跟本任务本身无关）
-- [ ] 确认 GCP 项目里 Sheets API 已启用
-- [ ] 上面三条做完后，用 `POST /api/admin/conversions/cts-crm-sync` 真实跑一次，核对 `/dashboard/conversions`
-      审核页面上的记录是否看得懂、数字是否对得上（这一步之前代码从未接触过真实 Google Sheets API 响应）
-- [ ] 实测发现：`阶段Stage` 列 1599 行只填了 1 行，`阶段更新日` 列 100% 空白——"已成交"检测目前几乎找不到信号，
-      是表格填写现状不是代码问题；等 PM/FDE 开始真正使用这两列，成交同步会自动生效，不需要改代码
+2026-09-13 用 `runCtsCrmSync()` 对生产库+真实表格跑通一次：612 行有效数据，
+50 条"有效咨询"写入 `pending_review`（全部关联到既有联系人，`contact_id` 非空，
+do_not_contact 检查对这批数据生效）、58 条因备注命中 wrong number/not interested 被排除、
+16 条无合格电话、1 条阶段标了已订金但表格未记录真实成交日期已搁置（见下方已知情况）。
+`clients.conversion_stage` 仍是 `dry_run`，未向 Meta 发送任何数据。
+
+- [ ] PM 去 `/dashboard/conversions` 核对这批 50 条记录是否看得懂、数字对不对，
+      再决定要不要开始批准发送（批准发送前提是先把 `conversion_stage` 切成 `live`，
+      这一步没有做，也不在本轮范围内）
+- [ ] 这次只处理了前 50 条（`maxInsertsPerRun` 默认上限，配合审核页面 limit=200 的容量），
+      剩下约 480+ 条历史存量需要再跑几次 `runCtsCrmSync()`（已同步过的会被幂等键自动跳过，
+      不会重复写入）——要不要现在就跑完、还是等 PM 看完这 50 条再继续，由 PM 决定
+- [ ] 实测发现：`阶段Stage` 列目前只有 1 行有效（已订金但无成交日期，卡在人工搁置项里），
+      `阶段更新日` 列 100% 空白——"已成交"检测目前几乎找不到信号，是表格填写现状不是代码
+      问题；等 PM/FDE 开始真正使用这两列，成交同步会自动生效，不需要改代码
+- [ ] 是否要把这条同步接成定时自动跑（目前只能手动 `POST /api/admin/conversions/cts-crm-sync`）
+      待 PM 拍板，不在本轮范围内
 - [ ] 若未来这条同步的记录量明显起量（不再是当前的 0-1 条成交/次），"查不到价格/缺日期"的搁置项要不要
       升级成正式的 `pm-todo` manual item（而不是只在同步响应里一次性返回），需要重新评估
 
