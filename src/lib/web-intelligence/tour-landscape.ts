@@ -40,16 +40,36 @@ function cleanList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 4) : []
 }
 
+function factValues(products: unknown[], key: string): string[] {
+  return products
+    .map(product => {
+      if (!product || typeof product !== 'object') return null
+      const value = (product as Record<string, unknown>)[key]
+      return typeof value === 'string' || typeof value === 'number' ? String(value) : null
+    })
+    .filter((value): value is string => Boolean(value))
+}
+
 function fallbackTourLandscape(input: Parameters<typeof tourLandscapePrompt>[0]): TourLandscape {
   const scope = input.market_scope?.length ? input.market_scope.join('、') : '当前监控范围'
   const clientCount = input.client_products.length
   const competitorCount = input.competitor_products.length
+  const clientNames = factValues(input.client_products, 'name').slice(0, 2)
+  const competitorNames = factValues(input.competitor_products, 'name').slice(0, 3)
+  const competitorDurations = factValues(input.competitor_products, 'duration_days')
+  const competitorPrices = factValues(input.competitor_products, 'price')
+  const observedFacts = [
+    clientNames.length ? `CTS样本包括${clientNames.join('、')}` : `CTS样本共${clientCount}个产品`,
+    competitorNames.length ? `监控样本包括${competitorNames.join('、')}` : `重点竞品样本共${competitorCount}个`,
+    competitorDurations.length ? `竞品已记录${competitorDurations.slice(0, 3).join('、')}天行程` : '',
+    competitorPrices.length ? `已记录价格${competitorPrices.slice(0, 3).join('、')}` : '',
+  ].filter(Boolean)
   return {
     headline: competitorCount ? `${scope}已有竞品样本，先验证再调整产品` : `${scope}目前缺少足够竞品样本`,
-    market_summary: `当前纳入分析的 CTS 产品有 ${clientCount} 个，重点监控样本有 ${competitorCount} 个。现有资料可以帮助发现城市、天数和价格带的方向，但不能代表竞品完整产品线或整个市场。`,
-    client_opportunities: clientCount ? ['先选一个最重要的 CTS 产品，核对它与监控样本在城市、天数和包含项目上的消费者差异。'] : [],
+    market_summary: `${observedFacts.slice(0, 3).join('；')}。这些事实可以帮助判断${scope}的产品组合方向，但目前只覆盖指定监控样本，不能代表竞品完整产品线或整个市场。`,
+    client_opportunities: clientCount ? [`先选定${clientNames[0] ?? '一个重点 CTS 产品'}，核对它与${competitorNames[0] ?? '竞品样本'}在城市、天数、价格和包含项目上的消费者差异。`] : [],
     client_risks: ['暂时不要仅凭当前监控样本做全线降价或改动全部产品的决定。'],
-    recommended_focus: ['先确认重点产品的完整路线、出发日期、余位和价格包含项目，再决定是否调整。'],
+    recommended_focus: [`先确认${clientNames[0] ?? '重点产品'}的完整路线、出发日期、余位和价格包含项目，再决定是否调整。`],
     unknowns: ['竞品完整产品线、真实出发窗口、余位和询盘转化数据仍未纳入。'],
     confidence: competitorCount > 0 && clientCount > 0 ? 0.35 : 0.2,
   }
