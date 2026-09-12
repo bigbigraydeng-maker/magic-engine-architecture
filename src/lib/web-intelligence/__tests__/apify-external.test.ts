@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const { runActorAndGetResults } = vi.hoisted(() => ({ runActorAndGetResults: vi.fn() }))
+const { runActorAndGetResults, estimateWebsiteTraffic } = vi.hoisted(() => ({ runActorAndGetResults: vi.fn(), estimateWebsiteTraffic: vi.fn() }))
 vi.mock('@/lib/apify/client', () => ({ runActorAndGetResults }))
+vi.mock('@/lib/apify/traffic-estimator', () => ({ estimateWebsiteTraffic }))
 const { scrapeSeek } = vi.hoisted(() => ({ scrapeSeek: vi.fn() }))
 vi.mock('@/lib/prospecting/job-boards/scrapers', () => ({ scrapeSeek }))
 
-import { collectApifyExternalObservations, collectConfiguredIndustrySource, collectFacebookPublicGroupPosts, collectIndustryWebsite, collectRssFeed, collectSeekNzJobs, WI_APIFY_ACTORS } from '../apify-external'
+import { collectApifyExternalObservations, collectConfiguredIndustrySource, collectFacebookPublicGroupPosts, collectIndustryWebsite, collectRssFeed, collectSeekNzJobs, collectTrafficDirectionObservations, WI_APIFY_ACTORS } from '../apify-external'
 
 const clientId = '00000000-0000-0000-0000-000000000001'
 
@@ -93,5 +94,26 @@ describe('Apify external observation adapter', () => {
   it('fails closed when no numeric public group URL is supplied', async () => {
     await expect(collectFacebookPublicGroupPosts({ clientId, groupUrls: ['https://www.facebook.com/groups/private-slug'], observedAt: '2026-09-11T01:00:00Z' }))
       .rejects.toThrow('public_facebook_group_url_required')
+  })
+
+  it('converts Apify traffic estimates into shared low-confidence observations with an audit receipt', async () => {
+    estimateWebsiteTraffic.mockResolvedValue({
+      run_id: 'traffic-run-1', dataset_id: 'traffic-dataset-1', cost_usd: 0.01,
+      data: [{
+        domain: 'wendywutours.co.nz', total_visits: '15.2K', visits_change_pct: 31,
+        bounce_rate_pct: 27.9, pages_per_visit: 4.36, avg_visit_duration: '00:04:22',
+        top_country: 'New Zealand', top_countries: [{ country: 'New Zealand', share_pct: 90.6 }],
+        traffic_sources: { organic: 45 }, checked_at: '2026-09-12T17:25:32.902Z',
+        source: 'similarweb_public_estimate_via_apify', confidence: 'low',
+      }],
+    })
+    const result = await collectTrafficDirectionObservations({ clientId, domains: ['https://www.wendywutours.co.nz/'], observedAt: '2026-09-13T00:00:00Z' })
+    expect(estimateWebsiteTraffic).toHaveBeenCalledWith(['https://www.wendywutours.co.nz/'], { maxChargeUsd: undefined })
+    expect(result).toMatchObject({ runId: 'traffic-run-1', datasetId: 'traffic-dataset-1', costUsd: 0.01, rejected: 0 })
+    expect(result.observations[0]).toMatchObject({
+      source_type: 'website', source_tier: 'C', competitor_domain: 'wendywutours.co.nz',
+      title: 'wendywutours.co.nz · 网站流量方向',
+    })
+    expect(result.observations[0].excerpt).toContain('数据性质：第三方公开估算')
   })
 })
