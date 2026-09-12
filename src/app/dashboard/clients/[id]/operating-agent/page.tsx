@@ -105,9 +105,18 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
       setTrafficBusy(true); setTrafficMessage('')
       try {
         const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence/traffic-direction`, { method: 'POST' })
-        const payload = await response.json() as { error?: string; persisted?: number; duplicates?: number; domains?: number }
+        const payload = await response.json() as { error?: string; persisted?: number; duplicates?: number; rejected?: number; write_failures?: number; returned?: number; domains?: number }
         if (!response.ok) throw new Error(payload.error ?? '竞品流量方向读取失败。')
-        setTrafficMessage(`本次已完成 ${payload.domains ?? 0} 个竞品网站读取，新增 ${payload.persisted ?? 0} 条结果。`)
+        const persisted = payload.persisted ?? 0
+        const duplicates = payload.duplicates ?? 0
+        const rejected = payload.rejected ?? 0
+        const writeFailures = payload.write_failures ?? 0
+        const detail = [
+          duplicates ? `${duplicates} 条已存在` : '',
+          rejected ? `${rejected} 条无法确认数据` : '',
+          writeFailures ? `${writeFailures} 条写入失败` : '',
+        ].filter(Boolean).join('；')
+        setTrafficMessage(`本次已完成 ${payload.domains ?? 0} 个竞品网站读取，新增 ${persisted} 条结果${detail ? `（${detail}）` : '。'}`)
         setRefresh(value => value + 1)
       } catch (reason) { setTrafficMessage(reason instanceof Error ? reason.message : '竞品流量方向读取失败。') }
       finally { setTrafficBusy(false) }

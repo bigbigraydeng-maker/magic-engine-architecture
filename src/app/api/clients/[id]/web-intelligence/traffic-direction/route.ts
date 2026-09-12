@@ -20,7 +20,19 @@ export async function POST(_req: Request, { params }: Context) {
     const domains = [...new Set(competitors.filter(item => item.status !== 'archive').map(item => item.domain).filter(Boolean))].slice(0, 20)
     if (!domains.length) return NextResponse.json({ error: 'No active competitor domains are configured.' }, { status: 409 })
     const receipt = await collectAndRecordTrafficDirectionObservations({ clientId: id, domains, observedAt: new Date().toISOString(), maxChargeUsd: 0.15 })
-    return NextResponse.json({ ok: !receipt.error, domains: domains.length, persisted: receipt.persisted, duplicates: receipt.duplicates, rejected: receipt.rejected, cost_usd: receipt.costUsd ?? 0, run_id: receipt.runId, dataset_id: receipt.datasetId ?? null, error: receipt.error ?? null }, { status: receipt.error ? 502 : 200 })
+    return NextResponse.json({
+      ok: !receipt.error,
+      domains: domains.length,
+      returned: (receipt.observations?.length ?? 0) + (receipt.rejected ?? 0),
+      persisted: receipt.persisted,
+      duplicates: receipt.duplicates,
+      rejected: receipt.rejected,
+      write_failures: receipt.writeFailures,
+      cost_usd: receipt.costUsd ?? 0,
+      run_id: receipt.runId,
+      dataset_id: receipt.datasetId ?? null,
+      error: receipt.error ?? null,
+    }, { status: receipt.error ? 502 : 200 })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Traffic direction collection failed.' }, { status: 502 })
   }
