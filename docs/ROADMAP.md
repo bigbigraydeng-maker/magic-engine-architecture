@@ -30,6 +30,13 @@
 - [ ] 找 Creatomate 客服或后台账单确认超出 2,000 credits/月后的真实计费行为（硬顶拒绝还是继续扣钱），不确定之前 `cost_usd` 记账在超额区间不可信（spec §6.2）
 - [ ] 至少一个试点客户（如 CTS）在 Settings 面板（客户详情页 → 出片引擎）填模板 ID + 镜头槽位映射，这条链路才有客户能真正用
 
+**真实照片接线（PR #1570 已合，`scene-assets.ts` 真实照片优先落地）后续 3 项**（子牙+魏征实施后复审留的小任务，不阻断本次合并）：
+
+- [ ] `pickRealPhoto`/`loadRankableClientAssets` 补一道质量分门槛——现在真实照片路径直接吐全部行给 LLM 排序，没有 `client-asset-pool.ts` 里 `MIN_QUALITY=5` 那道口径，理论上低分图可能被选中当成最终成片像素
+- [ ] `PreparedScene.visualSource`（'real_photo'|'ai_generated'）目前只写进 `content_factory_render_jobs.scenes`，没有任何 API/UI 读出来给人看，接入人工分镜自检表让 FDE 逐镜看时能分清"这镜是真图"
+- [ ] `pickRealPhoto` 内部调用 `rankAssetsByPrompt` 时如果素材池 > topN 会真的花一次 `gpt-4o-mini`（分钱级），这笔钱目前没有计入 `content_factory_render_jobs.cost_usd`，需要补计费
+- [ ] 每一套 Creatomate 模板的图片槽位是否真的在编辑器里配置了入场/推拉动画——代码测不出来，必须人工在 Creatomate 编辑器里逐个槽位确认一遍并记录，不能假设"能配=已配"（否则片子出来还是静态照片，团队却以为"真实照片+动态混剪"已完成）
+
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
 - [ ] Latest-result follow-up: show newest signal per page/direction including ignore; collapse earlier records without implying they are resolved. Read-only presentation, risk C, based on main bd6d3c4e47ae4d02feccabc9dcb88aabb744c1c6 fetched 2026-09-09.
