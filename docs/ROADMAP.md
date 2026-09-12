@@ -55,7 +55,7 @@
 - [x] **ME-WI.0.2-B0**：完成首批 Apify Actor 适配和 Travel Today、TRAVELinc、Tourism New Zealand 来源登记；待生产 migration、真实小样本和调度验收。
 - [ ] **ME-WI.0.2-C**：首期接入新西兰 SEEK、Indeed 公开招聘信息，识别组织与战略领先信号，并明确不等同于已发生业务事实。
 - [ ] **ME-WI.0.2-D**：SERP、公开广告库、AI 可见度、口碑接入统一事件模型，复用既有 provider，不恢复已退役 `ai-tracker`。
-- [ ] **ME-WI.0.2-D1**：通过 Apify `themineworks/similarweb-scraper` 接入竞品网站流量方向信号；仅保存域名级公开估算、变化率、来源结构和主要国家，标记低置信度，不将其解释为真实访问量、销售影响或 NZ 精确市场流量。已完成小样本验证：Wendy Wu 单域名约 USD 0.01；下一步接统一 observation/snapshot、成本记录和月度趋势。
+- [ ] **ME-WI.0.2-D1**：通过 Apify `themineworks/similarweb-scraper` 接入竞品网站流量方向信号；仅保存域名级公开估算、变化率、来源结构和主要国家，标记低置信度，不将其解释为真实访问量、销售影响或 NZ 精确市场流量。已完成小样本验证、统一 observation/snapshot 和经营 Agent 页面展示；下一步接受控调度、跨月趋势和 AI 分析边界验证。
 - [ ] **ME-WI.0.2-E**：跨来源事件聚合、高级客户预警与周度情报摘要。
 - [x] **ME-WI.0.2-F0**：登记 Facebook Group 受控情报源契约；仅支持客户授权导出或 Meta 审批后的接入，不实现绕过权限的社交抓取。
 - [ ] 每条管道必须完成“采集 → 证据 → 时效 → 变化分析 → 结果呈现”，保持只读、建议型、人工复核；不自动执行外部经营动作。
