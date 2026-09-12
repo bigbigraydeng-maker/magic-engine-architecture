@@ -11,6 +11,7 @@ function scene(overrides: Partial<PreparedScene> = {}): PreparedScene {
     visualType: 'video',
     voUrl: 'https://cdn.example.com/vo.mp3',
     costUsd: 0.3,
+    visualSource: 'ai_generated',
     ...overrides,
   }
 }
