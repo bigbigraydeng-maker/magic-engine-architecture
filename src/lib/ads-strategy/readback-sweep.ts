@@ -15,9 +15,18 @@
  *
  * 判在 `launch-readback.ts`（纯规则、可单测），取在 `lib/meta/readback.ts`，
  * 这里只负责串起来 + 按客户聚合。
+ *
+ * ── 2026-09-13 多账户 ────────────────────────────────────────────────────
+ * 一个客户可能登记了不止一个 Meta 广告账户（`client_meta_ad_accounts`）——
+ * CTS 就是：`meta_ad_account_id` 登记的账户之外，还有一个只在新表里的
+ * "CTStours 官方账户"跑着 ThruPlay 广告，老逻辑只查 `meta_ad_account_id`，
+ * 那个账户上的广告组从来没被这道每日闸门扫过。`sweepAllClients` 现在对每个
+ * 客户都取完整账户列表，每个账户各产出一条 `ClientSweepResult`（`sweepClient`
+ * 本身不用改，它一直就是"扫一个账户"）。
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { getClientAdAccountIds } from '@/lib/meta/client-ad-accounts'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import {
   listActiveAdSets,
@@ -153,6 +162,8 @@ export async function sweepClient(client: SweepClient): Promise<ClientSweepResul
 export async function sweepAllClients(
   supabase: SupabaseClient,
 ): Promise<ClientSweepResult[]> {
+  // 候选客户集合不变：老列有值 = 这个客户配过 Meta 广告账户。真正的账户列表
+  // （可能不止一个）再逐客户去 client_meta_ad_accounts 查一遍。
   const { data, error } = await supabase
     .from('clients')
     .select('id, name, meta_ad_account_id')
@@ -163,20 +174,23 @@ export async function sweepAllClients(
 
   const results: ClientSweepResult[] = []
   for (const c of (data ?? []) as SweepClient[]) {
-    try {
-      results.push(await sweepClient(c))
-    } catch (err) {
-      // 一个客户炸了不能让后面的客户今天都不扫。
-      results.push({
-        clientId: c.id,
-        clientName: c.name,
-        adAccountId: c.meta_ad_account_id ?? '',
-        adSetsChecked: 0,
-        blockers: 0,
-        warns: 0,
-        adSets: [],
-        error: err instanceof Error ? err.message : String(err),
-      })
+    const accountIds = await getClientAdAccountIds(c.id)
+    for (const accountId of accountIds) {
+      try {
+        results.push(await sweepClient({ ...c, meta_ad_account_id: accountId }))
+      } catch (err) {
+        // 一个客户 / 一个账户炸了不能让其余的今天都不扫。
+        results.push({
+          clientId: c.id,
+          clientName: c.name,
+          adAccountId: accountId,
+          adSetsChecked: 0,
+          blockers: 0,
+          warns: 0,
+          adSets: [],
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
   }
   return results

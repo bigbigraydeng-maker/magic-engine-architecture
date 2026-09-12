@@ -15,20 +15,31 @@ vi.mock('@/lib/meta/readback', () => ({
   listActiveAdSets: vi.fn(),
   fetchAdCreativesReadback: vi.fn(),
 }))
+// 2026-09-13：sweepAllClients 现在还要查每个客户名下的完整账户列表。
+// 默认给一个账户，让改动前就有的测试不用逐个改期望值。
+vi.mock('@/lib/meta/client-ad-accounts', () => ({
+  getClientAdAccountIds: vi.fn(),
+}))
 
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { listActiveAdSets, fetchAdCreativesReadback } from '@/lib/meta/readback'
+import { getClientAdAccountIds } from '@/lib/meta/client-ad-accounts'
 import { sweepClient, sweepAllClients, blockerSummary } from '../readback-sweep'
 
 const mockToken = vi.mocked(getMetaTokenForClient)
 const mockList = vi.mocked(listActiveAdSets)
 const mockCreatives = vi.mocked(fetchAdCreativesReadback)
+const mockAccountIds = vi.mocked(getClientAdAccountIds)
 
 const CLIENT = { id: 'c1', name: 'Roman', meta_ad_account_id: 'act_123' }
 
 beforeEach(() => {
   vi.resetAllMocks()
   mockToken.mockResolvedValue('tok')
+  // 默认：每个客户名下就登记着自己那一个账户，跟改动前行为一致。
+  mockAccountIds.mockImplementation(async (clientId: string) =>
+    clientId === 'c1' ? ['act_1'] : clientId === 'c2' ? ['act_2'] : [],
+  )
 })
 
 describe('sweepClient — 「查不出来」和「没问题」必须分开', () => {
@@ -153,6 +164,38 @@ describe('sweepAllClients — 一个客户炸了不能拖累其他客户', () =>
       }),
     } as unknown as SupabaseClient
     await expect(sweepAllClients(bad)).rejects.toThrow('db down')
+  })
+
+  it('一个客户登记了两个账户 → 各产出一条结果，两个都真的被扫过', async () => {
+    mockAccountIds.mockResolvedValue(['act_1', 'act_2'])
+    mockList.mockResolvedValue([])
+
+    const results = await sweepAllClients(
+      fakeSupabase([{ id: 'c1', name: 'CTS', meta_ad_account_id: 'act_1' }]),
+    )
+
+    expect(results).toHaveLength(2)
+    expect(results.map((r) => r.adAccountId).sort()).toEqual(['act_1', 'act_2'])
+    expect(results.every((r) => r.clientId === 'c1' && r.clientName === 'CTS')).toBe(true)
+    expect(mockList).toHaveBeenCalledTimes(2)
+  })
+
+  it('第二个账户扫描炸了，不影响第一个账户已经扫出的结果', async () => {
+    mockAccountIds.mockResolvedValue(['act_1', 'act_2'])
+    mockList.mockImplementation(async (accountId: string) => {
+      if (accountId === 'act_2') throw new Error('rate limited')
+      return []
+    })
+
+    const results = await sweepAllClients(
+      fakeSupabase([{ id: 'c1', name: 'CTS', meta_ad_account_id: 'act_1' }]),
+    )
+
+    expect(results).toHaveLength(2)
+    const ok = results.find((r) => r.adAccountId === 'act_1')
+    const bad2 = results.find((r) => r.adAccountId === 'act_2')
+    expect(ok?.error).toBeUndefined()
+    expect(bad2?.error).toContain('rate limited')
   })
 })
 

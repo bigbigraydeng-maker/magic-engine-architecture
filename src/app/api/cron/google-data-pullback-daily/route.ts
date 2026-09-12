@@ -13,9 +13,24 @@
  *   - GSC:        anchor='gsc',  status='connected', config.site_url
  *   - GA4:        anchor='ga4',  status='connected', config.property_id
  *   - Meta Ads:   clients.meta_ad_account_id + META_SYSTEM_USER_TOKEN env
+ *                 (30-day snapshot + MetaAdsAdapter feed — primary account only,
+ *                 see 2026-09-13 note below)
+ *   - Ad Strategy Engine daily series (ad_daily_insights, health, digest):
+ *                 ALL of the client's registered accounts —
+ *                 `client_meta_ad_accounts` (2026-09-13, see note below)
  *   - Google Ads: platform_oauth_connections (provider='google_ads', status='active')
  *                 + GOOGLE_ADS_DEVELOPER_TOKEN / CLIENT_ID / CLIENT_SECRET /
  *                 REFRESH_TOKEN env
+ *
+ * 2026-09-13 multi-account fix: CTS runs a second Meta ad account
+ * (act_2202695063810470, "CTStours 官方账户") that `meta_ad_account_id` never
+ * captured — its ThruPlay spend was invisible to ad_daily_insights, the health
+ * engine, and the daily digest. The 30-day `meta_ads_snapshots` pull above
+ * (`syncMeta`) still only covers the primary account — extending that table
+ * to multi-account is a separate, larger change not needed to close this gap;
+ * `ad_daily_insights` is what the health/digest/readback-sweep pipeline
+ * actually reads, so that's the loop that now covers every registered account.
+ * See src/lib/meta/client-ad-accounts.ts.
  *
  * Reference: ROADMAP.md P17.A.4, P17.B.3, P18.B.1
  */
@@ -31,6 +46,7 @@ import { adsMetricKeysWrittenBy } from '@/lib/flywheel/metric-registry'
 import { MetaAdsAdapter } from '@/lib/flywheel/adapters/MetaAdsAdapter'
 import { startCronRun } from '@/lib/cron/run-logger'
 import { domainToEnvKey } from '@/lib/meta/token-manager'
+import { getClientAdAccountIds } from '@/lib/meta/client-ad-accounts'
 import { syncAdDailyInsights, syncCampaignDailyInsights } from '@/lib/ads-strategy/daily-insights'
 import { evaluateClientAdHealth } from '@/lib/ads-strategy/evaluate'
 import { sendAdHealthDigest } from '@/lib/ads-strategy/digest'
@@ -74,6 +90,17 @@ interface ClientResult {
   ad_health?: { success: boolean; overall_verdict?: string; campaigns_evaluated?: number; error?: string }
   /** P21.K.4 daily email digest decision + send outcome. */
   ad_digest?: { sent: boolean; decision: string; error?: string }
+  /**
+   * 2026-09-13: `ad_daily`/`ad_level` above stay the PRIMARY account's result
+   * (unchanged shape, unchanged tallying). Any additional registered accounts
+   * (client_meta_ad_accounts) land here instead — purely additive, so nothing
+   * that reads `ad_daily`/`ad_level` needs to change.
+   */
+  ad_daily_secondary?: Array<{
+    ad_account_id: string
+    ad_daily?: { success: boolean; rows_written?: number; error?: string }
+    ad_level?:  { success: boolean; rows_written?: number; error?: string }
+  }>
 }
 
 // ─── Route ───────────────────────────────────────────────────────────────────
@@ -247,8 +274,39 @@ export async function GET(req: NextRequest) {
             metaToken,
           )
 
+          // 2026-09-13: any OTHER accounts this client has registered
+          // (client_meta_ad_accounts) get the same two syncs, so their
+          // campaigns/ads land in ad_daily_insights too — that table has no
+          // account filter downstream (evaluateClientAdHealth, the digest,
+          // readback-sweep all just query by client_id), so this is the one
+          // change needed for those to start seeing every account.
+          // Non-fatal per account: one account's failure must not skip the rest.
+          const allAccountIds = await getClientAdAccountIds(client.client_id)
+          const secondaryAccountIds = allAccountIds.filter(id => id !== client.meta_ad_account_id)
+          if (secondaryAccountIds.length > 0) {
+            result.ad_daily_secondary = []
+            for (const secondaryAccountId of secondaryAccountIds) {
+              const secondaryResult: NonNullable<ClientResult['ad_daily_secondary']>[number] = {
+                ad_account_id: secondaryAccountId,
+              }
+              secondaryResult.ad_daily = await syncCampaignDailyInsights(
+                client.client_id,
+                secondaryAccountId,
+                metaToken,
+              )
+              secondaryResult.ad_level = await syncAdDailyInsights(
+                client.client_id,
+                secondaryAccountId,
+                metaToken,
+              )
+              result.ad_daily_secondary.push(secondaryResult)
+            }
+          }
+
           // P21.K.2: judge each campaign against its own baseline and store the
-          // day's account-health narrative. Reads the series just written above.
+          // day's account-health narrative. Reads the series just written above
+          // PLUS any secondary accounts synced just above — evaluateClientAdHealth
+          // queries ad_daily_insights by client_id only, no account filter.
           // Non-fatal — a judging failure must not affect data collection.
           if (result.ad_daily?.success) {
             const insightDate = new Date()
