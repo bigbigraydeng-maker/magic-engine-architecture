@@ -189,6 +189,8 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
     setChatMessages(nextMessages); setChatQuestion(''); setChatBusy(true); setChatError('')
     try {
       const response = await fetch(`/api/clients/${encodeURIComponent(clientId)}/web-intelligence/tour-landscape/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, history: chatMessages, landscape }) })
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!contentType.includes('application/json')) throw new Error(`对话服务暂时不可用（HTTP ${response.status}），请稍后重试。`)
       const payload = await response.json() as { text?: string; error?: string }
       if (!response.ok || !payload.text) throw new Error(payload.error ?? '对话分析暂时不可用，请稍后重试。')
       setChatMessages([...nextMessages, { role: 'assistant', content: payload.text }])
