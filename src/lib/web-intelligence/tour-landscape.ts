@@ -36,6 +36,21 @@ function cleanList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 4) : []
 }
 
+function fallbackTourLandscape(input: Parameters<typeof tourLandscapePrompt>[0]): TourLandscape {
+  const scope = input.market_scope?.length ? input.market_scope.join('、') : '当前监控范围'
+  const clientCount = input.client_products.length
+  const competitorCount = input.competitor_products.length
+  return {
+    headline: competitorCount ? `${scope}已有竞品样本，先验证再调整产品` : `${scope}目前缺少足够竞品样本`,
+    market_summary: `当前纳入分析的 CTS 产品有 ${clientCount} 个，重点监控样本有 ${competitorCount} 个。现有资料可以帮助发现城市、天数和价格带的方向，但不能代表竞品完整产品线或整个市场。`,
+    client_opportunities: clientCount ? ['先选一个最重要的 CTS 产品，核对它与监控样本在城市、天数和包含项目上的消费者差异。'] : [],
+    client_risks: ['暂时不要仅凭当前监控样本做全线降价或改动全部产品的决定。'],
+    recommended_focus: ['先确认重点产品的完整路线、出发日期、余位和价格包含项目，再决定是否调整。'],
+    unknowns: ['竞品完整产品线、真实出发窗口、余位和询盘转化数据仍未纳入。'],
+    confidence: competitorCount > 0 && clientCount > 0 ? 0.35 : 0.2,
+  }
+}
+
 export function validateTourLandscape(value: unknown): TourLandscape {
   const parsed = typeof value === 'string' ? parseJsonResponse(value) as unknown : value
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid_tour_landscape')
@@ -57,8 +72,13 @@ export function validateTourLandscape(value: unknown): TourLandscape {
 export async function summarizeTourLandscape(input: Parameters<typeof tourLandscapePrompt>[0]) {
   // Use the shared gateway path. This keeps the aggregate call observable and
   // consistent with the other Web Intelligence AI workflows in production.
-  const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1800 })
-  return { landscape: validateTourLandscape(result.text), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION }
+  try {
+    const result = await callClaudeChat({ model: TOUR_LANDSCAPE_MODEL, systemPrompt: SYSTEM, messages: [{ role: 'user', content: tourLandscapePrompt(input) }], maxOutputTokens: 1400 })
+    return { landscape: validateTourLandscape(result.text), cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION, degraded: false }
+  } catch (error) {
+    console.warn('[wi-tour-landscape] AI unavailable; using evidence-bound fallback', error instanceof Error ? error.message : 'unknown_error')
+    return { landscape: fallbackTourLandscape(input), cost_usd: 0, model: 'rules-fallback', prompt_version: TOUR_LANDSCAPE_PROMPT_VERSION, degraded: true }
+  }
 }
 
 export async function chatAboutTourLandscape(input: {
@@ -74,11 +94,22 @@ export async function chatAboutTourLandscape(input: {
 回答固定使用以下顺序：结论：一句话直接回答；依据：列出1-3条输入资料支持的事实；建议：给出一个下一步动作。只能使用提供的客户产品、竞品资料和当前总览；资料没有写的内容必须明确说“目前无法判断”。竞品资料是重点监控样本，不是竞品完整产品线；不要把样本结论扩大成整个市场结论。
 不要把不同旅行社的 Tour 强行一一对应，不要建议自动调价、发布或执行外部动作。`
   const context = `当前总览：${JSON.stringify(input.landscape)}\n\n${tourLandscapePrompt({ client_name: input.client_name, market_scope: input.market_scope, client_products: input.client_products, competitor_products: input.competitor_products })}`
-  const result = await callClaudeChat({
-    model: TOUR_LANDSCAPE_MODEL,
-    systemPrompt,
-    messages: [...input.history.slice(-10), { role: 'user', content: `${context}\n\n用户问题：${input.question}` }],
-    maxOutputTokens: 900,
-  })
-  return { text: result.text, cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL }
+  try {
+    const result = await callClaudeChat({
+      model: TOUR_LANDSCAPE_MODEL,
+      systemPrompt,
+      messages: [...input.history.slice(-10), { role: 'user', content: `${context}\n\n用户问题：${input.question}` }],
+      maxOutputTokens: 900,
+    })
+    return { text: result.text, cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, degraded: false }
+  } catch (error) {
+    console.warn('[wi-tour-landscape-chat] AI unavailable; using evidence-bound fallback', error instanceof Error ? error.message : 'unknown_error')
+    const fallback = fallbackTourLandscape({ client_name: input.client_name, market_scope: input.market_scope, client_products: input.client_products, competitor_products: input.competitor_products })
+    return {
+      text: `结论：目前无法用 AI 进一步判断“${input.question}”。\n\n依据：当前分析范围内有 ${input.client_products.length} 个 CTS 产品和 ${input.competitor_products.length} 个重点竞品样本；这些样本不代表竞品完整产品线。\n\n建议：${fallback.recommended_focus[0] ?? '先补齐重点产品的路线、出发日期、余位和价格包含项目，再做经营调整。'}`,
+      cost_usd: 0,
+      model: 'rules-fallback',
+      degraded: true,
+    }
+  }
 }
