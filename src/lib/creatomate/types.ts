@@ -72,4 +72,12 @@ export interface CreatomateTemplateContract {
   outputWidth?: number
   outputHeight?: number
   outputFrameRate?: number
+  /**
+   * 固定图层覆盖(2026-09-13 新增)——模板里那些不随镜头轮换、平时"锁定"的品牌元素
+   * (如 Watermark/EndLogo/EndBG，见 spec §1 已验证的元素清单)：Creatomate 本身没有
+   * "锁定"这个概念，只是这些元素不在逐镜头循环里，所以平时没人去改它们；只要知道
+   * 真实元素名，一样能用 modifications 直接指定内容。每个客户品牌资产不同，这里
+   * 按元素名→URL 的键值对存，跟 sceneFieldMap 一样是纯客户配置，不进共享代码。
+   */
+  staticOverrides?: Record<string, string>
 }

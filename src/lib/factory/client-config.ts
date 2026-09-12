@@ -144,6 +144,12 @@ export function projectFactoryConfig(raw: unknown): FactoryConfigView {
   }
 }
 
+/** 校验 Record<string,string>——脏数据(非对象/含非字符串值)一律拒绝,不半收半弃。 */
+function isStringRecord(v: unknown): v is Record<string, string> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+  return Object.values(v as Record<string, unknown>).every((x) => typeof x === 'string')
+}
+
 function projectRender(raw: unknown): FactoryConfigView['render'] {
   const r = (raw ?? null) as Record<string, unknown> | null
   if (!r) return null
@@ -157,6 +163,7 @@ function projectRender(raw: unknown): FactoryConfigView['render'] {
           outputWidth: typeof c.output_width === 'number' ? c.output_width : undefined,
           outputHeight: typeof c.output_height === 'number' ? c.output_height : undefined,
           outputFrameRate: typeof c.output_frame_rate === 'number' ? c.output_frame_rate : undefined,
+          staticOverrides: isStringRecord(c.static_overrides) ? c.static_overrides : undefined,
         }
       : null
   return { engine, creatomate }
