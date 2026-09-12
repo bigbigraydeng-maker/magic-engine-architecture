@@ -1,9 +1,14 @@
 export type TrafficDirectionObservation = {
   domain: string
+  is_client?: boolean
   source_url: string
   observed_at: string
   valid_until: string | null
   excerpt: string
+}
+
+function sameDomain(left: string, right: string): boolean {
+  return left.replace(/^www\./i, '').toLowerCase() === right.replace(/^www\./i, '').toLowerCase()
 }
 
 export type TrafficDirectionSignal = TrafficDirectionObservation & {
@@ -48,7 +53,7 @@ function parseTopCountry(excerpt: string): string | null {
 }
 
 /** Project immutable observations into one current signal per competitor. */
-export function projectTrafficDirectionSignals(rows: TrafficDirectionObservation[]): TrafficDirectionSignal[] {
+export function projectTrafficDirectionSignals(rows: TrafficDirectionObservation[], clientDomain?: string | null): TrafficDirectionSignal[] {
   const grouped = new Map<string, TrafficDirectionObservation[]>()
   for (const row of rows) {
     const current = grouped.get(row.domain) ?? []
@@ -66,6 +71,7 @@ export function projectTrafficDirectionSignals(rows: TrafficDirectionObservation
       : null
     return {
       ...latest,
+      is_client: latest.is_client ?? (clientDomain ? sameDomain(domain, clientDomain) : false),
       observation_count: ordered.length,
       previous_observed_at: previous?.observed_at ?? null,
       estimated_visits: estimatedVisits,

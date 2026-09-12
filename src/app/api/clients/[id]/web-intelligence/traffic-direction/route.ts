@@ -17,7 +17,9 @@ export async function POST(_req: Request, { params }: Context) {
   if (!allowedClient(id)) return NextResponse.json({ error: 'Client is not enabled for Web Intelligence.' }, { status: 403 })
   try {
     const competitors = await loadCompetitors(id)
-    const domains = [...new Set(competitors.filter(item => item.status !== 'archive').map(item => item.domain).filter(Boolean))].slice(0, 20)
+    const client = await (await import('@/lib/supabase')).supabaseAdmin.from('clients').select('domain').eq('id', id).single()
+    if (client.error || !client.data?.domain) return NextResponse.json({ error: 'Client website domain is not configured.' }, { status: 409 })
+    const domains = [...new Set([client.data.domain, ...competitors.filter(item => item.status !== 'archive').map(item => item.domain).filter(Boolean)])].slice(0, 20)
     if (!domains.length) return NextResponse.json({ error: 'No active competitor domains are configured.' }, { status: 409 })
     const receipt = await collectAndRecordTrafficDirectionObservations({ clientId: id, domains, observedAt: new Date().toISOString(), maxChargeUsd: 0.15 })
     return NextResponse.json({
