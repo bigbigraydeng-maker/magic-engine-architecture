@@ -94,11 +94,22 @@ export async function chatAboutTourLandscape(input: {
 回答固定使用以下顺序：结论：一句话直接回答；依据：列出1-3条输入资料支持的事实；建议：给出一个下一步动作。只能使用提供的客户产品、竞品资料和当前总览；资料没有写的内容必须明确说“目前无法判断”。竞品资料是重点监控样本，不是竞品完整产品线；不要把样本结论扩大成整个市场结论。
 不要把不同旅行社的 Tour 强行一一对应，不要建议自动调价、发布或执行外部动作。`
   const context = `当前总览：${JSON.stringify(input.landscape)}\n\n${tourLandscapePrompt({ client_name: input.client_name, market_scope: input.market_scope, client_products: input.client_products, competitor_products: input.competitor_products })}`
-  const result = await callClaudeChat({
-    model: TOUR_LANDSCAPE_MODEL,
-    systemPrompt,
-    messages: [...input.history.slice(-10), { role: 'user', content: `${context}\n\n用户问题：${input.question}` }],
-    maxOutputTokens: 900,
-  })
-  return { text: result.text, cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL }
+  try {
+    const result = await callClaudeChat({
+      model: TOUR_LANDSCAPE_MODEL,
+      systemPrompt,
+      messages: [...input.history.slice(-10), { role: 'user', content: `${context}\n\n用户问题：${input.question}` }],
+      maxOutputTokens: 900,
+    })
+    return { text: result.text, cost_usd: result.cost_usd, model: TOUR_LANDSCAPE_MODEL, degraded: false }
+  } catch (error) {
+    console.warn('[wi-tour-landscape-chat] AI unavailable; using evidence-bound fallback', error instanceof Error ? error.message : 'unknown_error')
+    const fallback = fallbackTourLandscape({ client_name: input.client_name, market_scope: input.market_scope, client_products: input.client_products, competitor_products: input.competitor_products })
+    return {
+      text: `结论：目前无法用 AI 进一步判断“${input.question}”。\n\n依据：当前分析范围内有 ${input.client_products.length} 个 CTS 产品和 ${input.competitor_products.length} 个重点竞品样本；这些样本不代表竞品完整产品线。\n\n建议：${fallback.recommended_focus[0] ?? '先补齐重点产品的路线、出发日期、余位和价格包含项目，再做经营调整。'}`,
+      cost_usd: 0,
+      model: 'rules-fallback',
+      degraded: true,
+    }
+  }
 }
