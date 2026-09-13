@@ -24,6 +24,15 @@
  * 关键词清单目前是「已知案例」而非穷尽列表 —— 像"我已经付了定金"这类模糊表达
  * 能不能识别，issue #1576 明确排除在这次范围外，留到 dry-run 阶段用真实对话
  * 验证覆盖率之后再迭代关键词。
+ *
+ * ## 为什么不整段拉取消息（3 审第 1 轮 Codex P2）
+ *
+ * 单个对话消息数一旦超过 PostgREST 的 `max-rows`（默认 1,000），不分页的
+ * `select` 只会拿到按时间排好序的前一批，后面的售后关键词和真正的最后一条
+ * 消息时间都会被漏掉 —— 长对话可能被误判成 `lead_intake` 继续自动回复。
+ * 改成三条服务端查询各自独立完成判断：关键词命中用 `.or()` 交给数据库端过滤
+ * 只取 1 行判断存在性，首尾消息时间各自 `order + limit(1)` 单独取，
+ * 都不依赖把全部消息搬到内存。
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
@@ -39,15 +48,47 @@ const POST_SALE_SPAN_MS = 30 * 24 * 60 * 60 * 1000
  */
 const POST_SALE_KEYWORDS = ['booking', '我订的', '我已付', 'receipt', '我下单了']
 
-interface MessageRow {
-  body: string | null
+interface EdgeMessageRow {
   sent_at: string
 }
 
-function containsPostSaleKeyword(body: string | null): boolean {
-  if (!body) return false
-  const lower = body.toLowerCase()
-  return POST_SALE_KEYWORDS.some((kw) => lower.includes(kw))
+/** 关键词命中判断交给数据库端做（`.or()` + `ilike`），这里只拼过滤表达式。 */
+function buildKeywordOrFilter(): string {
+  return POST_SALE_KEYWORDS.map((kw) => `body.ilike.%${kw}%`).join(',')
+}
+
+/** 只问「存在不存在」，`limit(1)` 保证不管命中多少行都只搬 1 行回来。 */
+async function hasPostSaleKeyword(conversationId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from('conversation_messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .or(buildKeywordOrFilter())
+    .limit(1)
+
+  if (error) {
+    throw new Error(`classifyConversation: 关键词查询失败 — ${error.message}`)
+  }
+  return (data ?? []).length > 0
+}
+
+/** 只要对话的第一条 / 最后一条消息时间，各自 `order + limit(1)`，不搬中间的消息。 */
+async function fetchEdgeMessage(
+  conversationId: string,
+  ascending: boolean
+): Promise<EdgeMessageRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from('conversation_messages')
+    .select('sent_at')
+    .eq('conversation_id', conversationId)
+    .order('sent_at', { ascending })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`classifyConversation: 读 conversation_messages 失败 — ${error.message}`)
+  }
+  return data
 }
 
 /**
@@ -58,23 +99,17 @@ function containsPostSaleKeyword(body: string | null): boolean {
  * 之外更重的分支。
  */
 export async function classifyConversation(conversationId: string): Promise<ConversationClass> {
-  const { data, error } = await supabaseAdmin
-    .from('conversation_messages')
-    .select('body, sent_at')
-    .eq('conversation_id', conversationId)
-    .order('sent_at', { ascending: true })
+  if (await hasPostSaleKeyword(conversationId)) return 'post_sale'
 
-  if (error) {
-    throw new Error(`classifyConversation: 读 conversation_messages 失败 — ${error.message}`)
-  }
+  const [firstMessage, lastMessage] = await Promise.all([
+    fetchEdgeMessage(conversationId, true),
+    fetchEdgeMessage(conversationId, false),
+  ])
 
-  const messages = (data ?? []) as MessageRow[]
-  if (messages.length === 0) return 'lead_intake'
+  if (!firstMessage || !lastMessage) return 'lead_intake'
 
-  if (messages.some((m) => containsPostSaleKeyword(m.body))) return 'post_sale'
-
-  const firstAt = new Date(messages[0].sent_at).getTime()
-  const lastAt = new Date(messages[messages.length - 1].sent_at).getTime()
+  const firstAt = new Date(firstMessage.sent_at).getTime()
+  const lastAt = new Date(lastMessage.sent_at).getTime()
   if (lastAt - firstAt > POST_SALE_SPAN_MS) return 'post_sale'
 
   return 'lead_intake'

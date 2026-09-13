@@ -21,14 +21,55 @@ interface Row {
   sent_at: string
 }
 
-/** 拿一组消息行（已经按 sent_at 排好序）喂给 mock 的 supabase 链式调用。 */
+/**
+ * 跟 classify.ts 里的 POST_SALE_KEYWORDS 保持一致的测试夹具副本 —— 实现里
+ * 那份清单没有导出，这里独立维护一份不是偷懒，而是让测试断言不依赖实现内部
+ * 细节，只依赖「实现文档里承诺的判据」。
+ */
+const KEYWORDS = ['booking', '我订的', '我已付', 'receipt', '我下单了']
+
+function containsAnyKeyword(body: string | null): boolean {
+  if (!body) return false
+  const lower = body.toLowerCase()
+  return KEYWORDS.some((kw) => lower.includes(kw))
+}
+
+/**
+ * 拿一组消息行（不要求预先排序）喂给 mock 的 supabase 链式调用，模拟实现
+ * 现在会发出的三条独立查询：关键词存在性查询（`.or()` + `limit(1)`，直接
+ * `await` 链本身）、首条 / 末条消息时间查询（`.order() + .limit(1).maybeSingle()`）。
+ */
 function stubMessages(rows: Row[]) {
   mockFrom.mockImplementation((table: string) => {
     if (table !== 'conversation_messages') throw new Error(`fake supabase: 表 '${table}' 没建模`)
+
+    let usedOrFilter = false
+    let ascending = true
+
+    const sortedAsc = [...rows].sort(
+      (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+    )
+
     const chain: Record<string, unknown> = {
       select: () => chain,
       eq: () => chain,
-      order: async () => ({ data: rows, error: null }),
+      or: () => {
+        usedOrFilter = true
+        return chain
+      },
+      order: (_col: string, opts?: { ascending?: boolean }) => {
+        ascending = opts?.ascending ?? true
+        return chain
+      },
+      limit: () => chain,
+      maybeSingle: async () => {
+        const edge = ascending ? sortedAsc[0] : sortedAsc[sortedAsc.length - 1]
+        return { data: edge ?? null, error: null }
+      },
+      then: (resolve: (v: { data: Row[] | null; error: null }) => unknown) => {
+        const matched = usedOrFilter ? rows.filter((r) => containsAnyKeyword(r.body)).slice(0, 1) : rows
+        return Promise.resolve({ data: matched, error: null }).then(resolve)
+      },
     }
     return chain as never
   })
@@ -113,10 +154,16 @@ describe('classifyConversation', () => {
   it('查询报错要往上抛，不能吞掉当作"没有消息"', async () => {
     mockFrom.mockImplementation((table: string) => {
       if (table !== 'conversation_messages') throw new Error(`fake supabase: 表 '${table}' 没建模`)
+      const error = { message: 'network down' }
       const chain: Record<string, unknown> = {
         select: () => chain,
         eq: () => chain,
-        order: async () => ({ data: null, error: { message: 'network down' } }),
+        or: () => chain,
+        order: () => chain,
+        limit: () => chain,
+        maybeSingle: async () => ({ data: null, error }),
+        then: (resolve: (v: { data: null; error: typeof error }) => unknown) =>
+          Promise.resolve({ data: null, error }).then(resolve),
       }
       return chain as never
     })
