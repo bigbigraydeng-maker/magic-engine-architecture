@@ -73,6 +73,38 @@ describe('projectFactoryConfig — 投影', () => {
     expect(r?.creatomate?.requiredPostFields).toBeUndefined()
   })
 
+  it('render.creatomate.offers/post_field_sources（2026-09-13 新增）：合法嵌套 Record 原样投影', () => {
+    const r = projectFactoryConfig({
+      render: {
+        engine: 'creatomate',
+        creatomate: {
+          template_id: 'tmpl-1',
+          scene_field_map: [{ visual: 'Video-1' }],
+          offers: { default: { tour: 'Best of China', price_line: 'From NZD $4,080 pp' } },
+          post_field_sources: { EndTour: 'tour', EndMeta: 'price_line' },
+        },
+      },
+    }).render as {
+      creatomate: { offers?: Record<string, Record<string, string>>; postFieldSources?: Record<string, string> } | null
+    } | null
+    expect(r?.creatomate?.offers).toEqual({ default: { tour: 'Best of China', price_line: 'From NZD $4,080 pp' } })
+    expect(r?.creatomate?.postFieldSources).toEqual({ EndTour: 'tour', EndMeta: 'price_line' })
+  })
+
+  it('offers 某个档位混了非字符串值（脏数据）→ 整个 offers 投影为 undefined，不半收半弃', () => {
+    const r = projectFactoryConfig({
+      render: {
+        engine: 'creatomate',
+        creatomate: {
+          template_id: 'tmpl-1',
+          scene_field_map: [{ visual: 'Video-1' }],
+          offers: { default: { tour: 'Best of China', price_line: 4080 } },
+        },
+      },
+    }).render as { creatomate: { offers?: unknown } | null } | null
+    expect(r?.creatomate?.offers).toBeUndefined()
+  })
+
   it('🔴 只填一半的发布目标 → 投影成 null(等于没配,UI 才会提示「缺发布目标」)', () => {
     expect(projectFactoryConfig({ publish_target: { platform: 'facebook' } }).publish_target).toBeNull()
     expect(projectFactoryConfig({ publish_target: { page_id: '123456' } }).publish_target).toBeNull()
