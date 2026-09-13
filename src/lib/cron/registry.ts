@@ -66,6 +66,8 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   //    补登记的全部意义就是把这件事查出来，宽限期会直接抵消掉它。
   //    按本字段自己的约定：老任务不补 addedAt。（Codex thread：registry.ts L41）
   { service: 'ad-readback-sweep-daily', jobName: 'ad-readback-sweep', schedule: '40 20 * * *', logsRuns: true },
+  // ads IMPACT 阶段 1：广告设置快照，只在设置变化时记一行、另每天一次（只读 Meta）。
+  { service: 'ad-entity-snapshot', jobName: 'ad-entity-snapshot', schedule: '30 */3 * * *', logsRuns: true, addedAt: '2026-09-14' },
   { service: 'agent-learning-rollup', jobName: 'agent-learning-rollup', schedule: '0 7 * * 1', logsRuns: true },
   // IMPACT 的 Tune 段。路由早就写好了，但从 Phase 23.C 起**一直没登记调度** ——
   // cron_run_logs 里零条运行记录，而 Check 段 2026-08~09 产出了 285 条结论。

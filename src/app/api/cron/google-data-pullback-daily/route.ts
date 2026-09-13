@@ -58,7 +58,7 @@ import { MetaAdsAdapter } from '@/lib/flywheel/adapters/MetaAdsAdapter'
 import { startCronRun } from '@/lib/cron/run-logger'
 import { domainToEnvKey } from '@/lib/meta/token-manager'
 import { getClientAdAccountIds } from '@/lib/meta/client-ad-accounts'
-import { syncAdDailyInsights, syncCampaignDailyInsights } from '@/lib/ads-strategy/daily-insights'
+import { hasVideoColumns, syncAdDailyInsights, syncAdsetDailyInsights, syncCampaignDailyInsights } from '@/lib/ads-strategy/daily-insights'
 import { evaluateClientAdHealth } from '@/lib/ads-strategy/evaluate'
 import { sendAdHealthDigest } from '@/lib/ads-strategy/digest'
 import { loadAdStrategyConfigWithSource, resolveDigestRecipients } from '@/lib/ads-strategy/config'
@@ -111,7 +111,9 @@ interface ClientResult {
     ad_account_id: string
     ad_daily?: { success: boolean; rows_written?: number; error?: string }
     ad_level?:  { success: boolean; rows_written?: number; error?: string }
+    adset_level?: { success: boolean; rows_written?: number; error?: string }
   }>
+  adset_level?: { success: boolean; rows_written?: number; error?: string }
 }
 
 // ─── Route ───────────────────────────────────────────────────────────────────
@@ -130,6 +132,10 @@ export async function GET(req: NextRequest) {
   }
 
   const cronRun = await startCronRun('google-data-pullback-daily')
+
+  // ads IMPACT 阶段 1：视频完播 + actions 9 列（migration 20260914000001）在不在库里。
+  // 不在就照旧只写老列——不能为了新列把现有每日数据同步整条弄挂。结果进 summary。
+  const withVideo = await hasVideoColumns()
 
   // ── 1. Load connected Google connectors + Meta + Google Ads accounts in parallel
   const [connResult, metaResult, googleAdsResult] = await Promise.all([
@@ -283,6 +289,7 @@ export async function GET(req: NextRequest) {
             client.client_id,
             client.meta_ad_account_id,
             metaToken,
+            { withVideo },
           )
 
           // 2026-09-13: any OTHER accounts this client has registered
@@ -304,11 +311,19 @@ export async function GET(req: NextRequest) {
                 client.client_id,
                 secondaryAccountId,
                 metaToken,
+                { withVideo },
               )
               secondaryResult.ad_level = await syncAdDailyInsights(
                 client.client_id,
                 secondaryAccountId,
                 metaToken,
+                { withVideo },
+              )
+              secondaryResult.adset_level = await syncAdsetDailyInsights(
+                client.client_id,
+                secondaryAccountId,
+                metaToken,
+                { withVideo },
               )
               result.ad_daily_secondary.push(secondaryResult)
             }
@@ -351,6 +366,16 @@ export async function GET(req: NextRequest) {
             client.client_id,
             client.meta_ad_account_id,
             metaToken,
+            { withVideo },
+          )
+
+          // ads IMPACT 阶段 1 §2.2：广告组级日数据（漏斗角色、ABO 预算都挂在广告组上）。
+          // 同 ad_level 一样是 best-effort：不进 `failed`，失败进 errors。
+          result.adset_level = await syncAdsetDailyInsights(
+            client.client_id,
+            client.meta_ad_account_id,
+            metaToken,
+            { withVideo },
           )
         }
       }
@@ -392,13 +417,14 @@ export async function GET(req: NextRequest) {
   // Collect per-client errors so postmortem is possible without Render logs.
   // Diagnostic only — no behavior change.
   const errors = results.flatMap(r => {
-    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'|'ad_daily'|'ad_level'|'ad_health'|'ad_digest'|'ad_daily_secondary'; error: string }> = []
+    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'|'ad_daily'|'ad_level'|'adset_level'|'ad_health'|'ad_digest'|'ad_daily_secondary'; error: string }> = []
     if (r.gsc?.success === false && r.gsc.error)               out.push({ client_id: r.client_id, source: 'gsc',        error: r.gsc.error })
     if (r.ga4?.success === false && r.ga4.error)               out.push({ client_id: r.client_id, source: 'ga4',        error: r.ga4.error })
     if (r.meta?.success === false && r.meta.error)             out.push({ client_id: r.client_id, source: 'meta',       error: r.meta.error })
     if (r.google_ads?.success === false && r.google_ads.error) out.push({ client_id: r.client_id, source: 'google_ads', error: r.google_ads.error })
     if (r.ad_daily?.success === false && r.ad_daily.error)     out.push({ client_id: r.client_id, source: 'ad_daily',   error: r.ad_daily.error })
     if (r.ad_level?.success === false && r.ad_level.error)     out.push({ client_id: r.client_id, source: 'ad_level',   error: r.ad_level.error })
+    if (r.adset_level?.success === false && r.adset_level.error) out.push({ client_id: r.client_id, source: 'adset_level', error: r.adset_level.error })
     if (r.ad_health?.success === false && r.ad_health.error)   out.push({ client_id: r.client_id, source: 'ad_health', error: r.ad_health.error })
     if (r.ad_digest && !r.ad_digest.sent && r.ad_digest.error)  out.push({ client_id: r.client_id, source: 'ad_digest', error: r.ad_digest.error })
     // 2026-09-13 (魏征 review): a secondary account's sync failure used to be
@@ -414,6 +440,9 @@ export async function GET(req: NextRequest) {
       if (secondary.ad_level?.success === false && secondary.ad_level.error) {
         out.push({ client_id: r.client_id, source: 'ad_daily_secondary', error: `[${secondary.ad_account_id}] ${secondary.ad_level.error}` })
       }
+      if (secondary.adset_level?.success === false && secondary.adset_level.error) {
+        out.push({ client_id: r.client_id, source: 'ad_daily_secondary', error: `[${secondary.ad_account_id}] adset: ${secondary.adset_level.error}` })
+      }
     }
     return out
   })
@@ -423,7 +452,7 @@ export async function GET(req: NextRequest) {
   // errors that actually count as failures belong here — ad_level and
   // ad_daily_secondary are excluded (both best-effort, neither triggers `failed`)
   // and must not become the headline of an email they never triggered.
-  const headlineError = errors.find(e => e.source !== 'ad_level' && e.source !== 'ad_daily_secondary')
+  const headlineError = errors.find(e => e.source !== 'ad_level' && e.source !== 'adset_level' && e.source !== 'ad_daily_secondary')
   const errorMessage = failed > 0 && headlineError
     ? `${headlineError.source}: ${headlineError.error}${errors.length > 1 ? ` (+${errors.length - 1} more)` : ''}`
     : undefined
@@ -433,7 +462,7 @@ export async function GET(req: NextRequest) {
     completed: results.length - failed,
     error: errorMessage,
     failed,
-    summary: { gsc_synced: gscSynced, ga4_synced: ga4Synced, meta_synced: metaSynced, google_ads_synced: googleAdsSynced, ad_daily_synced: adDailySynced, ad_daily_rows: adDailyRows, ad_level_synced: adLevelSynced, ad_level_rows: adLevelRows, ad_health_synced: adHealthSynced, ad_health_alerts: adHealthAlerts, errors },
+    summary: { gsc_synced: gscSynced, ga4_synced: ga4Synced, meta_synced: metaSynced, google_ads_synced: googleAdsSynced, ad_daily_synced: adDailySynced, ad_daily_rows: adDailyRows, ad_level_synced: adLevelSynced, ad_level_rows: adLevelRows, ad_health_synced: adHealthSynced, ad_health_alerts: adHealthAlerts, video_columns_written: withVideo, errors },
   })
   return NextResponse.json({
     success:           true,

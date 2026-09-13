@@ -16,6 +16,7 @@
 import { supabaseAdmin } from '@/lib/supabase'
 import {
   getAdDailyInsights,
+  getAdsetDailyInsights,
   getCampaignDailyInsights,
   getCampaignWindowFrequency,
   MetaCampaignDailyRow,
@@ -37,6 +38,11 @@ export const DEFAULT_LOOKBACK_DAYS = 7
  */
 export const BACKFILL_LOOKBACK_DAYS = 30
 
+export interface SyncOptions {
+  /** 调用方先用 hasVideoColumns() 探一次；为真才写视频完播 + actions 9 列。 */
+  withVideo?: boolean
+}
+
 export interface SyncDailyInsightsResult {
   success: boolean
   rows_written?: number
@@ -55,7 +61,7 @@ function shiftDays(from: Date, days: number): Date {
   return out
 }
 
-type InsightLevel = 'campaign' | 'ad'
+type InsightLevel = 'campaign' | 'adset' | 'ad'
 
 /**
  * True when this client's stored history AT THIS LEVEL does not reach back far
@@ -119,10 +125,47 @@ interface InsightRowInput {
   stampedAt:    string
 }
 
+/**
+ * 视频完播 + 原始 actions 这 9 列（migration 20260914000001）是否已在库里。
+ *
+ * 🔴 为什么要探测而不是直接写：代码可能先于 migration 上线。upsert 带上不存在的列会让
+ *    **整条** 广告数据同步失败——为了几列新数据把引擎现有的每日数据断掉，代价不对等。
+ *    列不在就照旧写老列，并在结果里标出来（进 cron_run_logs，不静默）。
+ * 一次同步调用探一次；探测本身出错也按「列不在」处理（只影响新列，不影响老数据）。
+ */
+export async function hasVideoColumns(): Promise<boolean> {
+  // 绝不抛：它在 cron 最前面跑，抛出去会把 GSC/GA4/Meta 全部同步一起带走。
+  try {
+    const { error } = await supabaseAdmin
+      .from('ad_daily_insights')
+      .select('video_thruplays')
+      .limit(1)
+    return !error
+  } catch {
+    return false
+  }
+}
+
+/** 新 9 列；只有 hasVideoColumns() 为真时才写。 */
+function videoColumns(m: MetaCampaignDailyRow) {
+  return {
+    video_3s_views:          m.video_3s_views,
+    video_thruplays:         m.video_thruplays,
+    video_p25:               m.video_p25,
+    video_p50:               m.video_p50,
+    video_p75:               m.video_p75,
+    video_p95:               m.video_p95,
+    video_p100:              m.video_p100,
+    video_avg_watch_seconds: m.video_avg_watch_seconds,
+    actions:                 m.actions,
+  }
+}
+
 /** Map one parsed Meta row onto the `ad_daily_insights` column set. */
-function toInsightRow(i: InsightRowInput) {
+function toInsightRow(i: InsightRowInput, withVideo = false) {
   const m = i.metrics
   return {
+    ...(withVideo ? videoColumns(m) : {}),
     client_id:     i.clientId,
     ad_account_id: i.adAccountId,
     platform:      'meta',
@@ -210,6 +253,7 @@ export async function syncCampaignDailyInsights(
   clientId: string,
   adAccountId: string,
   accessToken: string,
+  opts: SyncOptions = {},
 ): Promise<SyncDailyInsightsResult> {
   try {
     const backfill = await needsBackfill(clientId, 'campaign')
@@ -250,7 +294,7 @@ export async function syncCampaignDailyInsights(
       frequency7d: freq7dFor(r.campaign_id, r.insight_date),
       metrics:     r,
       stampedAt,
-    }))
+    }, opts.withVideo))
 
     const failure = await upsertChunked(payload)
     if (failure) return { success: false, error: failure }
@@ -287,6 +331,7 @@ export async function syncAdDailyInsights(
   clientId: string,
   adAccountId: string,
   accessToken: string,
+  opts: SyncOptions = {},
 ): Promise<SyncDailyInsightsResult> {
   try {
     const backfill = await needsBackfill(clientId, 'ad')
@@ -311,7 +356,65 @@ export async function syncAdDailyInsights(
         frequency7d: null,
         metrics:     r,
         stampedAt,
-      }),
+      }, opts.withVideo),
+      parent_id: r.campaign_id || null,
+    }))
+
+    const failure = await upsertChunked(payload)
+    if (failure) return { success: false, error: failure }
+
+    return {
+      success: complete,
+      rows_written: payload.length,
+      days_requested: lookback,
+      backfilled: backfill,
+      error: complete ? undefined : 'page walk stopped early — window is short; the next run re-requests the missing depth',
+    }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  }
+}
+
+/**
+ * Pull and store one client's AD-SET-level daily series（ads IMPACT 阶段 1 §2.2）.
+ *
+ * 同一张表、同一幂等键，`level='adset'`（P21.K.1 表结构本来就留了 level 列，不改表）。
+ * `parent_id` 存所属广告系列。漏斗角色与 ABO 预算都挂在广告组上，D4/D5 要按广告组算花费。
+ *
+ * ⚠️ 生产里有 1 行来源不明的 Oztop adset 行（2026-08-16，CTR 存的是百分数而非小数，
+ *    来源是旧电脑上一个手写 SQL 的定时任务，见 PR #1656 系列 P0-6 结论）。首次回填 30 天
+ *    会按同一幂等键把它覆盖成 Meta 口径的正确值——这是预期行为，不是误删。
+ */
+export async function syncAdsetDailyInsights(
+  clientId: string,
+  adAccountId: string,
+  accessToken: string,
+  opts: SyncOptions = {},
+): Promise<SyncDailyInsightsResult> {
+  try {
+    const backfill = await needsBackfill(clientId, 'adset')
+    const { since, until, lookback } = requestWindow(backfill)
+
+    const { rows, complete } = await getAdsetDailyInsights(adAccountId, accessToken, since, until)
+    if (rows.length === 0) {
+      return complete
+        ? { success: true, rows_written: 0, days_requested: lookback, backfilled: backfill }
+        : { success: false, rows_written: 0, days_requested: lookback, backfilled: backfill,
+            error: 'Meta returned no usable page — check the token and rate limit' }
+    }
+
+    const stampedAt = new Date().toISOString()
+    const payload = rows.map(r => ({
+      ...toInsightRow({
+        clientId,
+        adAccountId,
+        level:       'adset',
+        entityId:    r.adset_id,
+        entityName:  r.adset_name,
+        frequency7d: null,
+        metrics:     r,
+        stampedAt,
+      }, opts.withVideo),
       parent_id: r.campaign_id || null,
     }))
 

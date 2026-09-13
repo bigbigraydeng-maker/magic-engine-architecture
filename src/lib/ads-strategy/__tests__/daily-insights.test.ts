@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const fetchDaily  = vi.fn()
 const fetchAds    = vi.fn()
+const fetchAdsets = vi.fn()
 const fetchWindow = vi.fn()
 const upsert      = vi.fn()
 const historyProbe = vi.fn()
@@ -26,6 +27,7 @@ function asWalk(value: unknown) {
 vi.mock('@/lib/meta/client', () => ({
   getCampaignDailyInsights: async (...a: unknown[]) => asWalk(await fetchDaily(...a)),
   getAdDailyInsights: async (...a: unknown[]) => asWalk(await fetchAds(...a)),
+  getAdsetDailyInsights: async (...a: unknown[]) => asWalk(await fetchAdsets(...a)),
   getCampaignWindowFrequency: (...a: unknown[]) => fetchWindow(...a),
 }))
 
@@ -48,6 +50,7 @@ vi.mock('@/lib/supabase', () => ({
 
 import {
   syncAdDailyInsights,
+  syncAdsetDailyInsights,
   syncCampaignDailyInsights,
   BACKFILL_LOOKBACK_DAYS,
   DEFAULT_LOOKBACK_DAYS,
@@ -98,6 +101,7 @@ function adRow(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   fetchDaily.mockReset()
   fetchAds.mockReset()
+  fetchAdsets.mockReset()
   fetchWindow.mockReset()
   upsert.mockReset()
   historyProbe.mockReset()
@@ -415,5 +419,52 @@ describe('syncAdDailyInsights', () => {
     // sees a history that is too shallow and re-requests the rest.
     const written = upsert.mock.calls[0][0] as Array<Record<string, string>>
     expect(written.map(r => r.insight_date).sort()[0]).toBe('2026-06-06')
+  })
+})
+
+// ── ads IMPACT 阶段 1 §2.2：广告组级 + 视频完播列 ────────────────────────────
+const VIDEO = {
+  video_3s_views: 745, video_thruplays: 723, video_p25: 725, video_p50: 714, video_p75: 260,
+  video_p95: 128, video_p100: 122, video_avg_watch_seconds: 34,
+  actions: [{ action_type: 'video_view', value: '745' }],
+}
+
+describe('syncAdsetDailyInsights', () => {
+  it('写 level=adset，parent_id 是所属系列，历史探测按 adset 层级', async () => {
+    historyProbe.mockResolvedValue(DEEP_HISTORY)
+    fetchAdsets.mockResolvedValue([{ ...dayRow(), ...VIDEO, adset_id: 's1', adset_name: 'ThruPlay_物流_200/cbm' }])
+
+    const res = await syncAdsetDailyInsights('client-1', 'act_1', 'tok', { withVideo: true })
+
+    expect(res.success).toBe(true)
+    expect(probedLevel()).toBe('adset')
+    const [written] = upsert.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(written).toMatchObject({ level: 'adset', entity_id: 's1', parent_id: 'c1', video_thruplays: 723, video_p95: 128 })
+  })
+
+  it('withVideo 未开（migration 还没 apply）→ 不带视频 9 列，老列照写', async () => {
+    historyProbe.mockResolvedValue(DEEP_HISTORY)
+    fetchAdsets.mockResolvedValue([{ ...dayRow(), ...VIDEO, adset_id: 's1', adset_name: 'x' }])
+
+    await syncAdsetDailyInsights('client-1', 'act_1', 'tok')
+
+    const [written] = upsert.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(written).not.toHaveProperty('video_thruplays')
+    expect(written).not.toHaveProperty('actions')
+    expect(written).toMatchObject({ level: 'adset', spend: 80, leads: 6 })
+  })
+
+  it('系列级、广告级同样按 withVideo 决定带不带视频列', async () => {
+    historyProbe.mockResolvedValue(DEEP_HISTORY)
+    fetchDaily.mockResolvedValue([{ ...dayRow(), ...VIDEO }])
+    fetchAds.mockResolvedValue([{ ...adRow(), ...VIDEO }])
+
+    await syncCampaignDailyInsights('client-1', 'act_1', 'tok', { withVideo: true })
+    await syncAdDailyInsights('client-1', 'act_1', 'tok')
+
+    const campaignRow = (upsert.mock.calls[0][0] as Array<Record<string, unknown>>)[0]
+    const adRowWritten = (upsert.mock.calls[1][0] as Array<Record<string, unknown>>)[0]
+    expect(campaignRow).toMatchObject({ video_thruplays: 723 })
+    expect(adRowWritten).not.toHaveProperty('video_thruplays')
   })
 })
