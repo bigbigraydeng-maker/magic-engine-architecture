@@ -16,12 +16,13 @@ export function shiftDate(day: string, delta: number): string {
 /** 账户时区某天结束的 UTC 时刻（毫秒）。时区缺失按 UTC。 */
 export function localDayEndUtc(day: string, tz: string | null): number {
   const next = shiftDate(day, 1)
-  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz ?? 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
-  for (let off = -14; off <= 14; off++) {
-    const t = Date.parse(`${next}T00:00:00Z`) - off * 3_600_000
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz ?? 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+  // 按 15 分钟步长找：半小时/45 分钟时区（如 Adelaide +9:30）也要切准（魏征复审）
+  for (let offMin = -14 * 60; offMin <= 14 * 60; offMin += 15) {
+    const t = Date.parse(`${next}T00:00:00Z`) - offMin * 60_000
     const p = fmt.formatToParts(new Date(t))
     const get = (k: string) => p.find(x => x.type === k)?.value
-    if (`${get('year')}-${get('month')}-${get('day')}` === next && get('hour') === '00') return t - 1000
+    if (`${get('year')}-${get('month')}-${get('day')}` === next && get('hour') === '00' && get('minute') === '00') return t - 1000
   }
   return Date.parse(`${day}T23:59:59Z`)
 }

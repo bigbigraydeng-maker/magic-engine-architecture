@@ -45,6 +45,15 @@ export function runDiagnostics(input: DiagnosisInput): DiagnosisRun {
     if (d8) diagnoses.push(d8)
   }
 
+  // 多账户客户：「没配目标单次成本」是客户级的一件事，合并成一条（子牙复审）
+  const targetMissing = diagnoses.filter(d => d.code === 'D3' && d.notComparableReason === 'target_cost_not_configured')
+  if (targetMissing.length > 1) {
+    const [first, ...rest] = targetMissing
+    first.units = targetMissing.flatMap(d => d.units)
+    first.sample = [{ label: '近 7 天有花费的获客/再营销广告组', value: first.units.length }]
+    for (const d of rest) diagnoses.splice(diagnoses.indexOf(d), 1)
+  }
+
   diagnoses.push(...diagnoseClientConfigHealth(input))
   const rank = (d: Diagnosis) => (d.status === 'hit' ? 0 : 1)
   diagnoses.sort((a, b) => rank(a) - rank(b) || a.code.localeCompare(b.code))

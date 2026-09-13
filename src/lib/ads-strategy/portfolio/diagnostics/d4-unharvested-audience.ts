@@ -52,6 +52,11 @@ export function diagnoseUnharvestedAudience(ctx: AccountContext): Diagnosis | nu
     }
   }
 
+  // 没取到任何破冰视频（广告级快照缺失、或破冰用的是图片/复用帖）→ 按 object_id 判不了，不能报「没受众」（子牙/魏征复审）
+  if (videos.size === 0) {
+    return { ...base, status: 'not_comparable', notComparableReason: 'no_video_creatives', title: '攒了人没收割判不了：找不到破冰广告用的视频', evidence: baseEvidence, reasons: ['广告级设置里没有视频 id（快照缺失或不是视频广告）'] }
+  }
+
   if (covering.length === 0) {
     if (pageAudienceRetarget.length > 0) {
       return { ...base, status: 'not_comparable', notComparableReason: 'page_audience_unverifiable', title: '攒了人没收割判不了：再营销用的是主页互动类受众，确认不了是否含视频观众', evidence: { ...baseEvidence, page_audiences: pageAudienceRetarget.join(',') }, reasons: ['按 object_id 匹配不到视频受众'] }
@@ -60,25 +65,28 @@ export function diagnoseUnharvestedAudience(ctx: AccountContext): Diagnosis | nu
       ...base, status: 'hit',
       title: `攒了人没收割：近 7 天破冰花了 ${spend}（${activeDays} 天），但没有任何受众在收看过这些视频的人`,
       evidence: baseEvidence,
-      reasons: ['按视频 object_id 匹配，没有覆盖这些破冰视频的受众'],
+      reasons: ['没有建「看过这些视频的人」这个受众（按视频编号核对，不按名字猜）'],
     }
   }
 
   const harvested = covering.filter(a => retargetingIncludes.has(a.entity_id))
   if (harvested.length > 0) return null
 
-  const young = covering.filter(a => a.audience_created_at && (endOfDay - Date.parse(a.audience_created_at)) / 3_600_000 < D4_AUDIENCE_MIN_AGE_HOURS)
-  if (young.length === covering.length) {
-    return { ...base, status: 'not_comparable', notComparableReason: 'audience_too_new', title: '攒了人没收割判不了：看过视频的受众刚建不到 72 小时', evidence: { ...baseEvidence, newest_audience_created_at: young.map(a => a.audience_created_at).sort().at(-1) ?? null }, reasons: [`受众建成不满 ${D4_AUDIENCE_MIN_AGE_HOURS} 小时`] }
-  }
-  const small = covering.filter(a => (a.audience_count_lower ?? 0) <= D4_AUDIENCE_FLOOR)
-  if (small.length === covering.length) {
+  const isYoung = (a: (typeof covering)[number]) => !!a.audience_created_at && (endOfDay - Date.parse(a.audience_created_at)) / 3_600_000 < D4_AUDIENCE_MIN_AGE_HOURS
+  const isSmall = (a: (typeof covering)[number]) => (a.audience_count_lower ?? 0) <= D4_AUDIENCE_FLOOR
+  // 只有「够老又够大」的覆盖受众没被收割才算命中；一个太新、一个太小也是判不了（魏征复审）
+  const usable = covering.filter(a => !isYoung(a) && !isSmall(a))
+  if (usable.length === 0) {
+    const young = covering.filter(isYoung)
+    if (young.length > 0) {
+      return { ...base, status: 'not_comparable', notComparableReason: 'audience_too_new', title: '攒了人没收割判不了：看过视频的受众刚建不到 72 小时', evidence: { ...baseEvidence, newest_audience_created_at: young.map(a => a.audience_created_at).sort().at(-1) ?? null }, reasons: [`受众建成不满 ${D4_AUDIENCE_MIN_AGE_HOURS} 小时`] }
+    }
     return { ...base, status: 'not_comparable', notComparableReason: 'audience_below_floor', title: '攒了人没收割判不了：受众人数还在 Meta 显示下限（≤1000）', evidence: baseEvidence, reasons: ['人数下限 ≤1000，攒没攒够说不清'] }
   }
   return {
     ...base, status: 'hit',
-    title: `攒了人没收割：看过视频的受众（${covering.length} 个）近 7 天没有再营销组在投`,
-    evidence: { ...baseEvidence, unharvested_audiences: covering.map(a => a.entity_id).join(',') },
+    title: `攒了人没收割：看过这些视频的人已经攒成受众（${usable.length} 个），但近 7 天没有再营销广告在找回他们`,
+    evidence: { ...baseEvidence, unharvested_audiences: usable.map(a => a.entity_id).join(',') },
     reasons: ['受众已存在，但只有「再营销」角色的组才算收割（Advantage+/扩展开着的不算）'],
   }
 }
