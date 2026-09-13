@@ -46,6 +46,63 @@ describe('rankAssetsByPrompt — 小素材库不烧 LLM 调用', () => {
   })
 })
 
+describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选图', () => {
+  it('挑出来的图跟 prompt 零关键词重叠时丢弃,返回空数组（复现 2026-09-14 故宫误配长城）', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // 小素材池(<=topN)分支：只有一张长城照,prompt 问故宫,零重叠。
+    const assets = [asset('great-wall', { vision_metadata: { objects: ['Great Wall', 'mountains', 'fog'], quality_score: 9 } })]
+    const picks = await rankAssetsByPrompt('forbidden city courtyard', assets, 1, { requireConfidentMatch: true })
+    expect(picks).toEqual([])
+  })
+
+  it('挑出来的图跟 prompt 有关键词重叠时正常返回', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    const assets = [asset('palace', { vision_metadata: { objects: ['palace', 'lion statue'], quality_score: 8 } })]
+    const picks = await rankAssetsByPrompt('forbidden city palace courtyard', assets, 1, { requireConfidentMatch: true })
+    expect(picks.map((p) => p.id)).toEqual(['palace'])
+  })
+
+  it('不开 requireConfidentMatch 时保持原样,零重叠也照样返回（人工选图界面靠这个看"最接近的几张"）', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    const assets = [asset('great-wall', { vision_metadata: { objects: ['Great Wall'], quality_score: 9 } })]
+    const picks = await rankAssetsByPrompt('forbidden city courtyard', assets, 1)
+    expect(picks.map((p) => p.id)).toEqual(['great-wall'])
+  })
+
+  it('大素材池、真正走 LLM 排序分支时,LLM 选出的图跟 prompt 零重叠照样会被过滤（复现 2026-09-14 真实故障链路：素材池里明明有 palace 那张对的图,LLM 却选了 great-wall）', async () => {
+    vi.resetModules()
+    vi.doMock('@/lib/ai/openai-client', () => ({
+      getOpenAIClient: () => ({
+        chat: {
+          completions: {
+            create: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      picks: [{ id: 'great-wall', reason: '长城雾景符合古代遗迹氛围' }],
+                    }),
+                  },
+                },
+              ],
+            }),
+          },
+        },
+      }),
+    }))
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // pool 长度(3) > topN(1),强制走 rankWithLlm,不是小池分支。
+    const assets = [
+      asset('great-wall', { vision_metadata: { objects: ['Great Wall', 'mountains', 'fog'], quality_score: 9 } }),
+      asset('palace', { vision_metadata: { objects: ['palace', 'lion statue'], quality_score: 8 } }),
+      asset('other', { vision_metadata: { objects: ['skyline'], quality_score: 7 } }),
+    ]
+    const picks = await rankAssetsByPrompt('forbidden city courtyard', assets, 1, { requireConfidentMatch: true })
+    expect(picks).toEqual([])
+    vi.doUnmock('@/lib/ai/openai-client')
+  })
+})
+
 describe('rankAssetsByPrompt — LLM 调用失败时降级关键词兜底', () => {
   beforeEach(() => {
     vi.resetModules()
