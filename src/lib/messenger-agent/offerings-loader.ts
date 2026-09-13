@@ -26,58 +26,90 @@ import { z } from 'zod'
 // ─── Schema ─────────────────────────────────────────────────────────────────
 
 /**
- * Accepts any string `Date.parse` can parse (plain "2026-11-16" dates and full
- * ISO instants alike) — offerings.yaml is hand-edited by non-engineers, so we
- * validate parseability rather than forcing one exact ISO format.
+ * Accepts ISO 8601 dates/timestamps (plain "2026-11-16" dates and full ISO
+ * instants alike) — offerings.yaml is hand-edited by non-engineers, so typos
+ * are expected. `Date.parse` alone is not enough: Node normalizes
+ * out-of-range days (e.g. "2026-02-30" silently becomes March 2), which would
+ * let a nonexistent departure date reach the fact layer and be quoted to a
+ * customer. This re-checks the year/month/day round-trip through
+ * `Date.UTC` to reject calendar dates that don't actually exist.
  */
-const dateLikeString = z.string().min(1).refine((value) => !Number.isNaN(Date.parse(value)), {
-  message: 'must be a valid date (e.g. "2026-11-16" or an ISO 8601 timestamp)',
+const dateLikeString = z.string().min(1).refine((value) => {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!match) return false
+  if (Number.isNaN(Date.parse(value))) return false
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const roundTrip = new Date(Date.UTC(year, month - 1, day))
+  return (
+    roundTrip.getUTCFullYear() === year &&
+    roundTrip.getUTCMonth() === month - 1 &&
+    roundTrip.getUTCDate() === day
+  )
+}, {
+  message:
+    'must be a valid calendar date in ISO format (e.g. "2026-11-16" or an ISO 8601 timestamp) — dates that do not exist (e.g. "2026-02-30") are rejected',
 })
 
-export const ActiveTourSchema = z.object({
-  code: z.string().min(1),
-  name: z.string().min(1),
-  aliases: z.array(z.string()).default([]),
-  price_nzd: z.number().positive(),
-  departure_dates: z.array(dateLikeString).min(1),
-  nights: z.number().int().positive(),
-  itinerary_url: z.string().url(),
-  highlights: z.array(z.string()).default([]),
-})
+// Every object schema below is `.strict()` (Codex review, PR #1626): a plain
+// z.object() silently drops unknown keys and lets a missing real field fall
+// back to its `.default([])`. A hand-edited YAML typo like `retired_tour:`
+// instead of `retired_tours:` would then parse "successfully" with an empty
+// retired list — silently erasing the exact safety data this file exists to
+// hold — instead of failing CI the way the loader tests already claim it does.
 
-export const RetiredTourSchema = z.object({
-  code: z.string().min(1),
-  name: z.string().min(1),
-  aliases: z.array(z.string()).default([]),
-  retired_reason: z.string().min(1),
-  /**
-   * True when the marketing page for a retired tour is still live on the
-   * client's website — the exact trap that caused Meta's AI to misreport a
-   * retired tour as bookable. Optional because it may be unknown/unverified
-   * at the time an entry is added.
-   */
-  still_visible_on_website: z.boolean().optional(),
-})
+export const ActiveTourSchema = z
+  .object({
+    code: z.string().min(1),
+    name: z.string().min(1),
+    aliases: z.array(z.string()).default([]),
+    price_nzd: z.number().positive(),
+    departure_dates: z.array(dateLikeString).min(1),
+    nights: z.number().int().positive(),
+    itinerary_url: z.string().url(),
+    highlights: z.array(z.string()).default([]),
+  })
+  .strict()
 
-export const OfferingsFileSchema = z.object({
-  active_tours: z.array(ActiveTourSchema).default([]),
-  retired_tours: z.array(RetiredTourSchema).default([]),
-  /** Hard facts the reply agent may state verbatim (company history, visa rules, etc). */
-  factual_bullets: z.array(z.string()).default([]),
-  /**
-   * Topics the reply agent must never answer directly, independent of
-   * `master_briefs.excluded_topics` (that field is about content/brand voice,
-   * this one is about what the Governed Reply Agent is allowed to say at all).
-   */
-  reply_forbidden_topics: z.array(z.string()).default([]),
-  /**
-   * When this file was last checked against reality. Kept as a plain string
-   * (not auto-generated) so PM/FDE editing the YAML by hand can see and update
-   * it directly. A downstream daily-todo reminder (Issue O) flags this file
-   * once it is more than 7 days old — this loader only exposes the field.
-   */
-  last_verified_at: dateLikeString,
-})
+export const RetiredTourSchema = z
+  .object({
+    code: z.string().min(1),
+    name: z.string().min(1),
+    aliases: z.array(z.string()).default([]),
+    retired_reason: z.string().min(1),
+    /**
+     * True when the marketing page for a retired tour is still live on the
+     * client's website — the exact trap that caused Meta's AI to misreport a
+     * retired tour as bookable. Optional because it may be unknown/unverified
+     * at the time an entry is added.
+     */
+    still_visible_on_website: z.boolean().optional(),
+  })
+  .strict()
+
+export const OfferingsFileSchema = z
+  .object({
+    active_tours: z.array(ActiveTourSchema).default([]),
+    retired_tours: z.array(RetiredTourSchema).default([]),
+    /** Hard facts the reply agent may state verbatim (company history, visa rules, etc). */
+    factual_bullets: z.array(z.string()).default([]),
+    /**
+     * Topics the reply agent must never answer directly, independent of
+     * `master_briefs.excluded_topics` (that field is about content/brand voice,
+     * this one is about what the Governed Reply Agent is allowed to say at all).
+     */
+    reply_forbidden_topics: z.array(z.string()).default([]),
+    /**
+     * When this file was last checked against reality. Kept as a plain string
+     * (not auto-generated) so PM/FDE editing the YAML by hand can see and update
+     * it directly. A downstream daily-todo reminder (Issue O) flags this file
+     * once it is more than 7 days old — this loader only exposes the field.
+     */
+    last_verified_at: dateLikeString,
+  })
+  .strict()
 
 export type ActiveTour = z.infer<typeof ActiveTourSchema>
 export type RetiredTour = z.infer<typeof RetiredTourSchema>

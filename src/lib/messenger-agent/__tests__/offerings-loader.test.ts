@@ -184,6 +184,71 @@ describe('OfferingsFileSchema — invalid input is rejected', () => {
       OfferingsFileSchema.parse({ last_verified_at: 'sometime last week' }),
     ).toThrow()
   })
+
+  it('rejects a departure date that is not a real calendar date (e.g. Feb 30)', () => {
+    expect(() =>
+      OfferingsFileSchema.parse({
+        active_tours: [
+          {
+            code: 'x',
+            name: 'X',
+            price_nzd: 100,
+            departure_dates: ['2026-02-30'],
+            nights: 1,
+            itinerary_url: 'https://example.com/x',
+          },
+        ],
+        last_verified_at: '2026-09-13',
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a last_verified_at that is not a real calendar date', () => {
+    expect(() =>
+      OfferingsFileSchema.parse({ last_verified_at: '2026-13-01' }),
+    ).toThrow()
+  })
+
+  describe('strict schemas reject unknown/typo-d keys (Codex review, PR #1626)', () => {
+    it('rejects a typo-d top-level key (retired_tour instead of retired_tours) instead of silently defaulting it to []', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          retired_tour: [{ code: 'x', name: 'X', retired_reason: 'gone' }],
+          last_verified_at: '2026-09-13',
+        }),
+      ).toThrow()
+    })
+
+    it('rejects an unknown key on an active tour entry', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          active_tours: [
+            {
+              code: 'x',
+              name: 'X',
+              price_nzd: 100,
+              departure_dates: ['2026-11-16'],
+              nights: 1,
+              itinerary_url: 'https://example.com/x',
+              pric: 100, // typo'd duplicate of price_nzd
+            },
+          ],
+          last_verified_at: '2026-09-13',
+        }),
+      ).toThrow()
+    })
+
+    it('rejects an unknown key on a retired tour entry', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          retired_tours: [
+            { code: 'x', name: 'X', retired_reason: 'gone', still_visable_on_website: true },
+          ],
+          last_verified_at: '2026-09-13',
+        }),
+      ).toThrow()
+    })
+  })
 })
 
 describe('loadOfferings — caching', () => {
