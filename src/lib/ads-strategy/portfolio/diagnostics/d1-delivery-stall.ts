@@ -105,7 +105,7 @@ export function diagnoseDeliveryStall(ctx: AccountContext, evaluatedAt: string):
   const priorMedian = round2(median(prior))
 
   // 只认评估日结束时仍在投的单位（2026-09-14 魏征复审：当天花过钱、后来被暂停的不算——那是主动停投不是卡住）
-  const live = ctx.budgetUnits.filter(u => isDelivering(u.level === 'campaign' ? ctx.campaigns.get(u.id) : ctx.adsets.get(u.id)))
+  const live = ctx.allBudgetUnits.filter(u => isDelivering(u.level === 'campaign' ? ctx.campaigns.get(u.id) : ctx.adsets.get(u.id)))
   const dailyBudget = round2(live.reduce((s, u) => s + (minorToMajor(u.dailyBudgetMinor) ?? 0), 0))
   // 「当天有预算剩余」是命中前提：没有在投单位 / 读不到任何日预算 → 不判
   if (live.length === 0) return null

@@ -129,6 +129,41 @@ describe('D1 复审补测', () => {
   })
 })
 
+describe('第二轮核验补测', () => {
+  const ctsSnaps = () => replaySnapshots({ fixture: CTS, clientId: 'c', asOfIso: '2026-09-13T11:59:59Z', date: '2026-09-13', daily: ctsDaily, activities: ctsActivities as ActivityRow[] })
+
+  it('🔴 N1：账户里有 Meta 实验在跑时，投放卡住不能漏报（花费和预算都要算上实验单位）', () => {
+    // 派生：复制 CTS 顶层 ThruPlay 组（同预算、同日花费、同小时花费）为第二个组，并挂上真实实验形状
+    const src = ctsSnaps().find(s => s.entity_id === '52549857906273')!
+    const twin = { ...src, entity_id: 'derived-twin', ad_studies: study('2026-09-10T00:00:00+0000', '2026-09-20T00:00:00+0000') }
+    const daily = [...ctsDaily, ...ctsDaily.filter(r => r.entity_id === '52549857906273').map(r => ({ ...r, entity_id: 'derived-twin' }))]
+    const hourly = Object.fromEntries(Object.entries(ctsHourly).map(([d, rows]) => [d, [...rows, ...rows.map(h => ({ ...h, adset_id: 'derived-twin' }))]]))
+    const acc = accountInput({ fixture: CTS, snapshots: [...ctsSnaps(), twin], daily, hourly, lastInsightDate: '2026-09-13' })
+    const d1 = run(acc, '2026-09-13', '2026-09-14T03:00:00Z', LEAD).diagnoses.find(d => d.code === 'D1')
+    expect(d1).toMatchObject({ status: 'hit', evidence: expect.objectContaining({ daily_budget: 120, budget_remaining: 46.44 }) })
+  })
+
+  it('夜里停得比下午长（0–6 点 6 小时 vs 14–17 点 3 小时）→ 仍报下午那段', () => {
+    // 派生：9/13 真实行去掉 0–5 点；17 点后补回 9/12 同小时真实行，下午缺口只剩 14–17 点
+    const hours = [...ctsHourly['2026-09-13'].filter(h => h.hour >= 6), ...ctsHourly['2026-09-12'].filter(h => h.hour >= 17)]
+    const acc = accountInput({ fixture: CTS, snapshots: ctsSnaps(), daily: ctsDaily, hourly: { ...ctsHourly, '2026-09-13': hours }, lastInsightDate: '2026-09-13' })
+    const d1 = run(acc, '2026-09-13', '2026-09-14T03:00:00Z', LEAD).diagnoses.find(d => d.code === 'D1')
+    expect(d1).toMatchObject({ status: 'hit', evidence: expect.objectContaining({ stall_start_hour: 14, stall_hours: 3 }) })
+  })
+
+  it('D5 显著性闸：占比差够（WhatsApp 系列 30% 的钱 → 45.5% 开聊，差 0.155）但样本只有 11 次开聊（p≈0.32）→ 不报', () => {
+    // 派生：评估窗口里只保留 9/11 当天的真实行
+    const oneDay = nalDaily.filter(r => r.insight_date < '2026-09-07' || r.insight_date === '2026-09-11')
+    const r = run(nalAcc(nalSnaps('2026-09-13', '2026-09-13T09:00:00Z'), '2026-09-13', oneDay), '2026-09-13', '2026-09-13T09:00:00Z', { ...MSG, minPrimaryPerUnit: 1 })
+    expect(r.diagnoses.filter(d => d.code === 'D5' && d.status === 'hit')).toEqual([])
+  })
+
+  it('空账户（没有系列、窗口里没有花费）→ 不报「诊断缺数据」', () => {
+    const r = run(nalAcc([], '2026-09-13', []), '2026-09-13', '2026-09-13T09:00:00Z', MSG)
+    expect(r.diagnoses.find(d => d.code === 'D7' && d.title.includes('缺数据'))).toBeUndefined()
+  })
+})
+
 describe('D4 复审补测', () => {
   it('🔴 广告级快照缺失（找不到破冰视频）→ not_comparable，不报「没受众」', () => {
     const snaps = nalSnaps('2026-09-13', '2026-09-13T09:00:00Z').filter(s => s.level !== 'ad')
