@@ -22,7 +22,19 @@
  * 但少数会话挂不上人（该渠道身份还合并不到任何人，比如只在 FB 聊过、从没留过
  * 电话邮箱）—— 这时没有 `contacts` 行可查，只能退回查这条会话自己的
  * `conversations.optout_unlinked` 兜底列（issue #1574 新增，**不经过任何缓存**，
- * 直查这一条会话，因为它天生就是会话级、不是人级的判断）。
+ * 直查这一条会话，因为它天生就是会话级、不是人级的判断）。`optout_unlinked`
+ * 一旦立起来，即使之后身份解析补上了 `contact_id`（`link-contacts.ts` 会做
+ * 这件事）也继续拦，不会被新联系人一张干净的 DNC 状态覆盖（Codex 复审）。
+ *
+ * 🔴 **已知的真实缺口，未在本 issue 修**：`optout_unlinked` 目前没有对应的
+ * 撤销入口——现成的 `/dnc` 纠正路由只处理 `contacts` 表，不认识这个会话级
+ * 兜底列，全仓也没有任何生产路径会清除它（Codex 复审第 4 轮指出）。如果这个
+ * 关键词判定命中错了（比如客户是在问退订政策，不是真退订），而这条会话又
+ * 恰好挂不上联系人，目前**没有任何界面能把它改回来**。这跟 v3 方案"opt-out
+ * 必须可撤销"这条原则冲突，但这个兜底路径本身只在身份解析失败这种边角场景
+ * 触发，修好需要给这一列加时间戳 + 扩展 `/dnc` 路由认会话级纠正（或单独开一个
+ * 入口），属于新增界面/接口能力，不是这个文件内部能补的一行代码，留给后续
+ * issue 处理，不能假装这个缺口不存在。
  *
  * ## IDOR 闸：`client_id` 只认会话自己带的，不接受外部传入
  *
@@ -64,12 +76,19 @@ import { isDoNotContact, dncClearedAt, type DncTouch } from '@/lib/crm/dnc'
 const OPT_OUT_KEYWORDS_EN = new Set(['stop', 'unsubscribe'])
 const OPT_OUT_KEYWORDS_ZH = new Set(['退订', '取消关注'])
 
-/** 两边的标点/空白都不算数：「STOP.」「退订!」「  stop  」都要认出来。 */
+/**
+ * 两边的标点/空白都不算数：「STOP.」「退订!」「  stop  」「(STOP)」「STOP:」
+ * 「"退订"」都要认出来。用 Unicode 标点类别 `\p{P}`（涵盖引号/括号/冒号/分号/
+ * 破折号等，不是只列举中英文里想到的那几个符号）而不是手写字符白名单——
+ * Codex 复审指出手写清单漏了括号/冒号/分号/引号这类客户很自然会用的包装符号，
+ * 之前的写法会让「(STOP)」「STOP:」这类明确的退订指令因为没剥干净标点而匹配
+ * 不上，继续给已经明确表示退订的客户发消息。
+ */
 function normalizeForKeywordMatch(text: string): string {
   return text
     .trim()
     .toLowerCase()
-    .replace(/^[\s.,!?~。，！？～、]+|[\s.,!?~。，！？～、]+$/g, '')
+    .replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '')
 }
 
 /**
@@ -354,9 +373,14 @@ export async function recordOptOutKeywordTouch(
     throw new Error(`更新 contacts.do_not_contact 失败: ${updateErr.message}`)
   }
 
-  // 回验：写完这一刻再看一眼有没有更晚的人工纠正在检查和写入之间插了进来。
-  // 有就立刻纠正回去 —— 不是完整的事务隔离，但把「镜像列错误地卡在 true」
-  // 的窗口从无限期收窄到这次调用内自愈（见函数头部注释）。
+  // 回验：写完这一刻再看一眼有没有别的事件在检查和写入之间插了进来。
+  // 有就把镜像列纠正成**全部触点算出来的最终判决**，不是无条件设 false ——
+  // Codex 复审指出的反例：如果插进来的不只是一条 dnc_cleared，而是
+  // 「先纠正、又来了一条更新的退订」，无条件写 false 会让镜像跟最新判决
+  // 正好相反（客户其实又退订了，镜像却说没退订）。用 isDoNotContact()
+  // 重新算一遍——跟全仓判「这个人还能不能联系」用的是同一份逻辑，不会出现
+  // 「这里判的和 dnc.ts 判的不一致」这第二套标准。不是完整的事务隔离，但把
+  // 「镜像列卡在错误值」的窗口从无限期收窄到这次调用内自愈（见函数头部注释）。
   const { data: recheckTouches, error: recheckErr } = await supabase
     .from('contact_touchpoints')
     .select('occurred_at, metadata')
@@ -374,12 +398,21 @@ export async function recordOptOutKeywordTouch(
         }
       },
     )
-    if (dncClearedAt(recheckDncTouches) > persistedOccurredAtMs) {
-      await supabase
-        .from('contacts')
-        .update({ do_not_contact: false })
-        .eq('id', contactId)
-        .eq('client_id', clientId)
+    // 只要有任何一条触点比这次写入时用的时间还晚，说明有并发事件插了进来，
+    // 镜像列该以「全部触点重新算出来的最终判决」为准，而不是只看有没有更晚
+    // 的 dnc_cleared——那样会漏掉「纠正之后又有更新退订」这种情况。
+    const somethingNewerHappened = recheckDncTouches.some(
+      (t) => new Date(t.occurredAt).getTime() > persistedOccurredAtMs,
+    )
+    if (somethingNewerHappened) {
+      const finalVerdict = isDoNotContact(true, recheckDncTouches)
+      if (finalVerdict !== true) {
+        await supabase
+          .from('contacts')
+          .update({ do_not_contact: finalVerdict })
+          .eq('id', contactId)
+          .eq('client_id', clientId)
+      }
     }
   }
   // 回验查询本身失败：不额外抛错阻断主流程（镜像列的写入已经成功且方向

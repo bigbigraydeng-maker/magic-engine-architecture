@@ -64,6 +64,18 @@ describe('isOptOutKeyword', () => {
     // @ts-expect-error 故意传非法类型，验证防御性写法
     expect(isOptOutKeyword(null)).toBe(false)
   })
+
+  describe('包着常见包装标点的独立指令（Codex 复审第 4 轮）', () => {
+    it.each([
+      ['(STOP)', '括号包住'],
+      ['STOP:', '冒号收尾'],
+      ['"STOP"', '双引号包住'],
+      ['退订；', '中文分号收尾'],
+      ['「退订」', '中文引号包住'],
+    ])('%s（%s）→ true', (text) => {
+      expect(isOptOutKeyword(text)).toBe(true)
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -217,10 +229,20 @@ describe('recordOptOutKeywordTouch', () => {
   /**
    * `existingTouchpoints`：这个联系人「已经存在」的触点（不含本次要写的这一条）——
    * 用来模拟「写镜像列之前，先看一眼有没有更晚的人工纠正」这一步查到的数据。
+   *
+   * `recheckTouchpoints`（可选）：写完之后**第二次**查触点表时应该看到的数据——
+   * 不传就跟第一次一样（默认没有并发变化）。传了就能模拟「两次查询之间有别的
+   * 事件插了进来」这个 TOCTOU 缩窗场景（Codex 复审第 3 轮）。
+   *
+   * 实测：这个假数据源只实现 `optout.ts` 真正调用到的
+   * `from/select/eq/upsert/update` 这几个方法名，调用形状已经在
+   * `optout.integration.pg.test.ts` 里对真实 Postgres 跑过一遍确认一致，
+   * 不是凭空猜的接口。
    */
-  function makeWritableFake(existingTouchpoints: Row[] = []) {
+  function makeWritableFake(existingTouchpoints: Row[] = [], recheckTouchpoints?: Row[]) {
     const inserted: Row[] = []
     const updates: Row[] = []
+    let selectCallCount = 0
     const supabase = {
       from: (table: string) => {
         if (table === 'contact_touchpoints') {
@@ -234,10 +256,14 @@ describe('recordOptOutKeywordTouch', () => {
               }
             },
             select: () => {
+              selectCallCount += 1
+              const isRecheck = selectCallCount > 1
+              const rows =
+                isRecheck && recheckTouchpoints !== undefined ? recheckTouchpoints : existingTouchpoints
               const builder: Record<string, unknown> = {}
               builder.eq = () => builder
               ;(builder as { then: PromiseLike<unknown>['then'] }).then = (resolve, reject) =>
-                Promise.resolve({ data: existingTouchpoints, error: null }).then(resolve, reject)
+                Promise.resolve({ data: rows, error: null }).then(resolve, reject)
               return builder
             },
           }
@@ -352,6 +378,67 @@ describe('recordOptOutKeywordTouch', () => {
       supabase,
     )
     expect(updates).toEqual([{ do_not_contact: true }])
+  })
+
+  describe('写完之后回验（TOCTOU 缩窗，Codex 复审第 3/4 轮）', () => {
+    it('写入 true 之后，回验发现两次查询之间多了一条更晚的人工纠正 → 补偿纠正回 false', async () => {
+      const { supabase, updates } = makeWritableFake(
+        [], // 第一次查（写入前）：什么都没有，正常判 post_sale/写 true
+        [
+          // 第二次查（写入后的回验）：多了一条比写入时间还晚的人工纠正。
+          {
+            occurred_at: '2026-09-13T00:05:00Z',
+            metadata: { outcome: 'dnc_cleared', do_not_contact: false },
+          },
+        ],
+      )
+      await recordOptOutKeywordTouch(
+        {
+          clientId: CLIENT_A,
+          contactId: CONTACT,
+          channel: 'messenger',
+          conversationId: CONVO,
+          messageId: 'msg-1',
+          occurredAt: '2026-09-13T00:00:00Z',
+        },
+        supabase,
+      )
+      // 第一次是主流程写 true，第二次是回验发现纠正后补偿写 false。
+      expect(updates).toEqual([{ do_not_contact: true }, { do_not_contact: false }])
+    })
+
+    it('回验发现「先纠正、又有更新的真实退订」→ 最终判决仍是 true，不能被无脑冲成 false（Codex 复审第 4 轮反例）', async () => {
+      const { supabase, updates } = makeWritableFake(
+        [],
+        [
+          {
+            occurred_at: '2026-09-13T00:05:00Z',
+            metadata: { outcome: 'dnc_cleared', do_not_contact: false },
+          },
+          // 纠正之后又来了一条更新的真实退订判词——最终判决应该是「退订」，
+          // 不是「没退订」。旧写法（只看有没有更晚的 dnc_cleared 就无条件写
+          // false）会在这里判错。
+          {
+            occurred_at: '2026-09-13T00:10:00Z',
+            metadata: { outcome: 'do_not_contact', do_not_contact: true },
+          },
+        ],
+      )
+      await recordOptOutKeywordTouch(
+        {
+          clientId: CLIENT_A,
+          contactId: CONTACT,
+          channel: 'messenger',
+          conversationId: CONVO,
+          messageId: 'msg-1',
+          occurredAt: '2026-09-13T00:00:00Z',
+        },
+        supabase,
+      )
+      // 主流程写了一次 true；回验算出最终判决仍是 true，跟镜像列当前值一致，
+      // 不需要再补一次写——只应该有主流程那一次 update。
+      expect(updates).toEqual([{ do_not_contact: true }])
+    })
   })
 
   it('触点写入失败 → 抛错，不去动镜像列', async () => {
