@@ -24,11 +24,49 @@ interface Row {
 /** 旅游行业判据里的关键词清单，直接复用 `TOURISM_POST_SALE_POLICY`，不再自己维护一份副本。 */
 const KEYWORDS = TOURISM_POST_SALE_POLICY.postSaleKeywords
 
-/** 从实现拼出的 `.or()` 过滤表达式（`body.ilike.%kw1%,body.ilike.%kw2%`）里还原关键词列表。 */
+/**
+ * 关键词现在整体加引号转义（`body.ilike."%kw%"`），引号内可能含原样的逗号 /
+ * 括号，不能再直接 `.split(',')` —— 按是否在引号内手动切分子句。
+ */
+function splitOrClauses(filterExpr: string): string[] {
+  const clauses: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < filterExpr.length; i++) {
+    const ch = filterExpr[i]
+    if (ch === '\\' && inQuotes) {
+      current += ch + (filterExpr[i + 1] ?? '')
+      i += 1
+      continue
+    }
+    if (ch === '"') {
+      inQuotes = !inQuotes
+      current += ch
+      continue
+    }
+    if (ch === ',' && !inQuotes) {
+      clauses.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current) clauses.push(current)
+  return clauses
+}
+
+/** 反转实现里的两层转义（ilike 通配符层 + PostgREST 引号层），还原成原始关键词。 */
+function unescapeIlikeValue(clause: string): string | undefined {
+  const match = clause.match(/^body\.ilike\."%([\s\S]*)%"$/)
+  if (!match) return undefined
+  // PostgREST 引号解析和 ilike 默认转义字符都是「反斜杠吃掉下一个字符」，两层各还原一次。
+  return match[1].replace(/\\(.)/g, '$1').replace(/\\(.)/g, '$1')
+}
+
+/** 从实现拼出的 `.or()` 过滤表达式里还原关键词列表。 */
 function keywordsFromOrFilter(filterExpr: string): string[] {
-  return filterExpr
-    .split(',')
-    .map((clause) => clause.match(/^body\.ilike\.%(.*)%$/)?.[1])
+  return splitOrClauses(filterExpr)
+    .map(unescapeIlikeValue)
     .filter((kw): kw is string => kw !== undefined)
 }
 
@@ -172,6 +210,35 @@ describe('classifyConversation', () => {
         postSaleSpanMs: 30 * 24 * 60 * 60 * 1000,
       }
       await expect(classifyConversation(CONVO, realEstatePolicy)).resolves.toBe('lead_intake')
+    })
+  })
+
+  describe('policy 关键词含 PostgREST / ilike 特殊字符（Codex 复审 P2）', () => {
+    it('关键词含逗号、括号、双引号仍能正确拼过滤表达式并命中', async () => {
+      const body = '好的，我已确认(订单号 A1"B)，谢谢'
+      stubMessages([{ body, sent_at: iso(0) }])
+      const policy = {
+        postSaleKeywords: ['已确认(订单号 A1"B)'],
+        postSaleSpanMs: 30 * 24 * 60 * 60 * 1000,
+      }
+      await expect(classifyConversation(CONVO, policy)).resolves.toBe('post_sale')
+    })
+
+    it('关键词含 % / _ 只当字面量匹配，不当通配符误判', async () => {
+      // 正文里出现的是任意字符夹在中间，如果 % / _ 被当通配符会误命中；
+      // 只有正文里出现字面量 "50%_off" 才应该判 post_sale。
+      stubMessages([{ body: '随便什么内容都不该命中', sent_at: iso(0) }])
+      const policy = {
+        postSaleKeywords: ['50%_off'],
+        postSaleSpanMs: 30 * 24 * 60 * 60 * 1000,
+      }
+      await expect(classifyConversation(CONVO, policy)).resolves.toBe('lead_intake')
+    })
+
+    it('空关键词数组不抛错，也不会生成无效的 .or(\'\')', async () => {
+      stubMessages([{ body: '你好，请问有没有团期', sent_at: iso(0) }])
+      const policy = { postSaleKeywords: [], postSaleSpanMs: 30 * 24 * 60 * 60 * 1000 }
+      await expect(classifyConversation(CONVO, policy)).resolves.toBe('lead_intake')
     })
   })
 

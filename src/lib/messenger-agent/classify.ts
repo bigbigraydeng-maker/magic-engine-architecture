@@ -69,13 +69,33 @@ interface EdgeMessageRow {
   sent_at: string
 }
 
-/** 关键词命中判断交给数据库端做（`.or()` + `ilike`），这里只拼过滤表达式。 */
-function buildKeywordOrFilter(keywords: string[]): string {
-  return keywords.map((kw) => `body.ilike.%${kw}%`).join(',')
+/**
+ * 单个关键词按 PostgREST 引号转义规则整体加引号，避免 `,` `(` `)` 等字符被
+ * 当成 `.or()` 的子句分隔符 / 分组符拆开、或双引号打断值本身；同时按 ilike
+ * 默认转义字符（反斜杠）转义 `%` `_` 通配符，避免误判命中（关键词里的原始
+ * 反斜杠也要先转义，否则会被当成转义符吃掉后面的字符）。
+ * 两层转义顺序不能反：先转 ilike 通配符，再转 PostgREST 引号层的反斜杠 / 双引号
+ * ——PostgREST 解析引号内容时，`\\` 还原成 `\`、`\"` 还原成 `"`，其余字符原样
+ * 传到数据库，所以里层转义产生的反斜杠必须在外层再转义一次才能保真传到底。
+ */
+function escapeIlikeKeyword(keyword: string): string {
+  const wildcardEscaped = keyword.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+  const quoteEscaped = wildcardEscaped.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  return `"%${quoteEscaped}%"`
 }
 
-/** 只问「存在不存在」，`limit(1)` 保证不管命中多少行都只搬 1 行回来。 */
+/** 关键词命中判断交给数据库端做（`.or()` + `ilike`），这里只拼过滤表达式。 */
+function buildKeywordOrFilter(keywords: string[]): string {
+  return keywords.map((kw) => `body.ilike.${escapeIlikeKeyword(kw)}`).join(',')
+}
+
+/**
+ * 只问「存在不存在」，`limit(1)` 保证不管命中多少行都只搬 1 行回来。
+ * 空关键词数组直接判「没命中」—— `.or('')` 是无效的 PostgREST 过滤表达式。
+ */
 async function hasPostSaleKeyword(conversationId: string, keywords: string[]): Promise<boolean> {
+  if (keywords.length === 0) return false
+
   const { data, error } = await supabaseAdmin
     .from('conversation_messages')
     .select('id')
