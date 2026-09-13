@@ -26,16 +26,24 @@
 #   - All `aliases` are agent-guessed customer phrasing, not sourced from the
 #     website or from PM/FDE. The issue recommended generating aliases with
 #     two independent agents and merging by hand; this draft only used one.
-#   - The three `retired_tours` entries are the three tours this issue named
-#     as "known retired tours". WebFetching their live detail pages today
-#     found all three still shown as bookable, with real 2027 prices and
-#     departure dates, and no retirement/sold-out notice on two of them.
-#     This directly contradicts "retired" — see each entry's `retired_reason`
-#     for the specific evidence, and see the PR description. Do not treat
-#     these three as confirmed retired until PM/FDE resolves this.
 #   - `reply_forbidden_topics` is an agent-drafted default list based on
 #     general travel-agency good practice, not something CTS or PM supplied.
 #     It needs PM/FDE sign-off before the Verifier layer enforces it.
+#
+# ── 2026-09-13 PM resolution on the 3 "known retired" tours ────────────────
+# Issue #1577 named Silk Road Discovery / A Tale of Two Cities / Shanghai &
+# Surroundings as the tours Meta's AI had wrongly reported as bookable. Live
+# WebFetch found all three still bookable with real 2027 pricing/dates. PM
+# confirmed (2026-09-13): these are genuine current tours — only their 2026
+# departure had sold out, not the tour itself. Moved to `active_tours` below
+# with real 2027 data (nights/highlights independently re-fetched from each
+# live page, not carried over from guesses). `retired_tours` is intentionally
+# empty for now — CTS has no currently-known discontinued tour on file. The
+# underlying incident (Meta's AI trusting stale/cached site info instead of
+# real-time inventory) is still the reason this whole system exists; it just
+# means the *next* wrongly-reported tour could be any tour, not only these
+# three — the Verifier's number/date-claim gates (not just the retired-tour
+# gate) are what actually protect against that.
 
 active_tours:
   - code: golden-china
@@ -115,47 +123,72 @@ active_tours:
       - "Hangzhou West Lake boat tour and Longjing tea plantation"
       - "Shanghai: Yuyuan Garden, the Bund, Nanjing Road"
 
-retired_tours:
   - code: silk-road-discovery
-    name: "Silk Road Discovery"
+    name: "China Signature — Silk Road"
     aliases:
       - "Silk Road"
+      - "Silk Road Discovery"
       - "China Signature — Silk Road"
-    retired_reason: >-
-      PM's CTS Governed Reply v3 plan lists this as a known retired tour.
-      UNVERIFIED / CONFLICT: 2026-09-13 WebFetch of
-      ctstours.co.nz/tours/china/signature/silk-road shows a same/similar-named
-      tour still live and bookable — NZD $7,999, departures 2027-05-13 and
-      2027-10-21, no retirement or sold-out notice, listed under "Signature"
-      rather than "Discovery". Needs PM/FDE to confirm whether this is the
-      same tour (relisted?), a renamed successor, or a different product.
-    still_visible_on_website: true
+    price_nzd: 7999
+    departure_dates:
+      - "2027-05-13"
+      - "2027-10-21"
+    nights: 15
+    itinerary_url: "https://www.ctstours.co.nz/tours/china/signature/silk-road"
+    highlights:
+      - "Terracotta Warriors of Xi'an"
+      - "1,700-year-old Buddhist cave murals at the Mogao Caves, Dunhuang"
+      - "Zhangye Danxia rainbow rock formations"
+      - "Alpine boat cruise on Tianshan Tianchi lake beneath snow peaks"
+      - "Turpan's Flaming Mountains and Bezeklik Thousand Buddha Caves"
+      - "Jiayuguan Fort and the hanging Great Wall at the western end of the Ming Wall"
 
   - code: tale-of-two-cities
-    name: "A Tale of Two Cities"
+    name: "China Discovery — A Tale of Two Cities"
     aliases:
-      - "China Discovery — A Tale of Two Cities"
-    retired_reason: >-
-      PM's CTS Governed Reply v3 plan lists this as a known retired tour.
-      UNVERIFIED / CONFLICT: 2026-09-13 WebFetch of
-      ctstours.co.nz/tours/china/discovery/beijing-xian shows this tour still
-      live and bookable — NZD $3,480, departures 2027-03-18 and 2027-06-10
-      open (only the Oct 2026 departure is marked sold out). No retirement
-      notice. Needs PM/FDE to confirm current status.
-    still_visible_on_website: true
+      - "A Tale of Two Cities"
+      - "Beijing Xi'an tour"
+    price_nzd: 3480
+    departure_dates:
+      - "2027-03-18"
+      - "2027-06-10"
+    nights: 7
+    itinerary_url: "https://www.ctstours.co.nz/tours/china/discovery/beijing-xian"
+    highlights:
+      - "500-year-old Temple of Heaven and its imperial gardens"
+      - "Tian'anmen Square, the world's largest public square"
+      - "The Forbidden City, 500 years of imperial residence"
+      - "The Great Wall of China"
+      - "Beijing Olympic Park — Bird's Nest and Water Cube"
+      - "High-speed train G89 to Xi'an, Terracotta Warriors"
 
   - code: shanghai-surroundings
-    name: "Shanghai & Surroundings"
+    name: "China Discovery — Shanghai & Surroundings"
     aliases:
-      - "China Discovery — Shanghai & Surroundings"
-    retired_reason: >-
-      PM's CTS Governed Reply v3 plan lists this as a known retired tour.
-      UNVERIFIED / CONFLICT: 2026-09-13 WebFetch of
-      ctstours.co.nz/tours/china/discovery/shanghai-surroundings shows this
-      tour still live and bookable — NZD $3,399, departure 2027-03-25 open
-      (only the Oct 2026 departure is marked sold out). No retirement notice.
-      Needs PM/FDE to confirm current status.
-    still_visible_on_website: true
+      - "Shanghai & Surroundings"
+      - "Shanghai Surroundings tour"
+    price_nzd: 3399
+    departure_dates:
+      - "2027-03-25"
+    nights: 7
+    itinerary_url: "https://www.ctstours.co.nz/tours/china/discovery/shanghai-surroundings"
+    highlights:
+      - "Suzhou — Master-of-Nets Garden, Tiger Hill, Shantang Street"
+      - "Wuxi — silk factory, Three Kingdoms City warship cruise and cavalry show"
+      - "Xinshi ancient water town — Hanfu photography and afternoon tea"
+      - "Hangzhou — West Lake cruise, Su Causeway, Leifeng Pagoda"
+      - "Hangzhou — Liuhe Pagoda and Longjing tea tasting"
+      - "Shanghai — the Bund, City God Temple, Nanjing Road"
+
+retired_tours: []
+# Intentionally empty (2026-09-13) — no currently-known discontinued CTS tour
+# on file. The three tours originally listed here (Silk Road / A Tale of Two
+# Cities / Shanghai & Surroundings) were confirmed by PM to still be genuine
+# current products, not retired; see the header comment. When a tour is
+# actually discontinued, add it here with `still_visible_on_website` set
+# accurately — do not leave this list empty just because nothing is top of
+# mind; the Verifier's retired-tour gate has nothing to check against while
+# this stays empty.
 
 factual_bullets:
   - "CTS Tours NZ has operated in New Zealand for 25 years (Auckland-founded, since 2001), backed by China Travel Service — the China-wide travel brand founded in 1928. Never state 1928 alone as CTS Tours NZ's own founding year; always pair it with the 25-years-in-NZ fact (PM hard rule, repeat incident — see MEMORY project-cts-1928-vs-nz-25-years)."

@@ -83,8 +83,11 @@ describe('OfferingsFileSchema — valid input', () => {
   it('accepts the real config/clients/cts/offerings.yaml shipped in this PR', async () => {
     const raw = await fs.readFile(offeringsPathFor('cts'), 'utf8')
     const parsed = OfferingsFileSchema.parse(parseYaml(raw))
-    expect(parsed.active_tours.length).toBeGreaterThan(0)
-    expect(parsed.retired_tours.length).toBeGreaterThanOrEqual(3)
+    // PM confirmed 2026-09-13 the 3 tours this file originally listed as
+    // "known retired" are genuine current products (only their 2026 batch had
+    // sold out) — moved to active_tours, retired_tours is intentionally empty.
+    expect(parsed.active_tours.length).toBeGreaterThanOrEqual(7)
+    expect(parsed.retired_tours).toEqual([])
     for (const tour of parsed.active_tours) {
       expect(tour.departure_dates.length).toBeGreaterThan(0)
     }
