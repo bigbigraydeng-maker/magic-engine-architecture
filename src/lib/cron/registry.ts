@@ -118,7 +118,10 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   // 补登记（2026-09-05 对账测试抓出）：Magic Insight 每日资讯管道，2026-08-20 就进了 render.yaml，
   // 清单里一直没有。老任务不补 addedAt（理由同上面 ad-readback-sweep-daily 那条）。
   { service: 'market-intel-daily', jobName: 'market-intel-daily', schedule: '0 18 * * *', logsRuns: true },
-  { service: 'messenger-hourly', jobName: 'messenger-sync-hourly', schedule: '10 * * * *', logsRuns: true },
+  // 🔴 schedule 2026-09-13 起从 `10 * * * *` 改成 `10 */2 * * *`（issue #1581，H14）：
+  //    `/api/webhooks/meta/messenger` 上线后这条降级成 webhook 的兜底，不用再每小时跑。
+  //    名字仍叫 messenger-hourly / messenger-sync-hourly，没有跟着改（见 render.yaml 同一处注释）。
+  { service: 'messenger-hourly', jobName: 'messenger-sync-hourly', schedule: '10 */2 * * *', logsRuns: true },
   // 🔴 同一条 Render 服务里的**第二个**任务：startCommand 是 `curl 私信同步 && curl 私信简报`，
   //    两条 curl 各写各的运行记录。清单原来一条服务只登记一个 jobName，第二条就此隐形 ——
   //    这正是它能停 14 天没人发现的原因。
@@ -136,13 +139,16 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   //    都没执行过，销售的客户需求卡停更 14 天。现在改成同步跑完发一张条子、
   //    `cloud-messenger-brief-after-sync` 收到就写。
   //
-  //    schedule 仍写 `10 * * * *`：它由每小时第 10 分的私信同步触发，实际节奏就是每小时
-  //    一次 —— 健康检查按这个间隔判「过期没跑」，跟改造之前一致。
+  //    schedule 跟着 messenger-hourly 那条私信同步走，因为它由同步跑完发的条子触发。
+  //    2026-09-13 起私信同步改成每 2 小时一次（issue #1581，H14：webhook 上线后同步降级
+  //    成兜底），这条写卡任务的实际节奏也跟着变成每 2 小时一次 —— 这里的 schedule 同步
+  //    改成 `10 */2 * * *`，否则健康检查会拿「该 1 小时一轮」的旧门槛去卡「现在 2 小时
+  //    一轮」的真实节奏，天天误报「过期没跑」。
   //
   //    🔴 **故意不填 `addedAt`。** 它不是新任务，是一条停了 14 天的老任务改了触发方式。
   //       填今天的日期会给它约 62 小时宽限期，而这段时间正好会盖住「Inngest 那边忘了
   //       重新 Sync、它其实还是没跑」—— 那恰恰是这次最该被喊出来的失败形态。
-  { service: 'inngest:cloud-messenger-brief-after-sync', jobName: 'messenger-brief-hourly', schedule: '10 * * * *', logsRuns: true, scheduler: 'inngest' },
+  { service: 'inngest:cloud-messenger-brief-after-sync', jobName: 'messenger-brief-hourly', schedule: '10 */2 * * *', logsRuns: true, scheduler: 'inngest' },
   { service: 'meta-leads-hourly', jobName: 'meta-leads-sync', schedule: '25 * * * *', logsRuns: true },
   { service: 'oztop-seo-optimizer', jobName: 'oztop-seo-optimizer', schedule: '0 5 * * 1', logsRuns: true },
   { service: 'pm-daily-todo', jobName: 'pm-daily-todo', schedule: '0 19 * * 0-4', logsRuns: true },
