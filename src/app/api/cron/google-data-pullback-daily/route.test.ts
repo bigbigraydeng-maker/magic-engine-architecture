@@ -121,6 +121,10 @@ vi.mock('@/lib/ads-strategy/daily-insights', () => ({
 }))
 vi.mock('@/lib/ads-strategy/evaluate', () => ({ evaluateClientAdHealth: vi.fn() }))
 vi.mock('@/lib/ads-strategy/digest', () => ({ sendAdHealthDigest: vi.fn() }))
+const mockSnapshotTablesExist = vi.fn().mockResolvedValue(false)
+const mockRunPortfolioDiagnostics = vi.fn().mockResolvedValue({ success: true, hits: 1, not_comparable: 0, excluded: 0, digest_decision: 'alert', digest_sent: true, recipients_dropped: 0 })
+vi.mock('@/lib/ads-strategy/portfolio/snapshot-sync', () => ({ snapshotTablesExist: () => mockSnapshotTablesExist() }))
+vi.mock('@/lib/ads-strategy/portfolio/run-daily', () => ({ runPortfolioDiagnostics: (...a: unknown[]) => mockRunPortfolioDiagnostics(...a) }))
 
 // ── Mock multi-account lookup (2026-09-13) ───────────────────────────────────
 // Defaults to just the primary account — every existing test above this line
@@ -362,6 +366,29 @@ describe('GET /api/cron/google-data-pullback-daily — 多账户 ad_daily_insigh
     expect(mockSyncAdsetDailyInsights).not.toHaveBeenCalledWith(CLIENT_ID, SECONDARY_ACCOUNT, META_TOKEN, expect.anything())
     expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, SECONDARY_ACCOUNT, META_TOKEN, { withVideo: false })
     expect(json.results[0].ad_daily_secondary[0].adset_level.error).toContain('shared')
+  })
+
+  it('ads IMPACT 第 7 步：快照表已建 → 跑只读诊断发内部版日报，不再调原日报；表没建 → 照旧发原日报', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])
+    const { evaluateClientAdHealth } = await import('@/lib/ads-strategy/evaluate')
+    const { sendAdHealthDigest } = await import('@/lib/ads-strategy/digest')
+    vi.mocked(evaluateClientAdHealth).mockResolvedValue({ success: true, overall_verdict: 'healthy' } as never)
+    vi.mocked(sendAdHealthDigest).mockResolvedValue({ decision: 'skip', sent: false } as never)
+    const { GET } = await import('./route')
+
+    mockSnapshotTablesExist.mockResolvedValueOnce(true)
+    const ready = await (await GET(makeRequest(CRON_SECRET))).json()
+    expect(mockRunPortfolioDiagnostics).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sendAdHealthDigest)).not.toHaveBeenCalled()
+    expect(ready.results[0].ad_diagnostics).toMatchObject({ hits: 1, digest_sent: true })
+
+    mockRunPortfolioDiagnostics.mockClear()
+    mockSnapshotTablesExist.mockResolvedValueOnce(false)
+    await GET(makeRequest(CRON_SECRET))
+    expect(mockRunPortfolioDiagnostics).not.toHaveBeenCalled()
+    expect(vi.mocked(sendAdHealthDigest)).toHaveBeenCalledTimes(1)
+    vi.mocked(evaluateClientAdHealth).mockReset()
+    vi.mocked(sendAdHealthDigest).mockReset()
   })
 
   it('失败邮件标题不拿广告组级错误当头条（它不触发 failed）', async () => {
