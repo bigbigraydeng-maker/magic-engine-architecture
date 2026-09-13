@@ -133,4 +133,9 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: 'ME 「基于产品事实的 Meta 广告方案生成」能力(拉官网真行程/价 + 现有受众池水位 + 客户历史广告成本基线 → 出三层漏斗 A/B/C 三版文案 + 受众种子选择 + 预算分配 + 激活闲置类似人群 · 全程官网 grounding 不编造)',
     reviewDate: '2026-10-07',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '广告效果按天诊断引擎（拉 campaign/adset/ad 级每日 Insights → 算成本效率（CPM/CTR/单次线索成本/单次私信开聊成本）→ 查再营销受众是否为空 → 输出预算调整建议 + 原因）',
+    reviewDate: '2026-10-13',
+  },
 ]
