@@ -89,9 +89,13 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
 );
 
 -- 同客户 + 同 fact_key + 同 scope 值唯一：重复萃取走更新不走新增。
--- 用表达式索引而非唯一约束，因为 scope 是 jsonb（无法直接进 UNIQUE 约束）。
+-- 直接对 jsonb 列建（本机 PG 17 实测过：jsonb 列可以直接进 btree 唯一索引，
+-- 不需要转 (scope::text) 表达式索引）——这样调用方写 `upsert(...,
+-- { onConflict: 'client_id,fact_key,scope' })` 时，冲突目标列表能跟这条
+-- 索引逐字对上；用表达式索引会导致 Postgres 报"没有匹配 ON CONFLICT 规格
+-- 的唯一约束"，那种写法在写入路径接上（萃取工作流）之前不会被任何测试发现。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_facts_identity
-  ON public.client_knowledge_facts (client_id, fact_key, (scope::text));
+  ON public.client_knowledge_facts (client_id, fact_key, scope);
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_facts_client_status
   ON public.client_knowledge_facts (client_id, status);
