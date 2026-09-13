@@ -15,7 +15,7 @@ export async function saveSettings(clientId: string, raw: unknown): Promise<void
   if (r.error) throw new Error('settings_save_failed')
 }
 export async function readView(clientId: string, canEdit: boolean) {
-  const [client, settings, competitors, signals, runs, budget, masterBrief, goals, trafficDirection] = await Promise.all([
+  const [client, settings, competitors, signals, runs, budget, masterBrief, goals, trafficDirection, externalSignals] = await Promise.all([
     db.from('clients').select('id,name,domain').eq('id', clientId).single(),
     db.from('web_intelligence_settings').select('*').eq('client_id', clientId).maybeSingle(),
     loadCompetitors(clientId),
@@ -25,6 +25,7 @@ export async function readView(clientId: string, canEdit: boolean) {
     db.from('master_briefs').select('products,primary_audience,buying_trigger,keyword_seeds,competitor_domains,status,is_active,version').eq('client_id', clientId).or('status.eq.active,is_active.eq.true').order('version', { ascending: false }).limit(1).maybeSingle(),
     db.from('goals').select('title,status,primary_metric_label,target_value,period_start,period_end,updated_at').eq('client_id', clientId).order('updated_at', { ascending: false }).limit(20),
     db.from('web_intelligence_external_observations').select('source_url,competitor_domain,observed_at,valid_until,excerpt').eq('client_id', clientId).eq('source_type', 'website').eq('source_name', '竞品网站流量方向（Apify）').order('observed_at', { ascending: false }).limit(100),
+    db.from('web_intelligence_external_observations').select('source_type,source_name,source_url,title,excerpt,observed_at,valid_until').eq('client_id', clientId).in('source_type', ['industry_news', 'industry_media', 'jobs']).order('observed_at', { ascending: false }).limit(60),
   ])
   if (client.error || settings.error || signals.error || runs.error || budget.error || masterBrief.error || goals.error) throw new Error('web_intelligence_read_failed')
   const ids = (signals.data as Signal[]).flatMap(s => [s.before_evidence_id, s.after_evidence_id])
@@ -84,5 +85,5 @@ export async function readView(clientId: string, canEdit: boolean) {
     evidence: operatingEvidence, now: asOf,
   })
   const trafficRows = (trafficDirection.data ?? []).flatMap(row => typeof row.competitor_domain === 'string' ? [{ domain: row.competitor_domain, source_url: row.source_url, observed_at: row.observed_at, valid_until: row.valid_until, excerpt: row.excerpt }] : [])
-  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, traffic_direction: projectTrafficDirectionSignals(trafficRows, client.data.domain), budget: budget.data, brief, operating, client_product_source: { kind: clientProductSource, count: clientProducts.length }, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
+  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, traffic_direction: projectTrafficDirectionSignals(trafficRows, client.data.domain), external_signals: externalSignals.error ? [] : externalSignals.data ?? [], budget: budget.data, brief, operating, client_product_source: { kind: clientProductSource, count: clientProducts.length }, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
 }
