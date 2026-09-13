@@ -144,6 +144,14 @@ export async function isConversationOptedOut(
     return row.optout_unlinked === true
   }
 
+  // Codex 复审（PR #1625，第 2 轮）：会话先在挂不上人的阶段命中过关键词、
+  // 写了 optout_unlinked=true，之后身份解析补上了 contact_id（见
+  // link-contacts.ts 会给原先为空的会话回填 contact_id）——如果这里只看
+  // contact 一侧，新联系人大概率还没有任何 DNC 触点，会直接判「没退订」，
+  // 一个已经明确表示过退订的人反而被放行。optout_unlinked 一旦立起来，
+  // 不会因为后来补上了 contact_id 就失效，两个信号是「或」的关系。
+  if (row.optout_unlinked === true) return true
+
   // IDOR 闸：contact / 触点查询必须同时按 contact_id 和「这条会话自己的」
   // client_id 过滤 —— 不接受任何外部传入的 client_id（本函数压根不收这个参数）。
   const clientId = row.client_id
@@ -212,8 +220,15 @@ export interface RecordOptOutKeywordTouchInput {
   channel: 'messenger' | 'whatsapp'
   conversationId: string
   messageId: string
-  /** 默认当前时间；补记场景可传入消息本身的发送时间。 */
-  occurredAt?: string
+  /**
+   * 必须是这条消息（触发退订关键词判定的那条客户消息）真实的发送时间，
+   * 不能省略、更不能用调用时刻的「现在」代替（Codex 复审 PR #1625 第 2 轮
+   * 指出的问题）：本函数下面的重放保护要拿它跟 `dncClearedAt()` 比大小，
+   * 如果每次重试都重算成当前时间，一条本该被识别成「旧 webhook 重放」的
+   * 事件，时间戳会永远晚于任何人工纠正，保护形同虚设。调用方从 webhook
+   * payload 或 `conversation_messages.sent_at` 取真实值传进来。
+   */
+  occurredAt: string
 }
 
 export interface RecordOptOutKeywordTouchResult {
@@ -244,13 +259,23 @@ export interface RecordOptOutKeywordTouchResult {
  * 覆盖回 `true`——那会让 `/dnc` 刚做完的纠正在下一次 webhook 重试时被
  * 悄悄推翻，且没有任何报错提示。所以写镜像列之前会看一眼这个联系人
  * 现在最新的 `dnc_cleared` 时间点：晚于这条事件本身的时间戳，就跳过覆盖。
+ *
+ * ## 已知但不在本次修的限制：先查后写不是原子操作（Codex 复审 PR #1625 第 2 轮）
+ *
+ * 「查有没有更晚的人工纠正」和「写镜像列」中间没有加锁/事务——理论上人工走
+ * `/dnc` 清除可以恰好插在这两步之间，让这次更新仍然把镜像列写回 `true`，
+ * 覆盖掉刚清除的结果。触点这份真相源本身不受影响（`isDoNotContact()` 永远
+ * 读得到那条更晚的 `dnc_cleared`，判断依旧正确），受影响的只是**直接读
+ * 镜像列、不走 `isDoNotContact()` 判据的少数消费方**。这个窗口极窄（需要
+ * 人工纠正精确插进两次数据库往返之间），修好需要一次 DB 端条件更新
+ * （RPC/存储过程或事务），本 issue 范围内没有引入新的迁移基础设施，先记录
+ * 清楚、留给 Build Gate 后续 issue 处理，不能假装没这回事。
  */
 export async function recordOptOutKeywordTouch(
   input: RecordOptOutKeywordTouchInput,
   supabase: SupabaseClient = supabaseAdmin,
 ): Promise<RecordOptOutKeywordTouchResult> {
-  const { clientId, contactId, channel, conversationId, messageId } = input
-  const occurredAt = input.occurredAt ?? new Date().toISOString()
+  const { clientId, contactId, channel, conversationId, messageId, occurredAt } = input
   const sourceRef = `${conversationId}:optout:${messageId}`
 
   const { data, error } = await supabase

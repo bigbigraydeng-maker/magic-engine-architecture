@@ -252,6 +252,7 @@ RUN('真 PostgreSQL 集成 —— contact_touchpoints + dnc.ts + /dnc 路由', (
         channel: 'messenger',
         conversationId: 'convo-1',
         messageId: 'msg-1',
+        occurredAt: '2026-09-13T00:00:00Z',
       },
       supabaseForPg,
     )
@@ -287,6 +288,7 @@ RUN('真 PostgreSQL 集成 —— contact_touchpoints + dnc.ts + /dnc 路由', (
         channel: 'whatsapp',
         conversationId: 'convo-2',
         messageId: 'msg-2',
+        occurredAt: '2026-09-13T00:00:00Z',
       },
       supabaseForPg,
     )

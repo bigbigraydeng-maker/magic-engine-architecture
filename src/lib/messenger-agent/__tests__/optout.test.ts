@@ -143,6 +143,19 @@ describe('isConversationOptedOut', () => {
     expect(await isConversationOptedOut(CONVO, supabase)).toBe(false)
   })
 
+  it('🔴 变异测试（Codex 复审 PR #1625 第 2 轮）：optout_unlinked=true 之后补上了 contact_id，且新联系人还没有任何 DNC 记录 —— 不许因为补上了身份就放行', async () => {
+    // 场景：会话先在挂不上人的阶段命中过退订关键词（optout_unlinked=true）；
+    // link-contacts.ts 之后给这条会话回填了 contact_id；这个刚被关联上的
+    // contact 本身干干净净，从没被标过 DNC、也没有任何触点。如果这里只看
+    // contact 一侧就会判「没退订」，一个已经明确表达过退订意图的人被放行。
+    const supabase = makeFakeSupabase({
+      conversations: [{ id: CONVO, client_id: CLIENT_A, contact_id: CONTACT, optout_unlinked: true }],
+      contacts: [{ id: CONTACT, client_id: CLIENT_A, do_not_contact: false }],
+      contact_touchpoints: [],
+    })
+    expect(await isConversationOptedOut(CONVO, supabase)).toBe(true)
+  })
+
   it('复用 dnc.ts 的「人纠正过」判词：contacts 列还没放下，但最后一次触点是 dnc_cleared → false', async () => {
     // 证明这里真的在调用 lib/crm/dnc.ts 的 isDoNotContact()，不是自己另写了一套
     // 更简单（更容易判错）的逻辑 —— 纠正之后必须立刻生效，哪怕镜像列还没收敛。
@@ -300,6 +313,7 @@ describe('recordOptOutKeywordTouch', () => {
         channel: 'whatsapp',
         conversationId: CONVO,
         messageId: 'msg-2',
+        occurredAt: '2026-09-13T00:00:00Z',
       },
       supabase,
     )
@@ -376,7 +390,14 @@ describe('recordOptOutKeywordTouch', () => {
 
     await expect(
       recordOptOutKeywordTouch(
-        { clientId: CLIENT_A, contactId: CONTACT, channel: 'messenger', conversationId: CONVO, messageId: 'm' },
+        {
+          clientId: CLIENT_A,
+          contactId: CONTACT,
+          channel: 'messenger',
+          conversationId: CONVO,
+          messageId: 'm',
+          occurredAt: '2026-09-13T00:00:00Z',
+        },
         supabase,
       ),
     ).rejects.toThrow('写退订触点失败')
