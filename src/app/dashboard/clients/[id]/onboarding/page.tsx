@@ -99,6 +99,7 @@ export default function OnboardingWizardPage() {
   useEffect(() => { void refresh() }, [refresh])
 
   const toggleHelp = (k: HelpKey) => setHelp(h => ({ ...h, [k]: !h[k] }))
+  const setHelpOn = (k: HelpKey) => setHelp(h => ({ ...h, [k]: true }))
 
   const s = status?.steps
   const doneCount = [s?.profile, s?.website, (s?.connectors.gbp || s?.connectors.gsc || s?.connectors.ga4), s?.assets].filter(Boolean).length
@@ -162,7 +163,7 @@ export default function OnboardingWizardPage() {
       <div className="space-y-5">
         <ProfileStep clientId={clientId} done={Boolean(s?.profile)} onSaved={refresh} help={help.profile} onHelp={() => toggleHelp('profile')} />
         <WebsiteStep clientId={clientId} done={Boolean(s?.website)} onSaved={refresh} help={help.website} onHelp={() => toggleHelp('website')} />
-        <ConnectStep clientId={clientId} connectors={s?.connectors ?? {}} help={help} onHelp={toggleHelp} onSaved={refresh} />
+        <ConnectStep clientId={clientId} connectors={s?.connectors ?? {}} help={help} onHelp={toggleHelp} onHelpOn={setHelpOn} onSaved={refresh} />
         <AssetsStep clientId={clientId} done={Boolean(s?.assets)} onSaved={refresh} help={help.assets} onHelp={() => toggleHelp('assets')} />
 
         {/* Submit */}
@@ -302,7 +303,7 @@ function WebsiteStep({ clientId, done, onSaved, help, onHelp }: { clientId: stri
 }
 
 // ── Step 3: Connect accounts ─────────────────────────────────────────────────────
-function ConnectStep({ clientId, connectors, help, onHelp, onSaved }: { clientId: string; connectors: Record<string, boolean>; help: Record<HelpKey, boolean>; onHelp: (k: HelpKey) => void; onSaved: () => Promise<void> }) {
+function ConnectStep({ clientId, connectors, help, onHelp, onHelpOn, onSaved }: { clientId: string; connectors: Record<string, boolean>; help: Record<HelpKey, boolean>; onHelp: (k: HelpKey) => void; onHelpOn: (k: HelpKey) => void; onSaved: () => Promise<void> }) {
   const [metaId, setMetaId] = useState('')
   const [metaMsg, setMetaMsg] = useState('')
   const [savingMeta, setSavingMeta] = useState(false)
@@ -322,10 +323,14 @@ function ConnectStep({ clientId, connectors, help, onHelp, onSaved }: { clientId
       // is recorded for the team to verify. Also tick "sort it on the visit" (set,
       // never toggle: toggling would un-tick it for an owner who already ticked it).
       if (r.status === 403 && j.reason === 'fde_verification_required') {
-        if (!help.meta) onHelp('meta')
+        onHelpOn('meta')
         setMetaMsg(j.request_recorded
           ? "Thanks — we've noted this number. Our team will check it and connect it for you."
           : "Thanks — we couldn't note the number just now, so we'll sort it out with you on the visit.")
+        return
+      }
+      if (r.status === 400) {
+        setMetaMsg("That doesn't look like an ad account number — it's usually 15–17 digits. Not sure? Tick \"sort it on the visit\" below.")
         return
       }
       if (!r.ok) { setMetaMsg(j.error ?? 'Could not save — check the number and try again.'); return }

@@ -1,23 +1,27 @@
 /**
  * PATCH /api/clients/[id]/meta-ad-account 的业务流程（AD-SEC-3）。
- * 路由只管鉴权分流和把结果转成 HTTP；为什么要这几道闸见 ad-account-binding.ts。
+ * 路由只管鉴权分流和把结果转成 HTTP；为什么要这几道闸见 ad-account-binding.ts，
+ * 两张表怎么一起改、失败怎么恢复见 ad-account-registry-write.ts。
  *
  * 流程一览：
  *   内部员工 bind  → 令牌 → Graph 核实 → 跨客户重复检查 → [preview 到此为止]
- *                   → 审计 authorized（写不进去 = 拒绝）→ 写 clients + 镜像表 → 审计 applied
- *   内部员工 clear → 审计 authorized → 清 clients + 降级镜像主账户 → 审计 applied
+ *                   → 审计 authorized（写不进去 = 拒绝）→ 改主账户（失败回滚）→ 审计 applied
+ *   内部员工 clear → 审计 authorized → 清主账户（失败回滚）→ 审计 applied
  *   内部员工 dismiss_request → 审计 request_dismissed
- *   客户成员提交   → 不写任何绑定，只记 requested_by_client，交给每日待办
+ *   客户成员提交   → 不写任何绑定，只记 requested_by_client（限流），交给每日待办
  */
 
+import {
+  insertBindingAudit, finishBindingAudit, recordRejectedBinding,
+  recentClientRequestValues, CLIENT_REQUESTS_PER_DAY,
+} from '@/lib/clients/binding-audit'
 import { supabaseAdmin } from '@/lib/supabase'
-import { insertBindingAudit, finishBindingAudit, recordRejectedBinding } from '@/lib/clients/binding-audit'
-import { listPendingBindingRequests } from '@/lib/clients/binding-requests'
 import { resolveMetaTokenForClient, type MetaTokenSource } from './token-manager'
 import {
   verifyAdAccountAccessible, findOtherClientRegistrations,
   type VerifiedAdAccount, type OtherClientRegistration,
 } from './ad-account-binding'
+import { applyPrimaryChange } from './ad-account-registry-write'
 
 export interface ServiceResult {
   status: number
@@ -30,6 +34,8 @@ export interface BindOptions {
   adAccountId: string
   preview: boolean
   override: { reason: string } | null
+  /** 旧主账户保留为这个客户的第二账户（仍受归属校验放行）；默认移除。 */
+  keepPrevious: boolean
 }
 
 const KIND = 'meta_ad_account' as const
@@ -92,6 +98,33 @@ async function runChecks(opts: BindOptions): Promise<Checked | ServiceResult> {
   return { account: verified.account, tokenSource: token.source, sharedWith }
 }
 
+interface WriteArgs {
+  clientId: string
+  auditId: string
+  previous: string | null
+  next: string | null
+  keepPrevious: boolean
+}
+
+/** 改主账户 + 补记审计结果，统一成 ServiceResult。 */
+async function writeAndFinish(args: WriteArgs, success: Record<string, unknown>): Promise<ServiceResult> {
+  const res = await applyPrimaryChange({
+    clientId: args.clientId, previous: args.previous, next: args.next, keepPrevious: args.keepPrevious,
+  })
+  if (!res.ok) {
+    await finishBindingAudit(args.auditId, 'write_failed', `${res.error} | rolled_back=${res.rolledBack}`)
+    return res.rolledBack
+      ? { status: 500, body: { error: `保存失败，已恢复成改之前的样子，可以重试：${res.error}`, reason: 'write_failed' } }
+      : { status: 500, body: { error: `只写了一半，恢复也没成功 —— 这个客户的广告账户登记现在可能前后不一致，请把这句话截图发给开发：${res.error}`, reason: 'partial_write' } }
+  }
+  const detail = args.previous ? `previous ${args.previous}: ${res.removedPrevious ? 'removed' : 'kept as secondary'}` : undefined
+  const audited = await finishBindingAudit(args.auditId, 'applied', detail)
+  return {
+    status: 200,
+    body: { success: true, ...success, previous_removed: res.removedPrevious, ...(audited ? {} : { audit_incomplete: true }) },
+  }
+}
+
 export async function bindAdAccount(opts: BindOptions): Promise<ServiceResult> {
   const checked = await runChecks(opts)
   if ('status' in checked) return checked
@@ -123,56 +156,13 @@ export async function bindAdAccount(opts: BindOptions): Promise<ServiceResult> {
     return { status: 500, body: { error: `审计记录写不进去，为安全起见没有保存：${audit.error}`, reason: 'audit_unavailable' } }
   }
 
-  const writeErr = await writePrimary(opts.clientId, account.id)
-  if (writeErr) {
-    await finishBindingAudit(audit.id, 'write_failed', writeErr)
-    return { status: 500, body: { error: `保存失败：${writeErr}`, reason: 'write_failed' } }
-  }
-  await finishBindingAudit(audit.id, 'applied')
-  return { status: 200, body: { success: true, ad_account_id: account.id, ...summary } }
+  return writeAndFinish(
+    { clientId: opts.clientId, auditId: audit.id, previous: prev.value, next: account.id, keepPrevious: opts.keepPrevious },
+    { ad_account_id: account.id, ...summary },
+  )
 }
 
-/**
- * 写 clients.meta_ad_account_id 并镜像到 client_meta_ad_accounts 的主账户行。
- * 返回错误文字 / null。镜像失败也算失败：否则新账户没登记进多账户表、
- * 旧主账户还挂着，界面却显示「已保存」。
- */
-async function writePrimary(clientId: string, next: string | null): Promise<string | null> {
-  const { error: updateErr } = await supabaseAdmin
-    .from('clients')
-    .update({ meta_ad_account_id: next })
-    .eq('id', clientId)
-  if (updateErr) return `clients: ${updateErr.message}`
-
-  // 降级旧主账户（不删除：已登记的第二账户 / 前主账户仍受每日安全巡检覆盖）。
-  const { error: demoteErr } = await supabaseAdmin
-    .from('client_meta_ad_accounts')
-    .update({ is_primary: false })
-    .eq('client_id', clientId)
-    .eq('is_primary', true)
-  if (demoteErr) return `client_meta_ad_accounts demote: ${demoteErr.message}`
-  if (!next) return null
-
-  // 已登记过的账户（如 CTS 官方账户种子行）可能带真实标签 —— 提升为主账户时保留，
-  // 不覆盖成默认值（魏征 2026-09-13）。
-  const { data: existingRow } = await supabaseAdmin
-    .from('client_meta_ad_accounts')
-    .select('label')
-    .eq('client_id', clientId)
-    .eq('ad_account_id', next)
-    .maybeSingle()
-  const label = (existingRow as { label?: string | null } | null)?.label ?? '主账户'
-
-  const { error: upsertErr } = await supabaseAdmin
-    .from('client_meta_ad_accounts')
-    .upsert(
-      { client_id: clientId, ad_account_id: next, is_primary: true, label },
-      { onConflict: 'client_id,ad_account_id' },
-    )
-  return upsertErr ? `client_meta_ad_accounts upsert: ${upsertErr.message}` : null
-}
-
-export async function clearAdAccount(clientId: string, actorEmail: string): Promise<ServiceResult> {
+export async function clearAdAccount(clientId: string, actorEmail: string, keepPrevious: boolean): Promise<ServiceResult> {
   const prev = await readPrimary(clientId)
   if ('error' in prev) return { status: 500, body: { error: `读不到当前绑定：${prev.error}` } }
 
@@ -183,14 +173,7 @@ export async function clearAdAccount(clientId: string, actorEmail: string): Prom
   if ('error' in audit) {
     return { status: 500, body: { error: `审计记录写不进去，为安全起见没有清空：${audit.error}`, reason: 'audit_unavailable' } }
   }
-
-  const writeErr = await writePrimary(clientId, null)
-  if (writeErr) {
-    await finishBindingAudit(audit.id, 'write_failed', writeErr)
-    return { status: 500, body: { error: `清空失败：${writeErr}`, reason: 'write_failed' } }
-  }
-  await finishBindingAudit(audit.id, 'applied')
-  return { status: 200, body: { success: true, ad_account_id: null } }
+  return writeAndFinish({ clientId, auditId: audit.id, previous: prev.value, next: null, keepPrevious }, { ad_account_id: null })
 }
 
 export async function dismissBindingRequest(clientId: string, actorEmail: string): Promise<ServiceResult> {
@@ -204,7 +187,11 @@ export async function dismissBindingRequest(clientId: string, actorEmail: string
 
 /**
  * 客户成员（含自助客户、受限管理员）提交的账户号：**不写绑定**，记一笔待核实，
- * 返回 403 让界面说清楚「已收到、FDE 核实后接上」。
+ * 返回 403 让界面说清楚「已收到、团队核实后接上」。
+ *
+ * 限流（魏征实施审）：24 小时内同一个号只记一次（谁交的都算）；每个客户每天
+ * 最多记 CLIENT_REQUESTS_PER_DAY 条。超了或读不到就不记，request_recorded=false，
+ * 向导退回「上门时处理」—— 不会让客户以为交上去了。
  */
 export async function recordClientRequest(
   clientId: string,
@@ -215,27 +202,17 @@ export async function recordClientRequest(
     error: 'Only the Magic Lab team can connect an ad account. We have noted this number and will verify it with you.',
     reason: 'fde_verification_required',
   }
-  // 这个客户当前待处理的请求已经是同一个人交的同一个号 → 不重复插（防刷新重交刷行）。
-  try {
-    const [pending] = await listPendingBindingRequests(supabaseAdmin, KIND, new Date(), [clientId])
-    if (pending && pending.requested_value === adAccountId && pending.actor_email === actorEmail) {
-      return { status: 403, body: { ...denied, request_recorded: true } }
-    }
-  } catch {
-    // 读不到就照常插一行：多一行重复比漏记一条客户提交好。
+  const recent = await recentClientRequestValues(clientId, KIND)
+  if (recent === null || recent.length >= CLIENT_REQUESTS_PER_DAY) {
+    return { status: 403, body: { ...denied, request_recorded: false } }
   }
-  const recorded = await recordRequestRow(clientId, actorEmail, adAccountId)
-  return { status: 403, body: { ...denied, request_recorded: recorded } }
-}
-
-async function recordRequestRow(clientId: string, actorEmail: string, value: string): Promise<boolean> {
+  if (recent.includes(adAccountId)) {
+    return { status: 403, body: { ...denied, request_recorded: true } }
+  }
   const res = await insertBindingAudit({
     client_id: clientId, binding_kind: KIND, actor_email: actorEmail,
-    action: 'request', outcome: 'requested_by_client', requested_value: value,
+    action: 'request', outcome: 'requested_by_client', requested_value: adAccountId,
   })
-  if ('error' in res) {
-    console.error('[meta-ad-account] failed to record client request:', res.error)
-    return false
-  }
-  return true
+  if ('error' in res) console.error('[meta-ad-account] failed to record client request:', res.error)
+  return { status: 403, body: { ...denied, request_recorded: !('error' in res) } }
 }

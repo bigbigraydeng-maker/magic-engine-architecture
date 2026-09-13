@@ -4,7 +4,8 @@
  * GET   → { ad_account_id, can_edit, pending_request }
  *         `pending_request` (internal staff only) is the latest number a client
  *         submitted from the self-serve wizard that nobody has handled yet.
- * PATCH → body { ad_account_id, preview?, allow_shared_account?, override_reason?, dismiss_request? }
+ * PATCH → body { ad_account_id, preview?, allow_shared_account?, override_reason?,
+ *                dismiss_request?, keep_previous_as_secondary? }
  *
  * Consumed by:
  *   - src/app/api/clients/[id]/meta-ads/sync/route.ts (manual sync, 422 if unset)
@@ -28,9 +29,10 @@
  *     a reason → audit row first, fail closed) and records who/when/what.
  *
  * Primary-account mirroring into `client_meta_ad_accounts` (2026-09-13 multi-
- * account table) is unchanged in shape: the old primary is demoted, not deleted,
- * so a registered secondary account stays covered by the daily safety sweep.
- * A mirror failure is now a 500 (with audit `write_failed`), not a silent 200.
+ * account table): the ownership gate trusts EVERY registered row, so on rebind /
+ * clear the old primary is now REMOVED from this client unless staff tick
+ * `keep_previous_as_secondary` (e.g. CTS personal + official accounts). Both
+ * writes roll back together on failure — see src/lib/meta/ad-account-registry-write.ts.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -51,6 +53,7 @@ interface PatchBody {
   allow_shared_account?: unknown
   override_reason?: unknown
   dismiss_request?: unknown
+  keep_previous_as_secondary?: unknown
 }
 
 const json = (r: ServiceResult) => NextResponse.json(r.body, { status: r.status })
@@ -127,9 +130,10 @@ export async function PATCH(
     return badRequest(err)
   }
 
+  const keepPrevious = body.keep_previous_as_secondary === true
   const result = next === null
-    ? await clearAdAccount(clientId, actorEmail)
-    : await bindAdAccount({ clientId, actorEmail, adAccountId: next, preview: body.preview === true, override })
+    ? await clearAdAccount(clientId, actorEmail, keepPrevious)
+    : await bindAdAccount({ clientId, actorEmail, adAccountId: next, preview: body.preview === true, override, keepPrevious })
 
   if (result.status === 200 && body.preview !== true) {
     try {

@@ -62,21 +62,49 @@ export async function insertBindingAudit(
   return { id: (data as { id: string }).id }
 }
 
-/** 把 authorized 行改成最终结果。尽力而为：结果已经发生，审计补记失败只打日志。 */
+/**
+ * 把 authorized 行改成最终结果。结果已经发生，补记失败不能回头撤销 ——
+ * 返回 false 让调用方在响应里如实说「审计没补记完」（行会停在 authorized）。
+ */
 export async function finishBindingAudit(
   id: string,
   outcome: 'applied' | 'write_failed',
   detail?: string,
-): Promise<void> {
+): Promise<boolean> {
   const { error } = await supabaseAdmin
     .from('client_binding_audit')
     .update({ outcome, detail: clip(detail, 500), updated_at: new Date().toISOString() })
     .eq('id', id)
   if (error) console.error('[binding-audit] failed to finish audit row', id, error.message)
+  return !error
 }
 
 /** 拒绝类结果：尽力记一笔，写失败不改变拒绝结论。 */
 export async function recordRejectedBinding(row: BindingAuditInsert): Promise<void> {
   const res = await insertBindingAudit(row)
   if ('error' in res) console.error('[binding-audit] failed to record rejection:', res.error)
+}
+
+/** 客户每 24 小时最多记这么多条提交 —— 防轮换号码刷行（魏征实施审）。 */
+export const CLIENT_REQUESTS_PER_DAY = 5
+
+/**
+ * 这个客户最近 24 小时内的提交值。读失败返回 null，调用方按「不记」处理
+ * （客户那边会退回「上门时处理」，不会丢）。
+ */
+export async function recentClientRequestValues(
+  clientId: string,
+  kind: BindingKind,
+  now: Date = new Date(),
+): Promise<string[] | null> {
+  const since = new Date(now.getTime() - 24 * 3600_000).toISOString()
+  const { data, error } = await supabaseAdmin
+    .from('client_binding_audit')
+    .select('requested_value')
+    .eq('client_id', clientId)
+    .eq('binding_kind', kind)
+    .eq('outcome', 'requested_by_client')
+    .gte('created_at', since)
+  if (error) return null
+  return ((data ?? []) as Array<{ requested_value: string | null }>).map(r => r.requested_value ?? '')
 }

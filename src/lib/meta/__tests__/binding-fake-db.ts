@@ -22,6 +22,7 @@ export interface FakeFailures {
   insert?: Set<string>
   update?: Set<string>
   upsert?: Set<string>
+  delete?: Set<string>
 }
 
 interface Result { data: Row[] | null; error: { message: string } | null }
@@ -45,11 +46,11 @@ export function makeBindingFakeDb(db: FakeDb, failures: FakeFailures = {}) {
     failures[kind]?.has(table) ? { data: null, error: { message: `simulated ${kind} failure on ${table}` } } : null
 
   function from(table: string) {
-    let mode: 'select' | 'insert' | 'update' | 'upsert' = 'select'
+    let mode: 'select' | 'insert' | 'update' | 'upsert' | 'delete' = 'select'
     let payload: Row = {}
     let conflictCols: string[] = []
     const filters: Filter[] = []
-    let order: { col: string; asc: boolean } | null = null
+    const orders: { col: string; asc: boolean }[] = []
     let range: [number, number] | null = null
     let limitN: number | null = null
     const rows = (): Row[] => (db[table] ??= [])
@@ -72,15 +73,25 @@ export function makeBindingFakeDb(db: FakeDb, failures: FakeFailures = {}) {
         for (const r of hit) Object.assign(r, payload)
         return { data: hit.map(r => ({ ...r })), error: null }
       }
+      if (mode === 'delete') {
+        const hit = new Set(hits())
+        db[table] = rows().filter(r => !hit.has(r))
+        return { data: [...hit].map(r => ({ ...r })), error: null }
+      }
       if (mode === 'upsert') {
         const existing = rows().find(r => conflictCols.every(c => r[c] === payload[c]))
         if (existing) Object.assign(existing, payload)
         return { data: [{ ...(existing ?? insertRow(payload)) }], error: null }
       }
       let out = hits().map(r => ({ ...r }))
-      if (order) {
-        const { col, asc } = order
-        out.sort((a, b) => (String(a[col]) < String(b[col]) ? -1 : String(a[col]) > String(b[col]) ? 1 : 0) * (asc ? 1 : -1))
+      if (orders.length > 0) {
+        out.sort((a, b) => {
+          for (const { col, asc } of orders) {
+            const c = String(a[col]) < String(b[col]) ? -1 : String(a[col]) > String(b[col]) ? 1 : 0
+            if (c !== 0) return asc ? c : -c
+          }
+          return 0
+        })
       }
       if (range) out = out.slice(range[0], range[1] + 1)
       if (limitN != null) out = out.slice(0, limitN)
@@ -91,6 +102,7 @@ export function makeBindingFakeDb(db: FakeDb, failures: FakeFailures = {}) {
       select() { return b },
       insert(p: Row) { mode = 'insert'; payload = p; return b },
       update(p: Row) { mode = 'update'; payload = p; return b },
+      delete() { mode = 'delete'; return b },
       upsert(p: Row, opts?: { onConflict?: string }) {
         mode = 'upsert'; payload = p; conflictCols = (opts?.onConflict ?? 'id').split(','); return b
       },
@@ -101,7 +113,7 @@ export function makeBindingFakeDb(db: FakeDb, failures: FakeFailures = {}) {
         if (operator !== 'is' || val !== null) throw new Error(`fake: unsupported not(${operator})`)
         filters.push({ op: 'notNull', col, val }); return b
       },
-      order(col: string, opts?: { ascending?: boolean }) { order = { col, asc: opts?.ascending ?? true }; return b },
+      order(col: string, opts?: { ascending?: boolean }) { orders.push({ col, asc: opts?.ascending ?? true }); return b },
       range(from: number, to: number) { range = [from, to]; return b },
       limit(n: number) { limitN = n; return b },
       single() { const r = run(); return Promise.resolve({ data: r.data?.[0] ?? null, error: r.error }) },

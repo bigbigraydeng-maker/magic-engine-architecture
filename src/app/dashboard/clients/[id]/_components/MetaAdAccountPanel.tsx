@@ -37,7 +37,14 @@ interface PendingRequest {
 type PanelState =
   | { phase: 'loading' }
   | { phase: 'error'; message: string }
-  | { phase: 'ready'; adAccountId: string | null; canEdit: boolean; pending: PendingRequest | null }
+  | {
+      phase: 'ready'
+      adAccountId: string | null
+      canEdit: boolean
+      pending: PendingRequest | null
+      /** 读待核实请求失败 —— 必须显示出来，不能当成「没有请求」 */
+      pendingError: string | null
+    }
 
 const TOKEN_SOURCE_LABEL: Record<Preview['token_source'], string> = {
   client_domain: '这个客户专属的令牌',
@@ -75,6 +82,7 @@ export function MetaAdAccountPanel({ clientId }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [shareOk, setShareOk] = useState(false)
   const [shareReason, setShareReason] = useState('')
+  const [keepPrevious, setKeepPrevious] = useState(false)
 
   const load = useCallback(async () => {
     setState({ phase: 'loading' })
@@ -84,7 +92,9 @@ export function MetaAdAccountPanel({ clientId }: Props) {
       const data = (await res.json()) as Json
       const value = typeof data.ad_account_id === 'string' ? data.ad_account_id : null
       const pending = isPendingRequest(data.pending_request) ? data.pending_request : null
-      setState({ phase: 'ready', adAccountId: value, canEdit: data.can_edit === true, pending })
+      const raw = data.pending_request as Json | null | undefined
+      const pendingError = raw && typeof raw.error === 'string' ? raw.error : null
+      setState({ phase: 'ready', adAccountId: value, canEdit: data.can_edit === true, pending, pendingError })
       setDraft(value ?? '')
     } catch (err) {
       setState({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -93,7 +103,7 @@ export function MetaAdAccountPanel({ clientId }: Props) {
 
   useEffect(() => { load() }, [load])
 
-  const resetPreview = () => { setPreview(null); setShareOk(false); setShareReason('') }
+  const resetPreview = () => { setPreview(null); setShareOk(false); setShareReason(''); setKeepPrevious(false) }
 
   const run = async (body: Json, onOk: (json: Json) => void | Promise<void>) => {
     setBusy(true)
@@ -117,7 +127,7 @@ export function MetaAdAccountPanel({ clientId }: Props) {
 
   const handleSave = () => {
     const trimmed = draft.trim()
-    const body: Json = { ad_account_id: trimmed.length === 0 ? null : trimmed }
+    const body: Json = { ad_account_id: trimmed.length === 0 ? null : trimmed, keep_previous_as_secondary: keepPrevious }
     if (preview && preview.shared_with.length > 0) {
       body.allow_shared_account = shareOk
       body.override_reason = shareReason
@@ -173,6 +183,12 @@ export function MetaAdAccountPanel({ clientId }: Props) {
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
+      {state.pendingError && (
+        <p className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+          ⚠ 读不到客户有没有提交过待核实的账户号（{state.pendingError}）—— 不代表没有，稍后刷新再看。
+        </p>
+      )}
+
       {pending && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
           <p>
@@ -216,6 +232,16 @@ export function MetaAdAccountPanel({ clientId }: Props) {
         />
       )}
 
+      {dirty && state.adAccountId && (clearing || preview) && (
+        <label className="mt-3 flex items-start gap-2 text-xs text-slate-600">
+          <input type="checkbox" checked={keepPrevious} onChange={e => setKeepPrevious(e.target.checked)} className="mt-0.5" />
+          <span>
+            旧账户 <code className="rounded bg-slate-100 px-1">{state.adAccountId}</code> 也是这个客户的，保留为第二账户
+            （不勾 = 从这个客户名下移除，这个客户就不能再停/改那个账户里的广告）
+          </span>
+        </label>
+      )}
+
       {errMsg && <p className="mt-2 text-xs text-red-600">⚠ {errMsg}</p>}
 
       <div className="mt-3 flex items-center gap-2">
@@ -234,7 +260,7 @@ export function MetaAdAccountPanel({ clientId }: Props) {
             disabled={busy || !canSave}
             className="rounded-lg bg-cyan-600 px-4 py-1.5 text-sm font-bold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {busy ? '保存中…' : clearing ? '确认清空' : '确认保存'}
+            {busy ? '保存中…' : clearing ? (keepPrevious ? '确认清空主账户' : '确认清空并移除') : '确认保存'}
           </button>
         )}
         {dirty && !busy && (

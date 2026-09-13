@@ -186,10 +186,28 @@ describe('非内部员工改绑 → 一律拒绝，绑定一个字都不动', ()
     expect(audit()).toHaveLength(0)
   })
 
-  it('同一个人重复提交同一个号 → 只记一条', async () => {
+  it('同一个号 24 小时内重复提交（换人也算）→ 只记一条', async () => {
     await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
     await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
+    await patchAs(OWNER_A_SELF_SERVE, A, { ad_account_id: ACC_NEW })
     expect(audit()).toHaveLength(1)
+  })
+
+  it('轮换号码刷提交 → 每个客户每天最多记 5 条，第 6 条如实回 request_recorded=false', async () => {
+    const results: boolean[] = []
+    for (let i = 0; i < 6; i++) {
+      const res = await patchAs(EMPLOYEE_A, A, { ad_account_id: `act_${7000000000 + i}` })
+      results.push((await res.json()).request_recorded)
+    }
+    expect(audit()).toHaveLength(5)
+    expect(results).toEqual([true, true, true, true, true, false])
+  })
+
+  it('读不到最近提交（限流查询失败）→ 不记，request_recorded=false', async () => {
+    h.failures = { select: new Set(['client_binding_audit']) }
+    const res = await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
+    expect((await res.json()).request_recorded).toBe(false)
+    expect(audit()).toHaveLength(0)
   })
 
   it('反向用例：员工改绑被拒后，拿 B 的 campaign 过归属校验 → 仍被拒', async () => {
@@ -200,19 +218,34 @@ describe('非内部员工改绑 → 一律拒绝，绑定一个字都不动', ()
 })
 
 describe('内部员工（FDE / ADMIN_EMAILS）改绑', () => {
-  it('合法新账户 → 200，写入 + 旧主账户降级 + 审计记下谁/改前改后/令牌来源', async () => {
+  it('合法新账户 → 200，写入 + 旧主账户默认从这个客户名下移除 + 审计记下谁/改前改后/令牌来源', async () => {
     const res = await patchAs(FDE, A, { ad_account_id: '3333333333' })
     const json = await res.json()
 
     expect(res.status).toBe(200)
     expect(json.ad_account_id).toBe(ACC_NEW)
+    expect(json.previous_removed).toBe(true)
     expect(primaryOf(A)).toBe(ACC_NEW)
-    expect(accountRowsOf(A)).toEqual([`${ACC_A}:false`, `${ACC_NEW}:true`])
+    expect(accountRowsOf(A)).toEqual([`${ACC_NEW}:true`])
     expect(audit()).toHaveLength(1)
     expect(audit()[0]).toMatchObject({
       client_id: A, actor_email: FDE, action: 'bind', outcome: 'applied',
       previous_value: ACC_A, requested_value: ACC_NEW, token_source: 'shared_fallback',
     })
+  })
+
+  it('改绑后旧账户里的 campaign 过归属校验 → 被拒（纠正误绑必须真的收回权限）', async () => {
+    await patchAs(FDE, A, { ad_account_id: ACC_NEW })
+    fetchMock.mockImplementationOnce(async () =>
+      Response.json({ id: 'camp_old', name: 'x', status: 'ACTIVE', account_id: ACC_A.slice(4) }))
+    expect((await assertCampaignOwnedByClient('camp_old', A, 'tok')).ok).toBe(false)
+  })
+
+  it('勾「保留为第二账户」→ 旧账户降级保留，审计写明 kept', async () => {
+    const res = await patchAs(FDE, A, { ad_account_id: ACC_NEW, keep_previous_as_secondary: true })
+    expect(res.status).toBe(200)
+    expect(accountRowsOf(A)).toEqual([`${ACC_A}:false`, `${ACC_NEW}:true`])
+    expect(String(audit()[0].detail)).toContain('kept as secondary')
   })
 
   it('Graph 核实确实被调用，用的是这个客户解析出来的令牌', async () => {
@@ -304,11 +337,53 @@ describe('内部员工（FDE / ADMIN_EMAILS）改绑', () => {
     expect(audit()).toHaveLength(0)
   })
 
-  it('镜像表写失败 → 500，审计记 write_failed，不再假装成功', async () => {
-    h.failures = { upsert: new Set(['client_meta_ad_accounts']) }
+  it('登记表插入失败 → 500，两处都恢复原状，审计记 write_failed', async () => {
+    h.failures = { insert: new Set(['client_meta_ad_accounts']) }
+    const res = await patchAs(FDE, A, { ad_account_id: ACC_NEW })
+    const json = await res.json()
+    expect(res.status).toBe(500)
+    expect(json.reason).toBe('write_failed')
+    expectBindingUntouched()
+    expect(audit()[0]).toMatchObject({ outcome: 'write_failed' })
+  })
+
+  it('移除旧账户那一步失败、恢复时删新行也失败 → 如实报 partial_write，clients 列没被改', async () => {
+    h.failures = { delete: new Set(['client_meta_ad_accounts']) }
     const res = await patchAs(FDE, A, { ad_account_id: ACC_NEW })
     expect(res.status).toBe(500)
-    expect(audit()[0]).toMatchObject({ outcome: 'write_failed' })
+    expect((await res.json()).reason).toBe('partial_write')
+    expect(primaryOf(A)).toBe(ACC_A)
+  })
+
+  it('clients 列写失败且恢复也写不进去 → 如实报「只写了一半」，不说成普通失败', async () => {
+    h.failures = { update: new Set(['clients']) }
+    const res = await patchAs(FDE, A, { ad_account_id: ACC_NEW, keep_previous_as_secondary: true })
+    const json = await res.json()
+    expect(res.status).toBe(500)
+    expect(json.reason).toBe('partial_write')
+    expect(json.error).toContain('只写了一半')
+  })
+
+  it('clients 列写失败 → 登记表那一半照快照恢复（归属校验不会停在新号上）', async () => {
+    h.failures = { update: new Set(['clients']) }
+    await patchAs(FDE, A, { ad_account_id: ACC_NEW, keep_previous_as_secondary: true })
+    expect(accountRowsOf(A)).toEqual([`${ACC_A}:true`])
+  })
+
+  it('改绑成功但审计补记失败 → 200 且带 audit_incomplete，不假装审计完整', async () => {
+    h.failures = { update: new Set(['client_binding_audit']) }
+    const res = await patchAs(FDE, A, { ad_account_id: ACC_NEW })
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.audit_incomplete).toBe(true)
+    expect(primaryOf(A)).toBe(ACC_NEW)
+  })
+
+  it('别家客户那行是降级行（is_primary=false）→ 也算重复', async () => {
+    h.db.client_meta_ad_accounts.push({ id: 'm9', client_id: B, ad_account_id: 'act_5555555555', is_primary: false, label: 'old' })
+    graphAccounts['act_5555555555'] = 'B old'
+    const res = await patchAs(FDE, A, { ad_account_id: 'act_5555555555' })
+    expect(res.status).toBe(409)
   })
 
   it('前导零 → 400（否则 act_0123… 和 act_123… 会被当成两个账户绕过重复检查）', async () => {
@@ -316,20 +391,34 @@ describe('内部员工（FDE / ADMIN_EMAILS）改绑', () => {
     expect(res.status).toBe(400)
   })
 
-  it('内部员工清空 → 200，审计记 clear', async () => {
+  it('内部员工清空 → 200，审计记 clear，旧账户默认移除', async () => {
     const res = await patchAs(FDE, A, { ad_account_id: null })
     expect(res.status).toBe(200)
     expect(primaryOf(A)).toBeNull()
+    expect(accountRowsOf(A)).toEqual([])
     expect(audit()[0]).toMatchObject({ action: 'clear', outcome: 'applied', previous_value: ACC_A })
+  })
+
+  it('内部员工清空 + 保留为第二账户 → 行留下但不是主账户', async () => {
+    await patchAs(FDE, A, { ad_account_id: null, keep_previous_as_secondary: true })
+    expect(accountRowsOf(A)).toEqual([`${ACC_A}:false`])
   })
 })
 
 describe('CTS 多账户不被误拦', () => {
-  it('把 CTS 自己已登记的官方账户设为主账户 → 不算重复，保留原标签', async () => {
-    const res = await patchAs(FDE, CTS, { ad_account_id: CTS_OFFICIAL })
+  it('把 CTS 自己已登记的官方账户设为主账户（保留个人号）→ 不算重复，保留原标签，两个账户都在', async () => {
+    const res = await patchAs(FDE, CTS, { ad_account_id: CTS_OFFICIAL, keep_previous_as_secondary: true })
     expect(res.status).toBe(200)
     const official = h.db.client_meta_ad_accounts.find(r => r.client_id === CTS && r.ad_account_id === CTS_OFFICIAL)
     expect(official).toMatchObject({ is_primary: true, label: 'CTStours 官方账户（ThruPlay）' })
+    expect(accountRowsOf(CTS)).toEqual([`${CTS_OFFICIAL}:true`, `${CTS_PERSONAL}:false`])
+  })
+
+  it('CTS 登记表里官方账户存成裸数字 → 提升时原行规范成 act_ 写法，不重复插行', async () => {
+    h.db.client_meta_ad_accounts.find(r => r.id === 'm4')!.ad_account_id = CTS_OFFICIAL.slice(4)
+    const res = await patchAs(FDE, CTS, { ad_account_id: CTS_OFFICIAL, keep_previous_as_secondary: true })
+    expect(res.status).toBe(200)
+    expect(accountRowsOf(CTS)).toEqual([`${CTS_OFFICIAL}:true`, `${CTS_PERSONAL}:false`])
   })
 
   it('官方账户上的 campaign 过归属校验 → 放行', async () => {
@@ -370,6 +459,18 @@ describe('客户提交 → FDE 看到 → 处理', () => {
     const res = await patchAs(EMPLOYEE_A, A, { dismiss_request: true })
     expect(res.status).toBe(403) // non-staff never reach the dismiss branch
     expect((await (await getAs(FDE, A)).json()).pending_request).not.toBeNull()
+  })
+
+  it('FDE 清空绑定 ≠ 处理了客户交的号 → 待核实还在', async () => {
+    await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
+    await patchAs(FDE, A, { ad_account_id: null })
+    expect((await (await getAs(FDE, A)).json()).pending_request).toMatchObject({ requested_value: ACC_NEW })
+  })
+
+  it('GET 读待核实请求失败 → 如实返回 error，不当成「没有请求」', async () => {
+    h.failures = { select: new Set(['client_binding_audit']) }
+    const json = await (await getAs(FDE, A)).json()
+    expect(json.pending_request).toHaveProperty('error')
   })
 
   it('FDE 采用这个号保存 → 待核实消失', async () => {
