@@ -40,6 +40,14 @@
 - [x] 背景音乐——2026-09-13 发现模板其实自带一个通用的 `Music` 音频图层（此前的模板结构记录漏记了这个，只记了画面/文字元素），PM 上传了 3 首新曲目到 Dropbox（`MagicLab_Studio/Music/`），已全部转存到正式素材库，PM 选定 `Horizon's Call` 作为默认背景音乐，通过已有的 `static_overrides` 机制接入（不需要改代码），已用真实渲染验证音轨确实有声音且不是哑的
 - [ ] 🔴 2026-09-13 测试渲染时新发现的生产缺口：当某个镜头一张真实照片都没匹配上、需要走"AI 现画兜底"这条路时，生产环境里 `MUAPI_API_KEY` 这个环境变量实际上没配置（`docs/ENV.md` 之前标记✅是错的，从没人真的验证过这条兜底路径），会导致整条渲染直接失败，不是"效果差一点"，是"整片渲不出来"。按 §11 资源优先级打分：频率=低（目前 47 张已核实真实照片覆盖 4 个常用镜头，命中兜底路径的机会不高，但会随内容多样化增加）、IMPACT 关口=高（卡在 Act 段，命中即整条渲染失败）、收入关联度=低（不直接影响客户投诉/续费，只是出片变慢）→ 两项低+一项高 → **P3**，先记录待认领，不阻塞当前工作
 
+## 新客户 Meta 广告户接入 — SOP 已验证，ME 操作侧步骤待并入后台流程
+
+> 背景：2026-09-13 给 Magic Picks 接入 Meta 广告户时，实测走通了"业务账户互为合作伙伴"路径（不用建应用、不用踩系统用户挂应用的死循环），写成 [`docs/sops/client-meta-ads-onboarding.md`](./sops/client-meta-ads-onboarding.md)，同一时间另一个并行会话把系统用户按客户隔离（角色必须"员工"不能"管理员"）、`leads_retrieval`/`pages_manage_ads` 权限、令牌命名规则等真实事故教训也补全了。PM 拍板：这份 SOP 要变成 ME 后台"新客户引导流程"里的一步，不能一直靠人读文档手动点。
+
+- [x] 客户方那一半（把资产 Partner-share 给 Magic Engine）已有自助页面 `src/app/authorisation/page.tsx`，文案和步骤已经和 SOP 对齐（`META_BUSINESS_ID` 常量一致）
+- [ ] ME 操作侧那一半（确认资产到账 → 建员工系统用户 → 分配资产 → 生成令牌 → 令牌写进 Render → 广告户写进 `clients.meta_ad_account_id`）目前全靠 SOP 文档人工按步骤点，还没有任何后台 UI/脚本辅助——评估要不要做成一个"新客户接入"向导页（读 `client_meta_ad_accounts` + `clients.meta_ad_account_id` 状态，缺哪步提示哪步），或者至少先把「客户已共享资产但 ME 还没确认」这个等待态接进 `src/lib/pm-todo/client-doc-manual-tasks.ts`（SOP 里已经要求这么做，但目前是"要求 ME 操作人手动记得加"，没有代码强制）
+- [ ] Magic Picks 是第一个用这条新路径接入的客户，目前只做到「客户资产已共享 + 广告户已登记 `clients.meta_ad_account_id`」，还没建专属员工系统用户/生成令牌（当前没有自动化发广告的需求，先手动在 Ads Manager 里操作即可；哪天要接 API 自动化再回头做「三～六」）
+
 ## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
 
 > 背景：`me_sale_outcomes`/`me_conversion_writebacks` 表结构（Issue #1397）2026-09-05 已定稿，
