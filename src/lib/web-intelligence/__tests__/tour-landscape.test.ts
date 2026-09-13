@@ -24,6 +24,13 @@ describe('tour landscape summary', () => {
     expect(prompt).toContain('不得因为一篇文章就声称整个市场发生变化')
   })
 
+  it('labels traffic estimates as an auxiliary low-confidence signal', () => {
+    const prompt = tourLandscapePrompt({ client_name: 'CTS', client_products: [], competitor_products: [], traffic_signals: [{ domain: 'competitor.example', observed_at: '2026-09-12', estimated_visits: 1200, previous_estimated_visits: 1000, visits_change_pct: 20, excerpt: 'Public estimate' }] })
+    expect(prompt).toContain('公开估算，低置信度')
+    expect(prompt).toContain('不得据此声称竞品销售增长')
+    expect(prompt).toContain('competitor.example')
+  })
+
   it('bounds injected client memory so it cannot overwhelm the analysis prompt', () => {
     const prompt = tourLandscapePrompt({ client_name: 'Example', client_products: [], competitor_products: [], memory_context: 'x'.repeat(10000) })
     expect(prompt).not.toContain('x'.repeat(5001))
