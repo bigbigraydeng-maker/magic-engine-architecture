@@ -155,6 +155,44 @@ describe('factory-creatomate-render — 早期失败必须落 job.status=failed�
     const failedUpdate = updates.find((u) => u.table === 'content_factory_render_jobs' && (u.patch as { status?: string }).status === 'failed')
     expect(failedUpdate, 'job 必须被 patch 成 failed，否则这条失败对 manual-items.ts 永远不可见').toBeDefined()
   })
+
+  // 2026-09-13 复审补测：这条校验（sceneFieldMap 的 caption 槽位和 requiredPostFields
+  // 撞了同一个元素名）是子牙设计复审要求加的安全网，加了却漏了测，这里补上。`.fn` 读法
+  // 是本文件第 145-147 行注释里已用真实 d.ts 实测确认过、并已用了 3 次的既有模式，不是
+  // 新的接口猜测。
+  it('模板配置里 sceneFieldMap 的 caption 和 requiredPostFields 撞了同一个元素名 → 抛错，job 标 failed', async () => {
+    const updates: Record<string, unknown>[] = []
+    const supabase = fakeSupabase({
+      job: { id: JOB_ID, client_id: CLIENT_ID, content_post_id: POST_ID, status: 'queued', scenes: null, creatomate_render_id: null },
+      clients: {
+        factory_config: {
+          render: {
+            engine: 'creatomate',
+            creatomate: {
+              template_id: 'tmpl-1',
+              scene_field_map: [{ visual: 'Still-1', caption: 'EndTour' }], // 跟下面 requiredPostFields 撞名
+              required_post_fields: ['EndTour'],
+            },
+          },
+        },
+      },
+      posts: { title: 'x', script: '口播稿' },
+      updates,
+    })
+    prepareSceneAssets.mockResolvedValue([
+      { index: 0, captionText: 'A', visualUrl: 'https://x/a.mp4', visualType: 'video', voUrl: 'https://x/a.mp3', costUsd: 0.3 },
+    ])
+
+    const fn = createFactoryCreatomateRender({ supabase: supabase as never })
+    const handler = (fn as unknown as { fn: (ctx: { event: { data: unknown }; step: ReturnType<typeof fakeStep> }) => Promise<unknown> }).fn
+
+    await expect(
+      handler({ event: { data: { job_id: JOB_ID, client_id: CLIENT_ID, post_id: POST_ID } }, step: fakeStep() }),
+    ).rejects.toThrow(/模板配置冲突/)
+
+    const failedUpdate = updates.find((u) => u.table === 'content_factory_render_jobs' && (u.patch as { status?: string }).status === 'failed')
+    expect(failedUpdate, 'job 必须被 patch 成 failed').toBeDefined()
+  })
 })
 
 describe('factory-creatomate-render — 成功路径把 Creatomate credits 记进 cost_usd（第二轮复审 ⚠️4）', () => {

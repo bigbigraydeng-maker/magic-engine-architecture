@@ -363,6 +363,18 @@ async function ensureSceneAssets(
   return step.run('prepare-assets', async () => {
     const { title, script } = await readPostFields(supabase, job.content_post_id)
     const factoryConfig = await readFactoryConfig(supabase, job.client_id)
+
+    // 🔴 必须在花钱生成分镜素材之前做，且必须在 patchJob 写 job.scenes 之前做——
+    // 外层 runWorkflow 用 `job.scenes ?? (await ensureSceneAssets(...))` 判断要不要
+    // 重跑这一步：如果这段校验排在 patchJob 之后，一旦它抛错（如客户没配这个团的
+    // 事实字典），job.scenes 已经非空，之后哪怕把配置改对了重新触发，也会因为
+    // job.scenes 非空而永远跳过这一步、跳过这段校验，只会在 submit 步骤被
+    // resolvePostEndcardOverrides 拦第二次——又变回"只能人工改数据库才能救"，
+    // 正是这条改动本来要消灭的操作（复审 acf8139a 抓出）。排在最前面，失败时
+    // job.scenes 还是空的，下次重跑会从头再来一遍，配置改对了就能自愈。
+    const contract = extractTemplateContract(factoryConfig, job.client_id)
+    await ensurePostFieldsWritten(supabase, job.content_post_id, contract)
+
     const scenes = await prepareSceneAssets({
       clientId: job.client_id,
       jobId: job.id,
@@ -372,11 +384,6 @@ async function ensureSceneAssets(
     })
     const sceneCostUsd = scenes.reduce((sum, s) => sum + s.costUsd, 0)
     await patchJob(supabase, job.id, { status: 'rendering', scenes, cost_usd: sceneCostUsd })
-
-    // 分镜准备好的同一步，把这条视频该填的真实事实也算好、写回去——不再等 submit
-    // 步骤才发现字段缺失（那样只会让 job 白跑一趟分镜+配音的钱再失败）。
-    const contract = extractTemplateContract(factoryConfig, job.client_id)
-    await ensurePostFieldsWritten(supabase, job.content_post_id, contract)
 
     return scenes
   })
