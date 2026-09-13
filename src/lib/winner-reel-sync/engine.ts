@@ -105,11 +105,12 @@ function normalizeAccountId(id: string): string {
  * cron + 看板「补新素材」按钮）都不收实体 id，没法在入口拦，守卫只能放在
  * 这里、读配置之后、碰 Meta 之前。
  *
- * 🔴 局限：账户/主页核对只查 `clients` 表登记值是否一致，挡的是「配置行
- * 串到了别的客户」这一类。CTS / Oztop 这类共用同一个 Meta 广告账户的客户，
- * `ad_account_id` 天然相同——这条守卫对「同账户内配错到另一个共享该账户的
- * 客户」挡不住，跟 `campaign-ownership.ts` 是同一个已知局限，根治需要账户
- * 拆分（产品/运维决策）。`target_adset_id` 这条（Codex 复审 P1 指出的缺口）
+ * 🔴 局限：账户按 `client_meta_ad_accounts` 登记集合核对、主页按 `clients.facebook_page_id`
+ * 核对（2026-09-14 起主页绑定只许内部员工改），挡的是「配置行串到了别的客户」这一类。
+ * 共用同一个 Meta 广告账户的客户（2026-09-14 生产实查：Roman HU 与 30 Kiteroa 同登记
+ * act_1260456876069575）`ad_account_id` 天然相同——这条守卫对「同账户内配错到另一个
+ * 共享该账户的客户」挡不住，跟 `campaign-ownership.ts` 是同一个已知局限，根治需要
+ * 广告系列级归属表（ads IMPACT 设计 §4.1④，阶段 2）。`target_adset_id` 这条（Codex 复审 P1 指出的缺口）
  * 改成真拉 Meta 核实 ad set 实际挂在哪个账户下——能挡住「账户/主页碰巧都对，
  * 但 ad set id 打错/串到别的账户」这一类，仍挡不住"同一个共享账户内，ad set
  * 也刚好属于共用该账户的另一个客户"这种更深的情况（同一条已知局限）。

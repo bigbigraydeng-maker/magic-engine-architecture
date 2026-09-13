@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
 vi.mock('@/lib/auth/client-access', () => ({ requireDashboardClientAccess: vi.fn() }))
+vi.mock('@/lib/auth/require-admin', () => ({ guardGlobalAdmin: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
 vi.mock('@/lib/meta/token-manager', () => ({
   getMetaTokenForClient: vi.fn(),
@@ -25,11 +26,14 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 
 import { GET, PATCH } from '../route'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
+import { guardGlobalAdmin } from '@/lib/auth/require-admin'
+import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getMetaTokenForClient, getStoredPageToken } from '@/lib/meta/token-manager'
 import { listManagedPages } from '@/lib/meta/page-posts'
 
 const mockAccess = vi.mocked(requireDashboardClientAccess)
+const mockStaffGuard = vi.mocked(guardGlobalAdmin)
 const mockFrom = vi.mocked(supabaseAdmin.from)
 const mockToken = vi.mocked(getMetaTokenForClient)
 const mockStoredToken = vi.mocked(getStoredPageToken)
@@ -56,6 +60,8 @@ function getRequest(): NextRequest {
 }
 
 function allow() {
+  // 写操作要内部员工：默认放行，专门的用例再把它改成 403。
+  mockStaffGuard.mockResolvedValue(null)
   mockAccess.mockResolvedValue({
     ok: true,
     user: { email: 'bdm@ctstours.co.nz' } as never,
@@ -243,6 +249,31 @@ describe('facebook-page — authorisation', () => {
 
     expect(res.status).toBe(401)
     expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  // 🔴 2026-09-14 PR #1658 复审阻断项：客户成员能把主页改成别家的，boost-post / draft /
+  // winner-reel-sync 的主页归属核对就全部失效。
+  it('客户成员（非内部员工）改主页绑定 → 403，一个字都不写', async () => {
+    allow()
+    mockStaffGuard.mockResolvedValue(NextResponse.json({ error: 'Forbidden' }, { status: 403 }))
+    const { update } = stubClients(null)
+
+    const res = await PATCH(patchRequest({ page_id: CTS_PAGE }), params(OZTOP))
+
+    expect(res.status).toBe(403)
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('客户成员仍然可以查看绑定（GET 不要求内部员工）', async () => {
+    allow()
+    mockStaffGuard.mockResolvedValue(NextResponse.json({ error: 'Forbidden' }, { status: 403 }))
+    stubClients(CTS_PAGE)
+    mockToken.mockResolvedValue(null)
+
+    const res = await GET(getRequest(), params())
+
+    expect(res.status).toBe(200)
+    expect(mockStaffGuard).not.toHaveBeenCalled()
   })
 })
 
