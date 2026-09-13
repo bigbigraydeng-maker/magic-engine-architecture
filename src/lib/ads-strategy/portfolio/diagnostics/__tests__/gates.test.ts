@@ -13,15 +13,15 @@ import ctsHourlyRaw from './fixtures/cts-official-hourly-adset.json'
 import ctsActivities from './fixtures/cts-official-activities-budget-create.json'
 import oztopDailyRaw from './fixtures/oztop-daily-adset-2026-07-01_2026-08-18.json'
 import oztopActivities from './fixtures/oztop-activities-budget-create.json'
-import { accountInput, dailyRowsFromGraph, hourlyFromGraph, replaySnapshots, type ActivityRow, type SettingsFixture } from './replay'
+import { accountInput, dailyRowsFromGraph, hourlyFromGraph, replaySnapshots, settingsFixture, type ActivityRow } from './replay'
 import { runDiagnostics } from '../run'
 import type { AccountInput, DailyRow, DiagnosisInput, HourlyRow } from '../types'
 import type { OutcomeConfig } from '../../outcome-ladder'
 import type { GraphHourlySpendRow } from '@/lib/meta/entity-settings'
 
-const CTS = ctsSettings as unknown as SettingsFixture
-const NAL = nalSettings as unknown as SettingsFixture
-const OZ = oztopSettings as unknown as SettingsFixture
+const CTS = settingsFixture(ctsSettings)
+const NAL = settingsFixture(nalSettings)
+const OZ = settingsFixture(oztopSettings)
 const CONFIGURED: OutcomeConfig = { leading: 'lead', primary: 'lead', targetCostPerPrimary: 40, minPrimaryPerUnit: 5 }
 
 let ctsDaily: DailyRow[] = []

@@ -33,6 +33,15 @@ export interface SettingsFixture {
 
 export interface ActivityRow { event_type: string; event_time: string; object_id: string; extra_data?: string }
 
+/** JSON 夹具 → SettingsFixture：先核对必需字段在，再收窄类型（形状不对直接抛，不静默）。 */
+export function settingsFixture(json: object): SettingsFixture {
+  const j = json as Partial<SettingsFixture>
+  if (typeof j.ad_account_id !== 'string' || !j.account || !Array.isArray(j.campaigns) || !Array.isArray(j.adsets) || !Array.isArray(j.ads) || !Array.isArray(j.audiences)) {
+    throw new Error('settings fixture shape mismatch')
+  }
+  return j as SettingsFixture
+}
+
 export async function dailyRowsFromGraph(raw: unknown[]): Promise<DailyRow[]> {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: raw }), { status: 200 })))
   const { rows } = await getAdsetDailyInsights('act_replay', 'replay-token', '2000-01-01', '2100-01-01')

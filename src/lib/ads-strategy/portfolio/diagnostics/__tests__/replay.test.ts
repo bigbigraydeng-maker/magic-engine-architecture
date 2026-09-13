@@ -20,15 +20,15 @@ import ctsStudy from './fixtures/cts-study-1489853439620194.json'
 import oztopDailyRaw from './fixtures/oztop-daily-adset-2026-07-01_2026-08-18.json'
 import oztopHourlyRaw from './fixtures/oztop-hourly-adset.json'
 import oztopActivities from './fixtures/oztop-activities-budget-create.json'
-import { accountInput, dailyRowsFromGraph, hourlyFromGraph, replaySnapshots, type ActivityRow, type SettingsFixture } from './replay'
+import { accountInput, dailyRowsFromGraph, hourlyFromGraph, replaySnapshots, settingsFixture, type ActivityRow } from './replay'
 import { runDiagnostics } from '../run'
 import type { DailyRow, DiagnosisInput } from '../types'
 import type { OutcomeConfig } from '../../outcome-ladder'
 import type { GraphHourlySpendRow } from '@/lib/meta/entity-settings'
 
-const NAL = nalSettings as unknown as SettingsFixture
-const CTS = ctsSettings as unknown as SettingsFixture
-const OZ = oztopSettings as unknown as SettingsFixture
+const NAL = settingsFixture(nalSettings)
+const CTS = settingsFixture(ctsSettings)
+const OZ = settingsFixture(oztopSettings)
 
 let nalDaily: DailyRow[] = []
 let ctsDaily: DailyRow[] = []
