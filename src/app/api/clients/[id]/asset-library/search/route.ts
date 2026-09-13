@@ -53,14 +53,19 @@ export async function POST(
       .select('id, storage_url, original_filename, vision_metadata, source')
       .eq('client_id', params.id)
       .eq('status', 'analyzed')
-      // 同 storyboard-generator:视频虽标 analyzed 但没有画面分析结果,不能当图片推荐出去
-      .not('vision_metadata->>kind', 'eq', 'video')
       .is('archived_at', null)
       .not('storage_url', 'is', null)
 
     if (error) throw error
 
-    const assets = (data ?? []) as RankableAsset[]
+    // 🔴 2026-09-13 生产实测发现：`.not('vision_metadata->>kind', 'eq', 'video')` 曾直接写在
+    //    上面的查询里，但绝大多数照片行没有 `kind` 这个键（只有视频行才写 kind='video'）——
+    //    PostgREST 的 not-eq 遇到键不存在（NULL）时按 SQL 三值逻辑整行排除，等于把几乎所有
+    //    真实照片一起筛掉了，只留极少数碰巧写了 kind 键的行。改成 JS 侧判断，跟
+    //    client-asset-pool.ts::selectAssetUrls 同一份"缺 kind 键 = 不是视频"的口径。
+    const assets = ((data ?? []) as RankableAsset[]).filter(
+      (a) => (a.vision_metadata as Record<string, unknown> | null)?.kind !== 'video',
+    )
     // requireVerified 不开:这是人工选图界面,FDE 要能看见/选未核实的图(界面按
     // source 显示徽章自己判断),自动出片管线才需要收紧到只认核实过的来源。
     const picks = await rankAssetsByPrompt(image_prompt.trim(), assets, topN)
