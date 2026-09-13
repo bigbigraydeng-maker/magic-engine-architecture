@@ -51,16 +51,21 @@
 
 ## 现实地基问题（必须先解决的一条）
 
-**现在这些团的数据不在 ME 里，在客户自己的网站代码库里**（CTS 的团在 `chinatravel` 仓 `src/lib/data/tours.ts`，是散文式行程，不是结构化数据）。
+**团数据分散在多处，而且已经有多份在漂移**（Codex 复审 2026-09-14 指出）：
+- CTS 官网 `chinatravel` 仓 `src/lib/data/tours.ts`（散文式行程）；
+- ME 内已有 `config/clients/cts/offerings.yaml`、`src/lib/web-intelligence/first-party-tours.ts`（`FirstPartyTour`）、`tailor_made_itineraries`，以及 `factory_config.render.creatomate.offers`——`docs/ROADMAP.md` 记录后两者的在售团数据正在漂移。
 
-要做成「ME 后台管理」，**第一步必须在 ME 建一套『团』的数据结构**（城市/天数/交通/活动/价格/出发日期），这是整个模块的地基。没有它，上面四块无从谈起。
+**🔴 关键约束（产品定义红线）**：[`ME_PRODUCT_DEFINITION.md`](../strategy/ME_PRODUCT_DEFINITION.md) §3.2 明确 **「旅游库存、正式报价、出票和预订后台」不由 ME 自建**，继续作为外部 Source of Truth，ME 只通过 Connector 读必要事实；§3.3「最小保存原则」——不复制外部系统的完整库存/订单数据。
+
+所以**第一步不是「自建一套团数据表」（那会造出第三/第四份事实源、与产品定义冲突）**，而是：**先把现有事实源统一/连接起来，只在 ME 保存营销所需的最小快照**（城市/天数/交通/活动这类画图和出文案要用的字段；价格/出发日期/库存留在外部源、按需读取或存快照+标注时效），再判断是否真的还缺表。
 
 ---
 
 ## Build vs Connect vs Buy
 
-- **团数据结构 + 管理后台 = Build**（ME 自己的核心数据，旅游版地基）。
-- **地图生成 = Build（已做内核）**：per-tour 自动出图，无现成 SaaS 能按 CTS 品牌 + 中国真实边界 + 自适应布局出图；成本为零（纯渲染）。
+- **团事实源 = Connect（不是 Build）**：读现有 `offerings.yaml` / `FirstPartyTour` / 客户官网，统一成一个营销快照；价格/库存/报价按 §3.2 留外部源用 Connector 读，**ME 不自建旅游库存/报价系统**。
+- **营销快照结构 = 最小 Build**：只存画图/出文案要用的字段，遵守 §3.3 最小保存原则，不复制完整库存。
+- **地图生成 = Build（已做原型）**：per-tour 自动出图，无现成 SaaS 能按品牌 + 中国真实边界 + 自适应布局出图；成本为零（纯渲染）。**当前原型只做中国线路、品牌/底图/地理规则硬编码**，产品化前需参数化（见 Reuse Statement）。
 - **AI 文案 / SEO 内容 = 复用 ME 现有** `src/lib/ai/` + SEO writer skill，不新建。
 - **PDF 渲染 = 复用**已登记的 HTML→PDF 候选。
 - **地图底图数据 = Buy/Free**：用公开地理边界数据（Natural Earth 类，免费），不买地图服务。
@@ -71,11 +76,11 @@
 
 > 每步都走：设计 → 子牙(架构)+魏征(挑刺) 双审 → 五道 Build Gate → 实现 → 验证。风险级见每步标注。
 
-1. **P1 · 团数据结构（地基）** [A 级：新表/schema]
-   在 ME 建 `tours` / `tour_departures` 等表，按 client 隔离（service_role RLS）。字段：城市序列、每城 nights、segment 交通方式、活动、价格、出发日期、gateway/origin。先能存、能按 client 读。
+1. **P1 · 统一/连接现有团事实源 + 最小营销快照** [A 级：涉及外部源接入]
+   先盘清现有几份源（`offerings.yaml` / `FirstPartyTour` / 客户官网 / creatomate offers），**连接而非新建第三份权威源**；在 ME 只存画图/出文案要用的最小快照（城市序列/每城 nights/交通/活动），价格/出发日期/库存按 §3.2 留外部源、Connector 读或存快照+时效标注。按 client 隔离（service_role RLS）。**先解决"多份源漂移、各渠道给客户不同答案"这个真问题。**
 
 2. **P2 · 路线图生成器产品化** [B 级]
-   把今天 scratchpad 的生成器（Python）搬成 ME 里的正式能力：输入 = P1 的结构化团数据，输出 = PC + 手机两版 SVG，落 ME 的公开桶。复用今天验证过的设计系统与自适应布局。**首例已证明可行**（CTS 7 团）。
+   把原型（`docs/specs/prototypes/tour-route-map/`）搬成 ME 里的正式能力：输入 = P1 的营销快照，输出 = PC + 手机两版 SVG，落 ME 的公开桶。**产品化前置：把品牌色/logo、底图、地理标注规则参数化**（当前原型这三样是 CTS/中国硬编码），才能支持非中国目的地/其他客户。复用今天验证过的设计系统与自适应布局。
 
 3. **P3 · Tour 管理后台 UI** [B 级]
    ME 后台一个页面：列出客户的团、录入/编辑四块、一键生成地图 + 预览。给 FDE/PM 用。
@@ -99,7 +104,7 @@
 - **PC 宽版 + 手机竖版**两套，页面按屏宽自动切；
 - CTS 品牌色 + logo。
 
-P2 就是把这套逻辑从一次性脚本，搬成 ME 里读数据库、落桶的正式服务。**设计不用重来，只是接上数据源和存储。**
+P2 就是把这套逻辑从原型脚本，搬成 ME 里读数据、落桶的正式服务。**设计不用重来**（原型已存进受跟踪路径 `docs/specs/prototypes/tour-route-map/`），主要工作 = 接上数据源 + 存储 + 把品牌/底图/地理规则参数化。
 
 ---
 
@@ -113,17 +118,19 @@ P2 就是把这套逻辑从一次性脚本，搬成 ME 里读数据库、落桶�
 
 ## Reuse Statement（复用边界）
 
-- **复用了什么平台能力**：今天的地图生成器复用了公开地理数据 + 已有 CTS VI；产品化后复用 ME 的 `src/lib/ai/`、SEO writer skill、HTML→PDF 候选、公开桶存储。
-- **平台共享**：团数据结构（旅游版通用）、地图生成器、内容/定价产出管道。
+- **复用了什么平台能力**：地图生成器复用公开地理数据；产品化后复用 ME 的 `src/lib/ai/`、SEO writer skill、HTML→PDF 候选、公开桶存储；团事实按 §3.2 走 Connector 读现有源。
+- **当前是「中国/CTS 首例」，尚未取得旅游版共享资格**（Codex 复审 2026-09-14 修正）：地图生成器原型**硬编码了 CTS 品牌色/logo、中国底图、台湾标注惯例**——这三样未参数化前，它是「中国线路路线图 · CTS 首例」，不是「ME 旅游版通用共享能力」。候选表状态仍是 `candidate · 1/2`，需第 2 个旅游客户事实复制才晋升。
+- **产品化前置条件**（写清防止后续实现者误当平台共享直接搬）：① 品牌色/logo 参数化（按 client 读）；② 底图/地理标注规则参数化（支持非中国目的地）；③ 团事实走 Connector 而非硬编码。
 - **行业专属（L2 旅游版）**：整个 Tour 管理模块只服务旅游类客户。
-- **客户专属（L4）**：CTS 的具体团/价格/城市/活动 = client 配置，进库隔离，不入 shared runtime。
-- **没有把客户事实写进 shared runtime**：地图生成器不含任何写死的客户名/城市/价格，全部来自输入的结构化数据。
+- **客户专属（L4）**：CTS 的具体团/价格/城市/活动 + 品牌资产 = client 配置，进库隔离，不入 shared runtime。
+- **红线核对**：生成器**逻辑**不含写死的客户名/城市/价格（全来自输入 specs），但**视觉资产（品牌色/logo/底图）当前硬编码**——这部分必须在产品化时下沉为 L4 配置，不能带进旅游版 shared runtime。
 
 ---
 
 ## 关联
 
-- 平台候选：`docs/registry/platform-candidates.md` →「行程转路线地图生成器」（本次已实现首例）
+- 平台候选：`docs/registry/platform-candidates.md` →「行程转路线地图生成器」（`candidate · 1/2`，未晋升共享能力）
 - 首例实现（CTS 官网）：`chinatravel` 仓 `src/components/tours/TourRouteMap.tsx` + `public/tour-maps/*.svg`
-- 生成器原型：本会话 scratchpad `gen.py` + `specs.py`
+- 生成器原型（受跟踪）：[`docs/specs/prototypes/tour-route-map/`](./prototypes/tour-route-map/)（gen.py + specs.py + 底图数据 + README）
+- 产品定义红线：[`ME_PRODUCT_DEFINITION.md`](../strategy/ME_PRODUCT_DEFINITION.md) §3.2/§3.3（旅游库存/报价不自建）
 - 平台化原则：`docs/roadmap/2026-08-19-me2-platformization-principle.md`
