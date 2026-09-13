@@ -23,8 +23,11 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
   id                          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id                   uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
 
-  -- 事实身份：同客户下 fact_key + scope 唯一 —— 重复萃取到同一条事实必须走
-  -- UPDATE，不许开一条新行（否则同一件事在库里会有多个"当前"版本）。
+  -- 事实身份 = client_id + fact_key + scope + value_fingerprint（唯一索引
+  -- 见下方 uq_client_knowledge_facts_identity）。同一个值重复萃取到走
+  -- UPDATE；不同的值（冲突）各开一行，同时存在，留给人工审核挑一条——
+  -- "同一时刻只能有一条 approved" 这条规则由触发器保证，不是靠这张表的
+  -- 唯一索引本身。
   fact_key                    text NOT NULL,
   -- 产品线/线路/门店……等细分范围。无范围区分的事实用 '{}'::jsonb。
   scope                       jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -58,6 +61,17 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
   -- 冲突分组：萃取管道发现同一 fact_key 在不同对话里有矛盾说法时，
   -- 把冲突的候选行打上同一个组号（应用层概念，这里不建外键目标表）。
   conflict_group_id           uuid,
+
+  -- 🔴 候选内容指纹（跨窗口复审引入·2026-09-14）：同一个 fact_key+scope
+  -- 出现价值矛盾的说法时（§9.7"聚类+冲突检测...不做多数投票自动裁决"），
+  -- 必须让多条互相矛盾的候选行同时存在,留给人工审核挑一条——不能只留一行
+  -- 覆盖掉另一条。由写入方（目前只有后续的萃取工作流）从 statement+
+  -- structured_value 算好填入,不含时间相关字段（不能用下面 client_confirmed_
+  -- fingerprint 用的 computeContentFingerprint()——那个含 validUntil,每次
+  -- 写入都用 now()+N 天现算,同一个值每次重跑会得到不同指纹,直接破坏幂等
+  -- 性）。留空（NULL）安全：Postgres 唯一索引把多个 NULL 视为互不相同,
+  -- 手工建的事实哪怕不填这一列也不会跟别的行意外冲突。
+  value_fingerprint            text,
 
   -- ME 内部批准（第一道闸）
   approved_by_email           text,
@@ -103,13 +117,59 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
     )
 );
 
--- 同客户下 fact_key + scope 唯一——重复萃取走 UPDATE。
--- jsonb 有默认 btree 操作符类（对象内部按已排序的键存储），可以直接建唯一索引。
-CREATE UNIQUE INDEX IF NOT EXISTS uq_client_knowledge_facts_key_scope
-  ON public.client_knowledge_facts (client_id, fact_key, scope);
+-- 🔴 身份唯一性（跨窗口复审引入·2026-09-14，替换本迁移最初版本里"同客户下
+-- fact_key+scope 无条件唯一"的设计）：
+--
+-- 最初版本把 (client_id, fact_key, scope) 设成无条件唯一，意味着重新萃取
+-- 出不同的值必须 UPDATE 同一行——这跟 issue #1645 的萃取工作流要求
+-- ("同 fact_key+scope 值不同→冲突组，不做多数投票自动裁决") 直接冲突：
+-- 冲突意味着两条互相矛盾的候选行要同时留着给人工挑，不能只留一行覆盖掉
+-- 另一条。改成 (client_id, fact_key, scope, value_fingerprint) 唯一——
+-- 同一个值只会有一行（重复萃取到同一个值走 UPDATE，不重复插入），但不同
+-- 的值可以是不同的行（冲突时两条都留着）。
+--
+-- 本机实测踩过一个坑，记录下来避免以后重犯：一开始想再加一条"只对
+-- status='approved' 唯一"的局部（partial）唯一索引来保证"同一时刻一个
+-- 身份只能有一条 approved"，SQL 层面完全正确，但 Supabase 的 upsert 是
+-- 经 PostgREST 转译的，PostgREST 的 on_conflict 参数只接受一份列名清单、
+-- 不支持带 WHERE 谓词的局部索引——用 supabase-js 调用会报"没有匹配
+-- ON CONFLICT 规格的唯一约束"。所以"同一身份只能一条 approved"这条规则
+-- 挪到下面的触发器里用查询显式检查，不受 PostgREST/upsert 语法能力限制。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_client_knowledge_facts_identity
+  ON public.client_knowledge_facts (client_id, fact_key, scope, value_fingerprint);
+
+CREATE OR REPLACE FUNCTION public.client_knowledge_facts_single_approved_per_identity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.status = 'approved' AND EXISTS (
+    SELECT 1 FROM public.client_knowledge_facts
+     WHERE client_id = NEW.client_id
+       AND fact_key  = NEW.fact_key
+       AND scope     = NEW.scope
+       AND status    = 'approved'
+       AND id <> NEW.id
+  ) THEN
+    RAISE EXCEPTION
+      'client_knowledge_facts: another approved row already exists for this identity (client_id=%, fact_key=%, scope=%)',
+      NEW.client_id, NEW.fact_key, NEW.scope;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS client_knowledge_facts_single_approved_per_identity_trigger
+  ON public.client_knowledge_facts;
+CREATE TRIGGER client_knowledge_facts_single_approved_per_identity_trigger
+  BEFORE INSERT OR UPDATE ON public.client_knowledge_facts
+  FOR EACH ROW EXECUTE FUNCTION public.client_knowledge_facts_single_approved_per_identity();
 
 CREATE INDEX IF NOT EXISTS idx_client_knowledge_facts_client_status
   ON public.client_knowledge_facts (client_id, status);
+CREATE INDEX IF NOT EXISTS idx_client_knowledge_facts_conflict_group
+  ON public.client_knowledge_facts (conflict_group_id) WHERE conflict_group_id IS NOT NULL;
 
 ALTER TABLE public.client_knowledge_facts ENABLE ROW LEVEL SECURITY;
 DO $$ BEGIN
@@ -136,12 +196,12 @@ CREATE TRIGGER client_knowledge_facts_touch_updated_at_trigger
   BEFORE UPDATE ON public.client_knowledge_facts
   FOR EACH ROW EXECUTE FUNCTION public.client_knowledge_facts_touch_updated_at();
 
--- 🔴 事故预防（跨窗口复审发现·2026-09-14）：uq_client_knowledge_facts_key_scope
--- 是无条件唯一索引（不分 status），意味着重新萃取同一条事实必须 UPDATE 同一行，
--- 不能开新行。如果萃取工作流（#1645）对一条已经 approved+已客户确认的行改了
--- statement/structured_value 却忘了把 status 拨回 candidate、清掉批准/确认字段，
--- 库里会显示"已批准+已确认"但内容已经变了——比丢数据更危险，因为它看起来完全
--- 正常。这道闸不依赖萃取工作流自己记得清字段：只要内容真的变了，无条件重置。
+-- 🔴 事故预防（跨窗口复审发现·2026-09-14）：即使有了 value_fingerprint 区分
+-- 不同的值各开一行，一条已经 approved+已客户确认的行仍然可以被直接 UPDATE
+-- 改动内容（比如手工纠错，或者未来某个写入路径没走"开新候选行"这条正规
+-- 路径）。如果改的时候忘了把 status 拨回 candidate、清掉批准/确认字段，库里
+-- 会显示"已批准+已确认"但内容已经变了——比丢数据更危险，因为它看起来完全
+-- 正常。这道闸不依赖调用方自己记得清字段：只要内容真的变了，无条件重置。
 CREATE OR REPLACE FUNCTION public.client_knowledge_facts_reset_signoff_on_content_change()
 RETURNS TRIGGER
 LANGUAGE plpgsql
