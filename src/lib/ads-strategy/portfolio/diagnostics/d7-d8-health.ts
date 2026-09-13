@@ -45,7 +45,9 @@ export function diagnoseAccountHealth(ctx: AccountContext, input: DiagnosisInput
   const windowSet = new Set(ctx.window)
   const campaignRowsInWindow = ctx.account.daily.some(r => r.level === 'campaign' && windowSet.has(r.insight_date) && r.spend > 0)
   const adsetRowsInWindow = ctx.account.daily.some(r => r.level === 'adset' && windowSet.has(r.insight_date))
-  if (!ctx.account.shared && (!hasEntitySnapshots || (campaignRowsInWindow && !adsetRowsInWindow))) {
+  // 没有实体快照但窗口里也没有任何花费（空账户）→ 不报，否则天天噪音（第二轮核验）
+  const anySpendInWindow = campaignRowsInWindow || ctx.account.daily.some(r => windowSet.has(r.insight_date) && r.spend > 0)
+  if (!ctx.account.shared && ((!hasEntitySnapshots && anySpendInWindow) || (campaignRowsInWindow && !adsetRowsInWindow))) {
     const why = !hasEntitySnapshots ? '没有这个账户的广告设置快照' : '有系列级花费，但广告组级日数据还没进来'
     out.push({
       code: 'D7', status: 'hit', clientVisible: false, units: [unit],
@@ -60,7 +62,7 @@ export function diagnoseAccountHealth(ctx: AccountContext, input: DiagnosisInput
     })
   }
 
-  const deliveringUnits = ctx.budgetUnits.filter(u => isDelivering(u.level === 'campaign' ? ctx.campaigns.get(u.id) : ctx.adsets.get(u.id)))
+  const deliveringUnits = ctx.allBudgetUnits.filter(u => isDelivering(u.level === 'campaign' ? ctx.campaigns.get(u.id) : ctx.adsets.get(u.id)))
   const last = ctx.account.lastInsightDate
   const staleSince = shiftDate(ctx.date, -D7_STALE_DATA_DAYS)
   if (deliveringUnits.length > 0 && (last === null || last < staleSince)) {

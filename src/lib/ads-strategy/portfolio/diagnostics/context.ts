@@ -59,6 +59,8 @@ export interface AccountContext {
   excluded: ExcludedEntity[]
   /** 独立预算单位：CBO 系列 / ABO 广告组（不含实验中的） */
   budgetUnits: BudgetUnit[]
+  /** 含 Meta 实验中的单位——只给账户级判断（D1 预算合计、D7 在投）用，花费和预算口径必须一致 */
+  allBudgetUnits: BudgetUnit[]
 }
 
 function studyOverlaps(start: string | null, end: string | null, windowStartIso: string, windowEndIso: string): boolean {
@@ -110,23 +112,30 @@ export function buildAccountContext(account: AccountInput, date: string, windowL
     }
   }
 
-  const budgetUnits: BudgetUnit[] = []
-  for (const c of Array.from(campaigns.values())) {
-    if (experimentIds.has(c.entity_id)) continue
-    const children = Array.from(adsets.values()).filter(s => s.campaign_id === c.entity_id && !experimentIds.has(s.entity_id))
-    if (c.budget_level === 'cbo') {
-      const live = children.filter(isDelivering)
-      const rolled = rollupCampaignRole((live.length > 0 ? live : children).map(s => roles.get(s.entity_id)!).filter(Boolean))
-      budgetUnits.push({ level: 'campaign', id: c.entity_id, name: c.entity_name, role: rolled.role, confidence: rolled.confidence, dailyBudgetMinor: c.daily_budget_minor, lifetimeBudgetMinor: c.lifetime_budget_minor, adsetIds: children.map(s => s.entity_id) })
-    } else {
-      for (const s of children) {
-        const v = roles.get(s.entity_id)!
-        budgetUnits.push({ level: 'adset', id: s.entity_id, name: s.entity_name, role: v.role, confidence: v.confidence, dailyBudgetMinor: s.daily_budget_minor, lifetimeBudgetMinor: s.lifetime_budget_minor, adsetIds: [s.entity_id] })
+  const buildUnits = (skipExperiments: boolean): BudgetUnit[] => {
+    const units: BudgetUnit[] = []
+    for (const c of Array.from(campaigns.values())) {
+      if (skipExperiments && experimentIds.has(c.entity_id)) continue
+      const children = Array.from(adsets.values()).filter(s => s.campaign_id === c.entity_id && !(skipExperiments && experimentIds.has(s.entity_id)))
+      if (c.budget_level === 'cbo') {
+        const live = children.filter(isDelivering)
+        const rolled = rollupCampaignRole((live.length > 0 ? live : children).map(s => roles.get(s.entity_id)!).filter(Boolean))
+        units.push({ level: 'campaign', id: c.entity_id, name: c.entity_name, role: rolled.role, confidence: rolled.confidence, dailyBudgetMinor: c.daily_budget_minor, lifetimeBudgetMinor: c.lifetime_budget_minor, adsetIds: children.map(s => s.entity_id) })
+      } else {
+        for (const s of children) {
+          const v = roles.get(s.entity_id)!
+          units.push({ level: 'adset', id: s.entity_id, name: s.entity_name, role: v.role, confidence: v.confidence, dailyBudgetMinor: s.daily_budget_minor, lifetimeBudgetMinor: s.lifetime_budget_minor, adsetIds: [s.entity_id] })
+        }
       }
     }
+    return units
   }
 
-  return { account, date, window, campaigns, adsets, ads: byLevel('ad'), audiences, accountRow, roles, experimentIds, excluded, budgetUnits }
+  return {
+    account, date, window, campaigns, adsets, ads: byLevel('ad'), audiences, accountRow, roles, experimentIds, excluded,
+    budgetUnits: buildUnits(true),
+    allBudgetUnits: buildUnits(false),
+  }
 }
 
 /** 窗口内某些广告组的日行（adset 级）。 */
