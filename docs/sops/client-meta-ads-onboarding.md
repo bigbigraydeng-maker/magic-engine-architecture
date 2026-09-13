@@ -1,62 +1,66 @@
 # SOP — 新客户 Meta 广告户开通与授权（通用路径）
 
 > **目的**：任何新客户要把 Meta（Facebook/Instagram）广告户交给 Magic Engine 代管/代投时，都走这一条路径，不因客户不同而另起一套流程。
-> **执行人**：客户方 / 客户方所在的 PM（必须是该广告户的 Business Manager 管理员本人操作，ME 不能代做——这是 Meta 官方要求，授权必须由账户所有者亲自完成）
+> **执行人**：分两段——第一段（资产共享）由**客户方**操作，必须是该广告户/主页所在 Business Manager 的 Admin 本人完成（Meta 官方要求，ME 不能代做）；第二段（分配资产、签发令牌）由 **Magic Engine 操作人**在 ME 自己的 Business Manager 里完成。
 > **耗时**：15-20 分钟
-> **前置**：操作人已经是目标客户 Business Manager 的 Admin
+> **前置**：客户方操作人已经是自己 Business Manager 的 Admin；ME 操作人已经是 Magic Engine 商业组合（Business ID `1265811139097132`）的 Admin
 
 本文档取代 `meta-system-user-token-setup.md` 里 CTS / Oztop 专属的部分，作为**所有新客户默认路径**。CTS / Oztop 已经配好的不用重做，新客户（例如 Magic Picks）从这里开始。
 
 ---
 
-## 零、最容易踩的坑：不要新建应用，复用 Magic Engine 已有的那一个
+## 零、最容易踩的坑：App 和系统用户永远留在 Magic Engine 自己的商业组合里，不要往客户那边搬
 
 **2026-09-13 Magic Picks 接入时的真实教训**：agent 一开始建议给新客户单独建一个 Meta Developer App，被 PM 当场纠正——Magic Engine 应该像所有正规代投代理商一样，**所有客户共用同一个应用**，只是这个应用被逐个客户的 Business Manager 单独授权。新建应用是错的，会导致每个客户一套配置、日后维护成本线性增长，也不符合"一个 agency 一个 App，多客户挂载"的 Meta 官方推荐架构。
+
+**另一个同源的坑（本轮复审新增）**：客户没有办法在自己的 Business Manager 里靠"按名称搜索"把一个归属 Magic Engine 商业组合的 App **加进**自己账户——那个 App 从来不出现在客户的候选列表里，这一步在客户那边大概率直接失败。Meta 代理商的标准架构是反过来的：**客户把自己的资产（广告账户、主页）Partner-share 给 Magic Engine 的商业组合，App 和系统用户永远留在 Magic Engine 这边不动**（详见 [`docs/strategy/meta-flywheel-risk-and-sequencing.md`](../strategy/meta-flywheel-risk-and-sequencing.md) §4，以及客户自助页面 [`src/app/authorisation/page.tsx`](../../src/app/authorisation/page.tsx) 里已经在用的 Partner 共享流程）。所以下面从「一」开始，操作方向是"客户共享资产进 ME"，不是"客户把 App 加进自己账户"。
 
 **Magic Engine 现有的正式应用**（用浏览器登录 developers.facebook.com/apps 核实过，2026-09-13）：
 
 | 应用名称 | 应用编号（App ID） | 状态 | 归属业务实体 |
 |---|---|---|---|
-| **Magic Engine** | `1752513682785923` | 已上线 | Magic Engine |
+| **Magic Engine** | `1752513682785923` | 已上线 | Magic Engine（商业组合 ID `1265811139097132`） |
 
-> 同名还有一个「开发中」的 `3955651258064982`，不归属任何业务实体，那是测试用的，**不要用**。生产客户一律用已上线的 `1752513682785923`。
-
-新客户走到"添加应用"这一步时，**按名称搜索 `Magic Engine`，选应用编号 `1752513682785923` 那个，不要点"创建应用"**。
+> 同名还有一个「开发中」的 `3955651258064982`，不归属任何业务实体，那是测试用的，**不要用**。生产客户一律用已上线的 `1752513682785923`。这个 App 只存在于 Magic Engine 自己的商业组合里，客户那一侧永远看不到、也不用管它。
 
 ---
 
-## 一、进 Business Settings
+## 一、客户把资产共享给 Magic Engine（客户操作）
 
-1. 打开 https://business.facebook.com
-2. 顶部切到客户自己的 Business Manager（不是 Magic Engine 自己的）
-3. 左下角 **⚙️ 业务设置**
+1. 客户登录 https://business.facebook.com，切到**客户自己**的 Business Manager
+2. 左下角 **⚙️ 业务设置** → 左侧「用户」→「合作伙伴」→「添加」→ 选「给一个合作伙伴访问你的资产的权限」
+3. 输入 Magic Engine 的**商业组合 ID**：`1265811139097132`（客户界面上会显示出商业名称，应该是 "Magic Engine"——如果显示别的名字，停下来找 PM 核实，别继续）
+4. 勾选要共享的资产：
+   - **广告账户**：客户的广告户，授予「管理广告」权限（新客户如果还没开广告户，先在客户自己的「账户」→「广告账户」里新建一个，归属必须是客户自己的业务账户，不能挂在 Magic Engine 名下）
+   - **公共主页**：客户的 Facebook 主页，授予 ads/insights 相关权限
+   - **Pixel**（如果客户网站装了追踪代码）：客户的 Pixel
+5. 保存
 
-## 二、把 Magic Engine 应用加进这个业务账户（如果还没加过）
+> 这一步做完之前，后面 ME 侧「四、分配资产」根本看不到这个客户的资产——**不要跳过，也不要指望反过来在客户那边"添加 App"**。
 
-1. 左侧「账户」→「应用」→「添加」
-2. 按名称搜索 `Magic Engine`，选应用编号 `1752513682785923`
-3. 确认添加
+## 二、Magic Engine 侧确认资产已到账（ME 操作）
 
-> 如果这一步找不到、或者提示权限不够，说明客户的 Business Manager 从没跟 Magic Engine 有过关联——正常，继续走，不影响后面创建系统用户。
+1. 登录 https://business.facebook.com，切到 **Magic Engine 自己的**商业组合（`1265811139097132`）
+2. 左侧「账户」→「广告账户」/「公共主页」，确认客户在「一」里共享的资产已经出现在列表里
+3. 如果没出现，回头找客户确认「一」的步骤 3 输入的商业组合 ID 有没有打对、有没有点保存
 
-## 三、新建系统用户
+## 三、新建或复用系统用户（ME 操作，系统用户住在 ME 自己的商业组合里）
 
-1. 左侧「用户」→「系统用户」→右上角「+ 添加」
-2. 名称填：`Magic Engine Ads`
-3. 角色选：**管理员**（⚠️ 不能选"员工"，员工权限调不了 `ads_management`）
-4. 创建
+1. 在 Magic Engine 自己的商业组合里，左侧「用户」→「系统用户」
+2. 如果已经有名叫 `Magic Engine Ads` 的系统用户，直接复用，跳到「四」
+3. 没有就右上角「+ 添加」新建：名称填 `Magic Engine Ads`，角色选**管理员**（⚠️ 不能选"员工"，员工权限调不了 `ads_management`）
 
 ## 四、分配资产（不分配，令牌就是空壳）
 
-在系统用户详情页 →「已分配的资产」→「添加资产」，以下都勾**完全控制**：
+在系统用户详情页 →「已分配的资产」→「添加资产」，这时候资产列表里应该已经能看到客户在「一」共享进来的资产（如果看不到，先解决「二」的问题，不要跳过继续）。以下都勾**完全控制**：
 
 | 资产类型 | 选哪个 |
 |---|---|
-| **广告账户** | 客户的广告户（新客户如果还没开广告户，先在「账户」→「广告账户」里新建一个） |
-| **公共主页** | 客户的 Facebook 主页 |
-| **Pixel**（如果客户网站装了追踪代码） | 客户的 Pixel |
+| **广告账户** | 客户共享进来的广告户 |
+| **公共主页** | 客户共享进来的 Facebook 主页 |
+| **Pixel**（如果有） | 客户共享进来的 Pixel |
 
-## 五、生成令牌
+## 五、生成令牌（在 Magic Engine 自己的商业组合里操作）
 
 1. 系统用户详情页 → 右上角「生成新令牌」
 2. **应用**：选 `Magic Engine`（`1752513682785923`）
@@ -75,20 +79,30 @@
 那串以 `EAA` 开头的字符能直接操控客户的广告户，泄露了任何人都能拿去投放花钱。正确路径：
 
 1. 登进 Render Dashboard → Magic Engine 主服务 → **Environment**
-2. 新增一条环境变量，命名规则：`META_SYSTEM_USER_TOKEN_<客户简称大写>`（例：`META_SYSTEM_USER_TOKEN_MAGICPICKS`）
+2. 新增一条环境变量，命名规则是**客户 `clients.domain` 字段派生的 key，不是随便起的客户简称**：
+   - 变量名 = `META_SYSTEM_USER_TOKEN_<DOMAIN_KEY>`
+   - `<DOMAIN_KEY>` = 把 `clients.domain` 转大写、非字母数字字符全部换成下划线（就是 [`src/lib/meta/token-manager.ts`](../../src/lib/meta/token-manager.ts) 里的 `domainToEnvKey()`，读取时也是走这个规则，两边必须对上）
+   - 举例：`clients.domain = magicpicks.com.au` → `DOMAIN_KEY = MAGICPICKS_COM_AU` → 完整变量名 `META_SYSTEM_USER_TOKEN_MAGICPICKS_COM_AU`
+   - **动手前先去数据库确认这个客户 `clients.domain` 的真实值**，不要凭客户名称猜——猜错了运行时读不到，广告读写会一直报未配置令牌
 3. 值填那串令牌
 4. 保存，等 Render 自动重启（约 60 秒）
 
 配完只需要回来说一句「token 已配」，不需要（也不应该）把令牌本身发过来。
 
-## 七、把广告户登记进数据库
+## 七、把广告户登记进数据库 —— 走 Settings UI / API，不要手写 SQL
 
-拿到广告户 ID（`act_` 开头一串数字，广告户设置首页能看到）后，登记进 `client_meta_ad_accounts` 表（每个客户可以有多个广告户，`is_primary` 标记主账户）：
+拿到广告户 ID（`act_` 开头一串数字，广告户设置首页能看到）后，**不要**直接写 `INSERT INTO client_meta_ad_accounts`——那张表只是给多账户场景用的镜像表，真正的真相源是 `clients.meta_ad_account_id`：每日回流任务（`google-data-pullback-daily`）、手动同步、诊断适配器都靠这一列判断"这个客户有没有配广告户"，只写 `client_meta_ad_accounts` 不动 `clients.meta_ad_account_id`，这个客户会被当成"未配置"直接跳过。
 
-```sql
-INSERT INTO client_meta_ad_accounts (client_id, ad_account_id, label, is_primary)
-VALUES ('<clients.id>', 'act_XXXXXXXXX', '<客户名> 主广告户', true);
-```
+正确路径二选一（效果一样，都会同时更新 `clients.meta_ad_account_id` 并镜像一条 `is_primary=true` 记录进 `client_meta_ad_accounts`）：
+
+1. **Settings UI（推荐，FDE 用）**：客户详情页 → 设置 → 「Meta 广告账户」面板，填入 `act_XXXXXXXXX`，点保存
+2. **API（脚本化场景用）**：
+   ```
+   PATCH /api/clients/<clients.id>/meta-ad-account
+   Content-Type: application/json
+
+   { "ad_account_id": "act_XXXXXXXXX" }
+   ```
 
 ## 八、验证（三项都过，才算真的能跑）
 
@@ -106,13 +120,13 @@ VALUES ('<clients.id>', 'act_XXXXXXXXX', '<客户名> 主广告户', true);
 A：不行，员工调不了 `ads_management`，只能读不能写。
 
 **Q2：要不要每个客户都建一个新应用？**
-A：**不要**。见本文档「零」——所有客户共用 `Magic Engine`（`1752513682785923`）这一个应用。
+A：**不要**。见本文档「零」——所有客户共用 `Magic Engine`（`1752513682785923`）这一个应用，且这个应用永远留在 Magic Engine 自己的商业组合里，不需要也不可能挂到客户账户下。
 
 **Q3：令牌真的永不过期？**
-A：是，前提是①选了"永不过期"②用的是系统用户不是普通用户。如果客户的 Business Manager 管理员把这个系统用户移除或收回权限，令牌照样会失效——这不是技术问题，是客户那边的账户变动。
+A：是，前提是①选了"永不过期"②用的是系统用户不是普通用户。如果客户把「一」里共享给 Magic Engine 的 Partner 权限收回，令牌照样会失效——这不是技术问题，是客户那边的账户变动。
 
 **Q4：客户还没有广告户 / 主页，怎么办？**
-A：先在客户自己的 Business Manager 里新建（「账户」→「广告账户」/「公共主页」→「添加」），归属必须是客户自己的业务账户，不能挂在 Magic Engine 名下——见 `CLAUDE.md` 铁律 8「客户营销落地页必须建在客户自己的域名」同理，广告户/主页所有权也必须是客户的，Magic Engine 只是被授权的代管方。
+A：先在客户自己的 Business Manager 里新建（「账户」→「广告账户」/「公共主页」→「添加」），归属必须是客户自己的业务账户，不能挂在 Magic Engine 名下——见 `CLAUDE.md` 铁律 8「客户营销落地页必须建在客户自己的域名」同理，广告户/主页所有权也必须是客户的，Magic Engine 只是被授权的代管方。建完之后回到「一」，把新建的资产 Partner-share 给 Magic Engine。
 
 ---
 
