@@ -5,6 +5,17 @@
 
 ---
 
+### 2026-09-13（视频工厂：修复真实照片池致命 bug + 片尾信息动态化 + CTS/NAL 双客户内容量产）
+
+PM 要求给 CTS 和 NAL 各准备一批新内容，过程中发现并修复了两个真正阻塞出片的生产 bug，最终两个客户的内容都做出来了：
+
+1. **修复致命 bug：自动选真实照片功能几乎完全失效**（PR [#1615](https://github.com/bigbigraydeng-maker/magic-engine/pull/1615)）——`loadRankableClientAssets`（出片自动选真实照片的核心查询）和素材库人工搜索接口，都用 `.not('vision_metadata->>kind', 'eq', 'video')` 在数据库层排除视频行；但只有视频行才会写这个字段，绝大多数照片行根本没有它，PostgREST 对着"字段不存在"的行算出来是 NULL，被数据库整行排除——CTS 47 张已核实真实照片，命中这个 bug 后自动出片只能看到 1 张。这解释了本次会话早些时候就记录过的"MUAPI_API_KEY 缺失"报错：真正原因不是环境变量偶尔缺失，是几乎每次新脚本都因为这个 bug 配不到真实照片、被迫掉进 AI 兜底路径。改成跟同文件里已经写对的逻辑一致（内存里判断 kind==='video'，没有这个字段按"不是视频"处理）。修复后真实照片池从 1 张恢复到 50 张。
+2. **片尾信息（团名/路线/天数价格/出发日期）此前 100% 是模板作者写死的示例内容**（PR [#1613](https://github.com/bigbigraydeng-maker/magic-engine/pull/1613)）——每条视频不管实际推广哪个团，片尾显示的都是同一份跟内容无关的占位信息。新增 `CreatomateTemplateContract.requiredPostFields` 声明"这几个元素每条视频必须各自提供值"，读自 `content_posts.generation_context_snapshot.endcard`，缺字段直接拦渲染，绝不静默套用旧内容。经"子牙"（架构）+"魏征"（挑刺）两轮设计复审后落地。
+3. **CTS 新内容**：2 条视频（"Best of China"真实团，长城/故宫/兵马俑/上海真实照片+真实价格 NZD $4,080/15 天；"China Awaits"通用宣传片）+ 3 条图文（25 年品牌信任状、丝路 2027 团、双城记 10 天团），均已用真实渲染自检确认画面和片尾信息正确。
+4. **NAL（New Asian Logistics，物流客户）首次接入视频工厂**——此前完全空白（无模板、无素材）。真实素材取自 NAL 自己已发布的 Facebook 内容（Graph API 官方接口拿原图/原视频，非网页截图），做了 1 条视频（真实仓库/装柜实拍 + logo 水印 + 品牌结尾卡，ffmpeg 本地合成，未走 Creatomate）+ 1 条图文。
+
+**Reuse Statement**：两处 bug 修复都是共享连接器代码（`src/lib/factory/client-asset-pool.ts`、素材库搜索路由），修完对所有客户生效，不是 CTS 专属；`requiredPostFields`/`endcard` 机制同样是共享连接器能力（跟 `staticOverrides` 同级），具体填什么值是每个客户自己的内容。CTS 的 5 条内容、NAL 的账号研究结论和真实素材，均为客户私有，未进共享代码。NAL 目前用 ffmpeg 本地合成而非 Creatomate 模板，是该客户当前规模下的判断，不代表放弃 Creatomate 路线。
+
 ### 2026-09-13（视频工厂：背景音乐接入 + 补齐胡同/西安城墙真实照片 + 清理僵尸 Render 服务）
 
 上一轮会话收尾后 PM 追加三个决定，当场处理完：
