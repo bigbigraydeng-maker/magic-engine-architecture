@@ -30,8 +30,15 @@
 
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
-/** The one row `loadClientProfile` reads — set per test. */
-let clientRow: { name: string | null; industry: string | null } | null = null
+/**
+ * Rows keyed by client_id — a fake that is NOT more permissive than the real
+ * query. If `loadClientProfile` ever queried the wrong column, or the wrong
+ * id got passed down from `brief-cycle.ts`, this returns null (not some
+ * other client's row) and the test would fail on a null/generic-name
+ * assertion instead of silently passing.
+ */
+let clientsById: Map<string, { name: string | null; industry: string | null }>
+let clientQueryError: string | null = null
 
 vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: {
@@ -39,8 +46,12 @@ vi.mock('@/lib/supabase', () => ({
       if (table !== 'clients') throw new Error(`brief.ts should only query 'clients' here, got '${table}'`)
       return {
         select: () => ({
-          eq: () => ({
-            maybeSingle: () => Promise.resolve({ data: clientRow, error: null }),
+          eq: (column: string, value: string) => ({
+            maybeSingle: () => {
+              if (clientQueryError) return Promise.resolve({ data: null, error: { message: clientQueryError } })
+              if (column !== 'id') throw new Error(`expected to filter clients by 'id', got '${column}'`)
+              return Promise.resolve({ data: clientsById.get(value) ?? null, error: null })
+            },
           }),
         }),
       }
@@ -314,6 +325,32 @@ describe('isLikelyNoiseMessage', () => {
   it('does not flag a short generic reply', () => {
     expect(isLikelyNoiseMessage('Hi~How can I help?')).toBe(false)
   })
+
+  /** 魏征 review: the original regex required "will be [verb]" with nothing
+   * in between, missing the common phishing phrasing with an adverb. */
+  it('flags "will be permanently deleted" (adverb between "will be" and the verb)', () => {
+    expect(
+      isLikelyNoiseMessage('Your page will be permanently deleted if you do not verify now.'),
+    ).toBe(true)
+  })
+
+  /**
+   * 魏征 review: a bare "verify your business" is routine, legitimate B2B
+   * text — e.g. a logistics/trade partner confirming registration before
+   * signing. It must NOT be flagged just because it mentions verification;
+   * only the phishing template (verify + a threat/deadline) should trip.
+   */
+  it('does not flag a legitimate B2B verification request with no threat or deadline', () => {
+    expect(
+      isLikelyNoiseMessage('We need to verify your business registration before signing the contract.'),
+    ).toBe(false)
+  })
+
+  it('still flags the phishing template: verify + a threat/deadline together', () => {
+    expect(
+      isLikelyNoiseMessage('Verify your business account within 24 hours or it will be suspended.'),
+    ).toBe(true)
+  })
 })
 
 /**
@@ -356,7 +393,8 @@ describe('generateBrief — client identity and content guardrails', () => {
     // vitest.setup.ts already sets a dummy OPENAI_API_KEY globally; restate it
     // here so this suite does not depend on that global staying in place.
     process.env.OPENAI_API_KEY = 'test-openai-key'
-    clientRow = null
+    clientsById = new Map()
+    clientQueryError = null
     mockResponsesCreate.mockReset()
   })
 
@@ -370,7 +408,7 @@ describe('generateBrief — client identity and content guardrails', () => {
    * discards it — the guardrail does not depend on the model behaving.
    */
   it('discards hallucinated needs for a phishing/ad thread, even if the model invents them', async () => {
-    clientRow = { name: 'New Asian Logistics', industry: 'logistics' }
+    clientsById.set(NAL_CLIENT_ID, { name: 'New Asian Logistics', industry: 'logistics' })
     const messages: StoredMessage[] = [
       {
         direction: 'inbound',
@@ -411,7 +449,7 @@ describe('generateBrief — client identity and content guardrails', () => {
    * asserts that label is now the real client's name.
    */
   it('labels the outbound side of the transcript with the real client name, never "CTS"', async () => {
-    clientRow = { name: 'New Asian Logistics', industry: 'logistics' }
+    clientsById.set(NAL_CLIENT_ID, { name: 'New Asian Logistics', industry: 'logistics' })
     const messages: StoredMessage[] = [
       { direction: 'inbound', senderName: 'Customer', body: 'Need more information', sentAt: '2026-09-10T03:00:00Z' },
       { direction: 'outbound', senderName: null, body: 'Hi~How can I help?', sentAt: '2026-09-10T03:05:00Z' },
@@ -431,7 +469,7 @@ describe('generateBrief — client identity and content guardrails', () => {
   })
 
   it('never asks for or keeps trip details for a non-tourism client, even if the model fills them in', async () => {
-    clientRow = { name: 'New Asian Logistics', industry: 'logistics' }
+    clientsById.set(NAL_CLIENT_ID, { name: 'New Asian Logistics', industry: 'logistics' })
     modelReturns({
       trip: {
         tour_interest: 'Best of China',
@@ -466,7 +504,7 @@ describe('generateBrief — client identity and content guardrails', () => {
    * fields.
    */
   it('keeps CTS working exactly as before: correct name, trip fields still captured', async () => {
-    clientRow = { name: 'CTS Tours NZ', industry: 'travel' }
+    clientsById.set(CTS_CLIENT_ID, { name: 'CTS Tours NZ', industry: 'travel' })
     const trip = {
       tour_interest: 'Best of China',
       travel_window: '2027年3月',
@@ -499,7 +537,7 @@ describe('generateBrief — client identity and content guardrails', () => {
   })
 
   it('falls back to a generic placeholder name when the client row cannot be found, never CTS', async () => {
-    clientRow = null
+    // clientsById is empty (beforeEach) — this id matches no row.
     modelReturns()
 
     await generateBrief(
@@ -509,5 +547,46 @@ describe('generateBrief — client identity and content guardrails', () => {
 
     const call = mockResponsesCreate.mock.calls[0][0] as { input: { role: string; content: string }[] }
     expect(call.input[0].content).not.toContain('CTS')
+  })
+
+  /**
+   * 魏征 review: the earlier fake returned one global row regardless of which
+   * id was queried, so a "queried the wrong client_id" bug would have passed
+   * silently. This proves the lookup is actually keyed by id — with both
+   * clients loaded, asking for CTS_CLIENT_ID must never leak NAL's identity.
+   */
+  it('never leaks another client\'s name when two clients are loaded at once', async () => {
+    clientsById.set(NAL_CLIENT_ID, { name: 'New Asian Logistics', industry: 'logistics' })
+    clientsById.set(CTS_CLIENT_ID, { name: 'CTS Tours NZ', industry: 'travel' })
+    modelReturns()
+
+    await generateBrief(
+      [{ direction: 'inbound', senderName: 'Customer', body: 'Hello?', sentAt: '2026-09-10T03:00:00Z' }],
+      CTS_CLIENT_ID,
+    )
+
+    const call = mockResponsesCreate.mock.calls[0][0] as { input: { role: string; content: string }[] }
+    expect(call.input[0].content).toContain('CTS Tours NZ')
+    expect(call.input[0].content).not.toContain('New Asian Logistics')
+  })
+
+  /**
+   * 魏征 review: `loadClientProfile` used to only destructure `{ data }` and
+   * ignore `error` — a transient Supabase failure would silently produce a
+   * generic-name, non-tourism profile instead of failing the card. That
+   * would null out CTS's own trip fields on nothing more than a network
+   * blip. It must throw, matching brief-cycle.ts's own "never silently
+   * treat a read failure as an empty/default result" rule.
+   */
+  it('throws (does not silently fall back) when the client lookup itself fails', async () => {
+    clientQueryError = 'connection reset by peer'
+    modelReturns()
+
+    await expect(
+      generateBrief(
+        [{ direction: 'inbound', senderName: 'Customer', body: 'Hello?', sentAt: '2026-09-10T03:00:00Z' }],
+        CTS_CLIENT_ID,
+      ),
+    ).rejects.toThrow('connection reset by peer')
   })
 })

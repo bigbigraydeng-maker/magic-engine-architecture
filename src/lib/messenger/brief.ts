@@ -99,11 +99,18 @@ interface ClientProfile {
 }
 
 async function loadClientProfile(clientId: string): Promise<ClientProfile> {
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from('clients')
     .select('name, industry')
     .eq('id', clientId)
     .maybeSingle()
+
+  // A transient read failure must not be read as "this client doesn't exist"
+  // — that would silently fall back to the generic name and null out trip
+  // fields for CTS's own real threads too. brief-cycle.ts already wraps each
+  // candidate in its own try/catch, so throwing here just fails that one
+  // card, exactly like a `conversation_messages` read failure would.
+  if (error) throw new Error(`client lookup failed for ${clientId}: ${error.message}`)
 
   return {
     name: (data?.name as string | null)?.trim() || GENERIC_COMPANY_NAME,
@@ -162,25 +169,53 @@ draft_reply rules (it goes to a real customer as ${name}):
  * "想了解更多关于中国的旅游信息" for a logistics client). The prompt above
  * already asks the model to do this; this does not depend on the model
  * getting it right.
+ *
+ * Split into STRONG (flags on its own — near-never legitimate business text)
+ * and WEAK + URGENCY (only counts as noise together). A bare "verify your
+ * business" is routine in real B2B correspondence — e.g. a logistics client
+ * confirming a partner's registration before signing — so it only counts as
+ * noise alongside an urgency/threat cue, which is what turns it into the
+ * classic "verify within 24 hours or be suspended" phishing template.
  */
-const NOISE_PATTERNS: RegExp[] = [
-  /verify\s+your\s+(account|identity|page|business)/i,
+const STRONG_NOISE_PATTERNS: RegExp[] = [
   /account\s+(has been|will be|is)\s+(suspended|restricted|disabled|limited|deactivated)/i,
-  /confirm\s+your\s+(account|information|identity)/i,
   /(claim|redeem)\s+your\s+(prize|reward|gift)/i,
   /you(?:’|')ve\s+(won|been selected)/i,
   /copyright\s+(infringement|violation)/i,
-  /page\s+will\s+be\s+(deleted|removed|suspended|restricted)/i,
+  // Allow an adverb between "will be" and the verb ("will be permanently deleted").
+  /page\s+will\s+be\s+(?:\w+\s+)?(deleted|removed|suspended|restricted)/i,
   /violat(?:e|es|ed|ion)\s+(our\s+)?community\s+standards/i,
+]
+
+const WEAK_NOISE_PATTERNS: RegExp[] = [
+  /verify\s+your\s+(account|identity|page|business)/i,
+  /confirm\s+your\s+(account|information|identity)/i,
+]
+
+const URGENCY_PATTERNS: RegExp[] = [
+  /within\s+\d+\s+(hours?|days?)/i,
+  /avoid\s+(restriction|suspension|deletion|deactivation)/i,
+  /or\s+your\s+(account|page)\s+will\s+be/i,
+  /click\s+(here|the link|below)/i,
 ]
 
 /** Exported so the pattern list itself has a direct test, not just the thread-level effect. */
 export function isLikelyNoiseMessage(text: string): boolean {
-  return NOISE_PATTERNS.some((re) => re.test(text))
+  if (STRONG_NOISE_PATTERNS.some((re) => re.test(text))) return true
+  return WEAK_NOISE_PATTERNS.some((re) => re.test(text)) && URGENCY_PATTERNS.some((re) => re.test(text))
 }
 
-/** Only true when every inbound message looks like noise — one phishing line
- * mixed into a real conversation must not wipe a genuine need. */
+/**
+ * Only true when every inbound message looks like noise — one phishing line
+ * mixed into a real conversation must not wipe a genuine need.
+ *
+ * Known gap (魏征 review, 2026-09-13): a real enquiry followed later by an
+ * unrelated ad in the same thread will NOT trip this — "every" inbound
+ * message must match. That mixed case is left to the NOISE / SPAM prompt
+ * rule in buildSystemPrompt(), which has no code-level guarantee behind it.
+ * This function only guarantees the "the whole thread is noise" case (which
+ * is what both real NAL incidents were).
+ */
 function threadLooksLikeNoise(messages: StoredMessage[]): boolean {
   const inbound = messages.filter((m) => m.direction === 'inbound' && m.body.trim().length > 0)
   if (inbound.length === 0) return false
