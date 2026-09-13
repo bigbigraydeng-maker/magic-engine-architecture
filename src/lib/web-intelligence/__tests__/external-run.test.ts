@@ -24,7 +24,7 @@ describe('external observation run orchestration', () => {
       actorId: 'actor/news', actorInput: {}, sourceId: 'travel-today', clientId: observation('').client_id,
       observedAt: '2026-09-11T00:00:00Z', persist,
     })
-    expect(result).toMatchObject({ runId: 'run-1', rejected: 1, persisted: 1, duplicates: 1, writeFailures: 0 })
+    expect(result).toMatchObject({ runId: 'run-1', rejected: 1, persisted: 1, duplicates: 1, writeFailures: 0, filtered: 0 })
     expect(persist).toHaveBeenCalledTimes(2)
   })
 
@@ -34,7 +34,7 @@ describe('external observation run orchestration', () => {
       actorId: 'actor/news', actorInput: {}, sourceId: 'travel-today', clientId: observation('').client_id,
       observedAt: '2026-09-11T00:00:00Z', persist: vi.fn().mockRejectedValue(new Error('db down')),
     })
-    expect(result).toMatchObject({ runId: 'run-2', persisted: 0, duplicates: 0, writeFailures: 1 })
+    expect(result).toMatchObject({ runId: 'run-2', persisted: 0, duplicates: 0, writeFailures: 1, filtered: 0 })
   })
 
   it('drops industry observations outside the client market before persistence', async () => {
@@ -44,7 +44,7 @@ describe('external observation run orchestration', () => {
       actorId: 'actor/news', actorInput: {}, sourceId: 'travel-today', clientId: observation('').client_id,
       observedAt: '2026-09-11T00:00:00Z', relevanceTerms: ['china'], persist,
     })
-    expect(result).toMatchObject({ runId: 'run-3', rejected: 1, persisted: 0 })
+    expect(result).toMatchObject({ runId: 'run-3', rejected: 0, filtered: 1, persisted: 0 })
     expect(persist).not.toHaveBeenCalled()
   })
 

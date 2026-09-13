@@ -88,9 +88,9 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     setExternalBusy(sourceId); setExternalMessage('')
     try {
       const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence/external`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: sourceId, queries: ['China travel', 'tour manager', 'travel consultant'], max_results: 20 }) })
-      const payload = await response.json() as { persisted?: number; duplicates?: number; rejected?: number; error?: string }
+      const payload = await response.json() as { persisted?: number; duplicates?: number; rejected?: number; filtered?: number; error?: string }
       if (!response.ok) throw new Error(payload.error ?? '外部信息读取失败。')
-      setExternalMessage(`本次已完成读取，新增 ${payload.persisted ?? 0} 条${payload.duplicates ? `，${payload.duplicates} 条已存在` : ''}${payload.rejected ? `，${payload.rejected} 条无法确认` : ''}。`)
+      setExternalMessage(`本次读取完成：新增 ${payload.persisted ?? 0} 条${payload.filtered ? `，过滤 ${payload.filtered} 条与当前市场无关` : ''}${payload.duplicates ? `，${payload.duplicates} 条已存在` : ''}${payload.rejected ? `，${payload.rejected} 条资料不完整` : ''}。`)
       setRefresh(value => value + 1)
     } catch (reason) { setExternalMessage(reason instanceof Error ? reason.message : '外部信息读取失败。') }
     finally { setExternalBusy('') }
