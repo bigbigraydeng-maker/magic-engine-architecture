@@ -69,6 +69,15 @@ describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选�
     expect(picks.map((p) => p.id)).toEqual(['great-wall'])
   })
 
+  it('通用词(city/people/building...)单独命中不算重叠,不能靠它蒙混过 requireConfidentMatch', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // "Forbidden City courtyard" 跟错误素材 "city skyline" 光凭 city 这个通用词就有
+    // 表面重叠,但两者根本不是同一个地方——city/skyline 都太笼统,不该算数。
+    const assets = [asset('wrong-city', { vision_metadata: { objects: ['city skyline'], quality_score: 9 } })]
+    const picks = await rankAssetsByPrompt('Forbidden City courtyard', assets, 1, { requireConfidentMatch: true })
+    expect(picks).toEqual([])
+  })
+
   it('大素材池、真正走 LLM 排序分支时,LLM 选出的图跟 prompt 零重叠照样会被过滤（复现 2026-09-14 真实故障链路：素材池里明明有 palace 那张对的图,LLM 却选了 great-wall）', async () => {
     vi.resetModules()
     vi.doMock('@/lib/ai/openai-client', () => ({

@@ -113,11 +113,26 @@ function promptWordsOf(prompt: string): Set<string> {
   )
 }
 
+/** 太笼统的名词自己撑不起"文对图对"——比如 prompt 是 "Forbidden City courtyard",
+ *  错误素材标了 "city skyline",光凭 city 就会被 `objectOverlap` 判成重叠,让
+ *  `requireConfidentMatch` 把文不对题的图当可信匹配继续放行(P1 复审指出)。这里把
+ *  常见到跟任何画面都能扯上关系的词排除在重叠判定之外,只有地标/主体这类有区分度
+ *  的词命中才算数。 */
+const GENERIC_OBJECT_WORDS = new Set([
+  'city', 'cities', 'town', 'towns', 'people', 'person', 'persons', 'man', 'men', 'woman', 'women',
+  'child', 'children', 'kid', 'kids', 'building', 'buildings', 'photo', 'photos', 'picture', 'pictures',
+  'image', 'images', 'background', 'scene', 'scenes', 'day', 'night', 'view', 'views', 'area', 'areas',
+  'place', 'places', 'group', 'groups', 'shot', 'shots', 'outdoor', 'indoor', 'close', 'wide', 'street',
+  'streets', 'road', 'roads', 'sky', 'skyline', 'water', 'tree', 'trees', 'car', 'cars', 'room', 'rooms',
+  'house', 'houses', 'light', 'lights', 'color', 'colors', 'style', 'styles', 'type', 'types', 'set',
+  'sets', 'landscape', 'landscapes', 'crowd', 'crowds', 'walking', 'standing', 'sitting', 'smiling',
+])
+
 /** prompt 分词与一组 object 短语的重叠数,`keywordFallback` 排序和 `keywordOverlap` 判定共用。 */
 function objectOverlap(promptWords: Set<string>, objects: string[]): number {
   return objects.reduce((n, obj) => {
     const words = obj.toLowerCase().split(/[^a-z0-9]+/)
-    return n + (words.some((w) => promptWords.has(w)) ? 1 : 0)
+    return n + (words.some((w) => !GENERIC_OBJECT_WORDS.has(w) && promptWords.has(w)) ? 1 : 0)
   }, 0)
 }
 
