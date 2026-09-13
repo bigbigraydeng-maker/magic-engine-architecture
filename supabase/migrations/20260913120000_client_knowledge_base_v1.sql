@@ -39,8 +39,15 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
   sensitivity               text NOT NULL CHECK (sensitivity IN
                               ('price','timeline','commitment','policy','general')),
 
-  -- price/timeline/commitment/policy 四类必须有有效期或复核周期（设计 §9.6）；
-  -- general 允许两者都为空。
+  -- price/timeline/commitment/policy 四类必须有 valid_until（设计 §9.6）；
+  -- general 允许为空。
+  --
+  -- 🔴 魏征复审纠偏：这条约束只认 valid_until，不认 last_verified_at 顶替——
+  -- 本表目前没有单独的"复核周期"列（比如 review_cycle_days），所以没有第二条
+  -- 路可以走。last_verified_at 纯粹是"上次人工复核是什么时候"的审计时间戳，
+  -- 从不参与这条 CHECK 的判定；设计 §9.6 提到的"价格默认 90 天复核周期"是写入
+  -- 时（萃取/FDE 批准）由应用层据此计算出一个具体 valid_until 再落库，不是数据库
+  -- 层面的另一种满足方式。
   valid_from                timestamptz NOT NULL DEFAULT now(),
   valid_until               timestamptz,
   last_verified_at          timestamptz,
@@ -72,9 +79,12 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
   -- 批准人和客户确认人不许是同一个人（设计 §9.4「确认人 ≠ 批草稿的人」）。
   -- 只挡"完全同一个邮箱"这个最直接的绕开方式；更完整的身份校验（登记人/
   -- 全局管理员/公司域名排除）在应用层 src/lib/knowledge/identity.ts。
+  -- 🔴 魏征复审纠偏：这条约束防的是"绕开应用层直接写 SQL"，不能假设写入者
+  -- 会经过 identity.ts 的 normaliseEmail()（它做了 trim）——所以这里的
+  -- lower() 也必须配 trim()，否则一个尾随空格就能绕开。
   CONSTRAINT approver_and_confirmer_differ CHECK (
     approved_by_email IS NULL OR client_confirmed_by_email IS NULL
-    OR lower(approved_by_email) <> lower(client_confirmed_by_email)
+    OR lower(trim(approved_by_email)) <> lower(trim(client_confirmed_by_email))
   )
 );
 
@@ -173,12 +183,13 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_confirmers (
   revoked_at         timestamptz,
   CONSTRAINT revoked_pair CHECK ((revoked_at IS NULL) = (revoked_by_email IS NULL)),
 
-  CONSTRAINT registrant_not_confirmer CHECK (lower(email) <> lower(registered_by_email))
+  -- 🔴 魏征复审纠偏：同上，配 trim() 防尾随空格绕过直接 SQL 写入。
+  CONSTRAINT registrant_not_confirmer CHECK (lower(trim(email)) <> lower(trim(registered_by_email)))
 );
 
 -- 同客户 + 同邮箱，最多一条"仍然有效"（未撤销）的登记
 CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_confirmers_active
-  ON public.client_knowledge_confirmers (client_id, lower(email))
+  ON public.client_knowledge_confirmers (client_id, lower(trim(email)))
   WHERE revoked_at IS NULL;
 
 ALTER TABLE public.client_knowledge_confirmers ENABLE ROW LEVEL SECURITY;

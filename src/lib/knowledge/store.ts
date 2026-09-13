@@ -110,6 +110,7 @@ function toFingerprintable(fact: KnowledgeFact) {
     statement: fact.statement,
     structuredValue: fact.structuredValue,
     scope: fact.scope,
+    validFrom: fact.validFrom,
     validUntil: fact.validUntil,
     visibility: fact.visibility,
     sensitivity: fact.sensitivity,

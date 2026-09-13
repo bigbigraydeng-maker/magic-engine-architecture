@@ -18,12 +18,13 @@ export interface FingerprintableFact {
   statement: string
   structuredValue: unknown
   scope: unknown
+  validFrom: string
   validUntil: string | null
   visibility: string
   sensitivity: string
 }
 
-const FINGERPRINT_VERSION = 1
+const FINGERPRINT_VERSION = 2
 
 /** Stable stringify: sorts object keys recursively so field order never affects the result. */
 function stableStringify(value: unknown): string {
@@ -49,6 +50,7 @@ export function computeFactFingerprint(fact: FingerprintableFact): string {
     statement: fact.statement,
     structuredValue: fact.structuredValue ?? null,
     scope: fact.scope ?? {},
+    validFrom: fact.validFrom,
     validUntil: fact.validUntil,
     visibility: fact.visibility,
     sensitivity: fact.sensitivity,

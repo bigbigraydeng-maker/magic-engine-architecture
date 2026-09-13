@@ -58,6 +58,7 @@ function priceFact(overrides: Partial<Row> = {}): Row {
       statement: merged.statement as string,
       structuredValue: merged.structured_value,
       scope: merged.scope,
+      validFrom: merged.valid_from as string,
       validUntil: merged.valid_until as string | null,
       visibility: merged.visibility as string,
       sensitivity: merged.sensitivity as string,
@@ -176,6 +177,22 @@ describe('getClientKnowledge — customer_reply', () => {
     expect(result).toEqual([])
   })
 
+  // 魏征 review (2026-09-13): the effective-from date is part of the
+  // confirmation binding too, not just the expiry — moving it after
+  // confirmation must invalidate it even when the statement text is
+  // untouched (the customer never saw "effective from the new date").
+  it('excludes a confirmed fact whose valid_from moved after confirmation, statement unchanged', async () => {
+    enableRollout(CLIENT_A)
+    const confirmed = priceFact({
+      client_confirmed_by_email: 'boss@nal.co.nz',
+      client_confirmed_at: '2026-09-10T00:00:00Z',
+    })
+    confirmed.valid_from = '2026-03-01T00:00:00Z'
+    fixture.facts.push(confirmed)
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' })
+    expect(result).toEqual([])
+  })
+
   // Mutation guard §9.14-D #4: expiry must be enforced.
   it('excludes an expired fact', async () => {
     enableRollout(CLIENT_A)
@@ -232,6 +249,21 @@ describe('getClientKnowledge — customer_reply', () => {
       scope: { service_line: 'parcel_air' },
     })
     expect(result.map((f) => f.id)).toEqual(['air'])
+  })
+
+  // 魏征 review (2026-09-13): `scope: {}` was untested and could be read
+  // two ways — "narrow to facts with an empty scope" or "no narrowing at
+  // all". This locks in the intended behaviour: an empty filter object
+  // means the caller gave no scope constraint, same as omitting `scope`
+  // entirely — it does NOT mean "only facts whose own scope is also {}".
+  it('treats an explicit empty scope filter as "no narrowing", same as omitting scope', async () => {
+    enableRollout(CLIENT_A)
+    fixture.facts.push(
+      priceFact({ id: 'sea', sensitivity: 'general', scope: { service_line: 'parcel_sea' } }),
+      priceFact({ id: 'air', sensitivity: 'general', scope: { service_line: 'parcel_air' } }),
+    )
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply', scope: {} })
+    expect(result.map((f) => f.id).sort()).toEqual(['air', 'sea'])
   })
 })
 

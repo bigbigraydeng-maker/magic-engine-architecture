@@ -108,6 +108,16 @@ export function containsSensitiveSignal(text: string): boolean {
  *    numeric or commitment-bearing statement to `general`
  *  - a missing or unrecognised tag defaults to `price`, the strictest
  *    category, never silently to `general`
+ *
+ * 🔴 魏征复审提醒（留给后续萃取工作流实现时处理，本次不改）：`text` only
+ * covers a fact's human-readable statement. A fact also carries a
+ * `structured_value` (e.g. `{ price: 500 }`) that could encode a real price
+ * behind an innocuous statement like "ask us for details" — that would slip
+ * through as `general` untouched. Whatever writes `client_knowledge_facts`
+ * (the mining pipeline, or an FDE-approval endpoint) MUST call this with a
+ * serialization that includes structured_value too, not the statement alone.
+ * This function has no way to enforce that from here — it only sees what its
+ * caller passes it.
  */
 export function resolveFactSensitivity(text: string, taggedSensitivity?: string | null): FactSensitivity {
   const tag = taggedSensitivity ?? undefined
