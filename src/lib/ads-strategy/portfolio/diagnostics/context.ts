@@ -146,6 +146,11 @@ export function unitOf(ctx: AccountContext, level: 'campaign' | 'adset', id: str
   return { level, id, name: row?.entity_name ?? null, adAccountId: ctx.account.adAccountId, role: verdict?.role, roleConfidence: verdict?.confidence }
 }
 
+/** 金额带币种（邮件里每个钱数都要带，板桥复审） */
+export function money(ctx: AccountContext, n: number | null): string {
+  return n === null ? '—' : `${ctx.account.currency ?? ''}${ctx.account.currency ? ' ' : ''}${n}`
+}
+
 export function minorToMajor(minor: number | null): number | null {
   return minor === null ? null : Math.round(minor) / 100
 }

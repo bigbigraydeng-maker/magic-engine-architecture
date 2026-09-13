@@ -125,7 +125,7 @@ export function diagnoseOutcomeTruthGap(ctx: AccountContext, input: DiagnosisInp
     units: [accountUnit(ctx)],
     title: `结果真相断层：近 7 天${OUTCOME_STEP_LABEL[leading]} ${leadingTotal} 个，但${OUTCOME_STEP_LABEL[primary]}归不到广告，真生意来没来看不出`,
     evidence: { window_start: ctx.window[0], window_end: ctx.date, leading: leadingTotal, primary_unknown_rows: unknownDays, spend: sumSpend(rows) },
-    sample: [{ label: OUTCOME_STEP_LABEL[leading], value: leadingTotal }, { label: '主结果归不上的广告组·天', value: unknownDays }],
+    sample: [{ label: OUTCOME_STEP_LABEL[leading], value: leadingTotal }, { label: '看不出带来多少真实生意的「广告组×天」', value: unknownDays }],
     reasons: [prim.find(c => c.note)?.note ?? '主结果 UNKNOWN'],
   }
 }
