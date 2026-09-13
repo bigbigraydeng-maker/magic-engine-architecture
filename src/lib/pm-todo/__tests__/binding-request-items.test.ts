@@ -44,7 +44,7 @@ describe('ad_account_binding_requested', () => {
     const items = await run({
       client_binding_audit: [
         row(A, 'requested_by_client', iso(30), { requested_value: 'act_3333333333' }),
-        row(A, 'applied', iso(20)),
+        row(A, 'applied', iso(20), { action: 'bind' }),
         row(B, 'requested_by_client', iso(30), { requested_value: 'act_4444444444' }),
         row(B, 'request_dismissed', iso(20)),
       ],
@@ -60,6 +60,16 @@ describe('ad_account_binding_requested', () => {
       ],
     })
     expect(items.map(i => i.what)).toEqual([expect.stringContaining('act_5555555555')])
+  })
+
+  it('FDE 清空了绑定（applied + clear）不算处理过客户交的号 → 仍然下发', async () => {
+    const items = await run({
+      client_binding_audit: [
+        row(A, 'requested_by_client', iso(30), { requested_value: 'act_3333333333', action: 'request' }),
+        row(A, 'applied', iso(20), { action: 'clear' }),
+      ],
+    })
+    expect(items).toHaveLength(1)
   })
 
   it('被拒类审计行（rejected_*）不算「已处理」', async () => {
