@@ -21,21 +21,24 @@
 
 ---
 
-## Creatomate Connector 落地后续（PR #1513 已合，代码就绪，未接通真实客户流量）
+## Creatomate Connector 落地后续
 
-> 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2，含两轮复审吸收清单）。四件事任一没做完，这条链路对客户来说都是"建好了但没通电"。
+> 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2）。2026-09-13 端到端真实验证已跑通（PR #1570/#1594/#1604，见 memory `project-cts-video-factory-decision-ledger` 完整记录），下面只留还没做完的。
 
-- [ ] `CREATOMATE_API_KEY` 配进 Render 环境变量（`docs/ENV.md` 已登记，只差实际填值）
-- [ ] 第一条真实渲染跑完后核实 webhook payload 真实字段结构（官方文档没给全，本地开发环境收不到公网回调，只能上线后验证，见 spec §5 渲染验证铁律）
-- [ ] 找 Creatomate 客服或后台账单确认超出 2,000 credits/月后的真实计费行为（硬顶拒绝还是继续扣钱），不确定之前 `cost_usd` 记账在超额区间不可信（spec §6.2）
-- [ ] 至少一个试点客户（如 CTS）在 Settings 面板（客户详情页 → 出片引擎）填模板 ID + 镜头槽位映射，这条链路才有客户能真正用
-
-**真实照片接线（PR #1570 已合，`scene-assets.ts` 真实照片优先落地）后续 3 项**（子牙+魏征实施后复审留的小任务，不阻断本次合并）：
-
-- [ ] `pickRealPhoto`/`loadRankableClientAssets` 补一道质量分门槛——现在真实照片路径直接吐全部行给 LLM 排序，没有 `client-asset-pool.ts` 里 `MIN_QUALITY=5` 那道口径，理论上低分图可能被选中当成最终成片像素
-- [ ] `PreparedScene.visualSource`（'real_photo'|'ai_generated'）目前只写进 `content_factory_render_jobs.scenes`，没有任何 API/UI 读出来给人看，接入人工分镜自检表让 FDE 逐镜看时能分清"这镜是真图"
-- [ ] `pickRealPhoto` 内部调用 `rankAssetsByPrompt` 时如果素材池 > topN 会真的花一次 `gpt-4o-mini`（分钱级），这笔钱目前没有计入 `content_factory_render_jobs.cost_usd`，需要补计费
-- [ ] 每一套 Creatomate 模板的图片槽位是否真的在编辑器里配置了入场/推拉动画——代码测不出来，必须人工在 Creatomate 编辑器里逐个槽位确认一遍并记录，不能假设"能配=已配"（否则片子出来还是静态照片，团队却以为"真实照片+动态混剪"已完成）
+- [x] `CREATOMATE_API_KEY` 已配进生产（PM 2026-09-12 确认）
+- [x] webhook payload 真实字段结构已通过多次真实渲染验证，正常工作
+- [x] 至少一个试点客户（CTS）已在 `factory_config.render.creatomate` 配好 template_id + scene_field_map，多次真实渲染成功
+- [x] 镜头槽位入场/推拉动画已确认真实存在（模板源码里每个 Still-N 都有 scale 动画，2026-09-13 直接读取模板源码确认，不再是假设）
+- [ ] 找 Creatomate 客服或后台账单确认超出 2,000 credits/月后的真实计费行为（硬顶拒绝还是继续扣钱）（spec §6.2）
+- [ ] `pickRealPhoto`/`loadRankableClientAssets` 补一道质量分门槛（`client-asset-pool.ts` 的 `MIN_QUALITY=5` 口径目前真实照片路径没用上）
+- [ ] `PreparedScene.visualSource` 接入人工分镜自检表 UI，让 FDE 逐镜看时能分清"这镜是真图"
+- [ ] `pickRealPhoto` 内部调用 `rankAssetsByPrompt` 的 `gpt-4o-mini` 排序成本（分钱级）没有计入 `content_factory_render_jobs.cost_usd`
+- [x] CTS 真实素材库缺 Hutong（Still-5 专属）、西安城墙（Still-6 专属，不是兵马俑）的真实照片——2026-09-13 发现公司自己的 Dropbox 素材库（`CTS/footage/photos/`）里其实早就有 2 张胡同 + 1 张西安城墙真实照片，只是从未录入 `client_assets`，不需要去 Unsplash 找。已上传+PM 过目确认+标记 `client_verified`。**注意**：这两个landmark 目前仍不在 `factory_config.render.creatomate.scene_field_map`（该客户脚本目前只生成 4 个镜头，对应 Still-3/4/7/8），要真的让这两张照片出现在成片里，还需要把内容生成扩到 6 个镜头并给 Still-5/Still-6 各加一条 `scene_field_map` 条目——这是下一步待决定的事，不是"现在已经在用"
+- [x] 那个已确认"退役但没真的关掉、还在偷偷抢渲染任务"的老 Render 服务（`content-factory-render-worker`）——PM 2026-09-13 拍板彻底删除，已在 Render 后台执行删除，服务已不存在
+- [ ] PM 拍板"AI 配音统一用 ElevenLabs"，账号免费版无法通过 API 调用任何声音——PM 2026-09-13 拍板暂不升级付费，先维持现状；CTS 出片全程仍未真正测过配音这一步
+- [ ] "多开发不同模板"：PM 不想招人代画，已验证 Creatomate 模板编辑页的 Code 视图（`{}` 图标）能直接读出完整模板 JSON 源码，理论上也能反向粘贴编辑保存，但只验证了"读"，没验证"改并保存"这一步
+- [x] 背景音乐——2026-09-13 发现模板其实自带一个通用的 `Music` 音频图层（此前的模板结构记录漏记了这个，只记了画面/文字元素），PM 上传了 3 首新曲目到 Dropbox（`MagicLab_Studio/Music/`），已全部转存到正式素材库，PM 选定 `Horizon's Call` 作为默认背景音乐，通过已有的 `static_overrides` 机制接入（不需要改代码），已用真实渲染验证音轨确实有声音且不是哑的
+- [ ] 🔴 2026-09-13 测试渲染时新发现的生产缺口：当某个镜头一张真实照片都没匹配上、需要走"AI 现画兜底"这条路时，生产环境里 `MUAPI_API_KEY` 这个环境变量实际上没配置（`docs/ENV.md` 之前标记✅是错的，从没人真的验证过这条兜底路径），会导致整条渲染直接失败，不是"效果差一点"，是"整片渲不出来"。按 §11 资源优先级打分：频率=低（目前 47 张已核实真实照片覆盖 4 个常用镜头，命中兜底路径的机会不高，但会随内容多样化增加）、IMPACT 关口=高（卡在 Act 段，命中即整条渲染失败）、收入关联度=低（不直接影响客户投诉/续费，只是出片变慢）→ 两项低+一项高 → **P3**，先记录待认领，不阻塞当前工作
 
 ## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
 

@@ -16,19 +16,23 @@ import { NextRequest } from 'next/server'
 
 vi.mock('@/lib/auth/client-access', () => ({ requireDashboardClientAccess: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
-vi.mock('@/lib/meta/token-manager', () => ({ getMetaTokenForClient: vi.fn() }))
+vi.mock('@/lib/meta/token-manager', () => ({
+  getMetaTokenForClient: vi.fn(),
+  getStoredPageToken: vi.fn(),
+}))
 vi.mock('@/lib/meta/page-posts', () => ({ listManagedPages: vi.fn() }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 
 import { GET, PATCH } from '../route'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getMetaTokenForClient } from '@/lib/meta/token-manager'
+import { getMetaTokenForClient, getStoredPageToken } from '@/lib/meta/token-manager'
 import { listManagedPages } from '@/lib/meta/page-posts'
 
 const mockAccess = vi.mocked(requireDashboardClientAccess)
 const mockFrom = vi.mocked(supabaseAdmin.from)
 const mockToken = vi.mocked(getMetaTokenForClient)
+const mockStoredToken = vi.mocked(getStoredPageToken)
 const mockPages = vi.mocked(listManagedPages)
 
 const CTS = 'c0000000-0000-0000-0000-000000000000'
@@ -139,6 +143,45 @@ describe('facebook-page — is the binding actually live', () => {
     const json = (await res.json()) as { reachable: boolean | null }
 
     expect(json.reachable).toBeNull()
+  })
+
+  /**
+   * New Asian Logistics (2026-09-13): clicked "连接 Meta", finished the Facebook
+   * OAuth flow, got "连接成功" — and this endpoint still showed "绑了主页，但线索
+   * 进不来". Root cause: `pages` here comes from getMetaTokenForClient, the
+   * legacy env-var token, which has never heard of a client that connected
+   * through OAuth. The real hourly sync (src/lib/messenger/sync.ts) already
+   * tries getStoredPageToken first and worked fine the whole time — only this
+   * status check was reading the wrong source.
+   */
+  it('reports reachable via the stored per-client OAuth token even when the legacy pick-list does not have this Page (New Asian Logistics)', async () => {
+    allow()
+    const NAL_PAGE = '1177479655430100'
+    stubClients(NAL_PAGE)
+    mockToken.mockResolvedValue('user-token')
+    // The old env-token pick-list has no idea this Page exists.
+    mockPages.mockResolvedValue([{ id: CTS_PAGE, name: 'CTS Tours' }] as never)
+    // But the OAuth button stored a real, working token for it.
+    mockStoredToken.mockResolvedValue('stored-oauth-token')
+
+    const res = await GET(getRequest(), params())
+    const json = (await res.json()) as { reachable: boolean | null }
+
+    expect(json.reachable).toBe(true)
+  })
+
+  it('still reports NOT reachable when neither the pick-list nor a stored token has this Page — connecting once must not make every future state look healthy', async () => {
+    allow()
+    const NAL_PAGE = '1177479655430100'
+    stubClients(NAL_PAGE)
+    mockToken.mockResolvedValue('user-token')
+    mockPages.mockResolvedValue([{ id: CTS_PAGE, name: 'CTS Tours' }] as never)
+    mockStoredToken.mockResolvedValue(null) // no stored connection for this Page either
+
+    const res = await GET(getRequest(), params())
+    const json = (await res.json()) as { reachable: boolean | null }
+
+    expect(json.reachable).toBe(false)
   })
 })
 

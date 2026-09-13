@@ -5,6 +5,37 @@
 
 ---
 
+### 2026-09-13（视频工厂：背景音乐接入 + 补齐胡同/西安城墙真实照片 + 清理僵尸 Render 服务）
+
+上一轮会话收尾后 PM 追加三个决定，当场处理完：
+
+1. **背景音乐**：PM 上传 3 首新曲目到 Dropbox（`MagicLab_Studio/Music/`）。检查 Creatomate 模板源码时发现模板其实自带一个通用 `Music` 音频图层（此前记录模板结构时漏记了这个，只记了画面/文字元素）。3 首曲目已转存到正式素材库，PM 选定 `Horizon's Call` 作为默认背景音乐，通过已有的 `static_overrides` 机制接入（跟 logo 覆盖用的是同一套机制，**不需要改代码**）。已用一条真实渲染验证音轨确实有声音（-16.8dB 均值，非静音桩轨）。
+2. **胡同/西安城墙真实照片**：PM 本让去 Unsplash 找，核实后发现公司自己的 Dropbox 素材库（`CTS/footage/photos/`）里其实早就有 2 张胡同 + 1 张西安城墙真实照片，只是从未录入 `client_assets`——不需要外部素材。已上传、PM 过目确认、标记 `client_verified`。这两个 landmark 目前仍不在该客户的 `scene_field_map` 里（脚本目前只生成 4 个镜头），要真正出现在成片里还需要后续把内容扩到 6 个镜头，记入 ROADMAP。
+3. **清理僵尸 Render 服务**：PM 拍板彻底删除此前发现的"退役但没真正关掉"的老服务 `content-factory-render-worker`（[render.yaml](../../render.yaml) 里早已没有这条声明，只留了一条归档注释，删除不会被下次部署复活）。已在 Render 后台执行删除，服务已不存在。
+
+**顺带发现一个新的生产缺口**：测试渲染时触发了"某镜头没配到真实照片、退回 AI 现画兜底"这条路径，暴露出生产环境的 `MUAPI_API_KEY` 环境变量实际上没配置（此前 `docs/ENV.md` 标记✅是错的，这条兜底路径此前从未被真实触发过）。按资源优先级三维打分定为 P3，记入 ROADMAP，不阻塞当前工作。
+
+另外发现 Render 账户当前有"Payment failed"提示（信用卡扣款失败），已单独告知 PM——这个不是工程优先级问题，是需要尽快更新付款方式的运营事项，拖下去可能导致全部 Render 服务被暂停。
+
+**Reuse Statement**：音乐/logo 都复用同一个 `staticOverrides` 通用机制（客户中立，哪个元素名对应哪个资产完全是每个客户自己的配置）；CTS 的曲目选择、真实照片素材、僵尸服务清理均为 CTS 客户私有配置/运维操作，未写入共享代码，本次也没有新增代码。
+
+### 2026-09-13（视频工厂：Creatomate 真实照片渲染链路端到端验证通过，附带修复两个生产事故）
+
+真实照片喂进 Creatomate "Golden China" 模板、渲染出正确成片，这条链路从代码合并到真人验证全部走完，产出多条真实渲染成片。过程中发现并处理了两个此前不知道的生产问题：
+
+1. **一个 2026-09-02"已退役"的老 ffmpeg 拼片工人（Render 服务 `content-factory-render-worker`）其实从未真正关闭**——只是摘掉了触发它的 cron，服务容器本体一直在运行。这次合并代码触发 Render 自动重新部署，该服务苏醒后抢占了新提交的渲染任务，写入旧数据格式，导致新 Creatomate 链路完全跑不起来。已在 Render 后台手动 Suspend（未删除，是否彻底移除待 PM 拍板）。
+2. **Creatomate 渲染产物下载被自己代码里的域名白名单拦下**——`src/lib/creatomate/store-result.ts` 原假设产物从 `cdn.creatomate.com` 出，实测实际存在 Backblaze B2（`f002.backblazeb2.com`）。PR [#1594](https://github.com/bigbigraydeng-maker/magic-engine/pull/1594) 已修复。
+
+另新增 `CreatomateTemplateContract.staticOverrides` 支持覆盖 `EndLogo`/`Watermark` 等不参与逐镜头轮换的固定品牌图层（PR [#1604](https://github.com/bigbigraydeng-maker/magic-engine/pull/1604)），CTS 收尾画面的 logo 已从模板作者放的占位白图换成真实品牌红白配色版本。
+
+同时从 Creatomate 模板编辑页面的 Code 视图直接读出了"Golden China"模板的完整真实结构（8 个镜头槽位各自写死的地名文案、EndCard 各元素名），此前靠试错渲染猜测的槽位映射（如误以为兵马俑在 Still-6）已全部更正为源码确认的真实值，记入 memory `project-cts-video-factory-decision-ledger`，以后不用再重新试错。
+
+CTS 真实素材库 47 张照片人工过目，44 张标记 `client_verified`（3 张文件名标注换脸/换 logo/AI 生成的确认排除），自动选真实照片功能现在对 CTS 真正有可用素材。
+
+**未完成**：Hutong（Still-5）、西安城墙（Still-6）两个镜头位置目前素材库没有专属真实照片；PM 拍板"AI 配音统一用 ElevenLabs"，但账号是免费版无法通过 API 调用任何声音，需要决定是否升级付费，配音这一步至今没有真正测试过。完整清单见 [ROADMAP.md](../ROADMAP.md) Creatomate Connector 落地后续。
+
+**Reuse Statement**：`staticOverrides` 是 Creatomate L3 Connector 契约的扩展，客户中立（哪个元素名对应哪个品牌资产完全是每个客户自己的配置，不进 shared runtime）；CTS 的模板真实结构、素材核实结果、logo 资产均为 CTS 客户私有配置，未写入共享代码。
+
 ### 2026-09-13（视频工厂：Creatomate 出片真实照片优先 + 老 ffmpeg 引擎归档标注）
 
 PR [#1570](https://github.com/bigbigraydeng-maker/magic-engine/pull/1570) 已合并（PR #1569 因改动 835 行撞了 `claude/*` 自动修车道 800 行上限，换 `feat/*` 分支重开，代码不变）。`src/lib/creatomate/scene-assets.ts` 出片时先按镜头描述去客户真实素材库（`client_assets`）里找匹配的真实照片（只认 `client_verified`/`fde_shot` 核实过的来源，见 `src/lib/assets/provenance.ts::canBackRealPrice`），命中就直接用真照片，不再走 AI 现画（`generateImage`）也不再走 AI 逐帧重画（`imageToClip`）；素材库没有匹配的镜头（如已知空白地标：西藏/长江三峡）才回退到原有 AI 现画路径。真实照片的"动"交给 Creatomate 模板本身在编辑器里给槽位配置的入场/推拉动画，ME 侧不实现 Ken Burns（三层架构冻结决策：填槽不造槽）。

@@ -5,7 +5,8 @@ import type { OperatingBrief } from '@/lib/web-intelligence/operating-brief'
 import type { TourLandscape } from '@/lib/web-intelligence/tour-landscape'
 
 type TrafficDirection = { domain: string; is_client?: boolean; source_url: string; observed_at: string; valid_until: string | null; excerpt: string; observation_count: number; previous_observed_at: string | null; estimated_visits: number | null; previous_estimated_visits: number | null; snapshot_change_pct: number | null; visits_change_pct: number | null; top_country: string | null }
-type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; client_product_source?: { kind: 'master_brief' | 'first_party_feed' | 'web_snapshot' | 'none'; count: number }; traffic_direction?: TrafficDirection[]; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
+type ExternalSignal = { source_type: 'industry_news' | 'industry_media' | 'jobs'; source_name: string; source_url: string; title: string; excerpt: string; observed_at: string; valid_until: string | null }
+type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; client_product_source?: { kind: 'master_brief' | 'first_party_feed' | 'web_snapshot' | 'none'; count: number }; traffic_direction?: TrafficDirection[]; external_signals?: ExternalSignal[]; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
 type ComparisonResult = { summary: string; client_strengths: string[]; competitor_strengths: string[]; differences: string[]; recommendations: string[]; unknowns: string[]; confidence: number; evidence_urls: string[] }
 type LandscapeChatMessage = { role: 'user' | 'assistant'; content: string }
 type CapturePhase = 'idle' | 'queued' | 'capturing' | 'analysing' | 'complete' | 'failed'
@@ -21,6 +22,9 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
   const [clientProductSource, setClientProductSource] = useState<Payload['client_product_source']>()
   const [clientDomain, setClientDomain] = useState<string | null>(null)
   const [trafficDirection, setTrafficDirection] = useState<TrafficDirection[]>([])
+  const [externalSignals, setExternalSignals] = useState<ExternalSignal[]>([])
+  const [externalBusy, setExternalBusy] = useState('')
+  const [externalMessage, setExternalMessage] = useState('')
   const [trafficBusy, setTrafficBusy] = useState(false)
   const [trafficMessage, setTrafficMessage] = useState('')
   const [canRun, setCanRun] = useState(false)
@@ -36,7 +40,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
         return response.json() as Promise<Payload>
       })
       .then(value => {
-        setData(value.operating); setClientProductSource(value.client_product_source); setTrafficDirection(value.traffic_direction ?? []); setClientDomain(value.client.domain); setCanRun(value.can_run)
+        setData(value.operating); setClientProductSource(value.client_product_source); setTrafficDirection(value.traffic_direction ?? []); setExternalSignals(value.external_signals ?? []); setClientDomain(value.client.domain); setCanRun(value.can_run)
         if (captureRequestId) {
           const run = value.runs?.find(item => item.id === captureRequestId)
           if (run?.status === 'complete') setCapturePhase('complete')
@@ -80,6 +84,18 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     } catch { setCaptureRequestId(null); setCapturePhase('failed') }
   }
 
+  async function collectExternal(sourceId: string) {
+    setExternalBusy(sourceId); setExternalMessage('')
+    try {
+      const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence/external`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: sourceId, queries: ['China travel', 'tour manager', 'travel consultant'], max_results: 20 }) })
+      const payload = await response.json() as { persisted?: number; duplicates?: number; rejected?: number; error?: string }
+      if (!response.ok) throw new Error(payload.error ?? '外部信息读取失败。')
+      setExternalMessage(`本次已完成读取，新增 ${payload.persisted ?? 0} 条${payload.duplicates ? `，${payload.duplicates} 条已存在` : ''}${payload.rejected ? `，${payload.rejected} 条无法确认` : ''}。`)
+      setRefresh(value => value + 1)
+    } catch (reason) { setExternalMessage(reason instanceof Error ? reason.message : '外部信息读取失败。') }
+    finally { setExternalBusy('') }
+  }
+
   if (error) return <main className="mx-auto max-w-5xl p-6"><p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-800">{error}</p></main>
   if (!data) return <main className="mx-auto max-w-5xl p-6"><p role="status" className="text-sm text-me-charcoal/60">正在整理客户经营上下文…</p></main>
 
@@ -121,6 +137,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
       } catch (reason) { setTrafficMessage(reason instanceof Error ? reason.message : '竞品流量方向读取失败。') }
       finally { setTrafficBusy(false) }
     }} />
+    <ExternalSignalsSection signals={externalSignals} busy={externalBusy} message={externalMessage} onCollect={collectExternal} />
 
     <section className="rounded-2xl border border-me-ochre/30 bg-me-ochre/10 p-5">
       <p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">本轮经营问题</p>
@@ -150,6 +167,17 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     </section>
     <p className="text-xs text-me-charcoal/45">截至 {new Date(data.as_of).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}（Pacific/Auckland）· 事实、推断、建议和未知已分开显示。</p>
   </main>
+}
+
+function ExternalSignalsSection({ signals, busy, message, onCollect }: { signals: ExternalSignal[]; busy: string; message: string; onCollect: (sourceId: string) => Promise<void> }) {
+  const latest = signals.slice(0, 6)
+  const labels: Record<string, string> = { 'industry_media': '行业媒体', 'industry_news': '行业新闻', jobs: '招聘信息' }
+  return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="行业动态和招聘信息">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-charcoal/50">其他外部信号</p><h2 className="mt-1 text-lg font-bold">行业动态与招聘信息</h2><p className="mt-1 text-sm leading-6 text-me-charcoal/65">用行业媒体、行业新闻和招聘需求补充市场变化；每条信息都保留来源和观察时间。</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void onCollect('travel-today')} disabled={Boolean(busy)} className="rounded-lg border border-me-ochre px-3 py-1.5 text-xs font-bold text-me-ochre disabled:opacity-50">{busy === 'travel-today' ? '读取中…' : '读取行业媒体'}</button><button type="button" onClick={() => void onCollect('seek-nz')} disabled={Boolean(busy)} className="rounded-lg border border-me-ochre px-3 py-1.5 text-xs font-bold text-me-ochre disabled:opacity-50">{busy === 'seek-nz' ? '读取中…' : '读取 SEEK 招聘'}</button></div></div>
+    {message && <p role="status" className="mt-3 rounded-lg bg-me-ivory px-3 py-2 text-sm">{message}</p>}
+    {latest.length ? <div className="mt-4 space-y-2">{latest.map(signal => <article key={`${signal.source_url}-${signal.observed_at}`} className="rounded-xl bg-me-ivory/60 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">{labels[signal.source_type] ?? signal.source_name}</p><h3 className="mt-1 font-bold">{signal.title || signal.source_name}</h3></div><a className="shrink-0 text-xs font-bold underline" href={signal.source_url} target="_blank" rel="noreferrer">查看来源</a></div><p className="mt-2 line-clamp-3 whitespace-pre-line text-sm leading-6 text-me-charcoal/75">{signal.excerpt}</p><p className="mt-2 text-xs text-me-charcoal/50">观察于 {new Date(signal.observed_at).toLocaleDateString('zh-CN')} · 有效至 {signal.valid_until ? new Date(signal.valid_until).toLocaleDateString('zh-CN') : '未知'}</p></article>)}</div> : <p className="mt-4 rounded-xl bg-me-ivory p-4 text-sm text-me-charcoal/60">尚未读取行业媒体或招聘信息。</p>}
+    {signals.length > 6 && <details className="mt-3"><summary className="cursor-pointer text-sm font-bold text-me-ochre">查看其余 {signals.length - 6} 条信息</summary><div className="mt-3 space-y-2">{signals.slice(6).map(signal => <article key={`${signal.source_url}-${signal.observed_at}-extra`} className="rounded-xl bg-me-ivory/60 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">{labels[signal.source_type] ?? signal.source_name}</p><h3 className="mt-1 font-bold">{signal.title || signal.source_name}</h3></div><a className="shrink-0 text-xs font-bold underline" href={signal.source_url} target="_blank" rel="noreferrer">查看来源</a></div><p className="mt-2 whitespace-pre-line text-sm leading-6 text-me-charcoal/75">{signal.excerpt}</p><p className="mt-2 text-xs text-me-charcoal/50">观察于 {new Date(signal.observed_at).toLocaleDateString('zh-CN')} · 有效至 {signal.valid_until ? new Date(signal.valid_until).toLocaleDateString('zh-CN') : '未知'}</p></article>)}</div></details>}
+  </section>
 }
 
 function TrafficDirectionSection({ clientId, signals, busy, message, onRun }: { clientId: string; signals: TrafficDirection[]; busy: boolean; message: string; onRun: () => Promise<void> }) {
