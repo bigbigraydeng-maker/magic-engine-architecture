@@ -29,7 +29,7 @@
 - **是什么**：面向旅游运营商 · 目的地营销的垂直版本
 - **归属**：L2 Playbook / Version
 - **当前状态**：**已正式立版（PM 2026-09-14 拍板）**。Customer Zero = CTS Tours NZ。
-  - 首个 L2 能力候选 / 首个验证实例：**行程转路线地图生成器**（PC + 手机两版，按团自动出图；CTS 8 个团已用）。**仍是 `candidate · 1/2`（未晋升为共享能力）**——需第 2 个旅游客户事实复制、且把品牌/底图/地理规则参数化后才具备旅游版共享资格，见 `docs/registry/platform-candidates.md`。
+  - 首个 L2 能力候选（尚未晋升为共享能力）：**行程转路线地图生成器**（PC + 手机两版，按团自动出图；CTS 8 个团已用首例验证，见 `docs/registry/platform-candidates.md`——该条目当前状态仍为 `candidate`，证据 1/2 客户，需第 2 个旅游客户出现事实复制后才能晋升为 ME 旅游版共享能力）。
   - 首个模块规划：**ME Tour 管理模块**（一个团在推广前统一备好内容/定价/行程/地图），规划见 [`docs/specs/2026-09-14-me-tour-management-module-plan.md`](../specs/2026-09-14-me-tour-management-module-plan.md)，**未授权实施**，待 P1 团数据结构立项。
   - 红线：客户具体团数据（城市/价格/活动）= L4 配置按 client 隔离，不入 shared runtime。
 - **触发词**：`ME 旅游版` · `旅游版` · `travel playbook` · `tourism`
