@@ -80,4 +80,14 @@ export interface CreatomateTemplateContract {
    * 按元素名→URL 的键值对存，跟 sceneFieldMap 一样是纯客户配置，不进共享代码。
    */
   staticOverrides?: Record<string, string>
+  /**
+   * 这条视频专属、真的会随视频变化的文字元素名清单(2026-09-13 新增，如 EndCard 的
+   * 团名/路线/天数价格/出发日期)——跟 staticOverrides 刻意分开：staticOverrides 是
+   * "客户级、所有视频共用一份值"，这里声明的每个元素名，每条视频必须各自提供一份
+   * 不同的值(读自 content_posts.generation_context_snapshot.endcard，见
+   * factory-creatomate-render.ts::resolvePostEndcardOverrides)。只声明"要哪些
+   * 元素名"，不声明值——值是每条视频自己的内容，不是客户级配置（红线2：不把单
+   * 视频事实塞进共享/客户级配置）。声明了却漏填 = 直接拦渲染，绝不允许静默套用
+   * 模板作者写的示例内容当真发布（魏征复审 ①②）。 */
+  requiredPostFields?: string[]
 }

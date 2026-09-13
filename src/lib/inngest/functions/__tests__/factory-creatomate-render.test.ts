@@ -46,7 +46,7 @@ const POST_ID = '00000000-0000-4000-8000-0000000000bb'
 // 直接把测试想验证的"配置生效"场景测成了"没配置"，是本文件自己犯过的同一类 fixture 错。
 const STORED_TEMPLATE_CONTRACT = { template_id: 'tmpl-1', scene_field_map: [{ visual: 'Video-1' }] }
 
-import { createFactoryCreatomateRender } from '../factory-creatomate-render'
+import { createFactoryCreatomateRender, resolvePostEndcardOverrides } from '../factory-creatomate-render'
 import { cloudFunctions } from '../index'
 import { CLOUD_FN_PREFIX, WORKER_OWNED_EVENTS } from '../../client'
 import { CREATOMATE_RENDER_REQUESTED_EVENT } from '@/lib/creatomate/events'
@@ -182,5 +182,123 @@ describe('factory-creatomate-render — 成功路径把 Creatomate credits 记�
     const costUsd = (successUpdate!.patch as { cost_usd: number }).cost_usd
     // 场景成本 0.3 + Creatomate 估算（默认尺寸，1 镜头 6 秒）> 0.3，证明两笔都算了，不是只记一半
     expect(costUsd).toBeGreaterThan(0.3)
+  })
+})
+
+describe('resolvePostEndcardOverrides — 单视频专属 EndCard 覆盖（2026-09-13 子牙+魏征复审后新增）', () => {
+  it('模板没声明 requiredPostFields（没有需要逐视频变化的文字）→ 直接返回空对象，不要求 snapshot 有内容', () => {
+    expect(resolvePostEndcardOverrides(null, undefined)).toEqual({})
+    expect(resolvePostEndcardOverrides({ some: 'thing' }, [])).toEqual({})
+  })
+
+  it('声明了 requiredPostFields 但 snapshot 完全没有 endcard → 抛错（魏征复审 ②：绝不静默套用模板默认值）', () => {
+    expect(() => resolvePostEndcardOverrides(null, ['EndTour', 'EndDate'])).toThrow(/缺少 EndCard 内容/)
+    expect(() => resolvePostEndcardOverrides({}, ['EndTour'])).toThrow(/缺少 EndCard 内容/)
+  })
+
+  it('endcard 里混了非字符串值（脏数据）→ 当作没有 endcard 一样拒绝，不半收半弃', () => {
+    expect(() =>
+      resolvePostEndcardOverrides({ endcard: { EndTour: 'Best of China', EndDate: 123 } }, ['EndTour', 'EndDate']),
+    ).toThrow(/缺少 EndCard 内容/)
+  })
+
+  it('endcard 缺了 requiredPostFields 里的某一项 → 精确报出缺哪个字段，不是笼统报错', () => {
+    expect(() =>
+      resolvePostEndcardOverrides(
+        { endcard: { EndTour: 'Best of China', EndRoute: 'Beijing · Xi\'an · Shanghai' } },
+        ['EndTour', 'EndRoute', 'EndDate'],
+      ),
+    ).toThrow(/EndCard 缺字段：EndDate/)
+  })
+
+  it('endcard 字段是空字符串（写了键但没填值）→ 同样算缺失，不能用空字符串糊弄过去', () => {
+    expect(() =>
+      resolvePostEndcardOverrides({ endcard: { EndTour: '  ', EndDate: '2027-03-01' } }, ['EndTour', 'EndDate']),
+    ).toThrow(/EndCard 缺字段：EndTour/)
+  })
+
+  it('endcard 齐全 → 原样返回这几个字段的值，供上层合并进 staticOverrides', () => {
+    const result = resolvePostEndcardOverrides(
+      { endcard: { EndTour: 'Best of China', EndRoute: 'Beijing · Xi\'an · Shanghai', extra: 'ignored-but-fine' } },
+      ['EndTour', 'EndRoute'],
+    )
+    expect(result).toEqual({ EndTour: 'Best of China', EndRoute: 'Beijing · Xi\'an · Shanghai', extra: 'ignored-but-fine' })
+  })
+})
+
+describe('factory-creatomate-render — 提交时合并单视频 EndCard 覆盖', () => {
+  it('客户模板声明了 requiredPostFields，但这条视频的 content_posts 没有对应 endcard → 提交前拦下，job 标 failed', async () => {
+    const updates: Record<string, unknown>[] = []
+    const supabase = fakeSupabase({
+      job: { id: JOB_ID, client_id: CLIENT_ID, content_post_id: POST_ID, status: 'queued', scenes: null, creatomate_render_id: null },
+      clients: {
+        factory_config: {
+          render: {
+            engine: 'creatomate',
+            creatomate: { ...STORED_TEMPLATE_CONTRACT, required_post_fields: ['EndTour', 'EndDate'] },
+          },
+        },
+      },
+      posts: { title: 'x', script: '口播稿' }, // 没有 generation_context_snapshot
+      updates,
+    })
+    prepareSceneAssets.mockResolvedValue([
+      { index: 0, captionText: 'A', visualUrl: 'https://x/a.mp4', visualType: 'video', voUrl: 'https://x/a.mp3', costUsd: 0.3 },
+    ])
+
+    const fn = createFactoryCreatomateRender({ supabase: supabase as never })
+    const handler = (fn as unknown as { fn: (ctx: { event: { data: unknown }; step: ReturnType<typeof fakeStep> }) => Promise<unknown> }).fn
+
+    await expect(
+      handler({ event: { data: { job_id: JOB_ID, client_id: CLIENT_ID, post_id: POST_ID } }, step: fakeStep() }),
+    ).rejects.toThrow(/缺少 EndCard 内容/)
+
+    const failedUpdate = updates.find((u) => u.table === 'content_factory_render_jobs' && (u.patch as { status?: string }).status === 'failed')
+    expect(failedUpdate, 'job 必须被 patch 成 failed，不能安静停在 queued/rendering').toBeDefined()
+    expect(submitRender).not.toHaveBeenCalled()
+  })
+
+  it('endcard 内容齐全 → 合并进 staticOverrides 传给 buildModifications，客户级 staticOverrides 也保留', async () => {
+    const updates: Record<string, unknown>[] = []
+    const supabase = fakeSupabase({
+      job: { id: JOB_ID, client_id: CLIENT_ID, content_post_id: POST_ID, status: 'queued', scenes: null, creatomate_render_id: null },
+      clients: {
+        factory_config: {
+          render: {
+            engine: 'creatomate',
+            creatomate: {
+              ...STORED_TEMPLATE_CONTRACT,
+              static_overrides: { EndLogo: 'https://x/logo.png' },
+              required_post_fields: ['EndTour'],
+            },
+          },
+        },
+      },
+      posts: {
+        title: 'x',
+        script: '口播稿',
+        generation_context_snapshot: { endcard: { EndTour: 'Best of China' }, unrelated_key: 'from-another-feature' },
+      },
+      updates,
+    })
+    prepareSceneAssets.mockResolvedValue([
+      { index: 0, captionText: 'A', visualUrl: 'https://x/a.mp4', visualType: 'video', voUrl: 'https://x/a.mp3', costUsd: 0.3 },
+    ])
+    submitRender.mockResolvedValue({ renderId: 'render-1' })
+    getRender.mockResolvedValue({ id: 'render-1', status: 'succeeded', url: 'https://cdn.creatomate.com/out.mp4' })
+    storeCreatomateResult.mockResolvedValue({ storageUrl: 'https://supabase/out.mp4', fileSizeKb: 100 })
+
+    const fn = createFactoryCreatomateRender({ supabase: supabase as never })
+    const handler = (fn as unknown as { fn: (ctx: { event: { data: unknown }; step: ReturnType<typeof fakeStep> }) => Promise<{ ok: boolean }> }).fn
+
+    const result = await handler({
+      event: { data: { job_id: JOB_ID, client_id: CLIENT_ID, post_id: POST_ID } },
+      step: fakeStep({ data: { job_id: JOB_ID, render_id: 'render-1' } }),
+    })
+
+    expect(result.ok).toBe(true)
+    expect(buildModifications).toHaveBeenCalledTimes(1)
+    const [, effectiveContract] = buildModifications.mock.calls[0] as [unknown, { staticOverrides?: Record<string, string> }]
+    expect(effectiveContract.staticOverrides).toEqual({ EndLogo: 'https://x/logo.png', EndTour: 'Best of China' })
   })
 })
