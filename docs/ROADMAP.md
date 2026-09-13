@@ -33,10 +33,12 @@
 - [ ] `pickRealPhoto`/`loadRankableClientAssets` 补一道质量分门槛（`client-asset-pool.ts` 的 `MIN_QUALITY=5` 口径目前真实照片路径没用上）
 - [ ] `PreparedScene.visualSource` 接入人工分镜自检表 UI，让 FDE 逐镜看时能分清"这镜是真图"
 - [ ] `pickRealPhoto` 内部调用 `rankAssetsByPrompt` 的 `gpt-4o-mini` 排序成本（分钱级）没有计入 `content_factory_render_jobs.cost_usd`
-- [ ] CTS 真实素材库缺 Hutong（Still-5 专属）、西安城墙（Still-6 专属，不是兵马俑）的真实照片，目前这两个位置只能用模板默认图
-- [ ] 那个已确认"退役但没真的关掉、还在偷偷抢渲染任务"的老 Render 服务（`content-factory-render-worker`）2026-09-13 已手动 Suspend，要不要彻底删除还没拍板
-- [ ] PM 拍板"AI 配音统一用 ElevenLabs"，但账号是免费版，26 个声音全部不能通过 API 调用，需要 PM 决定要不要升级付费；在此之前 CTS 出片全程没有真正测过配音这一步
+- [x] CTS 真实素材库缺 Hutong（Still-5 专属）、西安城墙（Still-6 专属，不是兵马俑）的真实照片——2026-09-13 发现公司自己的 Dropbox 素材库（`CTS/footage/photos/`）里其实早就有 2 张胡同 + 1 张西安城墙真实照片，只是从未录入 `client_assets`，不需要去 Unsplash 找。已上传+PM 过目确认+标记 `client_verified`。**注意**：这两个landmark 目前仍不在 `factory_config.render.creatomate.scene_field_map`（该客户脚本目前只生成 4 个镜头，对应 Still-3/4/7/8），要真的让这两张照片出现在成片里，还需要把内容生成扩到 6 个镜头并给 Still-5/Still-6 各加一条 `scene_field_map` 条目——这是下一步待决定的事，不是"现在已经在用"
+- [x] 那个已确认"退役但没真的关掉、还在偷偷抢渲染任务"的老 Render 服务（`content-factory-render-worker`）——PM 2026-09-13 拍板彻底删除，已在 Render 后台执行删除，服务已不存在
+- [ ] PM 拍板"AI 配音统一用 ElevenLabs"，账号免费版无法通过 API 调用任何声音——PM 2026-09-13 拍板暂不升级付费，先维持现状；CTS 出片全程仍未真正测过配音这一步
 - [ ] "多开发不同模板"：PM 不想招人代画，已验证 Creatomate 模板编辑页的 Code 视图（`{}` 图标）能直接读出完整模板 JSON 源码，理论上也能反向粘贴编辑保存，但只验证了"读"，没验证"改并保存"这一步
+- [x] 背景音乐——2026-09-13 发现模板其实自带一个通用的 `Music` 音频图层（此前的模板结构记录漏记了这个，只记了画面/文字元素），PM 上传了 3 首新曲目到 Dropbox（`MagicLab_Studio/Music/`），已全部转存到正式素材库，PM 选定 `Horizon's Call` 作为默认背景音乐，通过已有的 `static_overrides` 机制接入（不需要改代码），已用真实渲染验证音轨确实有声音且不是哑的
+- [ ] 🔴 2026-09-13 测试渲染时新发现的生产缺口：当某个镜头一张真实照片都没匹配上、需要走"AI 现画兜底"这条路时，生产环境里 `MUAPI_API_KEY` 这个环境变量实际上没配置（`docs/ENV.md` 之前标记✅是错的，从没人真的验证过这条兜底路径），会导致整条渲染直接失败，不是"效果差一点"，是"整片渲不出来"。按 §11 资源优先级打分：频率=低（目前 47 张已核实真实照片覆盖 4 个常用镜头，命中兜底路径的机会不高，但会随内容多样化增加）、IMPACT 关口=高（卡在 Act 段，命中即整条渲染失败）、收入关联度=低（不直接影响客户投诉/续费，只是出片变慢）→ 两项低+一项高 → **P3**，先记录待认领，不阻塞当前工作
 
 ## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
 
