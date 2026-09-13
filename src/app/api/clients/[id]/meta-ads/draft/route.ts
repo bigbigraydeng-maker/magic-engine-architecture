@@ -38,7 +38,7 @@ export async function POST(
 
   const { data: client } = await supabaseAdmin
     .from('clients')
-    .select('meta_ad_account_id, facebook_page_id, country')
+    .select('meta_ad_account_id, facebook_page_id, country, industry')
     .eq('id', clientId)
     .maybeSingle()
 
@@ -69,6 +69,7 @@ export async function POST(
     adAccountId,
     accessToken,
     expectedGeo: (client as { country?: string } | null)?.country ?? null,
+    industry: (client as { industry?: string | null } | null)?.industry ?? null,
   })
 
   return NextResponse.json(outcome)

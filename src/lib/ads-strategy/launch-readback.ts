@@ -21,6 +21,8 @@
  * 每一条规则都来自 2026-08-04 当天的真实事故，不是想象出来的。
  */
 
+import { resolveAdsPlaybook } from './playbooks'
+
 export type Severity =
   /** 🔴 会伤到真买家或烧错钱 —— 不修不许开 */
   | 'blocker'
@@ -81,6 +83,8 @@ export interface LaunchReadbackInput {
   claimsRetargeting?: boolean
   /** 房源/客户所在地区，用于对照投放地区。给不出就跳过这条检查。 */
   expectedGeo?: string | null
+  /** 客户行业（`clients.industry`），只用来从广告剧本取叫法；给不出就用中性词。 */
+  industry?: string | null
 }
 
 export interface LaunchReadbackReport {
@@ -285,7 +289,7 @@ export function checkLaunch(input: LaunchReadbackInput): LaunchReadbackReport {
       findings.push({
         code: 'geo_mismatch',
         severity: 'blocker',
-        message: `投放地区是「${t.geoNames.join(' / ')}」，房源在「${input.expectedGeo}」—— 对不上。`,
+        message: `投放地区是「${t.geoNames.join(' / ')}」，${resolveAdsPlaybook(input.industry ?? null).expectedGeoNoun}在「${input.expectedGeo}」—— 对不上。`,
         learnedFrom: '2026-08-04 Roman「IG 专投测试」把奥克兰北岸 $1.25M 的房投给了整个新西兰',
       })
     }
