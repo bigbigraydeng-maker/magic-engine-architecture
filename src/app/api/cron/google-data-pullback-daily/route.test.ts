@@ -391,6 +391,32 @@ describe('GET /api/cron/google-data-pullback-daily — 多账户 ad_daily_insigh
     vi.mocked(sendAdHealthDigest).mockReset()
   })
 
+  it('诊断出错 → 当天原体检成功就退回发原日报，错误进 errors（PM 当天仍收得到信）', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])
+    const { evaluateClientAdHealth } = await import('@/lib/ads-strategy/evaluate')
+    const { sendAdHealthDigest } = await import('@/lib/ads-strategy/digest')
+    vi.mocked(evaluateClientAdHealth).mockResolvedValue({ success: true, overall_verdict: 'watch' } as never)
+    vi.mocked(sendAdHealthDigest).mockResolvedValue({ decision: 'watch', sent: true } as never)
+    mockSnapshotTablesExist.mockResolvedValueOnce(true)
+    mockRunPortfolioDiagnostics.mockResolvedValueOnce({ success: false, hits: 0, not_comparable: 0, excluded: 0, error: 'load failed: relation missing' })
+    const { GET } = await import('./route')
+    const json = await (await GET(makeRequest(CRON_SECRET))).json()
+    expect(vi.mocked(sendAdHealthDigest)).toHaveBeenCalledTimes(1)
+    expect(json.results[0].ad_digest.decision).toBe('fallback:watch')
+    vi.mocked(evaluateClientAdHealth).mockReset()
+    vi.mocked(sendAdHealthDigest).mockReset()
+  })
+
+  it('当天拉数失败（授权断了）→ 诊断照样跑（D7 要报这件事）', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])
+    mockSyncCampaignDailyInsights.mockResolvedValue({ success: false, error: 'Meta returned no usable page' })
+    mockSnapshotTablesExist.mockResolvedValueOnce(true)
+    mockRunPortfolioDiagnostics.mockClear()
+    const { GET } = await import('./route')
+    await GET(makeRequest(CRON_SECRET))
+    expect(mockRunPortfolioDiagnostics).toHaveBeenCalledTimes(1)
+  })
+
   it('失败邮件标题不拿广告组级错误当头条（它不触发 failed）', async () => {
     // 顺序上 adset_level 的错误排在 ad_health 之前；真正触发 failed 的是 ad_health
     mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])

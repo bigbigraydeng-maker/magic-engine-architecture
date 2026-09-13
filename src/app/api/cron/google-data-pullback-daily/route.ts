@@ -355,25 +355,16 @@ export async function GET(req: NextRequest) {
             // Skip sending when the config was a read-error fallback: enabled is
             // then a guess, and re-opening a paused client to email is the one
             // irreversible mistake we don't fail-open on (魏征).
-            if (adConfigSource !== 'fallback' && result.ad_health?.success && result.ad_health.overall_verdict) {
-              // ads IMPACT 阶段 1 第 7 步：快照表已建（migration 已 apply）→ 跑只读诊断 D1/D3/D4/D5/D7/D8，
-              // 发**内部版**日报（收件人只留内部邮箱）。表还没建 → 照旧发原日报，行为不变。
-              if (snapshotsReady) {
-                result.ad_diagnostics = await runPortfolioDiagnostics(
-                  client.client_id,
-                  client.client_name ?? 'Client',
-                  insightDateStr,
-                  adStrategyConfig.digest_recipients,
-                )
-              } else {
-                const digest = await sendAdHealthDigest(
-                  client.client_id,
-                  client.client_name ?? 'Client',
-                  insightDateStr,
-                  resolveDigestRecipients(adStrategyConfig),
-                )
-                result.ad_digest = { sent: digest.sent, decision: digest.decision, error: digest.error }
-              }
+            // ads IMPACT 阶段 1 第 7 步：快照表已建时改由下方（广告组级同步之后）的只读诊断发**内部版**日报；
+            // 表还没建（migration 未 apply）→ 照旧在这里发原日报，行为不变。
+            if (!snapshotsReady && adConfigSource !== 'fallback' && result.ad_health?.success && result.ad_health.overall_verdict) {
+              const digest = await sendAdHealthDigest(
+                client.client_id,
+                client.client_name ?? 'Client',
+                insightDateStr,
+                resolveDigestRecipients(adStrategyConfig),
+              )
+              result.ad_digest = { sent: digest.sent, decision: digest.decision, error: digest.error }
             }
           }
 
@@ -394,6 +385,23 @@ export async function GET(req: NextRequest) {
           result.adset_level = isShared(client.meta_ad_account_id)
             ? skippedShared
             : await syncAdsetDailyInsights(client.client_id, client.meta_ad_account_id, metaToken, { withVideo })
+
+          // ads IMPACT 阶段 1：只读诊断 + 内部版日报。放在广告组级同步之后（诊断要广告组级数据），
+          // 且**不依赖**当天拉数/体检成功——授权断了导致拉数失败时，D7「授权/数据体检」正是要报这件事（子牙复审）。
+          // 诊断出错：计入 errors；当天原体检成功的话退回发原日报，保证 PM 当天仍收得到信（魏征复审）。
+          if (snapshotsReady && adConfigSource !== 'fallback') {
+            const diagDate = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+            result.ad_diagnostics = await runPortfolioDiagnostics(
+              client.client_id,
+              client.client_name ?? 'Client',
+              diagDate,
+              adStrategyConfig.digest_recipients,
+            )
+            if (!result.ad_diagnostics.success && result.ad_health?.success && result.ad_health.overall_verdict) {
+              const digest = await sendAdHealthDigest(client.client_id, client.client_name ?? 'Client', diagDate, resolveDigestRecipients(adStrategyConfig))
+              result.ad_digest = { sent: digest.sent, decision: `fallback:${digest.decision}`, error: digest.error }
+            }
+          }
         }
       }
     }

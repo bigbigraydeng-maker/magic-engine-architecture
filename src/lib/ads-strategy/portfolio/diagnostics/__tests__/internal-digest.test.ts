@@ -16,8 +16,9 @@ import type { DailyRow, DiagnosisRun } from '../types'
 import type { GraphHourlySpendRow } from '@/lib/meta/entity-settings'
 
 const sent: Array<{ to: string[]; subject: string; html: string }> = []
+let sendError: { name: string; message: string; statusCode: number } | null = null
 vi.mock('resend', () => ({
-  Resend: class { emails = { send: async (m: { to: string[]; subject: string; html: string }) => { sent.push(m); return { error: null } } } },
+  Resend: class { emails = { send: async (m: { to: string[]; subject: string; html: string }) => { if (sendError) return { error: sendError }; sent.push(m); return { error: null } } } },
 }))
 
 type Row = Record<string, unknown>
@@ -44,7 +45,8 @@ vi.mock('@/lib/supabase', () => ({
   },
 }))
 
-import { buildInternalDigest, decideInternalSend, isInternalRecipient, persistAndSendInternalDigest, resolveInternalRecipients } from '../../internal-digest'
+import { buildInternalDigest, decideInternalSend, persistAndSendInternalDigest, resolveInternalRecipients } from '../../internal-digest'
+import { isInternalEmail as isInternalRecipient } from '../internal-email'
 
 let ctsRun: DiagnosisRun
 let nalRun: DiagnosisRun
@@ -67,7 +69,7 @@ beforeAll(async () => {
   })
 })
 
-beforeEach(() => { sent.length = 0; narratives.length = 0; process.env.RESEND_API_KEY = 'test' })
+beforeEach(() => { sent.length = 0; narratives.length = 0; sendError = null; process.env.RESEND_API_KEY = 'test'; delete process.env.AD_HEALTH_DIGEST_TO })
 
 describe('收件人只留内部', () => {
   it('内部域名放行，客户域名丢弃', () => {
@@ -80,16 +82,37 @@ describe('收件人只留内部', () => {
   it('全是客户邮箱 → 发内部默认收件箱，并记下丢了几个', () => {
     const r = resolveInternalRecipients(['owner@nalexpress.com', 'boss@ctstours.co.nz'])
     expect(r.dropped).toBe(2)
+    expect(r.to.length).toBe(1)
     expect(r.to.every(isInternalRecipient)).toBe(true)
+  })
+
+  it('🔴 兜底地址环境变量被设成客户邮箱（含逗号串）→ 不当内部，也不拿来兜底', () => {
+    process.env.AD_HEALTH_DIGEST_TO = 'boss@ctstours.co.nz, owner@nalexpress.com'
+    const r = resolveInternalRecipients(['boss@ctstours.co.nz'])
+    expect(r.to).not.toContain('boss@ctstours.co.nz')
+    expect(r.to.every(isInternalRecipient)).toBe(true)
+  })
+
+  it('带显示名、大小写混写的内部地址 → 认得出，按裸地址发', () => {
+    expect(resolveInternalRecipients(['Ray <Hello@MagicEngine.cloud>']).to).toEqual(['hello@magicengine.cloud'])
   })
 })
 
 describe('发不发（防疲劳）', () => {
-  it('有命中发；昨天有今天没有发「恢复」；周一发周报；其余不发', () => {
-    expect(decideInternalSend(1, 0, false)).toBe('alert')
-    expect(decideInternalSend(0, 2, false)).toBe('recovery')
-    expect(decideInternalSend(0, 0, true)).toBe('weekly')
-    expect(decideInternalSend(0, null, false)).toBe('skip')
+  it('有命中发；昨天有今天没有发「恢复」；昨天有、今天判不了 →「🟡 判不了」不算恢复；周一例行；其余不发', () => {
+    expect(decideInternalSend({ hits: 1, notComparable: 0 }, 0, false)).toBe('alert')
+    expect(decideInternalSend({ hits: 0, notComparable: 0 }, 2, false)).toBe('recovery')
+    expect(decideInternalSend({ hits: 0, notComparable: 3 }, 2, false)).toBe('uncertain')
+    expect(decideInternalSend({ hits: 0, notComparable: 0 }, 0, true)).toBe('weekly')
+    expect(decideInternalSend({ hits: 0, notComparable: 0 }, null, false)).toBe('skip')
+  })
+
+  it('周一判定按数据日期：2026-09-14 是周一、09-16 不是（发 2 封对比）', async () => {
+    const quiet = { ...ctsRun, diagnoses: [] }
+    for (const date of ['2026-09-14', '2026-09-16']) narratives.push({ client_id: 'q', insight_date: date, payload: { campaigns: [] }, email_status: null })
+    const mon = await persistAndSendInternalDigest({ clientId: 'q', clientName: 'Q', date: '2026-09-14', run: quiet, configuredRecipients: [] })
+    const wed = await persistAndSendInternalDigest({ clientId: 'q', clientName: 'Q', date: '2026-09-16', run: quiet, configuredRecipients: [] })
+    expect([mon.decision, wed.decision]).toEqual(['weekly', 'skip'])
   })
 })
 
@@ -102,6 +125,30 @@ describe('日报内容（真实回放诊断）', () => {
     expect(html).toContain('投放卡住')
     expect(html).toContain('样本：')
     expect(html).toContain('只读诊断，没有改任何广告和预算')
+    expect(html).toContain('NZD 23.22')
+    expect(html).toContain('<a href="https://adsmanager.facebook.com/')
+  })
+
+  it('例行信里有判不了的 → 🟡 并明说「判不了」，不写「没问题」', () => {
+    // 派生：把 CTS 9/13 那条真实 D1 改成「判不了」
+    const run = { ...ctsRun, diagnoses: ctsRun.diagnoses.map(d => ({ ...d, status: 'not_comparable' as const, notComparableReason: 'no_hourly_data' as const })) }
+    const { html } = buildInternalDigest({ clientName: 'C', date: '2026-09-14', run, decision: 'weekly', legacyNeedsAction: [], droppedRecipients: 0 })
+    expect(html).toContain('🟡')
+    expect(html).toContain('判不了')
+    expect(html).not.toContain('🟢')
+  })
+
+  it('相对链接补成正式站绝对地址、可点', () => {
+    const run = { ...ctsRun, diagnoses: [{ ...ctsRun.diagnoses[0], manualTask: { what: 'x', how: 'y', href: '/dashboard/clients/c/settings' } }] }
+    const { html } = buildInternalDigest({ clientName: 'C', date: '2026-09-13', run, decision: 'alert', legacyNeedsAction: [], droppedRecipients: 0 })
+    expect(html).toContain('<a href="https://app.magicengine.com.au/dashboard/clients/c/settings"')
+  })
+
+  it('广告名里的尖括号 / 引号被转义（不注入 HTML）', () => {
+    const run = { ...ctsRun, diagnoses: [{ ...ctsRun.diagnoses[0], title: '<script>alert("x")</script>' }] }
+    const { html } = buildInternalDigest({ clientName: 'C', date: '2026-09-13', run, decision: 'alert', legacyNeedsAction: [], droppedRecipients: 0 })
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&lt;script&gt;')
   })
 
   it('NAL 9/13：命中按角色分组（破冰下面是攒了人没收割），D8 也在', () => {
@@ -129,6 +176,29 @@ describe('发送与回执', () => {
     const stored = narratives[0].payload as { portfolio_diagnoses: { hit_count: number } }
     expect(stored.portfolio_diagnoses.hit_count).toBe(1)
     expect(narratives[0].email_status).toBe('sent')
+  })
+
+  it('🔴 所有地址都不是内部（兜底也被设成客户邮箱）→ 不发，回执写错误', async () => {
+    process.env.AD_HEALTH_DIGEST_TO = 'boss@ctstours.co.nz'
+    const prevTo = process.env.ME_MAIL_TO
+    process.env.ME_MAIL_TO = 'boss@ctstours.co.nz'
+    vi.resetModules()
+    const mod = await import('../../internal-digest')
+    narratives.push({ client_id: 'cts', insight_date: '2026-09-13', payload: { campaigns: [] }, email_status: null })
+    const r = await mod.persistAndSendInternalDigest({ clientId: 'cts', clientName: 'CTS', date: '2026-09-13', run: ctsRun, configuredRecipients: ['boss@ctstours.co.nz'] })
+    expect(r.sent).toBe(false)
+    expect(r.error).toContain('no internal recipient')
+    expect(sent).toHaveLength(0)
+    if (prevTo === undefined) delete process.env.ME_MAIL_TO; else process.env.ME_MAIL_TO = prevTo
+    vi.resetModules()
+  })
+
+  it('发送商报错 → 回执标 failed，错误信息带状态码', async () => {
+    sendError = { name: 'validation_error', message: 'bad', statusCode: 422 }
+    narratives.push({ client_id: 'cts', insight_date: '2026-09-13', payload: { campaigns: [] }, email_status: null })
+    const r = await persistAndSendInternalDigest({ clientId: 'cts', clientName: 'CTS', date: '2026-09-13', run: ctsRun, configuredRecipients: [] })
+    expect(r.error).toContain('HTTP 422')
+    expect(narratives[0].email_status).toBe('failed')
   })
 
   it('同一天已经发过 → 不重发', async () => {
