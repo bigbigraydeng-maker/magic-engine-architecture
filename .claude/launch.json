@@ -29,7 +29,7 @@
     {
       "name": "scratch-preview",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8901"],
+      "runtimeArgs": ["-m", "http.server", "8901", "--directory", ".claude/scratch", "--bind", "127.0.0.1"],
       "port": 8901
     }
   ]
