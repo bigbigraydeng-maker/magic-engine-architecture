@@ -407,11 +407,19 @@ export async function recordOptOutKeywordTouch(
     if (somethingNewerHappened) {
       const finalVerdict = isDoNotContact(true, recheckDncTouches)
       if (finalVerdict !== true) {
-        await supabase
+        // Codex 复审：这一步失败绝不能被吞掉——补偿写不进去，镜像列会永久
+        // 卡在 true，`writeback-service.ts` 这类直接读镜像列的消费方会一直
+        // 错误拦截一个已经解除退订的联系人，而且没有任何报错提示。抛出去，
+        // 让调用方按同一个幂等键（source_ref）重试收敛，跟本函数其它失败
+        // 分支的处理方式一致。
+        const { error: compensateErr } = await supabase
           .from('contacts')
           .update({ do_not_contact: finalVerdict })
           .eq('id', contactId)
           .eq('client_id', clientId)
+        if (compensateErr) {
+          throw new Error(`回验补偿写入 contacts.do_not_contact 失败: ${compensateErr.message}`)
+        }
       }
     }
   }

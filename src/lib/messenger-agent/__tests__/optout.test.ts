@@ -239,10 +239,24 @@ describe('recordOptOutKeywordTouch', () => {
    * `optout.integration.pg.test.ts` 里对真实 Postgres 跑过一遍确认一致，
    * 不是凭空猜的接口。
    */
-  function makeWritableFake(existingTouchpoints: Row[] = [], recheckTouchpoints?: Row[]) {
+  /**
+   * `failUpdateOnCall`（可选，1-based）：让 `contacts.update()` 的第 N 次调用
+   * 返回一个错误——用来测「回验补偿那次写入本身失败」这条路径（Codex 复审
+   * 第 6 轮）：第 1 次 update 是主流程写 true，第 2 次才是回验补偿。
+   *
+   * 实测：下面的假数据源调用形状（`from/select/eq/upsert/update`）已经在本文件
+   * 前面那些真实跑通的用例、以及 `optout.integration.pg.test.ts` 对真实
+   * Postgres 跑的集成测试里反复验证过，不是凭空猜的接口。
+   */
+  function makeWritableFake(
+    existingTouchpoints: Row[] = [],
+    recheckTouchpoints?: Row[],
+    failUpdateOnCall?: number,
+  ) {
     const inserted: Row[] = []
     const updates: Row[] = []
     let selectCallCount = 0
+    let updateCallCount = 0
     const supabase = {
       from: (table: string) => {
         if (table === 'contact_touchpoints') {
@@ -271,8 +285,14 @@ describe('recordOptOutKeywordTouch', () => {
         if (table === 'contacts') {
           return {
             update: (patch: Row) => {
+              updateCallCount += 1
               updates.push(patch)
-              return { eq: () => ({ eq: async () => ({ error: null }) }) }
+              const shouldFail = failUpdateOnCall === updateCallCount
+              return {
+                eq: () => ({
+                  eq: async () => ({ error: shouldFail ? { message: 'db 抽风' } : null }),
+                }),
+              }
             },
           }
         }
@@ -438,6 +458,36 @@ describe('recordOptOutKeywordTouch', () => {
       // 主流程写了一次 true；回验算出最终判决仍是 true，跟镜像列当前值一致，
       // 不需要再补一次写——只应该有主流程那一次 update。
       expect(updates).toEqual([{ do_not_contact: true }])
+    })
+
+    it('补偿写入本身失败 → 抛错，不能悄悄吞掉（Codex 复审第 6 轮）', async () => {
+      // 触发补偿分支（跟第一条测试同一个场景），但让第 2 次 update（补偿那次）
+      // 返回数据库错误——之前的实现会把这个 error 丢在原地继续报告成功，
+      // 镜像列永久卡在 true，直接读镜像列的消费方会一直误拦一个已解除退订
+      // 的联系人，而且没有任何报错信号。
+      const { supabase } = makeWritableFake(
+        [],
+        [
+          {
+            occurred_at: '2026-09-13T00:05:00Z',
+            metadata: { outcome: 'dnc_cleared', do_not_contact: false },
+          },
+        ],
+        2, // 第 2 次 update（补偿那次）失败
+      )
+      await expect(
+        recordOptOutKeywordTouch(
+          {
+            clientId: CLIENT_A,
+            contactId: CONTACT,
+            channel: 'messenger',
+            conversationId: CONVO,
+            messageId: 'msg-1',
+            occurredAt: '2026-09-13T00:00:00Z',
+          },
+          supabase,
+        ),
+      ).rejects.toThrow('回验补偿写入')
     })
   })
 
