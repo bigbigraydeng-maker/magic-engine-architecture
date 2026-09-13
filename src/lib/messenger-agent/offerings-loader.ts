@@ -44,14 +44,29 @@ import { z } from 'zod'
  * customer. This re-checks the year/month/day round-trip through
  * `Date.UTC` to reject calendar dates that don't actually exist.
  */
+/**
+ * Full-string ISO date/timestamp shape — anchored at both ends, not just the
+ * start (Codex review, PR #1626, round 7). The date-part extraction below
+ * used to only anchor `^`, so `Date.parse`'s own leniency let trailing
+ * garbage through: "2026-01-01 (draft)" and "2026-01-01 UTC" both parse
+ * successfully in Node, so a hand-edited departure_dates/last_verified_at
+ * entry could keep malformed trailing text that the reply agent might then
+ * quote verbatim to a customer. This matches either a plain date
+ * (`2026-11-16`) or a full ISO instant (`2026-09-13T00:00:00+13:00`) with
+ * nothing else allowed before or after.
+ */
+const ISO_DATE_OR_INSTANT_RE =
+  /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/
+
 const dateLikeString = z.string().min(1).refine((value) => {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  const match = value.match(ISO_DATE_OR_INSTANT_RE)
   if (!match) return false
   if (Number.isNaN(Date.parse(value))) return false
 
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
+  const [, yearStr, monthStr, dayStr] = value.match(/^(\d{4})-(\d{2})-(\d{2})/) ?? []
+  const year = Number(yearStr)
+  const month = Number(monthStr)
+  const day = Number(dayStr)
   const roundTrip = new Date(Date.UTC(year, month - 1, day))
   return (
     roundTrip.getUTCFullYear() === year &&
@@ -60,7 +75,7 @@ const dateLikeString = z.string().min(1).refine((value) => {
   )
 }, {
   message:
-    'must be a valid calendar date in ISO format (e.g. "2026-11-16" or an ISO 8601 timestamp) — dates that do not exist (e.g. "2026-02-30") are rejected',
+    'must be a valid calendar date in ISO format with nothing before or after it (e.g. "2026-11-16" or "2026-09-13T00:00:00+13:00") — dates that do not exist (e.g. "2026-02-30") or have trailing text (e.g. "2026-01-01 UTC") are rejected',
 })
 
 // Every object schema below is `.strict()` (Codex review, PR #1626): a plain

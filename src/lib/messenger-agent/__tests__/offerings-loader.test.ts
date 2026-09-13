@@ -209,6 +209,23 @@ describe('OfferingsFileSchema — invalid input is rejected', () => {
     ).toThrow()
   })
 
+  describe('rejects a date with trailing garbage that Date.parse alone would accept (Codex review, PR #1626, round 7)', () => {
+    it.each([
+      ['2026-01-01 (draft)', '括号备注'],
+      ['2026-01-01 UTC', '时区文字'],
+      ['2026-01-01 ', '尾部空格'],
+      [' 2026-01-01', '首部空格'],
+    ])('拒绝 %s（%s）', (value) => {
+      expect(() => OfferingsFileSchema.parse({ last_verified_at: value })).toThrow()
+    })
+
+    it('全字符串合法的日期仍然通过', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({ last_verified_at: '2026-09-13T00:00:00+13:00' }),
+      ).not.toThrow()
+    })
+  })
+
   describe('strict schemas reject unknown/typo-d keys (Codex review, PR #1626)', () => {
     it('rejects a typo-d top-level key (retired_tour instead of retired_tours) instead of silently defaulting it to []', () => {
       expect(() =>
