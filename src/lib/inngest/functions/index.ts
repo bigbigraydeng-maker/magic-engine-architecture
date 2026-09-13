@@ -1,5 +1,5 @@
 /** 本应用注册到 Inngest 的全部云端函数登记处（#1346）。新增函数在此追加。 */
-import { webIntelligenceCapture, webIntelligenceDue } from './web-intelligence'
+import { webIntelligenceCapture, webIntelligenceDue, webIntelligenceTrafficDue } from './web-intelligence'
 import { CLOUD_FN_PREFIX } from '../client'
 import { probePing } from './probe'
 import { geoRemeasureOne } from './geo-remeasure'
@@ -12,6 +12,7 @@ import { factoryCreatomateRender } from './factory-creatomate-render'
 export const cloudFunctions = [
   webIntelligenceCapture,
   webIntelligenceDue,
+  webIntelligenceTrafficDue,
   probePing,
   geoRemeasureOne,
   dailyPlanPostFanOut,

@@ -32,6 +32,15 @@ import { createHmac, timingSafeEqual } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { buildIdentities, resolveContact } from '@/lib/crm/identity'
+import { isOptOutKeyword, recordOptOutKeywordTouch } from '@/lib/messenger-agent/optout'
+import { inngest } from '@/lib/inngest/client'
+
+/**
+ * 渠道无关的会话消息事件（v3 修订，见 issue #1582）—— Messenger 和 WhatsApp 两个
+ * webhook 都 emit 这同一个事件名，靠 payload 里的 `channel` 字段区分，不是靠事件名。
+ * 事件名字符串必须跟 Messenger webhook（issue #1581）那边完全一致，改这里务必同步改那边。
+ */
+const CONVERSATION_MESSAGE_RECEIVED_EVENT = 'conversation/message.received' as const
 
 export const dynamic = 'force-dynamic'
 
@@ -377,6 +386,72 @@ async function storeMessage(
     } catch (err) {
       console.error(`[webhooks/whatsapp] 记 CRM 触点失败（消息已入库，但可能不会出现在今日待办）:`, err)
     }
+  }
+
+  // Opt-out 检测（issue #1575 / #1582）：只判文本消息本身的整条内容，不是
+  // messageBody() 拼过 `[image] ...` 这类前缀的展示用文案。best-effort（跟上面
+  // 的 CRM 触点一样）——消息已经落库，退订判定写失败不该让 Meta 重投整条消息；
+  // 代价是极端情况下这一条命中会被漏记，等下一条重复的退订消息（或人工核对）
+  // 兜底，比因为这里失败而把已经存好的消息也标记成失败要小。
+  if (isOptOutKeyword(msg.text?.body ?? '')) {
+    try {
+      if (contactId) {
+        // 有 contact_id：走 optout.ts 的跨渠道写入路径（触点 + 反规范化镜像列）。
+        await recordOptOutKeywordTouch(
+          {
+            clientId,
+            contactId,
+            channel: 'whatsapp',
+            conversationId,
+            messageId: msg.id,
+            // 必须传消息真实的发送时间，不能让函数省略参数落到「现在」——
+            // 那样 Meta 的 webhook 重投会让「晚于人工纠正」这个判断永远失效
+            // （见 optout.ts 头部注释）。
+            occurredAt: sentAt,
+          },
+          supabaseAdmin,
+        )
+      } else {
+        // 没解析出 contact_id（resolveContact 是 best-effort，可能失败）：
+        // optout.ts 假设 contact 已经存在，这条会话没有可查的联系人，退回
+        // 会话级兜底列（issue #1574），不经过 optout.ts。
+        const { error: unlinkedErr } = await supabaseAdmin
+          .from('conversations')
+          .update({ optout_unlinked: true })
+          .eq('id', conversationId)
+          .eq('client_id', clientId)
+        if (unlinkedErr) {
+          console.error(
+            `[webhooks/whatsapp] 写 conversations.optout_unlinked 失败（会话 ${conversationId}）:`,
+            unlinkedErr.message,
+          )
+        }
+      }
+    } catch (err) {
+      console.error(`[webhooks/whatsapp] 退订触点写入失败（消息已入库）:`, err)
+    }
+  }
+
+  // emit 渠道无关事件（issue #1582）：下游分类 / agent-core 靠这个事件驱动，
+  // 不靠轮询。跟 CRM 触点一样 best-effort——消息已经落库，emit 失败不该让
+  // Meta 重投整条已经存好的消息。
+  try {
+    await inngest.send({
+      id: `whatsapp:${conversationId}:${msg.id}`,
+      name: CONVERSATION_MESSAGE_RECEIVED_EVENT,
+      data: {
+        channel: 'whatsapp',
+        client_id: clientId,
+        conversation_id: conversationId,
+        contact_id: contactId,
+        message_id: msg.id,
+        direction: 'inbound',
+        body: messageBody(msg),
+        occurred_at: sentAt,
+      },
+    })
+  } catch (err) {
+    console.error(`[webhooks/whatsapp] emit ${CONVERSATION_MESSAGE_RECEIVED_EVENT} 失败（消息已入库）:`, err)
   }
 }
 

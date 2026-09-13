@@ -14,14 +14,13 @@
  *   Omit clientId or leave google_oauth_tokens empty for that client.
  */
 
-import { createSign } from 'crypto'
 import { getValidAccessToken } from '@/lib/google-oauth/client'
 import { getValidToken, PlatformConnectionNotFoundError } from '@/lib/platform-oauth/token-manager'
+import { loadServiceAccount, mintServiceAccountToken } from '@/lib/google-oauth/service-account'
 import type { GscSearchData, GscQueryRow } from '@/lib/zhangqian/types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TOKEN_URL              = 'https://oauth2.googleapis.com/token'
 const SERVICE_ACCOUNT_SCOPE  = 'https://www.googleapis.com/auth/webmasters.readonly'
 const SEARCH_ANALYTICS_BASE  = 'https://searchconsole.googleapis.com/webmasters/v3/sites'
 
@@ -59,13 +58,6 @@ function parseGoogleError(rawBody: string): { googleStatus: string; googleReason
   } catch {
     return { googleStatus: '', googleReason: '', message: rawBody.slice(0, 200) }
   }
-}
-
-// ─── Service-account shape (legacy) ──────────────────────────────────────────
-
-interface ServiceAccount {
-  private_key: string
-  client_email: string
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -381,68 +373,14 @@ export async function resolveAccessToken(
     if (oauthToken) return oauthToken
   }
 
-  // 3. Service-account JWT (legacy / internal)
+  // 3. Service-account JWT (legacy / internal) —— 铸造逻辑已提取到
+  //    lib/google-oauth/service-account.ts，GA4/GSC/Sheets 共用一份。
   const creds = loadServiceAccount()
   if (!creds) return null
-  return getServiceAccountToken(creds).catch(() => null)
-}
-
-// ─── Service-account JWT helpers (legacy) ────────────────────────────────────
-
-function loadServiceAccount(): ServiceAccount | null {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw) as Partial<ServiceAccount>
-    if (!parsed.private_key || !parsed.client_email) return null
-    return parsed as ServiceAccount
-  } catch {
-    return null
-  }
-}
-
-async function getServiceAccountToken(creds: ServiceAccount): Promise<string> {
-  const now = Math.floor(Date.now() / 1000)
-  const exp = now + 3600
-
-  const headerB64  = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-  const payloadB64 = b64url(
-    JSON.stringify({
-      iss:   creds.client_email,
-      sub:   creds.client_email,
-      scope: SERVICE_ACCOUNT_SCOPE,
-      aud:   TOKEN_URL,
-      iat:   now,
-      exp,
-    }),
-  )
-
-  const toSign = `${headerB64}.${payloadB64}`
-  const signer = createSign('RSA-SHA256')
-  signer.update(toSign)
-  const sig = signer.sign(creds.private_key, 'base64url')
-  const jwt = `${toSign}.${sig}`
-
-  const res = await fetch(TOKEN_URL, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body:    new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion:  jwt,
-    }),
-  })
-
-  if (!res.ok) throw new Error(`Service account token exchange failed: ${res.status}`)
-  const json = await res.json() as { access_token?: string }
-  if (!json.access_token) throw new Error('No access_token in service account response')
-  return json.access_token
+  return mintServiceAccountToken(creds, SERVICE_ACCOUNT_SCOPE).catch(() => null)
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
-
-function b64url(str: string): string {
-  return Buffer.from(str, 'utf8').toString('base64url')
-}
 
 function daysAgo(n: number): Date {
   const d = new Date()

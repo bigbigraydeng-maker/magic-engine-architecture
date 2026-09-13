@@ -18,6 +18,7 @@ export const externalSourceRegistry: readonly ExternalSourceDefinition[] = [
   { id: 'facebook-group-public', name: 'Facebook Group（公开）', type: 'facebook_group', tier: 'B', market: 'public-only', validity_hours: 72 },
   // Controlled source only: authorised export or Meta-approved integration.
   { id: 'facebook-group-authorized', name: 'Facebook Group（授权）', type: 'facebook_group', tier: 'C', market: 'customer-authorized', requires_authorization: true, validity_hours: 72 },
+  { id: 'competitor-traffic-apify', name: '竞品网站流量方向（Apify）', type: 'website', tier: 'C', market: 'public-estimate', validity_hours: 720 },
 ]
 
 export function sourceDefinition(id: string): ExternalSourceDefinition | null {

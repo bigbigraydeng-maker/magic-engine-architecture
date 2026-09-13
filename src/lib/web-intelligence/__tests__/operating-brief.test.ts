@@ -27,6 +27,14 @@ describe('buildOperatingBrief', () => {
     expect(brief.matches[0].reason).toContain('客户产品缺少')
   })
 
+  it('does not claim the client product is missing when complete client facts have no comparable competitor', () => {
+    const client = { name: 'China Highlights', destination: 'China', route: 'Beijing Shanghai', duration_days: 12, price: 'NZD 4999 pp', departure_window: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }
+    const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [client], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [record] }], evidence })
+    expect(brief.matches[0].status).toBe('insufficient_evidence')
+    expect(brief.decision.recommendation).not.toContain('还缺 CTS 自己这条团的完整资料')
+    expect(brief.decision.recommendation).toContain('CTS 产品资料已经进入分析')
+  })
+
   it('keeps a similar but different Tour as a candidate for AI comparison', () => {
     const brief = buildOperatingBrief({ client: { id: 'client', name: 'Example Travel' }, goal: null, product_scope: scope, client_products: [{ name: 'China Highlights', destination: 'China', route: 'Beijing Shanghai', duration_days: 12, price: 'NZD 4999 pp', departure_window: 'November 2026', includes: 'Flights hotels', positioning: 'small group', audience: 'NZ travellers' }], competitor_products: [{ domain: 'competitor.example', source_url: 'https://competitor.example/china', observed_at: evidence[0].observed_at, records: [{ ...record, route: 'Beijing Xian', durationDays: 14, price: 'AUD 9030 pp', departureWindow: 'November 2026', includes: 'Flights hotels', positioning: 'large group', audience: 'NZ travellers' }] }], evidence, now: new Date('2026-09-11T00:00:00Z') })
     expect(brief.matches[0].status).toBe('comparable')

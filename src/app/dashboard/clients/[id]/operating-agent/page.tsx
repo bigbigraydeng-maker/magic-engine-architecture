@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import type { OperatingBrief } from '@/lib/web-intelligence/operating-brief'
 import type { TourLandscape } from '@/lib/web-intelligence/tour-landscape'
 
-type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; client_product_source?: { kind: 'master_brief' | 'first_party_feed' | 'web_snapshot' | 'none'; count: number }; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
+type TrafficDirection = { domain: string; is_client?: boolean; source_url: string; observed_at: string; valid_until: string | null; excerpt: string; observation_count: number; previous_observed_at: string | null; estimated_visits: number | null; previous_estimated_visits: number | null; snapshot_change_pct: number | null; visits_change_pct: number | null; top_country: string | null }
+type ExternalSignal = { source_type: 'industry_news' | 'industry_media' | 'jobs'; source_name: string; source_url: string; title: string; excerpt: string; observed_at: string; valid_until: string | null }
+type Payload = { operating: OperatingBrief; client: { domain: string | null }; can_run: boolean; client_product_source?: { kind: 'master_brief' | 'first_party_feed' | 'web_snapshot' | 'none'; count: number }; traffic_direction?: TrafficDirection[]; external_signals?: ExternalSignal[]; runs?: Array<{ id: string; status: string; provider_status: string | null }> }
 type ComparisonResult = { summary: string; client_strengths: string[]; competitor_strengths: string[]; differences: string[]; recommendations: string[]; unknowns: string[]; confidence: number; evidence_urls: string[] }
 type LandscapeChatMessage = { role: 'user' | 'assistant'; content: string }
 type CapturePhase = 'idle' | 'queued' | 'capturing' | 'analysing' | 'complete' | 'failed'
@@ -19,6 +21,12 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
   const [data, setData] = useState<OperatingBrief | null>(null)
   const [clientProductSource, setClientProductSource] = useState<Payload['client_product_source']>()
   const [clientDomain, setClientDomain] = useState<string | null>(null)
+  const [trafficDirection, setTrafficDirection] = useState<TrafficDirection[]>([])
+  const [externalSignals, setExternalSignals] = useState<ExternalSignal[]>([])
+  const [externalBusy, setExternalBusy] = useState('')
+  const [externalMessage, setExternalMessage] = useState('')
+  const [trafficBusy, setTrafficBusy] = useState(false)
+  const [trafficMessage, setTrafficMessage] = useState('')
   const [canRun, setCanRun] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [captureRequestId, setCaptureRequestId] = useState<string | null>(null)
@@ -32,7 +40,7 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
         return response.json() as Promise<Payload>
       })
       .then(value => {
-        setData(value.operating); setClientProductSource(value.client_product_source); setClientDomain(value.client.domain); setCanRun(value.can_run)
+        setData(value.operating); setClientProductSource(value.client_product_source); setTrafficDirection(value.traffic_direction ?? []); setExternalSignals(value.external_signals ?? []); setClientDomain(value.client.domain); setCanRun(value.can_run)
         if (captureRequestId) {
           const run = value.runs?.find(item => item.id === captureRequestId)
           if (run?.status === 'complete') setCapturePhase('complete')
@@ -76,6 +84,18 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     } catch { setCaptureRequestId(null); setCapturePhase('failed') }
   }
 
+  async function collectExternal(sourceId: string) {
+    setExternalBusy(sourceId); setExternalMessage('')
+    try {
+      const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence/external`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_id: sourceId, queries: ['China travel', 'tour manager', 'travel consultant'], max_results: 20 }) })
+      const payload = await response.json() as { persisted?: number; duplicates?: number; rejected?: number; filtered?: number; error?: string }
+      if (!response.ok) throw new Error(payload.error ?? '外部信息读取失败。')
+      setExternalMessage(`本次读取完成：新增 ${payload.persisted ?? 0} 条${payload.filtered ? `，过滤 ${payload.filtered} 条与当前市场无关` : ''}${payload.duplicates ? `，${payload.duplicates} 条已存在` : ''}${payload.rejected ? `，${payload.rejected} 条资料不完整` : ''}。`)
+      setRefresh(value => value + 1)
+    } catch (reason) { setExternalMessage(reason instanceof Error ? reason.message : '外部信息读取失败。') }
+    finally { setExternalBusy('') }
+  }
+
   if (error) return <main className="mx-auto max-w-5xl p-6"><p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-800">{error}</p></main>
   if (!data) return <main className="mx-auto max-w-5xl p-6"><p role="status" className="text-sm text-me-charcoal/60">正在整理客户经营上下文…</p></main>
 
@@ -97,6 +117,27 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
       <ContextCard title="授权边界" values={['本页只提供建议', '不调价、不改广告、不发布']} />
     </section>
     <ProductSourceStatus source={clientProductSource} />
+    <TrafficDirectionSection clientId={params.id} signals={trafficDirection} busy={trafficBusy} message={trafficMessage} onRun={async () => {
+      setTrafficBusy(true); setTrafficMessage('')
+      try {
+        const response = await fetch(`/api/clients/${encodeURIComponent(params.id)}/web-intelligence/traffic-direction`, { method: 'POST' })
+        const payload = await response.json() as { error?: string; persisted?: number; duplicates?: number; rejected?: number; write_failures?: number; returned?: number; domains?: number }
+        if (!response.ok) throw new Error(payload.error ?? '竞品流量方向读取失败。')
+        const persisted = payload.persisted ?? 0
+        const duplicates = payload.duplicates ?? 0
+        const rejected = payload.rejected ?? 0
+        const writeFailures = payload.write_failures ?? 0
+        const detail = [
+          duplicates ? `${duplicates} 条已存在` : '',
+          rejected ? `${rejected} 条无法确认数据` : '',
+          writeFailures ? `${writeFailures} 条写入失败` : '',
+        ].filter(Boolean).join('；')
+        setTrafficMessage(`本次已完成 ${payload.domains ?? 0} 个竞品网站读取，新增 ${persisted} 条结果${detail ? `（${detail}）` : '。'}`)
+        setRefresh(value => value + 1)
+      } catch (reason) { setTrafficMessage(reason instanceof Error ? reason.message : '竞品流量方向读取失败。') }
+      finally { setTrafficBusy(false) }
+    }} />
+    <ExternalSignalsSection signals={externalSignals} busy={externalBusy} message={externalMessage} onCollect={collectExternal} />
 
     <section className="rounded-2xl border border-me-ochre/30 bg-me-ochre/10 p-5">
       <p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">本轮经营问题</p>
@@ -126,6 +167,41 @@ export default function OperatingAgentPage({ params }: { params: { id: string } 
     </section>
     <p className="text-xs text-me-charcoal/45">截至 {new Date(data.as_of).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}（Pacific/Auckland）· 事实、推断、建议和未知已分开显示。</p>
   </main>
+}
+
+function ExternalSignalsSection({ signals, busy, message, onCollect }: { signals: ExternalSignal[]; busy: string; message: string; onCollect: (sourceId: string) => Promise<void> }) {
+  const latest = signals.slice(0, 6)
+  const labels: Record<string, string> = { 'industry_media': '行业媒体', 'industry_news': '行业新闻', jobs: '招聘信息' }
+  return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="行业动态和招聘信息">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-charcoal/50">其他外部信号</p><h2 className="mt-1 text-lg font-bold">行业动态与招聘信息</h2><p className="mt-1 text-sm leading-6 text-me-charcoal/65">用行业媒体、行业新闻和招聘需求补充市场变化；每条信息都保留来源和观察时间。</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void onCollect('travel-today')} disabled={Boolean(busy)} className="rounded-lg border border-me-ochre px-3 py-1.5 text-xs font-bold text-me-ochre disabled:opacity-50">{busy === 'travel-today' ? '读取中…' : '读取行业媒体'}</button><button type="button" onClick={() => void onCollect('seek-nz')} disabled={Boolean(busy)} className="rounded-lg border border-me-ochre px-3 py-1.5 text-xs font-bold text-me-ochre disabled:opacity-50">{busy === 'seek-nz' ? '读取中…' : '读取 SEEK 招聘'}</button></div></div>
+    {message && <p role="status" className="mt-3 rounded-lg bg-me-ivory px-3 py-2 text-sm">{message}</p>}
+    {latest.length ? <div className="mt-4 space-y-2">{latest.map(signal => <article key={`${signal.source_url}-${signal.observed_at}`} className="rounded-xl bg-me-ivory/60 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">{labels[signal.source_type] ?? signal.source_name}</p><h3 className="mt-1 font-bold">{signal.title || signal.source_name}</h3></div><a className="shrink-0 text-xs font-bold underline" href={signal.source_url} target="_blank" rel="noreferrer">查看来源</a></div><p className="mt-2 line-clamp-3 whitespace-pre-line text-sm leading-6 text-me-charcoal/75">{signal.excerpt}</p><p className="mt-2 text-xs text-me-charcoal/50">观察于 {new Date(signal.observed_at).toLocaleDateString('zh-CN')} · 有效至 {signal.valid_until ? new Date(signal.valid_until).toLocaleDateString('zh-CN') : '未知'}</p></article>)}</div> : <p className="mt-4 rounded-xl bg-me-ivory p-4 text-sm text-me-charcoal/60">目前没有与客户目标市场相关的行业媒体或招聘信息。系统已自动过滤无关内容。</p>}
+    {signals.length > 6 && <details className="mt-3"><summary className="cursor-pointer text-sm font-bold text-me-ochre">查看其余 {signals.length - 6} 条信息</summary><div className="mt-3 space-y-2">{signals.slice(6).map(signal => <article key={`${signal.source_url}-${signal.observed_at}-extra`} className="rounded-xl bg-me-ivory/60 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">{labels[signal.source_type] ?? signal.source_name}</p><h3 className="mt-1 font-bold">{signal.title || signal.source_name}</h3></div><a className="shrink-0 text-xs font-bold underline" href={signal.source_url} target="_blank" rel="noreferrer">查看来源</a></div><p className="mt-2 whitespace-pre-line text-sm leading-6 text-me-charcoal/75">{signal.excerpt}</p><p className="mt-2 text-xs text-me-charcoal/50">观察于 {new Date(signal.observed_at).toLocaleDateString('zh-CN')} · 有效至 {signal.valid_until ? new Date(signal.valid_until).toLocaleDateString('zh-CN') : '未知'}</p></article>)}</div></details>}
+  </section>
+}
+
+function TrafficDirectionSection({ clientId, signals, busy, message, onRun }: { clientId: string; signals: TrafficDirection[]; busy: boolean; message: string; onRun: () => Promise<void> }) {
+  const [showAll, setShowAll] = useState(false)
+  const orderedSignals = [...signals].sort((a, b) => {
+    if (a.is_client !== b.is_client) return a.is_client ? -1 : 1
+    const aHasEstimate = a.estimated_visits !== null ? 1 : 0
+    const bHasEstimate = b.estimated_visits !== null ? 1 : 0
+    return bHasEstimate - aHasEstimate || Date.parse(b.observed_at) - Date.parse(a.observed_at)
+  })
+  const latest = showAll ? orderedSignals : orderedSignals.slice(0, 6)
+  return <section className="rounded-2xl border border-black/10 bg-white p-5" aria-label="网站流量方向">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-charcoal/50">网站市场信号</p><h2 className="mt-1 text-lg font-bold">网站流量方向</h2><p className="mt-1 text-sm leading-6 text-me-charcoal/65">先看 CTS 自己的网站，再看竞品公开估算的变化方向；不代表真实访问量、订单或销售影响。</p></div>
+      <div className="flex items-center gap-2"><span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">公开估算·低置信度</span><button type="button" onClick={() => void onRun()} disabled={busy} aria-label={`读取 ${clientId} 网站流量方向`} className="rounded-lg border border-me-ochre px-3 py-1.5 text-xs font-bold text-me-ochre disabled:opacity-50">{busy ? '读取中…' : '立即读取'}</button></div>
+    </div>
+    {message && <p role="status" className="mt-3 rounded-lg bg-me-ivory px-3 py-2 text-sm">{message}</p>}
+    {latest.length ? <div className="mt-4 grid gap-3 md:grid-cols-2">{latest.map(signal => {
+      const facts = signal.excerpt.split('\n').filter(line => !line.startsWith('数据性质：')).slice(0, 4)
+      const trend = signal.snapshot_change_pct === null ? signal.observation_count > 1 ? '暂无法比较上一期' : '仅有一次观察' : `较上次估算 ${signal.snapshot_change_pct > 0 ? '+' : ''}${signal.snapshot_change_pct}%`
+      return <article key={`${signal.domain}-${signal.observed_at}`} className={`rounded-xl border p-4 ${signal.is_client ? 'border-me-ochre/40 bg-me-ochre/10' : 'border-black/5 bg-me-ivory/60'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">{signal.is_client ? 'CTS 自己的网站' : '竞品网站'}</p><h3 className="font-bold">{signal.domain}</h3><p className={`mt-1 text-sm font-bold ${signal.snapshot_change_pct === null ? 'text-me-charcoal/55' : signal.snapshot_change_pct > 0 ? 'text-red-700' : 'text-green-800'}`}>{trend}</p></div><a className="shrink-0 text-xs font-bold underline" href={signal.source_url} target="_blank" rel="noreferrer">查看来源</a></div><ul className="mt-3 space-y-1 text-sm leading-6">{facts.map(fact => <li key={fact}>{fact}</li>)}</ul><p className="mt-3 text-xs text-me-charcoal/50">观察于 {new Date(signal.observed_at).toLocaleDateString('zh-CN')} · {signal.observation_count} 次观察 · 有效至 {signal.valid_until ? new Date(signal.valid_until).toLocaleDateString('zh-CN') : '未知'}</p></article>
+    })}</div> : <p className="mt-4 rounded-xl bg-me-ivory p-4 text-sm text-me-charcoal/60">尚未测量竞品网站流量方向；完成首轮 Apify 采集后，这里只显示每个竞品最新结果。</p>}
+    {signals.length > 6 && <button type="button" onClick={() => setShowAll(value => !value)} className="mt-4 text-sm font-bold text-me-ochre underline">{showAll ? '收起其他竞品' : `查看其余 ${signals.length - 6} 个竞品`}</button>}
+  </section>
 }
 
 function CaptureProgress({ phase }: { phase: Exclude<CapturePhase, 'idle'> }) {
@@ -165,6 +241,7 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
   const [busy, setBusy] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [landscape, setLandscape] = useState<TourLandscape | null>(null)
+  const [landscapeMode, setLandscapeMode] = useState<'ai' | 'fallback'>('ai')
   const [landscapeBusy, setLandscapeBusy] = useState(false)
   const [landscapeError, setLandscapeError] = useState('')
   const [chatMessages, setChatMessages] = useState<LandscapeChatMessage[]>([])
@@ -189,6 +266,8 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
     setChatMessages(nextMessages); setChatQuestion(''); setChatBusy(true); setChatError('')
     try {
       const response = await fetch(`/api/clients/${encodeURIComponent(clientId)}/web-intelligence/tour-landscape/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, history: chatMessages, landscape }) })
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!contentType.includes('application/json')) throw new Error(`对话服务暂时不可用（HTTP ${response.status}），请稍后重试。`)
       const payload = await response.json() as { text?: string; error?: string }
       if (!response.ok || !payload.text) throw new Error(payload.error ?? '对话分析暂时不可用，请稍后重试。')
       setChatMessages([...nextMessages, { role: 'assistant', content: payload.text }])
@@ -202,17 +281,17 @@ function TourComparisonSection({ clientId, candidates, marketScope }: { clientId
       const response = await fetch(`/api/clients/${encodeURIComponent(clientId)}/web-intelligence/tour-landscape`, { method: 'POST' })
       const contentType = response.headers.get('content-type') ?? ''
       if (!contentType.includes('application/json')) throw new Error(`总览服务暂时不可用（HTTP ${response.status}），请稍后重试。`)
-      const payload = await response.json() as { landscape?: TourLandscape; error?: string }
+      const payload = await response.json() as { landscape?: TourLandscape; error?: string; degraded?: boolean }
       if (!response.ok || !payload.landscape) throw new Error(payload.error ?? '总览生成失败，请稍后重试。')
-      setLandscape(payload.landscape)
+      setLandscape(payload.landscape); setLandscapeMode(payload.degraded ? 'fallback' : 'ai')
     }
     catch (reason) { setLandscapeError(reason instanceof Error ? reason.message : '暂时无法生成竞品总览。') }
     finally { setLandscapeBusy(false) }
   }
   return <section className="space-y-4 rounded-2xl border border-me-ochre/30 bg-me-ochre/5 p-5" aria-label="AI Tour 产品总览">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">AI 竞品总览</p><h2 className="mt-1 text-xl font-bold">市场上正在卖什么，CTS 该关注什么？</h2><p className="mt-2 text-sm leading-6 text-me-charcoal/70">AI 会综合多个竞品的城市、天数、价格和定位，给出消费者视角的整体判断，不强行把不同 Tour 一一配对。</p></div><button type="button" onClick={() => void summariseLandscape()} disabled={landscapeBusy} className="rounded-lg bg-me-ochre px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{landscapeBusy ? '正在汇总…' : landscape ? '重新生成总览' : '生成竞品总览'}</button></div>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-me-ochre">AI 竞品总览</p><h2 className="mt-1 text-xl font-bold">本次监控范围内，CTS 该关注什么？</h2><p className="mt-2 text-sm leading-6 text-me-charcoal/70">只分析当前客户市场范围和指定监控对象；竞品名单不代表其完整产品线，也不等于整个市场。</p></div><button type="button" onClick={() => void summariseLandscape()} disabled={landscapeBusy} className="rounded-lg bg-me-ochre px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{landscapeBusy ? '正在汇总…' : landscape ? '重新生成总览' : '生成竞品总览'}</button></div>
     {landscapeError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{landscapeError}</p>}
-    {landscape && <article className="space-y-4 rounded-xl border border-black/10 bg-white p-5"><div><p className="text-xs font-bold text-me-charcoal/55">整体结论</p><h3 className="mt-1 text-lg font-black">{landscape.headline}</h3><p className="mt-2 text-sm leading-6">{landscape.market_summary}</p></div><div className="grid gap-3 md:grid-cols-2"><ComparisonList title="CTS 可以利用的机会" items={landscape.client_opportunities} tone="green" /><ComparisonList title="需要留意的风险" items={landscape.client_risks} tone="amber" /><ComparisonList title="建议优先关注" items={landscape.recommended_focus} tone="ochre" /><ComparisonList title="还缺什么证据" items={landscape.unknowns} tone="muted" /></div><p className="border-t border-black/5 pt-3 text-xs text-me-charcoal/50">Haiku 汇总 · 置信度 {Math.round(landscape.confidence * 100)}% · 仅供人工复核</p><div className="border-t border-black/5 pt-4"><p className="text-sm font-bold">继续问 Agent</p><p className="mt-1 text-xs text-me-charcoal/55">可以问：现在最该调整哪个产品？为什么不建议降价？还缺哪条证据？</p>{chatMessages.length > 0 && <div className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-lg bg-me-ivory p-3">{chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={message.role === 'user' ? 'text-right' : 'text-left'}><span className={`inline-block max-w-[90%] rounded-lg px-3 py-2 text-sm leading-6 ${message.role === 'user' ? 'bg-me-ochre text-white' : 'bg-white'}`}>{message.content}</span></div>)}</div>}<div className="mt-3 flex gap-2"><input aria-label="询问竞品总览 Agent" value={chatQuestion} onChange={event => setChatQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void askLandscape() }} placeholder="例如：CTS现在最应该先改哪个产品？" className="min-w-0 flex-1 rounded-lg border border-black/15 bg-white px-3 py-2 text-sm" disabled={chatBusy} /><button type="button" onClick={() => void askLandscape()} disabled={!chatQuestion.trim() || chatBusy} className="rounded-lg border border-me-ochre px-3 py-2 text-sm font-bold text-me-ochre disabled:opacity-50">{chatBusy ? '分析中…' : '发送'}</button></div>{chatError && <p role="alert" className="mt-2 text-sm text-red-700">{chatError}</p>}</div></article>}
+    {landscape && <article className="space-y-4 rounded-xl border border-black/10 bg-white p-5"><div><p className="text-xs font-bold text-me-charcoal/55">现在最重要的判断</p><h3 className="mt-1 text-lg font-black">{landscape.headline}</h3><p className="mt-2 text-sm leading-6">{landscape.market_summary}</p></div><div className="grid gap-3 md:grid-cols-2"><ComparisonList title="建议现在做" items={landscape.client_opportunities} tone="green" /><ComparisonList title="暂时不要做" items={landscape.client_risks} tone="amber" /><ComparisonList title="下一步先确认" items={landscape.recommended_focus} tone="ochre" /><ComparisonList title="还缺的关键证据" items={landscape.unknowns} tone="muted" /></div><p className="border-t border-black/5 pt-3 text-xs text-me-charcoal/50">{landscapeMode === 'ai' ? 'Haiku AI 汇总' : '规则兜底结论（AI 服务暂时不可用）'} · 置信度 {Math.round(landscape.confidence * 100)}% · 仅供人工复核</p><div className="border-t border-black/5 pt-4"><p className="text-sm font-bold">继续问 Agent</p><p className="mt-1 text-xs text-me-charcoal/55">可以问：现在最该调整哪个产品？为什么不建议降价？还缺哪条证据？</p>{chatMessages.length > 0 && <div className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-lg bg-me-ivory p-3">{chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={message.role === 'user' ? 'text-right' : 'text-left'}><span className={`inline-block max-w-[90%] rounded-lg px-3 py-2 text-sm leading-6 ${message.role === 'user' ? 'bg-me-ochre text-white' : 'bg-white'}`}>{message.content}</span></div>)}</div>}<div className="mt-3 flex gap-2"><input aria-label="询问竞品总览 Agent" value={chatQuestion} onChange={event => setChatQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void askLandscape() }} placeholder="例如：CTS现在最应该先改哪个产品？" className="min-w-0 flex-1 rounded-lg border border-black/15 bg-white px-3 py-2 text-sm" disabled={chatBusy} /><button type="button" onClick={() => void askLandscape()} disabled={!chatQuestion.trim() || chatBusy} className="rounded-lg border border-me-ochre px-3 py-2 text-sm font-bold text-me-ochre disabled:opacity-50">{chatBusy ? '分析中…' : '发送'}</button></div>{chatError && <p role="alert" className="mt-2 text-sm text-red-700">{chatError}</p>}</div></article>}
     {!landscape && <p className="rounded-xl bg-white/70 p-4 text-sm text-me-charcoal/65">点击“生成竞品总览”，查看当前市场组合的整体判断。</p>}
     {candidates.length > 0 ? <details className="rounded-xl border border-black/10 bg-white p-4"><summary className="cursor-pointer text-sm font-bold">查看逐条候选证据（{candidates.length} 条）</summary><div className="mt-4 grid gap-3 lg:grid-cols-2">{candidates.map((candidate, index) => <button type="button" key={`${candidate.client_product.name}-${candidate.competitor_product.source_url}`} onClick={() => void analyse(index)} disabled={busy !== null} className={`text-left rounded-xl border bg-white p-4 transition ${selected === index ? 'border-me-ochre ring-2 ring-me-ochre/20' : 'border-black/10 hover:border-me-ochre/50'}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold text-me-charcoal/55">CTS：{candidate.client_product.name}</p><p className="mt-1 font-black">竞品：{candidate.competitor_product.name}</p></div><span className="shrink-0 rounded-full bg-me-ivory px-2 py-1 text-[11px] font-bold">相似度 {candidate.match_score}</span></div><p className="mt-3 text-xs font-bold text-me-ochre">{busy === index ? '正在分析…' : results[index] ? '重新生成对比' : '点击查看优劣势对比 →'}</p></button>)}</div></details> : <p className="rounded-xl bg-white/70 p-4 text-sm text-me-charcoal/65">当前没有逐团明细可供核对；仍可生成整体竞品总览。</p>}
     {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}

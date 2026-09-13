@@ -5,6 +5,85 @@
 
 ---
 
+### 2026-09-13（视频工厂：资料包自助管理界面 + 视频归属选择 + CTS 真实 7 团接入）
+
+同一天会话继续：PM 追问"这个能力在 Magic Engine 里是不是真的做完了"，倒逼出两块此前一直靠工程手改数据库的界面。
+
+1. **资料包管理界面**（客户设置页 → 内容 tab → 视频工厂配置）：FDE/PM 现在能自己增删"团/档位"及其真实字段（团名/路线/价格/出发日期，或任何客户/行业需要的字段），不用再找工程改 JSON。顺手修复一个真实存在的老 bug：Settings 页的保存接口（`mergeFactoryConfig`）此前完全没有回写 `offers`/`post_field_sources`/`static_overrides`/`required_post_fields` 这四个字段——新界面加了也会保存到空气里，现已修正为"没带就沿用、带 null 就清空、带合法值就覆盖"的正确合并语义。
+2. **视频归属选择框**（内容工厂看板"确认做"这一步）：客户配了 ≥2 个资料包时，必须先选这条视频对应哪个团才能确认，选不了就直接拦下，不让系统瞎猜——这条红线延续自 PR #1632 的设计。
+3. **对抗性复审抓出并修复两个真洞**：①`offer_key` 写入前此前不校验是否真的存在于客户当前配置里，选错/选到刚被删掉的档位，视频会先"确认成功"、几十秒后才在 Inngest 渲染任务里默默失败——已改成确认这一刻同步查库校验，不存在直接 400 拦下（顺带把这次查询和后面判断出片引擎的查询合并成一次，没多打库）。②资料包表单里如果手滑建了两个同名档位，后一个会静默覆盖前一个、保存显示成功但内容悄悄丢了——已改成检测到重复直接报错挡住保存。
+4. **CTS 真实 7 个在售团接入**：没有凭空编数据——发现另一个并行会话已经为"私信自动回复"功能做过一遍"CTS 现在卖哪些团"的真实调研（`config/clients/cts/offerings.yaml`，PM 已核实），直接复用这份数据导入视频工厂的资料包配置（Golden China / 圣诞团奥克兰+基督城两个出发城市 / Best of China / 丝路 / 双城记 / 上海周边），没有重新造一遍轮子。在生产环境用真实数据完整跑通一次闭环：看板选团 → 系统核对团存在 → 自动填对片尾信息（团名/路线/价格/日期）→ Creatomate 渲染成功。
+5. **顺带记录一个待还的技术债**：CTS 现在有两套"卖哪些团"的真实数据（视频工厂一套、私信回复 Agent 一套），语义重叠，以后团有变动要改两个地方——记入 ROADMAP，不在这轮解决。
+
+**Reuse Statement**：两块新界面都是共享连接器/看板代码的自然扩展（跟 `staticOverrides`/`requiredPostFields` 同级别的字段，不是 CTS 专属新能力），换客户/换行业都不用改代码，只是配置的资料包内容不同。CTS 的 7 团真实事实是客户私有数据，来自另一个已完成的调研工作，本轮只做了导入和格式转换，没有重新研究或编造。
+
+### 2026-09-13（视频工厂：字幕不再写死 + 片尾信息真正自动化 + 模板风格探索）
+
+同一天会话继续：PM 反馈"看不出 CTS 视频区别、NAL 视频就是发过的那条"，追问"视频里的文字该由 AI 统一想清楚存起来，不该 Creatomate 自己每次现设计"，推动了两处真正的架构修复。
+
+1. **字幕不再写死（配置改动，无需新代码）**——发现 `SceneSlotFieldMap.caption` 字段代码里早就存在，但 CTS 配置从未真正用上：长城/故宫/兵马俑/上海四镜头的字幕此前是模板固定文字，改成读 `scene_field_map` 里的 `caption` 映射后，字幕直接由分镜阶段（`planScenes`）逐镜头生成，跟着脚本内容变。已用真实渲染验证：两条不同脚本产出的字幕内容确实不同、非写死。
+2. **换了 3 个 Creatomate 自带模板风格试渲染**（Photo Collage / Search Field w/ Rating [16:9-only，中途放弃] / Searchlight Reveal）——验证"不用请设计师、Creatomate 自带模板库可直接换风格"这条能力路径，全部走"备份现有配置→临时切模板→真实渲染→验证→立刻还原"的安全流程。PM 反馈三个都"不像短视频爆款"，随后按 CLAUDE.md §8 规矩查了 `viral_reference_library` 里的真实高播放旅游参考数据（10 条，最高 2.6 亿播放）：发现共同点不是"切得快"（多条播放量最高的反而全片零剪辑），而是全部为真实动态画面/真人出镜/真实瞬间，没有一条是"照片+图形标题"形式——现有模板路线的天花板由此确认：不是参数能调出来的，而是内容形态本身的差异。
+3. **片尾信息此前的"自动化"其实是假的，全靠人工代填数据库**——PR #1613（见下一条 09-13 记录）设计了 `requiredPostFields`+`endcard` 机制，但复核发现全仓库没有任何代码真的往 `content_posts.generation_context_snapshot.endcard` 写值，此前两次"验证通过"全靠这个会话手动跑脚本代填，撞了"该给人填的字段不能只让人进数据库后台手填"这条红线。新增自动写入机制（PR [#1632](https://github.com/bigbigraydeng-maker/magic-engine/pull/1632)）：`CreatomateTemplateContract` 新增 `offers`（按团/出发城市变体分的真实事实字典）+ `postFieldSources`（元素名→事实字段的确定性映射，不走 LLM，杜绝幻觉/改写风险）；`resolveOfferFacts` 在"没指定用哪个团 + 客户配了 ≥2 个团"时 fail-closed 抛错，不会猜一份不相关的事实套上去（这条红线是"子牙"+"魏征"设计复审时明确要堵的：CTS 圣诞团奥克兰/基督城两个出发城市变体同时在打广告，套错团的价格/日期比模板写死的占位文字更危险）。实施完的复审又抓出一处真 bug：字段解析必须排在花钱生成分镜素材之前，否则一旦触发 fail-closed，job 会卡进无法自愈的状态（改配置也救不回来）——已修正执行顺序并补测试。
+4. **顺带发现并修正一条过期客户数据**：CTS 官网实测（`ctstours.co.nz/tours/china/discovery/beijing-xian`）发现 `factory_config.verified_cta.departure` 存的"15 Oct 2026"已过期（该场次已 sold out），官网当前显示下一场是"18 Mar 2027"——已更正。
+5. **`MUAPI_API_KEY` 生产环境确认缺失并已修复**——三次全新脚本真实渲染测试均在"某镜头配不到真实照片、回退 AI 生成动态画面"这一步失败（此前 09-13 早些时候的记录曾错误判断这个环境变量"命中率低不再紧迫"），PM 直接在 Render 后台补上，已用真实渲染验证 Muapi 回退路径恢复正常。
+6. **端到端真实渲染验证**：合并 PR #1632 并等 Render 部署完成后，用真实产品数据重新渲染一条 CTS 视频，`generation_context_snapshot.endcard` 全部字段自动写对（团名"China Discovery — A Tale of Two Cities"、路线"Beijing (Great Wall · Forbidden City) → Xi'an (Terracotta Warriors)"、价格"10 Days · From NZD $3,480 pp"、日期"Next departure 18 Mar 2027"），成片渲染成功（`ready_for_review`），全程零人工数据库写入。
+
+**Reuse Statement**：字幕修复是配置层面接入既有共享代码（`SceneSlotFieldMap.caption` 早就是连接器契约的一部分），未新增代码。`offers`/`postFieldSources`/自动写入机制是共享连接器能力（跟 `staticOverrides`/`requiredPostFields` 同级），对所有走 Creatomate 的客户生效，不是 CTS 专属；具体填哪些团、哪些事实值是 CTS 自己的客户配置。`viral_reference_library` 查询结论（爆款靠真实动态画面而非剪辑节奏）是行业级洞察，未来给其他旅游客户设计模板时同样适用，建议沉淀进对应的 Industry Playbook。
+
+### 2026-09-13（视频工厂：修复真实照片池致命 bug + 片尾信息动态化 + CTS/NAL 双客户内容量产）
+
+PM 要求给 CTS 和 NAL 各准备一批新内容，过程中发现并修复了两个真正阻塞出片的生产 bug，最终两个客户的内容都做出来了：
+
+1. **修复致命 bug：自动选真实照片功能几乎完全失效**（PR [#1615](https://github.com/bigbigraydeng-maker/magic-engine/pull/1615)）——`loadRankableClientAssets`（出片自动选真实照片的核心查询）和素材库人工搜索接口，都用 `.not('vision_metadata->>kind', 'eq', 'video')` 在数据库层排除视频行；但只有视频行才会写这个字段，绝大多数照片行根本没有它，PostgREST 对着"字段不存在"的行算出来是 NULL，被数据库整行排除——CTS 47 张已核实真实照片，命中这个 bug 后自动出片只能看到 1 张。这解释了本次会话早些时候就记录过的"MUAPI_API_KEY 缺失"报错：真正原因不是环境变量偶尔缺失，是几乎每次新脚本都因为这个 bug 配不到真实照片、被迫掉进 AI 兜底路径。改成跟同文件里已经写对的逻辑一致（内存里判断 kind==='video'，没有这个字段按"不是视频"处理）。修复后真实照片池从 1 张恢复到 50 张。
+2. **片尾信息（团名/路线/天数价格/出发日期）此前 100% 是模板作者写死的示例内容**（PR [#1613](https://github.com/bigbigraydeng-maker/magic-engine/pull/1613)）——每条视频不管实际推广哪个团，片尾显示的都是同一份跟内容无关的占位信息。新增 `CreatomateTemplateContract.requiredPostFields` 声明"这几个元素每条视频必须各自提供值"，读自 `content_posts.generation_context_snapshot.endcard`，缺字段直接拦渲染，绝不静默套用旧内容。经"子牙"（架构）+"魏征"（挑刺）两轮设计复审后落地。
+3. **CTS 新内容**：2 条视频（"Best of China"真实团，长城/故宫/兵马俑/上海真实照片+真实价格 NZD $4,080/15 天；"China Awaits"通用宣传片）+ 3 条图文（25 年品牌信任状、丝路 2027 团、双城记 10 天团），均已用真实渲染自检确认画面和片尾信息正确。
+4. **NAL（New Asian Logistics，物流客户）首次接入视频工厂**——此前完全空白（无模板、无素材）。真实素材取自 NAL 自己已发布的 Facebook 内容（Graph API 官方接口拿原图/原视频，非网页截图），做了 1 条视频（真实仓库/装柜实拍 + logo 水印 + 品牌结尾卡，ffmpeg 本地合成，未走 Creatomate）+ 1 条图文。
+
+**Reuse Statement**：两处 bug 修复都是共享连接器代码（`src/lib/factory/client-asset-pool.ts`、素材库搜索路由），修完对所有客户生效，不是 CTS 专属；`requiredPostFields`/`endcard` 机制同样是共享连接器能力（跟 `staticOverrides` 同级），具体填什么值是每个客户自己的内容。CTS 的 5 条内容、NAL 的账号研究结论和真实素材，均为客户私有，未进共享代码。NAL 目前用 ffmpeg 本地合成而非 Creatomate 模板，是该客户当前规模下的判断，不代表放弃 Creatomate 路线。
+
+### 2026-09-13（视频工厂：背景音乐接入 + 补齐胡同/西安城墙真实照片 + 清理僵尸 Render 服务）
+
+上一轮会话收尾后 PM 追加三个决定，当场处理完：
+
+1. **背景音乐**：PM 上传 3 首新曲目到 Dropbox（`MagicLab_Studio/Music/`）。检查 Creatomate 模板源码时发现模板其实自带一个通用 `Music` 音频图层（此前记录模板结构时漏记了这个，只记了画面/文字元素）。3 首曲目已转存到正式素材库，PM 选定 `Horizon's Call` 作为默认背景音乐，通过已有的 `static_overrides` 机制接入（跟 logo 覆盖用的是同一套机制，**不需要改代码**）。已用一条真实渲染验证音轨确实有声音（-16.8dB 均值，非静音桩轨）。
+2. **胡同/西安城墙真实照片**：PM 本让去 Unsplash 找，核实后发现公司自己的 Dropbox 素材库（`CTS/footage/photos/`）里其实早就有 2 张胡同 + 1 张西安城墙真实照片，只是从未录入 `client_assets`——不需要外部素材。已上传、PM 过目确认、标记 `client_verified`。这两个 landmark 目前仍不在该客户的 `scene_field_map` 里（脚本目前只生成 4 个镜头），要真正出现在成片里还需要后续把内容扩到 6 个镜头，记入 ROADMAP。
+3. **清理僵尸 Render 服务**：PM 拍板彻底删除此前发现的"退役但没真正关掉"的老服务 `content-factory-render-worker`（[render.yaml](../../render.yaml) 里早已没有这条声明，只留了一条归档注释，删除不会被下次部署复活）。已在 Render 后台执行删除，服务已不存在。
+
+**顺带发现一个新的生产缺口**：测试渲染时触发了"某镜头没配到真实照片、退回 AI 现画兜底"这条路径，暴露出生产环境的 `MUAPI_API_KEY` 环境变量实际上没配置（此前 `docs/ENV.md` 标记✅是错的，这条兜底路径此前从未被真实触发过）。按资源优先级三维打分定为 P3，记入 ROADMAP，不阻塞当前工作。
+
+另外发现 Render 账户当前有"Payment failed"提示（信用卡扣款失败），已单独告知 PM——这个不是工程优先级问题，是需要尽快更新付款方式的运营事项，拖下去可能导致全部 Render 服务被暂停。
+
+**Reuse Statement**：音乐/logo 都复用同一个 `staticOverrides` 通用机制（客户中立，哪个元素名对应哪个资产完全是每个客户自己的配置）；CTS 的曲目选择、真实照片素材、僵尸服务清理均为 CTS 客户私有配置/运维操作，未写入共享代码，本次也没有新增代码。
+
+### 2026-09-13（视频工厂：Creatomate 真实照片渲染链路端到端验证通过，附带修复两个生产事故）
+
+真实照片喂进 Creatomate "Golden China" 模板、渲染出正确成片，这条链路从代码合并到真人验证全部走完，产出多条真实渲染成片。过程中发现并处理了两个此前不知道的生产问题：
+
+1. **一个 2026-09-02"已退役"的老 ffmpeg 拼片工人（Render 服务 `content-factory-render-worker`）其实从未真正关闭**——只是摘掉了触发它的 cron，服务容器本体一直在运行。这次合并代码触发 Render 自动重新部署，该服务苏醒后抢占了新提交的渲染任务，写入旧数据格式，导致新 Creatomate 链路完全跑不起来。已在 Render 后台手动 Suspend（未删除，是否彻底移除待 PM 拍板）。
+2. **Creatomate 渲染产物下载被自己代码里的域名白名单拦下**——`src/lib/creatomate/store-result.ts` 原假设产物从 `cdn.creatomate.com` 出，实测实际存在 Backblaze B2（`f002.backblazeb2.com`）。PR [#1594](https://github.com/bigbigraydeng-maker/magic-engine/pull/1594) 已修复。
+
+另新增 `CreatomateTemplateContract.staticOverrides` 支持覆盖 `EndLogo`/`Watermark` 等不参与逐镜头轮换的固定品牌图层（PR [#1604](https://github.com/bigbigraydeng-maker/magic-engine/pull/1604)），CTS 收尾画面的 logo 已从模板作者放的占位白图换成真实品牌红白配色版本。
+
+同时从 Creatomate 模板编辑页面的 Code 视图直接读出了"Golden China"模板的完整真实结构（8 个镜头槽位各自写死的地名文案、EndCard 各元素名），此前靠试错渲染猜测的槽位映射（如误以为兵马俑在 Still-6）已全部更正为源码确认的真实值，记入 memory `project-cts-video-factory-decision-ledger`，以后不用再重新试错。
+
+CTS 真实素材库 47 张照片人工过目，44 张标记 `client_verified`（3 张文件名标注换脸/换 logo/AI 生成的确认排除），自动选真实照片功能现在对 CTS 真正有可用素材。
+
+**未完成**：Hutong（Still-5）、西安城墙（Still-6）两个镜头位置目前素材库没有专属真实照片；PM 拍板"AI 配音统一用 ElevenLabs"，但账号是免费版无法通过 API 调用任何声音，需要决定是否升级付费，配音这一步至今没有真正测试过。完整清单见 [ROADMAP.md](../ROADMAP.md) Creatomate Connector 落地后续。
+
+**Reuse Statement**：`staticOverrides` 是 Creatomate L3 Connector 契约的扩展，客户中立（哪个元素名对应哪个品牌资产完全是每个客户自己的配置，不进 shared runtime）；CTS 的模板真实结构、素材核实结果、logo 资产均为 CTS 客户私有配置，未写入共享代码。
+
+### 2026-09-13（视频工厂：Creatomate 出片真实照片优先 + 老 ffmpeg 引擎归档标注）
+
+PR [#1570](https://github.com/bigbigraydeng-maker/magic-engine/pull/1570) 已合并（PR #1569 因改动 835 行撞了 `claude/*` 自动修车道 800 行上限，换 `feat/*` 分支重开，代码不变）。`src/lib/creatomate/scene-assets.ts` 出片时先按镜头描述去客户真实素材库（`client_assets`）里找匹配的真实照片（只认 `client_verified`/`fde_shot` 核实过的来源，见 `src/lib/assets/provenance.ts::canBackRealPrice`），命中就直接用真照片，不再走 AI 现画（`generateImage`）也不再走 AI 逐帧重画（`imageToClip`）；素材库没有匹配的镜头（如已知空白地标：西藏/长江三峡）才回退到原有 AI 现画路径。真实照片的"动"交给 Creatomate 模板本身在编辑器里给槽位配置的入场/推拉动画，ME 侧不实现 Ken Burns（三层架构冻结决策：填槽不造槽）。
+
+顺手给 5 个已于 2026-09-02 退役的老 ffmpeg 拼片文件（`render-assemble.ts`/`render-pipeline.ts`/`render-queue.ts`/`lecture-render.ts`/`scripts/render-worker/worker.ts`）加了"已退役"说明注释，不改逻辑，防止被误当活代码维护或复活。
+
+**审查流程**：设计阶段子牙（架构）+ 魏征（挑刺）复审打回两条（素材真实性过滤缺失、动态化验收缺乏机制）→ 按两条修正后实施 → 实施后子牙+魏征再审一次，均判定可合并。复审留的 3 项后续小任务已登记 [ROADMAP.md](../ROADMAP.md)：真实照片路径补质量分门槛、`visualSource` 字段接入人工分镜自检表 UI、排图 LLM 调用补计费。
+
+**验证**：新增 `rank-assets-by-prompt.ts`（从 `asset-library/search` 路由抽出的共享排图逻辑）+ 25 个新增/改动测试全部通过；`tsc --noEmit` 触碰文件零错误；`npm run build` 成功；全仓 vitest 42 个失败均为触碰前既有、与本次改动无关的 baseline（cron/attribution、huatuo、kernel-approval、kernel、places）。
+
+**Reuse Statement**：`rank-assets-by-prompt.ts` 是 `asset-library/search` 路由与 `scene-assets.ts` 共用的 L3 Connector 内部实现细节修正（非新增能力线，未登记 platform-candidates）；复用既有 `client-asset-pool.ts::loadClientAssetPool`（新增 `requireVerified` 选项，默认 false 不影响 `evaluate.ts` 现有调用）与 `provenance.ts::canBackRealPrice`。`client_assets.source` 核实口径是平台共享判断，CTS/客户具体照片内容仍是客户配置，无客户名/客户 ID/行业规则写入 shared runtime。
+
 ### 2026-09-10（竞争分析收敛为 IMPACT 单入口）
 
 PR [#1525](https://github.com/bigbigraydeng-maker/magic-engine/pull/1525) 已合并并部署生产（`66a17018`）。Industry Baselines 的入口改为「竞争分析」，决策者只需点一次「开始竞争分析」，系统便按 core 优先读取全部已配置业务页面；页面只把本轮真实启动的请求计入覆盖，未完成、失败或未启动的页面都会阻止整体「没有变化」结论。主界面按 IMPACT 展示发现、衡量和建议，明确标记尚未执行；配置、成本、运行记录和原始证据收进折叠区。

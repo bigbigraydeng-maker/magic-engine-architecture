@@ -1,4 +1,5 @@
 import { runActorAndGetResults } from '@/lib/apify/client'
+import { estimateWebsiteTraffic } from '@/lib/apify/traffic-estimator'
 import { scrapeSeek } from '@/lib/prospecting/job-boards/scrapers'
 import { buildExternalObservation, sourceDefinition, sourceDefaultUrls } from './sources'
 import type { ExternalObservation } from './contracts'
@@ -9,6 +10,9 @@ export type ApifyExternalCollection = {
   observations: ExternalObservation[]
   rejected: number
   runId: string | null
+  datasetId?: string | null
+  costUsd?: number
+  actorBuild?: string
   error?: string
 }
 
@@ -186,4 +190,41 @@ export function collectSeekNzJobs(input: {
     }
     return { observations, rejected, runId: null }
   })
+}
+
+/**
+ * Collect a low-confidence, public traffic direction signal for competitor
+ * domains. This deliberately uses the shared observation contract so it can
+ * be stored and reviewed alongside other WI evidence without implying that
+ * the estimate is first-party analytics.
+ */
+export async function collectTrafficDirectionObservations(input: {
+  clientId: string; domains: string[]; observedAt: string; maxChargeUsd?: number
+}): Promise<ApifyExternalCollection> {
+  try {
+    const result = await estimateWebsiteTraffic(input.domains, { maxChargeUsd: input.maxChargeUsd })
+    const observations: ExternalObservation[] = []
+    let rejected = 0
+    for (const estimate of result.data) {
+      const sourceUrl = `https://www.similarweb.com/website/${estimate.domain}/`
+      const excerpt = [
+        `估算访问量：${estimate.total_visits ?? '未测量'}`,
+        `访问量变化：${estimate.visits_change_pct === null ? '未测量' : `${estimate.visits_change_pct}%`}`,
+        `主要国家：${estimate.top_country ?? '未测量'}`,
+        `来源结构：${Object.entries(estimate.traffic_sources).map(([name, share]) => `${name} ${share}%`).join('；') || '未测量'}`,
+        '数据性质：第三方公开估算，仅作为低置信度方向性证据，不代表真实访问量或销售影响。',
+      ].join('\n')
+      try {
+        observations.push(buildExternalObservation({
+          client_id: input.clientId, source_id: 'competitor-traffic-apify', source_url: sourceUrl,
+          title: `${estimate.domain} · 网站流量方向`, excerpt, competitor_domain: estimate.domain,
+          observed_at: estimate.checked_at || input.observedAt,
+          valid_until: new Date(Date.parse(estimate.checked_at || input.observedAt) + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        }))
+      } catch { rejected += 1 }
+    }
+    return { observations, rejected, runId: result.run_id, datasetId: result.dataset_id, costUsd: result.cost_usd, actorBuild: '0.1.11' }
+  } catch (error) {
+    return { observations: [], rejected: 0, runId: null, error: error instanceof Error ? error.message : String(error) }
+  }
 }

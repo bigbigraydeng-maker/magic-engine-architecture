@@ -28,13 +28,18 @@
  * skipping with `no_page_token`, zero conversations in ME, nothing on screen
  * saying so. Computing it on GET costs nothing — readPages() is already called
  * here for the pick-list.
+ *
+ * `reachable` also checks the stored per-client OAuth token (added 2026-09-13,
+ * see computeReachable below) — not just the legacy env-var token `pages` is
+ * built from — otherwise any client who connects through "连接 Meta" gets a
+ * permanent false alarm even though the actual hourly sync works fine.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
-import { getMetaTokenForClient } from '@/lib/meta/token-manager'
+import { getMetaTokenForClient, getStoredPageToken } from '@/lib/meta/token-manager'
 import { listManagedPages, type ManagedPage } from '@/lib/meta/page-posts'
 import { projectFactoryConfig } from '@/lib/factory/client-config'
 
@@ -79,15 +84,38 @@ async function readPages(
 
 /**
  * Can ME actually act for the bound Page right now?
- *   true  → the Page is in the list our token can act for; sync will pull it
- *   false → bound, but Meta does not hand us this Page (grant missing/expired)
- *   null  → nothing bound, or we could not ask Meta at all
+ *   true  → the Page is in the list our token can act for, OR we hold a stored
+ *           per-client OAuth token for it; sync will pull it
+ *   false → bound, but neither source hands us this Page (grant missing/expired)
+ *   null  → nothing bound, or we could not ask Meta at all and have no stored token
  * `false` is the state that used to be invisible, so callers must render it.
+ *
+ * WHY THIS ALSO CHECKS getStoredPageToken (added 2026-09-13)
+ * ------------------------------------------------------------
+ * `pages` comes from getMetaTokenForClient — the legacy env-var token, which is
+ * what the pick-list is built from. It has no idea about a client that connected
+ * through the "连接 Meta" OAuth button: that flow stores its own per-client token
+ * in platform_oauth_connections via getStoredPageToken, and never touches the
+ * env var. New Asian Logistics hit exactly this: OAuth succeeded, the sync (which
+ * already tries getStoredPageToken first) worked fine, but this check only ever
+ * looked at the old env-token pick-list and reported "not reachable" forever.
+ * The pick-list logic itself is untouched — it still needs to know which Pages
+ * exist before it can offer them, and stored-token lookup needs a concrete
+ * page_id to check, so it cannot help there.
  */
-function computeReachable(pageId: string | null, pages: ManagedPage[] | null): boolean | null {
+async function computeReachable(
+  clientId: string,
+  pageId: string | null,
+  pages: ManagedPage[] | null,
+): Promise<boolean | null> {
   if (pageId === null) return null
+  if (pages?.some((p) => p.id === pageId)) return true
+
+  const storedToken = await getStoredPageToken(clientId, pageId)
+  if (storedToken) return true
+
   if (!pages) return null
-  return pages.some((p) => p.id === pageId)
+  return false
 }
 
 export async function GET(
@@ -130,7 +158,7 @@ export async function GET(
     publish_target_page_id,
     pages,
     pages_error,
-    reachable: computeReachable(page_id, pages),
+    reachable: await computeReachable(clientId, page_id, pages),
   })
 }
 
@@ -184,7 +212,7 @@ export async function PATCH(
   // is legitimate — but the UI must be able to say "saved, but not live yet"
   // instead of implying the sync has started.
   const { pages, pages_error } = await readPages(clientId)
-  const reachable = computeReachable(next, pages)
+  const reachable = await computeReachable(clientId, next, pages)
 
   return NextResponse.json({ success: true, page_id: next, reachable, pages, pages_error })
 }
