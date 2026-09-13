@@ -299,6 +299,55 @@ describe('OfferingsFileSchema — invalid input is rejected', () => {
       ).not.toThrow()
     })
   })
+
+  describe('code must already be a normalized slug (Codex review, PR #1626, round 6)', () => {
+    const activeTour = (code: string) => ({
+      code,
+      name: 'X',
+      price_nzd: 100,
+      departure_dates: ['2026-11-16'],
+      nights: 1,
+      itinerary_url: 'https://example.com/x',
+    })
+
+    it.each([
+      ['Silk-Road', '大写字母'],
+      ['silk-road ', '尾部空格'],
+      [' silk-road', '首部空格'],
+      ['silk--road', '连续两个连字符'],
+      ['-silk-road', '开头带连字符'],
+      ['silk_road', '下划线不是连字符'],
+    ])('拒绝 code=%s（%s）', (code) => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          active_tours: [activeTour(code)],
+          last_verified_at: '2026-09-13',
+        }),
+      ).toThrow()
+    })
+
+    it('规范格式的 code 通过校验', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          active_tours: [activeTour('silk-road-discovery')],
+          last_verified_at: '2026-09-13',
+        }),
+      ).not.toThrow()
+    })
+
+    it('字段本身就强制规范格式后，大小写/空格不一致的"同一个团"不再可能绕过跨列表冲突检查', () => {
+      // 在 code 字段本身被 regex 卡死之后，"Silk-Road" 和 "silk-road " 这类
+      // 试图绕过冲突检查的写法在到达 superRefine 之前就已经被拒绝——
+      // 不需要在冲突检查里再做一次大小写/空格归一化比较。
+      expect(() =>
+        OfferingsFileSchema.parse({
+          active_tours: [activeTour('Silk-Road')],
+          retired_tours: [{ code: 'silk-road', name: 'X', retired_reason: 'gone' }],
+          last_verified_at: '2026-09-13',
+        }),
+      ).toThrow() // 因为 'Silk-Road' 本身就不是合法 slug，先在字段级别被拒绝
+    })
+  })
 })
 
 describe('loadOfferings — caching', () => {

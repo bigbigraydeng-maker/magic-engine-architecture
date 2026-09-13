@@ -70,9 +70,28 @@ const dateLikeString = z.string().min(1).refine((value) => {
 // retired list — silently erasing the exact safety data this file exists to
 // hold — instead of failing CI the way the loader tests already claim it does.
 
+/**
+ * `code` must already be a normalized slug (lowercase kebab-case, no leading/
+ * trailing/internal whitespace) — enforced here instead of only normalizing
+ * before comparison (Codex review, PR #1626, round 6). The cross-list
+ * uniqueness check below (`superRefine`) does a plain string comparison; if
+ * `code` could contain mixed case or stray whitespace, "Silk-Road" and
+ * "silk-road " would slip through as "different" codes and the same tour
+ * could still end up simultaneously active and retired. Forcing the format
+ * at the field level closes that gap for every future consumer of `code`
+ * (aliases, URLs, log lines), not just this one check.
+ */
+const tourCodeSchema = z
+  .string()
+  .min(1)
+  .regex(
+    /^[a-z0-9]+(-[a-z0-9]+)*$/,
+    'must be a normalized slug: lowercase letters/digits, words separated by single hyphens, no leading/trailing/double hyphens or whitespace',
+  )
+
 export const ActiveTourSchema = z
   .object({
-    code: z.string().min(1),
+    code: tourCodeSchema,
     name: z.string().min(1),
     aliases: z.array(z.string()).default([]),
     price_nzd: z.number().positive(),
@@ -85,7 +104,7 @@ export const ActiveTourSchema = z
 
 export const RetiredTourSchema = z
   .object({
-    code: z.string().min(1),
+    code: tourCodeSchema,
     name: z.string().min(1),
     aliases: z.array(z.string()).default([]),
     retired_reason: z.string().min(1),
