@@ -53,6 +53,26 @@ describe('projectFactoryConfig — 投影', () => {
     })
   })
 
+  it('render.creatomate.required_post_fields（2026-09-13 新增）：合法 string[] 原样投影为 requiredPostFields', () => {
+    const r = projectFactoryConfig({
+      render: {
+        engine: 'creatomate',
+        creatomate: { template_id: 'tmpl-1', scene_field_map: [{ visual: 'Video-1' }], required_post_fields: ['EndTour', 'EndDate'] },
+      },
+    }).render as { creatomate: { requiredPostFields?: string[] } | null } | null
+    expect(r?.creatomate?.requiredPostFields).toEqual(['EndTour', 'EndDate'])
+  })
+
+  it('required_post_fields 混了非字符串（脏数据）→ 投影为 undefined，不半收半弃', () => {
+    const r = projectFactoryConfig({
+      render: {
+        engine: 'creatomate',
+        creatomate: { template_id: 'tmpl-1', scene_field_map: [{ visual: 'Video-1' }], required_post_fields: ['EndTour', 123] },
+      },
+    }).render as { creatomate: { requiredPostFields?: string[] } | null } | null
+    expect(r?.creatomate?.requiredPostFields).toBeUndefined()
+  })
+
   it('🔴 只填一半的发布目标 → 投影成 null(等于没配,UI 才会提示「缺发布目标」)', () => {
     expect(projectFactoryConfig({ publish_target: { platform: 'facebook' } }).publish_target).toBeNull()
     expect(projectFactoryConfig({ publish_target: { page_id: '123456' } }).publish_target).toBeNull()

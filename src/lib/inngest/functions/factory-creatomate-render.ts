@@ -110,6 +110,54 @@ async function readPostFields(
   return { title: data.title ?? '', script: data.script }
 }
 
+/** 校验 Record<string,string>——脏数据(非对象/含非字符串值)一律拒绝，跟
+ *  client-config.ts::isStringRecord 同一套原则（这里不 import 那个私有函数，
+ *  两处各自维护同一份简单校验比跨模块导出一个内部 helper 更省心）。 */
+function isStringRecord(v: unknown): v is Record<string, string> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+  return Object.values(v as Record<string, unknown>).every((x) => typeof x === 'string')
+}
+
+/** 这条视频专属的 EndCard 文字覆盖——读自 `content_posts.generation_context_snapshot.endcard`
+ *  （子牙+魏征复审后的设计，2026-09-13）。`generation_context_snapshot` 这一列同时被别的
+ *  功能用（如发布失败原因），写入时必须只动 `endcard` 这个子 key（见写入侧的 jsonb_set 用法，
+ *  不能整列覆盖），这里只负责读+校验，不负责写。
+ *
+ *  `requiredPostFields` 声明了哪些元素名这条视频必须自己提供值——一个都不能少，缺了直接
+ *  抛错（外层 handleCreatomateRenderRequested 会把 job 标 failed，不会静默套用模板作者
+ *  写的示例内容当真发布，魏征复审 ②）。没声明 `requiredPostFields`（该客户模板没有需要
+ *  逐视频变化的文字）时，也不要求 snapshot 里有 endcard，返回空对象即可。 */
+export function resolvePostEndcardOverrides(
+  snapshot: unknown,
+  requiredPostFields: string[] | undefined,
+): Record<string, string> {
+  if (!requiredPostFields || requiredPostFields.length === 0) return {}
+
+  const root = (snapshot ?? null) as Record<string, unknown> | null
+  const endcard = root?.endcard
+  if (!isStringRecord(endcard)) {
+    throw new Error(
+      `该视频缺少 EndCard 内容（content_posts.generation_context_snapshot.endcard），模板要求填：${requiredPostFields.join('/')}`,
+    )
+  }
+
+  const missing = requiredPostFields.filter((key) => !endcard[key]?.trim())
+  if (missing.length > 0) {
+    throw new Error(`该视频 EndCard 缺字段：${missing.join('/')}——不允许静默套用模板默认内容发布`)
+  }
+  return endcard
+}
+
+async function readPostEndcardSnapshot(supabase: SupabaseClient, postId: string): Promise<unknown> {
+  const { data, error } = await supabase
+    .from('content_posts')
+    .select('generation_context_snapshot')
+    .eq('id', postId)
+    .single()
+  if (error || !data) throw new Error(`content_posts not found: ${postId}`)
+  return data.generation_context_snapshot
+}
+
 async function finalizeSuccess(
   supabase: SupabaseClient,
   job: JobRow,
@@ -273,7 +321,18 @@ async function ensureSubmitted(
   const renderId = await step.run('submit', async () => {
     const factoryConfig = await readFactoryConfig(supabase, job.client_id)
     const contract = extractTemplateContract(factoryConfig, job.client_id)
-    const modifications = buildModifications(scenes, contract)
+
+    // 这条视频专属的 EndCard 覆盖，合并进 staticOverrides 之上——buildModifications 本身
+    // 不用感知"客户级 vs 单视频"这两层来源，调用它之前就拼成一份（子牙复审：避免
+    // buildModifications 内部再背一层新的优先级心智负担）。
+    const endcardSnapshot = await readPostEndcardSnapshot(supabase, job.content_post_id)
+    const postOverrides = resolvePostEndcardOverrides(endcardSnapshot, contract.requiredPostFields)
+    const effectiveContract: CreatomateTemplateContract = {
+      ...contract,
+      staticOverrides: { ...contract.staticOverrides, ...postOverrides },
+    }
+
+    const modifications = buildModifications(scenes, effectiveContract)
     const webhookUrl = `${requireBaseUrl()}/api/webhooks/creatomate`
     const { renderId } = await submitRender({ templateId: contract.templateId, modifications, webhookUrl })
     return renderId
