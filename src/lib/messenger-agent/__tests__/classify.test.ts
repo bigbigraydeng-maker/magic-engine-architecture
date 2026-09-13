@@ -21,14 +21,19 @@ interface Row {
   sent_at: string
 }
 
-/** 拿一组消息行（已经按 sent_at 排好序）喂给 mock 的 supabase 链式调用。 */
+/**
+ * 拿一组消息行（已经按 sent_at 排好序）喂给 mock 的 supabase 链式调用。
+ * `.range(from, to)` 真的按请求的区间切片返回——这样能测出「读全部消息要靠
+ * 分页」这件事本身，而不是靠 mock 一次性把所有行都吐出来蒙混过关。
+ */
 function stubMessages(rows: Row[]) {
   mockFrom.mockImplementation((table: string) => {
     if (table !== 'conversation_messages') throw new Error(`fake supabase: 表 '${table}' 没建模`)
     const chain: Record<string, unknown> = {
       select: () => chain,
       eq: () => chain,
-      order: async () => ({ data: rows, error: null }),
+      order: () => chain,
+      range: async (from: number, to: number) => ({ data: rows.slice(from, to + 1), error: null }),
     }
     return chain as never
   })
@@ -116,10 +121,69 @@ describe('classifyConversation', () => {
       const chain: Record<string, unknown> = {
         select: () => chain,
         eq: () => chain,
-        order: async () => ({ data: null, error: { message: 'network down' } }),
+        order: () => chain,
+        range: async () => ({ data: null, error: { message: 'network down' } }),
       }
       return chain as never
     })
     await expect(classifyConversation(CONVO)).rejects.toThrow('network down')
+  })
+
+  describe('分页读取（Codex 复审 P2：单次查询不能依赖 PostgREST 默认行数上限）', () => {
+    it('对话消息数超过一页（500 条），售后关键词出现在第 501 条也要能命中', async () => {
+      const rows: Row[] = []
+      for (let i = 0; i < 500; i++) {
+        rows.push({ body: `第 ${i} 条闲聊消息`, sent_at: iso(i * 1000) })
+      }
+      // 第 501 条（下标 500，超过单页 500 条的边界）才带售后关键词。
+      rows.push({ body: '我已付了尾款', sent_at: iso(500 * 1000) })
+
+      stubMessages(rows)
+      await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
+    })
+
+    it('对话消息数超过一页时，"最后一条消息"要是真正的最后一条，不是第一页的最后一条', async () => {
+      const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+      const rows: Row[] = []
+      for (let i = 0; i < 500; i++) {
+        rows.push({ body: `第 ${i} 条闲聊消息`, sent_at: iso(i * 1000) })
+      }
+      // 真正的最后一条跨度超过 30 天，但如果分页没做全，第一页最后一条（下标 499）
+      // 跨度远不到 30 天，会被误判成 lead_intake。
+      rows.push({ body: '好的谢谢', sent_at: iso(THIRTY_DAYS_MS + 1000) })
+
+      stubMessages(rows)
+      await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
+    })
+  })
+
+  describe('关键词/跨度可覆盖（Codex 复审 P1：默认值不是全平台硬编码）', () => {
+    it('传入自定义关键词时，CTS 默认关键词不再生效，只认传入的那一份', async () => {
+      stubMessages([{ body: '我已付了定金', sent_at: iso(0) }])
+      // 自定义策略里没有"我已付"，CTS 默认值里有——验证真的切换成了传入的策略。
+      await expect(
+        classifyConversation(CONVO, { postSaleKeywords: ['appraisal booking'] }),
+      ).resolves.toBe('lead_intake')
+    })
+
+    it('传入自定义关键词命中时判 post_sale', async () => {
+      stubMessages([{ body: "I'd like an appraisal booking please", sent_at: iso(0) }])
+      await expect(
+        classifyConversation(CONVO, { postSaleKeywords: ['appraisal booking'] }),
+      ).resolves.toBe('post_sale')
+    })
+
+    it('传入自定义跨度阈值时，按传入值判断，不是固定 30 天', async () => {
+      const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+      stubMessages([
+        { body: '你好', sent_at: iso(0) },
+        { body: '谢谢', sent_at: iso(SEVEN_DAYS_MS + 1000) },
+      ])
+      // 默认 30 天阈值下这跨度判不了 post_sale；传入 7 天阈值应该判成 post_sale。
+      await expect(classifyConversation(CONVO)).resolves.toBe('lead_intake')
+      await expect(
+        classifyConversation(CONVO, { postSaleSpanMs: SEVEN_DAYS_MS }),
+      ).resolves.toBe('post_sale')
+    })
   })
 })
