@@ -26,12 +26,31 @@ import { z } from 'zod'
 // ─── Schema ─────────────────────────────────────────────────────────────────
 
 /**
- * Accepts any string `Date.parse` can parse (plain "2026-11-16" dates and full
- * ISO instants alike) — offerings.yaml is hand-edited by non-engineers, so we
- * validate parseability rather than forcing one exact ISO format.
+ * Accepts ISO 8601 dates/timestamps (plain "2026-11-16" dates and full ISO
+ * instants alike) — offerings.yaml is hand-edited by non-engineers, so typos
+ * are expected. `Date.parse` alone is not enough: Node normalizes
+ * out-of-range days (e.g. "2026-02-30" silently becomes March 2), which would
+ * let a nonexistent departure date reach the fact layer and be quoted to a
+ * customer. This re-checks the year/month/day round-trip through
+ * `Date.UTC` to reject calendar dates that don't actually exist.
  */
-const dateLikeString = z.string().min(1).refine((value) => !Number.isNaN(Date.parse(value)), {
-  message: 'must be a valid date (e.g. "2026-11-16" or an ISO 8601 timestamp)',
+const dateLikeString = z.string().min(1).refine((value) => {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!match) return false
+  if (Number.isNaN(Date.parse(value))) return false
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const roundTrip = new Date(Date.UTC(year, month - 1, day))
+  return (
+    roundTrip.getUTCFullYear() === year &&
+    roundTrip.getUTCMonth() === month - 1 &&
+    roundTrip.getUTCDate() === day
+  )
+}, {
+  message:
+    'must be a valid calendar date in ISO format (e.g. "2026-11-16" or an ISO 8601 timestamp) — dates that do not exist (e.g. "2026-02-30") are rejected',
 })
 
 export const ActiveTourSchema = z.object({

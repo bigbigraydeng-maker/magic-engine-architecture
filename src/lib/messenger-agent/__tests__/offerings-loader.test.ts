@@ -184,6 +184,30 @@ describe('OfferingsFileSchema — invalid input is rejected', () => {
       OfferingsFileSchema.parse({ last_verified_at: 'sometime last week' }),
     ).toThrow()
   })
+
+  it('rejects a departure date that is not a real calendar date (e.g. Feb 30)', () => {
+    expect(() =>
+      OfferingsFileSchema.parse({
+        active_tours: [
+          {
+            code: 'x',
+            name: 'X',
+            price_nzd: 100,
+            departure_dates: ['2026-02-30'],
+            nights: 1,
+            itinerary_url: 'https://example.com/x',
+          },
+        ],
+        last_verified_at: '2026-09-13',
+      }),
+    ).toThrow()
+  })
+
+  it('rejects a last_verified_at that is not a real calendar date', () => {
+    expect(() =>
+      OfferingsFileSchema.parse({ last_verified_at: '2026-13-01' }),
+    ).toThrow()
+  })
 })
 
 describe('loadOfferings — caching', () => {
