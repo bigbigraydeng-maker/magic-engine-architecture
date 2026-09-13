@@ -31,6 +31,27 @@ export type TourLandscapeTrafficSignal = {
   excerpt: string
 }
 
+export function formatTourLandscapeChatReply(value: string): string {
+  const cleaned = value.replace(/^\s*```(?:json|JSON)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+  try {
+    const parsed = JSON.parse(cleaned) as Record<string, unknown>
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const sections: Array<[string, string]> = [['headline', '结论'], ['market_summary', '依据']]
+      const lists: Array<[string, string]> = [['client_opportunities', '建议'], ['client_risks', '暂时不要做'], ['recommended_focus', '下一步'], ['unknowns', '还缺证据']]
+      const output = sections.flatMap(([key, label]) => typeof parsed[key] === 'string' && parsed[key] ? [`${label}：${parsed[key]}`] : [])
+      for (const [key, label] of lists) {
+        const items = Array.isArray(parsed[key]) ? parsed[key].filter((item): item is string => typeof item === 'string' && Boolean(item.trim())) : []
+        if (items.length) output.push(`${label}：\n${items.map(item => `- ${item}`).join('\n')}`)
+      }
+      if (output.length) return output.join('\n\n')
+    }
+  } catch {
+    // Some provider responses are truncated JSON. The readable cleanup below
+    // still removes the code fence and keeps the raw evidence visible.
+  }
+  return cleaned.replace(/^json\s*/i, '').replace(/,\s*"(market_summary|client_opportunities|client_risks|recommended_focus|unknowns)"\s*:/g, '\n\n$1：').replace(/[{}]/g, '').replace(/"/g, '').replace(/,\s*$/g, '').trim()
+}
+
 const SYSTEM = '你是旅游产品竞争情报分析师。只根据输入事实做整体市场判断，不把不同旅行社的 Tour 强行视为一一对应产品。不得编造价格、日期、城市或余位。输出严格 JSON。结论必须具体到已提供的产品、城市、天数或价格事实；如果事实不足，就明确说缺什么，不要用空泛的行业术语填充。'
 
 export function tourLandscapePrompt(input: { client_name: string; market_scope?: string[]; client_products: unknown[]; competitor_products: unknown[]; external_signals?: TourLandscapeExternalSignal[]; traffic_signals?: TourLandscapeTrafficSignal[]; memory_context?: string }): string {
