@@ -5,6 +5,35 @@
 
 ---
 
+### 2026-09-13（视频工厂：Creatomate 真实照片渲染链路端到端验证通过，附带修复两个生产事故）
+
+真实照片喂进 Creatomate "Golden China" 模板、渲染出正确成片，这条链路从代码合并到真人验证全部走完，产出多条真实渲染成片。过程中发现并处理了两个此前不知道的生产问题：
+
+1. **一个 2026-09-02"已退役"的老 ffmpeg 拼片工人（Render 服务 `content-factory-render-worker`）其实从未真正关闭**——只是摘掉了触发它的 cron，服务容器本体一直在运行。这次合并代码触发 Render 自动重新部署，该服务苏醒后抢占了新提交的渲染任务，写入旧数据格式，导致新 Creatomate 链路完全跑不起来。已在 Render 后台手动 Suspend（未删除，是否彻底移除待 PM 拍板）。
+2. **Creatomate 渲染产物下载被自己代码里的域名白名单拦下**——`src/lib/creatomate/store-result.ts` 原假设产物从 `cdn.creatomate.com` 出，实测实际存在 Backblaze B2（`f002.backblazeb2.com`）。PR [#1594](https://github.com/bigbigraydeng-maker/magic-engine/pull/1594) 已修复。
+
+另新增 `CreatomateTemplateContract.staticOverrides` 支持覆盖 `EndLogo`/`Watermark` 等不参与逐镜头轮换的固定品牌图层（PR [#1604](https://github.com/bigbigraydeng-maker/magic-engine/pull/1604)），CTS 收尾画面的 logo 已从模板作者放的占位白图换成真实品牌红白配色版本。
+
+同时从 Creatomate 模板编辑页面的 Code 视图直接读出了"Golden China"模板的完整真实结构（8 个镜头槽位各自写死的地名文案、EndCard 各元素名），此前靠试错渲染猜测的槽位映射（如误以为兵马俑在 Still-6）已全部更正为源码确认的真实值，记入 memory `project-cts-video-factory-decision-ledger`，以后不用再重新试错。
+
+CTS 真实素材库 47 张照片人工过目，44 张标记 `client_verified`（3 张文件名标注换脸/换 logo/AI 生成的确认排除），自动选真实照片功能现在对 CTS 真正有可用素材。
+
+**未完成**：Hutong（Still-5）、西安城墙（Still-6）两个镜头位置目前素材库没有专属真实照片；PM 拍板"AI 配音统一用 ElevenLabs"，但账号是免费版无法通过 API 调用任何声音，需要决定是否升级付费，配音这一步至今没有真正测试过。完整清单见 [ROADMAP.md](../ROADMAP.md) Creatomate Connector 落地后续。
+
+**Reuse Statement**：`staticOverrides` 是 Creatomate L3 Connector 契约的扩展，客户中立（哪个元素名对应哪个品牌资产完全是每个客户自己的配置，不进 shared runtime）；CTS 的模板真实结构、素材核实结果、logo 资产均为 CTS 客户私有配置，未写入共享代码。
+
+### 2026-09-13（视频工厂：Creatomate 出片真实照片优先 + 老 ffmpeg 引擎归档标注）
+
+PR [#1570](https://github.com/bigbigraydeng-maker/magic-engine/pull/1570) 已合并（PR #1569 因改动 835 行撞了 `claude/*` 自动修车道 800 行上限，换 `feat/*` 分支重开，代码不变）。`src/lib/creatomate/scene-assets.ts` 出片时先按镜头描述去客户真实素材库（`client_assets`）里找匹配的真实照片（只认 `client_verified`/`fde_shot` 核实过的来源，见 `src/lib/assets/provenance.ts::canBackRealPrice`），命中就直接用真照片，不再走 AI 现画（`generateImage`）也不再走 AI 逐帧重画（`imageToClip`）；素材库没有匹配的镜头（如已知空白地标：西藏/长江三峡）才回退到原有 AI 现画路径。真实照片的"动"交给 Creatomate 模板本身在编辑器里给槽位配置的入场/推拉动画，ME 侧不实现 Ken Burns（三层架构冻结决策：填槽不造槽）。
+
+顺手给 5 个已于 2026-09-02 退役的老 ffmpeg 拼片文件（`render-assemble.ts`/`render-pipeline.ts`/`render-queue.ts`/`lecture-render.ts`/`scripts/render-worker/worker.ts`）加了"已退役"说明注释，不改逻辑，防止被误当活代码维护或复活。
+
+**审查流程**：设计阶段子牙（架构）+ 魏征（挑刺）复审打回两条（素材真实性过滤缺失、动态化验收缺乏机制）→ 按两条修正后实施 → 实施后子牙+魏征再审一次，均判定可合并。复审留的 3 项后续小任务已登记 [ROADMAP.md](../ROADMAP.md)：真实照片路径补质量分门槛、`visualSource` 字段接入人工分镜自检表 UI、排图 LLM 调用补计费。
+
+**验证**：新增 `rank-assets-by-prompt.ts`（从 `asset-library/search` 路由抽出的共享排图逻辑）+ 25 个新增/改动测试全部通过；`tsc --noEmit` 触碰文件零错误；`npm run build` 成功；全仓 vitest 42 个失败均为触碰前既有、与本次改动无关的 baseline（cron/attribution、huatuo、kernel-approval、kernel、places）。
+
+**Reuse Statement**：`rank-assets-by-prompt.ts` 是 `asset-library/search` 路由与 `scene-assets.ts` 共用的 L3 Connector 内部实现细节修正（非新增能力线，未登记 platform-candidates）；复用既有 `client-asset-pool.ts::loadClientAssetPool`（新增 `requireVerified` 选项，默认 false 不影响 `evaluate.ts` 现有调用）与 `provenance.ts::canBackRealPrice`。`client_assets.source` 核实口径是平台共享判断，CTS/客户具体照片内容仍是客户配置，无客户名/客户 ID/行业规则写入 shared runtime。
+
 ### 2026-09-10（竞争分析收敛为 IMPACT 单入口）
 
 PR [#1525](https://github.com/bigbigraydeng-maker/magic-engine/pull/1525) 已合并并部署生产（`66a17018`）。Industry Baselines 的入口改为「竞争分析」，决策者只需点一次「开始竞争分析」，系统便按 core 优先读取全部已配置业务页面；页面只把本轮真实启动的请求计入覆盖，未完成、失败或未启动的页面都会阻止整体「没有变化」结论。主界面按 IMPACT 展示发现、衡量和建议，明确标记尚未执行；配置、成本、运行记录和原始证据收进折叠区。

@@ -21,14 +21,41 @@
 
 ---
 
-## Creatomate Connector 落地后续（PR #1513 已合，代码就绪，未接通真实客户流量）
+## Creatomate Connector 落地后续
 
-> 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2，含两轮复审吸收清单）。四件事任一没做完，这条链路对客户来说都是"建好了但没通电"。
+> 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2）。2026-09-13 端到端真实验证已跑通（PR #1570/#1594/#1604，见 memory `project-cts-video-factory-decision-ledger` 完整记录），下面只留还没做完的。
 
-- [ ] `CREATOMATE_API_KEY` 配进 Render 环境变量（`docs/ENV.md` 已登记，只差实际填值）
-- [ ] 第一条真实渲染跑完后核实 webhook payload 真实字段结构（官方文档没给全，本地开发环境收不到公网回调，只能上线后验证，见 spec §5 渲染验证铁律）
-- [ ] 找 Creatomate 客服或后台账单确认超出 2,000 credits/月后的真实计费行为（硬顶拒绝还是继续扣钱），不确定之前 `cost_usd` 记账在超额区间不可信（spec §6.2）
-- [ ] 至少一个试点客户（如 CTS）在 Settings 面板（客户详情页 → 出片引擎）填模板 ID + 镜头槽位映射，这条链路才有客户能真正用
+- [x] `CREATOMATE_API_KEY` 已配进生产（PM 2026-09-12 确认）
+- [x] webhook payload 真实字段结构已通过多次真实渲染验证，正常工作
+- [x] 至少一个试点客户（CTS）已在 `factory_config.render.creatomate` 配好 template_id + scene_field_map，多次真实渲染成功
+- [x] 镜头槽位入场/推拉动画已确认真实存在（模板源码里每个 Still-N 都有 scale 动画，2026-09-13 直接读取模板源码确认，不再是假设）
+- [ ] 找 Creatomate 客服或后台账单确认超出 2,000 credits/月后的真实计费行为（硬顶拒绝还是继续扣钱）（spec §6.2）
+- [ ] `pickRealPhoto`/`loadRankableClientAssets` 补一道质量分门槛（`client-asset-pool.ts` 的 `MIN_QUALITY=5` 口径目前真实照片路径没用上）
+- [ ] `PreparedScene.visualSource` 接入人工分镜自检表 UI，让 FDE 逐镜看时能分清"这镜是真图"
+- [ ] `pickRealPhoto` 内部调用 `rankAssetsByPrompt` 的 `gpt-4o-mini` 排序成本（分钱级）没有计入 `content_factory_render_jobs.cost_usd`
+- [ ] CTS 真实素材库缺 Hutong（Still-5 专属）、西安城墙（Still-6 专属，不是兵马俑）的真实照片，目前这两个位置只能用模板默认图
+- [ ] 那个已确认"退役但没真的关掉、还在偷偷抢渲染任务"的老 Render 服务（`content-factory-render-worker`）2026-09-13 已手动 Suspend，要不要彻底删除还没拍板
+- [ ] PM 拍板"AI 配音统一用 ElevenLabs"，但账号是免费版，26 个声音全部不能通过 API 调用，需要 PM 决定要不要升级付费；在此之前 CTS 出片全程没有真正测过配音这一步
+- [ ] "多开发不同模板"：PM 不想招人代画，已验证 Creatomate 模板编辑页的 Code 视图（`{}` 图标）能直接读出完整模板 JSON 源码，理论上也能反向粘贴编辑保存，但只验证了"读"，没验证"改并保存"这一步
+
+## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
+
+> 背景：`me_sale_outcomes`/`me_conversion_writebacks` 表结构（Issue #1397）2026-09-05 已定稿，
+> 本次会话（2026-09-13）apply 到生产库并跑完 5 项自验。这条待办是给它接第一个真实数据源：
+> CTS 人工维护的 Google Sheet（FB 即时表单留资 + 员工跟进记录）。设计经子牙+魏征两轮独立
+> 复审后实施，详见 PR #1597 描述。
+
+- [ ] PM 确认 `source_kind='crm_sheet_sync'` 命名（或改用别的名字）——迁移
+      `supabase/migrations/20260913000001_conversion_source_kind_crm_sheet_sync.sql` 已写好未 apply
+- [ ] PM/FDE 把 Google Sheet 分享给 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` 里的 `client_email`（查看者权限即可），
+      并把分享设置从"任何人可查看"改成限定名单（顺手修的安全问题，跟本任务本身无关）
+- [ ] 确认 GCP 项目里 Sheets API 已启用
+- [ ] 上面三条做完后，用 `POST /api/admin/conversions/cts-crm-sync` 真实跑一次，核对 `/dashboard/conversions`
+      审核页面上的记录是否看得懂、数字是否对得上（这一步之前代码从未接触过真实 Google Sheets API 响应）
+- [ ] 实测发现：`阶段Stage` 列 1599 行只填了 1 行，`阶段更新日` 列 100% 空白——"已成交"检测目前几乎找不到信号，
+      是表格填写现状不是代码问题；等 PM/FDE 开始真正使用这两列，成交同步会自动生效，不需要改代码
+- [ ] 若未来这条同步的记录量明显起量（不再是当前的 0-1 条成交/次），"查不到价格/缺日期"的搁置项要不要
+      升级成正式的 `pm-todo` manual item（而不是只在同步响应里一次性返回），需要重新评估
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
@@ -736,6 +763,18 @@ Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说�
 - [ ] **1 条 `rendered` 旧单**(CTS 07-12,有 caption)永久卡住:交付直连修复只对新单生效,这条旧单需手动迁 `in_review` 或归档(PM 判断)
 - [ ] **P21.K.7 ad 级数据脊柱**(登记 2026-07-25,PM 拍板):日度 cron 补拉 **ad 级**(每条广告每天一行,复用 `ad_daily_insights` 的 `level='ad'`),让「某天新增了哪条广告 / 哪条在拖后腿」可被系统自查,不依赖 Meta MCP(Oztop 账户未开通)也不用人翻广告后台。**背书案例**:Oztop Lead Form Cold Broad 的 CPL 7/17 起翻倍,campaign 级只能定位到「填表率腰斩 + 出现出站点击」。含 `parent_id` 列(ad→campaign 归属,**migration 待 PM `go apply`**)+ 首拉 30 天回补 + 分页完整性守卫。顺带铺好 34.B Creative Lifecycle 要的作品层日度基础设施
 - [ ] **P21.K.8 objective 感知 + 视频疲劳正向检测**(登记 2026-07-26,PM 拍板 `排`):把 P21.K 止血从「不误判视频广告」升级到「真正体检视频广告好不好」。需 ① `ad_daily_insights` 加 `objective` 列 + 采集时拉 campaign 节点 objective(**migration 待 PM `go apply`**)② 脊柱补拉视频完播指标(ThruPlay 完播成本 / CPM / video_p100)③ 按 objective 切换判定指标:视频/播放量目标用完播成本或 CPM,表单/流量目标保留 ctr+cost_per_result,拿不到 objective 或样本太少判 `insufficient_history`。价值:CTS 这类主打视频的客户,看完成本涨→主动提醒换素材。半天到一天。附:止血注释已在 `baseline.ts` 登记本项为 follow-up
+- [ ] **P21.K.9 每日分析 cron 的候选客户名单仍只看主账户**(2026-09-13 子牙+魏征复审
+      PR [#1595](https://github.com/bigbigraydeng-maker/magic-engine/pull/1595) 发现,同批
+      发现的另一半已修):`readback-sweep.ts` 的每日安全巡检已改成同时看
+      `clients.meta_ad_account_id` 和 `client_meta_ad_accounts`(见
+      `getActiveClientsWithMetaAccounts`),但 `google-data-pullback-daily/route.ts`
+      的每日分析/健康摘要 cron 没跟着改——如果某客户的主账户被清空、只剩登记在
+      新表里的次账户,这条 cron 会把这个客户整个漏掉,`ad_daily_insights`/健康检查
+      /每日摘要全部停摆(安全巡检不受影响,已经修好)。触发条件:今天 CTS 主账户
+      还在,不会发生;一旦有人清空某客户主账户就会撞上。修法应该是这条 cron 的候选
+      客户查询也换成 `getActiveClientsWithMetaAccounts`,并把主账户专属逻辑
+      (30 天快照、token 解析里用到的域名/客户名)在"无主账户但有次账户"时优雅退化。
+      未修原因:改动涉及这条 900 行 cron 的主循环结构,复审当天为控制风险没有仓促改
 - [ ] **多视角对抗复盘工作流**(1-2 天,可后置):battle-plan §8 方法论固化成可复用 Workflow/agent(N 视角互相证伪前提 → 作战计划 → 喂鲁班),异常触发非每日跑
 - [ ] **开放项**:三张新表 migration 逐次 PM `go apply`(`ad_daily_insights` / `ad_strategy_configs`+`_triggers` / `ad_health_narratives`)· P5 泛化首批客户(Oztop?)· 姊妹 spec Creative Lifecycle 同一 GHA 笔误待独立小 PR 修
 
