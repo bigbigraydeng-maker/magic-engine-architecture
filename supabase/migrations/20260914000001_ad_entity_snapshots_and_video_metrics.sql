@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS public.ad_entity_snapshots (
   -- 该实体当前所在的 Meta 实验（ad_studies）：[{id,type,start_time,end_time}]
   ad_studies             jsonb       NOT NULL DEFAULT '[]'::jsonb,
 
+  -- 广告级：创意里的视频 id（creative.video_id）与主页 id。D4 按「视频受众规则 object_id ∩ 破冰广告视频」
+  -- 判是否攒了人，不按名字判（2026-09-14 实拉核对：NAL 视频池规则 object_id 与 ThruPlay 广告 video_id 一致）
+  creative_video_ids     text[]      NOT NULL DEFAULT '{}',
+  creative_page_id       text,
+
   -- 账户级
   account_status         integer,
   disable_reason         integer,

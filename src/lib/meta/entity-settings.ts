@@ -105,6 +105,12 @@ export interface GraphAdSettings {
   status?: string
   effective_status?: string
   updated_time?: string
+  creative?: {
+    id?: string
+    video_id?: string
+    effective_object_story_id?: string
+    object_story_spec?: { page_id?: string; video_data?: { video_id?: string } }
+  }
 }
 
 export interface GraphCustomAudience {
@@ -206,7 +212,7 @@ export function fetchAdsetSettings(adAccountId: string, accessToken: string) {
 
 export function fetchAdSettings(adAccountId: string, accessToken: string) {
   return readList<GraphAdSettings>(graphUrl(`${adAccountId}/ads`, {
-    fields: 'id,name,adset_id,campaign_id,status,effective_status,updated_time',
+    fields: 'id,name,adset_id,campaign_id,status,effective_status,updated_time,creative{video_id,effective_object_story_id,object_story_spec{page_id,video_data{video_id}}}',
     filtering: STATUS_FILTER,
     limit: PAGE_LIMIT,
   }, accessToken))

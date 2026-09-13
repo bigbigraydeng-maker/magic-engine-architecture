@@ -7,6 +7,7 @@ import nal from './fixtures/nal-settings.json'
 import cts from './fixtures/cts-settings.json'
 import ctsStudies from './fixtures/cts-adset-studies.json'
 import {
+  normalizeAd,
   normalizeAdset,
   normalizeAudience,
   normalizeCampaign,
@@ -15,7 +16,7 @@ import {
   settingsHash,
   type SnapshotContext,
 } from '../snapshot'
-import type { GraphAdsetSettings, GraphCampaignSettings, GraphCustomAudience } from '@/lib/meta/entity-settings'
+import type { GraphAdSettings, GraphAdsetSettings, GraphCampaignSettings, GraphCustomAudience } from '@/lib/meta/entity-settings'
 
 const NAL_CTX: SnapshotContext = { clientId: 'client-nal', adAccountId: nal.ad_account_id, currency: 'NZD', sharedAccount: false }
 const CTS_CTX: SnapshotContext = { clientId: 'client-cts', adAccountId: cts.ad_account_id, currency: 'NZD', sharedAccount: false }
@@ -77,6 +78,23 @@ describe('normalizeAdset — 受众包含/排除、Advantage+、名单外扩展'
     }
     const control = normalizeAdset(CTS_CTX, { ...byId(ctsAdsets, '52549857906273'), ad_studies: studiesById.get('52549857906273') } as GraphAdsetSettings)
     expect(control.ad_studies).toEqual([])
+  })
+})
+
+describe('normalizeAd — 创意视频 id（D4 用）', () => {
+  it('NAL ThruPlay 广告的 creative.video_id 正是视频观众池规则里的 object_id（不是上传稿 video_data.video_id）', () => {
+    const ads = nal.ads as GraphAdSettings[]
+    const thruplay = normalizeAd(NAL_CTX, ads.find(a => a.adset_id === '52596939123725')!)
+    expect(thruplay.creative_video_ids).toEqual(['961317390332083'])
+    expect(thruplay.creative_page_id).toBe('1177479655430100')
+    const pool = parseAudienceRule((nal.audiences as GraphCustomAudience[])[0].rule)
+    expect(pool.objectIds).toContain(thruplay.creative_video_ids[0])
+  })
+
+  it('复用帖子、没有 video_id 的广告 → 空数组，不猜', () => {
+    const ads = nal.ads as GraphAdSettings[]
+    const noVideo = ads.find(a => !a.creative?.video_id)!
+    expect(normalizeAd(NAL_CTX, noVideo).creative_video_ids).toEqual([])
   })
 })
 
