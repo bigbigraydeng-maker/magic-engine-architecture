@@ -1,0 +1,153 @@
+/**
+ * Offerings fact layer loader (Issue #1577).
+ *
+ * `config/clients/<clientId>/offerings.yaml` is the PM/FDE-maintained, hand-edited
+ * source of truth for what a client is actually selling right now. This loader is
+ * the ONLY supported way to read it: parse YAML, validate with Zod, cache in memory
+ * for 5 minutes so the reply agent and the Verifier don't re-hit the filesystem on
+ * every message.
+ *
+ * Why this exists: the incident that started the CTS Governed Reply project was
+ * Meta's official AI reading a still-live website page and telling a customer a
+ * retired tour was bookable. This file is the governance layer's only source of
+ * "is this tour actually for sale" — the Agent reasoning layer (Issue F) and the
+ * Verifier policy (Issue D) both read through here instead of trusting the website
+ * or the model's own training knowledge.
+ *
+ * Platform note: this loader is client-agnostic (`clientId` picks the YAML file) —
+ * only `config/clients/<clientId>/offerings.yaml` itself is client-specific data.
+ */
+
+import { promises as fs } from 'fs'
+import path from 'path'
+import { parse as parseYaml } from 'yaml'
+import { z } from 'zod'
+
+// ─── Schema ─────────────────────────────────────────────────────────────────
+
+/**
+ * Accepts any string `Date.parse` can parse (plain "2026-11-16" dates and full
+ * ISO instants alike) — offerings.yaml is hand-edited by non-engineers, so we
+ * validate parseability rather than forcing one exact ISO format.
+ */
+const dateLikeString = z.string().min(1).refine((value) => !Number.isNaN(Date.parse(value)), {
+  message: 'must be a valid date (e.g. "2026-11-16" or an ISO 8601 timestamp)',
+})
+
+export const ActiveTourSchema = z.object({
+  code: z.string().min(1),
+  name: z.string().min(1),
+  aliases: z.array(z.string()).default([]),
+  price_nzd: z.number().positive(),
+  departure_dates: z.array(dateLikeString).min(1),
+  nights: z.number().int().positive(),
+  itinerary_url: z.string().url(),
+  highlights: z.array(z.string()).default([]),
+})
+
+export const RetiredTourSchema = z.object({
+  code: z.string().min(1),
+  name: z.string().min(1),
+  aliases: z.array(z.string()).default([]),
+  retired_reason: z.string().min(1),
+  /**
+   * True when the marketing page for a retired tour is still live on the
+   * client's website — the exact trap that caused Meta's AI to misreport a
+   * retired tour as bookable. Optional because it may be unknown/unverified
+   * at the time an entry is added.
+   */
+  still_visible_on_website: z.boolean().optional(),
+})
+
+export const OfferingsFileSchema = z.object({
+  active_tours: z.array(ActiveTourSchema).default([]),
+  retired_tours: z.array(RetiredTourSchema).default([]),
+  /** Hard facts the reply agent may state verbatim (company history, visa rules, etc). */
+  factual_bullets: z.array(z.string()).default([]),
+  /**
+   * Topics the reply agent must never answer directly, independent of
+   * `master_briefs.excluded_topics` (that field is about content/brand voice,
+   * this one is about what the Governed Reply Agent is allowed to say at all).
+   */
+  reply_forbidden_topics: z.array(z.string()).default([]),
+  /**
+   * When this file was last checked against reality. Kept as a plain string
+   * (not auto-generated) so PM/FDE editing the YAML by hand can see and update
+   * it directly. A downstream daily-todo reminder (Issue O) flags this file
+   * once it is more than 7 days old — this loader only exposes the field.
+   */
+  last_verified_at: dateLikeString,
+})
+
+export type ActiveTour = z.infer<typeof ActiveTourSchema>
+export type RetiredTour = z.infer<typeof RetiredTourSchema>
+export type OfferingsFile = z.infer<typeof OfferingsFileSchema>
+
+// ─── Loader ─────────────────────────────────────────────────────────────────
+
+const CACHE_TTL_MS = 5 * 60 * 1000
+
+/** Injectable clock so tests can control cache expiry without real sleeps or timer mocks. */
+export interface Clock {
+  now(): number
+}
+
+const systemClock: Clock = { now: () => Date.now() }
+
+interface CacheEntry {
+  filePath: string
+  data: OfferingsFile
+  loadedAt: number
+}
+
+let cache: CacheEntry | null = null
+
+export function offeringsPathFor(clientId: string): string {
+  return path.join(process.cwd(), 'config', 'clients', clientId, 'offerings.yaml')
+}
+
+export interface LoadOfferingsOptions {
+  /** Defaults to 'cts'. Ignored when `filePath` is given. */
+  clientId?: string
+  /** Overrides the computed `config/clients/<clientId>/offerings.yaml` path — mainly for tests. */
+  filePath?: string
+  /** Skip the in-memory cache and re-read + re-validate the file. */
+  forceRefresh?: boolean
+  /** Injectable clock — mainly for tests. Defaults to the real system clock. */
+  clock?: Clock
+}
+
+/**
+ * Load, validate, and cache a client's offerings.yaml.
+ *
+ * Throws if the file is missing or fails Zod validation — callers (Agent tool
+ * layer, Verifier policy) must treat a throw as "fact layer unavailable" and
+ * fail closed (do not let the model answer tour-availability questions from
+ * its own knowledge), not silently fall back to no facts at all.
+ */
+export async function loadOfferings(options: LoadOfferingsOptions = {}): Promise<OfferingsFile> {
+  const filePath = options.filePath ?? offeringsPathFor(options.clientId ?? 'cts')
+  const clock = options.clock ?? systemClock
+  const now = clock.now()
+
+  if (
+    !options.forceRefresh &&
+    cache &&
+    cache.filePath === filePath &&
+    now - cache.loadedAt < CACHE_TTL_MS
+  ) {
+    return cache.data
+  }
+
+  const raw = await fs.readFile(filePath, 'utf8')
+  const parsed = parseYaml(raw)
+  const data = OfferingsFileSchema.parse(parsed)
+
+  cache = { filePath, data, loadedAt: now }
+  return data
+}
+
+/** Test-only escape hatch — clears the module-level cache between test cases. */
+export function __clearOfferingsCacheForTests(): void {
+  cache = null
+}
