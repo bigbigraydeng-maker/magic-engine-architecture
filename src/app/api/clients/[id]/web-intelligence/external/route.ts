@@ -64,7 +64,7 @@ export async function POST(req: Request, { params }: Context) {
       ? await collectAndRecordExternalObservations({
         sourceId, clientId: id, observedAt,
         actorId: 'automation-lab/news-article-extractor',
-        actorInput: { startUrls: siteUrl ? [siteUrl] : [], maxArticles: maxResults, extractFullContent: true, includeImages: false },
+        actorInput: { startUrls: siteUrl ? [siteUrl] : [], maxArticles: Math.max(maxResults, 50), extractFullContent: true, includeImages: false },
         relevanceTerms,
       })
       : sourceId === 'seek-nz'
