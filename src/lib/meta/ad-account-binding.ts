@@ -51,13 +51,26 @@ export function parseAdAccountInput(raw: unknown): string | null {
 
 /**
  * 比对用的规范形：去空白、去大小写、去 `act_`、去前导零。
- * 登记表不强制格式（老数据可能是后台手填的 `ACT_…` / 带空格 / 裸数字），
- * 所以比对一律过这个函数，不能只比 `{act_X, X}` 两种写法。
+ * 用于**已通过 parseAdAccountInput 或 Meta 返回**的干净值。
  */
 export function canonicalAccountDigits(id: string): string {
   const compact = id.replace(/\s+/g, '').toLowerCase()
   const digits = compact.startsWith('act_') ? compact.slice(4) : compact
   return digits.replace(/^0+/, '')
+}
+
+/**
+ * 登记表里存的值可能是后台手填的脏数据（全角数字、零宽字符、`act-`、多个号用
+ * 逗号拼在一起…）。重复检查必须对这些**也认得出**，否则就是 fail-open：
+ * NFKC 归一（全角 → 半角），去掉空白和零宽字符，再按其余非数字切段，每段去前导零，任一段等于目标即算命中。
+ * （狄仁杰 2026-09-13 实测：只做 canonicalAccountDigits 时 7 种手工写法漏认。）
+ */
+export function registeredValueMatches(stored: string, targetDigits: string): boolean {
+  return stored
+    .normalize('NFKC')
+    .replace(/[\s\p{Cf}]/gu, '') // whitespace / zero-width inside a number must not split it
+    .split(/\D+/)
+    .some(run => run.length > 0 && run.replace(/^0+/, '') === targetDigits)
 }
 
 export interface VerifiedAdAccount {
@@ -147,7 +160,8 @@ export interface OtherClientRegistration {
  * 这个账户（按规范形比对）是否已登记在**别的**客户名下 —— 新表和老列都查。
  * 任何一次查询出错都抛出，调用方必须 fail closed（查不出来 ≠ 没有重复）。
  *
- * 全量读出再在内存里比对：登记表不强制格式，数据库侧的等值查询会漏掉异形写法。
+ * 全量读出再在内存里比对：登记表不强制格式，数据库侧的等值查询会漏掉异形写法
+ * （比对规则见 registeredValueMatches）。
  */
 export async function findOtherClientRegistrations(
   clientId: string,
@@ -175,12 +189,12 @@ export async function findOtherClientRegistrations(
   const names = new Map(legacyRows.map(r => [r.id, r.name]))
   const hits = new Set<string>()
   for (const r of tableRows) {
-    if (r.client_id !== clientId && r.ad_account_id && canonicalAccountDigits(r.ad_account_id) === target) {
+    if (r.client_id !== clientId && r.ad_account_id && registeredValueMatches(r.ad_account_id, target)) {
       hits.add(r.client_id)
     }
   }
   for (const r of legacyRows) {
-    if (r.id !== clientId && r.meta_ad_account_id && canonicalAccountDigits(r.meta_ad_account_id) === target) {
+    if (r.id !== clientId && r.meta_ad_account_id && registeredValueMatches(r.meta_ad_account_id, target)) {
       hits.add(r.id)
     }
   }

@@ -60,7 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   m.registeredAccounts.mockResolvedValue({ data: [{ ad_account_id: 'act_1111111111' }], error: null })
   m.getCampaignDetails.mockResolvedValue({
-    id: 'camp_b', name: 'B campaign', status: 'ACTIVE', daily_budget: '5000', account_id: '2222222222',
+    id: '120220000000000002', name: 'B campaign', status: 'ACTIVE', daily_budget: '5000', account_id: '2222222222',
   })
 })
 
@@ -70,7 +70,7 @@ describe('meta-ads/execute POST — campaign belonging to another client', () =>
     ['ads.adjust_bid', { new_daily_budget: 1 }],
     ['ads.reactivate_campaign', {}],
   ])('%s on client B campaign → 403, no Meta write, no audit row', async (action_type, params) => {
-    const res = await post({ action_type, campaign_id: 'camp_b', params })
+    const res = await post({ action_type, campaign_id: '120220000000000002', params })
 
     expect(res.status).toBe(403)
     expect(m.setCampaignStatus).not.toHaveBeenCalled()
@@ -80,16 +80,16 @@ describe('meta-ads/execute POST — campaign belonging to another client', () =>
 
   it('campaign in client A own account → passes the ownership gate (control case)', async () => {
     m.getCampaignDetails.mockResolvedValue({
-      id: 'camp_a', name: 'A campaign', status: 'ACTIVE', daily_budget: '5000', account_id: '1111111111',
+      id: '120210000000000001', name: 'A campaign', status: 'ACTIVE', daily_budget: '5000', account_id: '1111111111',
     })
     m.setCampaignStatus.mockResolvedValue(true)
     m.otherTableInsert.mockReturnValue({
       select: () => ({ single: vi.fn().mockResolvedValue({ data: { id: 'act1' }, error: null }) }),
     })
 
-    const res = await post({ action_type: 'ads.pause_campaign', campaign_id: 'camp_a' })
+    const res = await post({ action_type: 'ads.pause_campaign', campaign_id: '120210000000000001' })
 
     expect(res.status).not.toBe(403)
-    expect(m.setCampaignStatus).toHaveBeenCalledWith('camp_a', 'SHARED_FALLBACK_TOKEN', 'PAUSED')
+    expect(m.setCampaignStatus).toHaveBeenCalledWith('120210000000000001', 'SHARED_FALLBACK_TOKEN', 'PAUSED')
   })
 })

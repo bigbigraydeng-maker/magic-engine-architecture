@@ -81,19 +81,27 @@ beforeEach(() => {
 describe('stop-loss POST — campaign belonging to another client', () => {
   it.each(['pause', 'cut'] as const)('action=%s on client B campaign → 403, no Meta write', async action => {
     m.getCampaignDetails.mockResolvedValue({
-      id: 'camp_b', name: 'B campaign', status: 'ACTIVE', daily_budget: '5000', account_id: '2222222222',
+      id: '120220000000000002', name: 'B campaign', status: 'ACTIVE', daily_budget: '5000', account_id: '2222222222',
     })
 
-    const res = await post({ campaign_id: 'camp_b', action })
+    const res = await post({ campaign_id: '120220000000000002', action })
 
     expect(res.status).toBe(403)
+    expectNoMetaWrite()
+  })
+
+  it('campaign_id smuggling extra Graph params → 403 before any Meta request is built', async () => {
+    const res = await post({ campaign_id: '120220000000000002?method=post&status=PAUSED', action: 'pause' })
+
+    expect(res.status).toBe(403)
+    expect(m.getCampaignDetails).not.toHaveBeenCalled()
     expectNoMetaWrite()
   })
 
   it('registry lookup fails → 403 fail-closed, Meta campaign never even read', async () => {
     m.registeredAccounts.mockResolvedValue({ data: null, error: { message: 'timeout' } })
 
-    const res = await post({ campaign_id: 'camp_b', action: 'pause' })
+    const res = await post({ campaign_id: '120220000000000002', action: 'pause' })
 
     expect(res.status).toBe(403)
     expect(m.getCampaignDetails).not.toHaveBeenCalled()

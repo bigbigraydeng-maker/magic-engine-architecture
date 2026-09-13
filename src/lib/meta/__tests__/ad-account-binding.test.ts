@@ -3,7 +3,7 @@
  * 路由级的端到端行为见 app/api/clients/[id]/meta-ad-account/route.test.ts。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { parseAdAccountInput, canonicalAccountDigits, verifyAdAccountAccessible } from '../ad-account-binding'
+import { parseAdAccountInput, canonicalAccountDigits, registeredValueMatches, verifyAdAccountAccessible } from '../ad-account-binding'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -36,6 +36,20 @@ describe('canonicalAccountDigits — 比对规范形', () => {
   it('大小写 / act_ 前缀 / 空白 / 前导零都归一', () => {
     const forms = ['act_2222222222', 'ACT_2222222222', ' act_ 2222222222 ', '2222222222', '002222222222', 'act_002222222222']
     expect(new Set(forms.map(canonicalAccountDigits))).toEqual(new Set(['2222222222']))
+  })
+})
+
+describe('registeredValueMatches — 登记表里手工填的脏值也要认得出（重复检查不许 fail-open）', () => {
+  it.each([
+    'act_2222222222', 'ACT_2222222222', ' act_2222222222 ', '2222222222', '002222222222',
+    'act_2222\u200B222222', '\uFEFFact_2222222222', 'act_２２２２２２２２２２', 'act-2222222222',
+    'act 2222222222', 'act__2222222222', 'act_1111111111,act_2222222222', 'act_2222222222\u00A0',
+  ])('%j → 命中', stored => {
+    expect(registeredValueMatches(stored, '2222222222')).toBe(true)
+  })
+
+  it.each(['act_22222222229', 'act_1111111111', '', 'act_'])('%j → 不命中', stored => {
+    expect(registeredValueMatches(stored, '2222222222')).toBe(false)
   })
 })
 

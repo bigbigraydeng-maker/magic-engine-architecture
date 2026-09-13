@@ -61,8 +61,8 @@ const fetchMock = vi.fn(async (input: string | URL) => {
   const url = new URL(String(input))
   const node = url.pathname.split('/').pop() ?? ''
   const fields = url.searchParams.get('fields') ?? ''
-  if (node === 'camp_b') {
-    return Response.json({ id: 'camp_b', name: 'B', status: 'ACTIVE', account_id: ACC_B.slice(4) })
+  if (node === '120220000000000002') {
+    return Response.json({ id: '120220000000000002', name: 'B', status: 'ACTIVE', account_id: ACC_B.slice(4) })
   }
   const digits = node.replace(/^act_/, '')
   if (!(node in graphAccounts)) return new Response('{"error":{"code":100}}', { status: 400 })
@@ -186,7 +186,7 @@ describe('非内部员工改绑 → 一律拒绝，绑定一个字都不动', ()
     expect(audit()).toHaveLength(0)
   })
 
-  it('同一个号 24 小时内重复提交（换人也算）→ 只记一条', async () => {
+  it('同一个号还挂着待处理时重复提交（换人也算）→ 只记一条', async () => {
     await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
     await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
     await patchAs(OWNER_A_SELF_SERVE, A, { ad_account_id: ACC_NEW })
@@ -203,6 +203,14 @@ describe('非内部员工改绑 → 一律拒绝，绑定一个字都不动', ()
     expect(results).toEqual([true, true, true, true, true, false])
   })
 
+  it('FDE 忽略后 24 小时内客户重交同一个号 → 重新记一条，待办里重新出现（不说「已记下」却没有）', async () => {
+    await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
+    await patchAs(FDE, A, { dismiss_request: true })
+    const res = await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
+    expect((await res.json()).request_recorded).toBe(true)
+    expect((await (await getAs(FDE, A)).json()).pending_request).toMatchObject({ requested_value: ACC_NEW })
+  })
+
   it('读不到最近提交（限流查询失败）→ 不记，request_recorded=false', async () => {
     h.failures = { select: new Set(['client_binding_audit']) }
     const res = await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_NEW })
@@ -212,7 +220,7 @@ describe('非内部员工改绑 → 一律拒绝，绑定一个字都不动', ()
 
   it('反向用例：员工改绑被拒后，拿 B 的 campaign 过归属校验 → 仍被拒', async () => {
     await patchAs(EMPLOYEE_A, A, { ad_account_id: ACC_B })
-    const r = await assertCampaignOwnedByClient('camp_b', A, 'SHARED_FALLBACK_TOKEN')
+    const r = await assertCampaignOwnedByClient('120220000000000002', A, 'SHARED_FALLBACK_TOKEN')
     expect(r.ok).toBe(false)
   })
 })
@@ -237,8 +245,8 @@ describe('内部员工（FDE / ADMIN_EMAILS）改绑', () => {
   it('改绑后旧账户里的 campaign 过归属校验 → 被拒（纠正误绑必须真的收回权限）', async () => {
     await patchAs(FDE, A, { ad_account_id: ACC_NEW })
     fetchMock.mockImplementationOnce(async () =>
-      Response.json({ id: 'camp_old', name: 'x', status: 'ACTIVE', account_id: ACC_A.slice(4) }))
-    expect((await assertCampaignOwnedByClient('camp_old', A, 'tok')).ok).toBe(false)
+      Response.json({ id: '120210000000000009', name: 'x', status: 'ACTIVE', account_id: ACC_A.slice(4) }))
+    expect((await assertCampaignOwnedByClient('120210000000000009', A, 'tok')).ok).toBe(false)
   })
 
   it('勾「保留为第二账户」→ 旧账户降级保留，审计写明 kept', async () => {
@@ -423,8 +431,8 @@ describe('CTS 多账户不被误拦', () => {
 
   it('官方账户上的 campaign 过归属校验 → 放行', async () => {
     fetchMock.mockImplementationOnce(async () =>
-      Response.json({ id: 'camp_cts', name: 'x', status: 'ACTIVE', account_id: CTS_OFFICIAL.slice(4) }))
-    const r = await assertCampaignOwnedByClient('camp_cts', CTS, 'tok')
+      Response.json({ id: '120230000000000003', name: 'x', status: 'ACTIVE', account_id: CTS_OFFICIAL.slice(4) }))
+    const r = await assertCampaignOwnedByClient('120230000000000003', CTS, 'tok')
     expect(r.ok).toBe(true)
   })
 })

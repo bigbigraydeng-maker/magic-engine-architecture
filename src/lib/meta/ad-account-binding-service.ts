@@ -22,6 +22,7 @@ import {
   type VerifiedAdAccount, type OtherClientRegistration,
 } from './ad-account-binding'
 import { applyPrimaryChange } from './ad-account-registry-write'
+import { listPendingBindingRequests } from '@/lib/clients/binding-requests'
 
 export interface ServiceResult {
   status: number
@@ -189,9 +190,10 @@ export async function dismissBindingRequest(clientId: string, actorEmail: string
  * 客户成员（含自助客户、受限管理员）提交的账户号：**不写绑定**，记一笔待核实，
  * 返回 403 让界面说清楚「已收到、团队核实后接上」。
  *
- * 限流（魏征实施审）：24 小时内同一个号只记一次（谁交的都算）；每个客户每天
- * 最多记 CLIENT_REQUESTS_PER_DAY 条。超了或读不到就不记，request_recorded=false，
- * 向导退回「上门时处理」—— 不会让客户以为交上去了。
+ * 限流（魏征实施审）：每个客户每天最多记 CLIENT_REQUESTS_PER_DAY 条；超了或读不到
+ * 就不记，request_recorded=false，向导退回「上门时处理」—— 不会让客户以为交上去了。
+ * 去重只跟「现在还挂着待处理」的那个号比：被 FDE 忽略过又重交，要重新记一条，
+ * 否则回「已记下」而待办里其实没有（狄仁杰 2026-09-13 实测）。
  */
 export async function recordClientRequest(
   clientId: string,
@@ -206,7 +208,13 @@ export async function recordClientRequest(
   if (recent === null || recent.length >= CLIENT_REQUESTS_PER_DAY) {
     return { status: 403, body: { ...denied, request_recorded: false } }
   }
-  if (recent.includes(adAccountId)) {
+  let pending
+  try {
+    ;[pending] = await listPendingBindingRequests(supabaseAdmin, KIND, new Date(), [clientId])
+  } catch {
+    return { status: 403, body: { ...denied, request_recorded: false } }
+  }
+  if (pending?.requested_value === adAccountId) {
     return { status: 403, body: { ...denied, request_recorded: true } }
   }
   const res = await insertBindingAudit({
