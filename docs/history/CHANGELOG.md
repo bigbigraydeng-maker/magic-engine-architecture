@@ -5,6 +5,19 @@
 
 ---
 
+### 2026-09-13（视频工厂：字幕不再写死 + 片尾信息真正自动化 + 模板风格探索）
+
+同一天会话继续：PM 反馈"看不出 CTS 视频区别、NAL 视频就是发过的那条"，追问"视频里的文字该由 AI 统一想清楚存起来，不该 Creatomate 自己每次现设计"，推动了两处真正的架构修复。
+
+1. **字幕不再写死（配置改动，无需新代码）**——发现 `SceneSlotFieldMap.caption` 字段代码里早就存在，但 CTS 配置从未真正用上：长城/故宫/兵马俑/上海四镜头的字幕此前是模板固定文字，改成读 `scene_field_map` 里的 `caption` 映射后，字幕直接由分镜阶段（`planScenes`）逐镜头生成，跟着脚本内容变。已用真实渲染验证：两条不同脚本产出的字幕内容确实不同、非写死。
+2. **换了 3 个 Creatomate 自带模板风格试渲染**（Photo Collage / Search Field w/ Rating [16:9-only，中途放弃] / Searchlight Reveal）——验证"不用请设计师、Creatomate 自带模板库可直接换风格"这条能力路径，全部走"备份现有配置→临时切模板→真实渲染→验证→立刻还原"的安全流程。PM 反馈三个都"不像短视频爆款"，随后按 CLAUDE.md §8 规矩查了 `viral_reference_library` 里的真实高播放旅游参考数据（10 条，最高 2.6 亿播放）：发现共同点不是"切得快"（多条播放量最高的反而全片零剪辑），而是全部为真实动态画面/真人出镜/真实瞬间，没有一条是"照片+图形标题"形式——现有模板路线的天花板由此确认：不是参数能调出来的，而是内容形态本身的差异。
+3. **片尾信息此前的"自动化"其实是假的，全靠人工代填数据库**——PR #1613（见下一条 09-13 记录）设计了 `requiredPostFields`+`endcard` 机制，但复核发现全仓库没有任何代码真的往 `content_posts.generation_context_snapshot.endcard` 写值，此前两次"验证通过"全靠这个会话手动跑脚本代填，撞了"该给人填的字段不能只让人进数据库后台手填"这条红线。新增自动写入机制（PR [#1632](https://github.com/bigbigraydeng-maker/magic-engine/pull/1632)）：`CreatomateTemplateContract` 新增 `offers`（按团/出发城市变体分的真实事实字典）+ `postFieldSources`（元素名→事实字段的确定性映射，不走 LLM，杜绝幻觉/改写风险）；`resolveOfferFacts` 在"没指定用哪个团 + 客户配了 ≥2 个团"时 fail-closed 抛错，不会猜一份不相关的事实套上去（这条红线是"子牙"+"魏征"设计复审时明确要堵的：CTS 圣诞团奥克兰/基督城两个出发城市变体同时在打广告，套错团的价格/日期比模板写死的占位文字更危险）。实施完的复审又抓出一处真 bug：字段解析必须排在花钱生成分镜素材之前，否则一旦触发 fail-closed，job 会卡进无法自愈的状态（改配置也救不回来）——已修正执行顺序并补测试。
+4. **顺带发现并修正一条过期客户数据**：CTS 官网实测（`ctstours.co.nz/tours/china/discovery/beijing-xian`）发现 `factory_config.verified_cta.departure` 存的"15 Oct 2026"已过期（该场次已 sold out），官网当前显示下一场是"18 Mar 2027"——已更正。
+5. **`MUAPI_API_KEY` 生产环境确认缺失并已修复**——三次全新脚本真实渲染测试均在"某镜头配不到真实照片、回退 AI 生成动态画面"这一步失败（此前 09-13 早些时候的记录曾错误判断这个环境变量"命中率低不再紧迫"），PM 直接在 Render 后台补上，已用真实渲染验证 Muapi 回退路径恢复正常。
+6. **端到端真实渲染验证**：合并 PR #1632 并等 Render 部署完成后，用真实产品数据重新渲染一条 CTS 视频，`generation_context_snapshot.endcard` 全部字段自动写对（团名"China Discovery — A Tale of Two Cities"、路线"Beijing (Great Wall · Forbidden City) → Xi'an (Terracotta Warriors)"、价格"10 Days · From NZD $3,480 pp"、日期"Next departure 18 Mar 2027"），成片渲染成功（`ready_for_review`），全程零人工数据库写入。
+
+**Reuse Statement**：字幕修复是配置层面接入既有共享代码（`SceneSlotFieldMap.caption` 早就是连接器契约的一部分），未新增代码。`offers`/`postFieldSources`/自动写入机制是共享连接器能力（跟 `staticOverrides`/`requiredPostFields` 同级），对所有走 Creatomate 的客户生效，不是 CTS 专属；具体填哪些团、哪些事实值是 CTS 自己的客户配置。`viral_reference_library` 查询结论（爆款靠真实动态画面而非剪辑节奏）是行业级洞察，未来给其他旅游客户设计模板时同样适用，建议沉淀进对应的 Industry Playbook。
+
 ### 2026-09-13（视频工厂：修复真实照片池致命 bug + 片尾信息动态化 + CTS/NAL 双客户内容量产）
 
 PM 要求给 CTS 和 NAL 各准备一批新内容，过程中发现并修复了两个真正阻塞出片的生产 bug，最终两个客户的内容都做出来了：
