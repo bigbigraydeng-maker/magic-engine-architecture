@@ -40,7 +40,7 @@ export function formatTourLandscapeChatReply(value: string): string {
       const lists: Array<[string, string]> = [['client_opportunities', '建议'], ['client_risks', '暂时不要做'], ['recommended_focus', '下一步'], ['unknowns', '还缺证据']]
       const output = sections.flatMap(([key, label]) => typeof parsed[key] === 'string' && parsed[key] ? [`${label}：${parsed[key]}`] : [])
       for (const [key, label] of lists) {
-        const items = Array.isArray(parsed[key]) ? parsed[key].filter((item): item is string => typeof item === 'string' && item.trim()) : []
+        const items = Array.isArray(parsed[key]) ? parsed[key].filter((item): item is string => typeof item === 'string' && Boolean(item.trim())) : []
         if (items.length) output.push(`${label}：\n${items.map(item => `- ${item}`).join('\n')}`)
       }
       if (output.length) return output.join('\n\n')
