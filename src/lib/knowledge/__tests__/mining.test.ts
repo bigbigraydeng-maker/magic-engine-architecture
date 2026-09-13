@@ -131,6 +131,31 @@ describe('groupMessagesIntoTemplates', () => {
     const messages: RawMessage[] = [inbound('do you ship to Hamilton?', '2026-01-01T00:00:00Z', 'c1')]
     expect(groupMessagesIntoTemplates(messages)).toEqual([])
   })
+
+  // 魏征 review (2026-09-13): distinguishes "sent to 51 different customers"
+  // from "repeated 51 times to the same customer in one thread" — only the
+  // former is evidence of a reusable business rule.
+  it('counts distinctConversationCount separately from raw count — same template, 3 different customers', () => {
+    const messages: RawMessage[] = [
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:00:00Z', 'c1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:00:00Z', 'c2'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-03T00:00:00Z', 'c3'),
+    ]
+    const template = groupMessagesIntoTemplates(messages)[0]
+    expect(template.count).toBe(3)
+    expect(template.distinctConversationCount).toBe(3)
+  })
+
+  it('counts distinctConversationCount as 1 when the same template is repeated to the SAME customer', () => {
+    const messages: RawMessage[] = [
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:00:00Z', 'c1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:00:00Z', 'c1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-03T00:00:00Z', 'c1'),
+    ]
+    const template = groupMessagesIntoTemplates(messages)[0]
+    expect(template.count).toBe(3) // raw send count is still 3...
+    expect(template.distinctConversationCount).toBe(1) // ...but it's really one customer, asked once
+  })
 })
 
 // ── PII redaction (REAL NAL address/phone/tracking-number block) ─────────
@@ -165,6 +190,28 @@ describe('redactPersonalInfo', () => {
   it('does NOT redact the real customs/GST quote', () => {
     const result = redactPersonalInfo(REAL_CUSTOMS_QUOTE)
     expect(result.text).toBe(REAL_CUSTOMS_QUOTE)
+    expect(result.hits).toEqual([])
+  })
+
+  // 魏征 review (2026-09-13): the original digit-run-only pattern missed
+  // every real ANZ phone format — they're almost always written WITH
+  // separators, unlike the unspaced Chinese mobile number already tested
+  // above. Each of these must now be caught.
+  it.each([
+    ['NZ mobile with spaces', '021 234 5678'],
+    ['NZ mobile with hyphens', '021-234-5678'],
+    ['NZ mobile with country code', '+64 21 234 5678'],
+    ['NZ landline with area code in parens', '(09) 123 4567'],
+  ])('redacts a real ANZ phone format: %s', (_label, phone) => {
+    const result = redactPersonalInfo(`Please call me on ${phone} to confirm.`)
+    expect(result.text).not.toContain(phone)
+    expect(result.text).toContain('[已抹去:号码]')
+    expect(result.hits).toContain('phone_or_postcode')
+  })
+
+  it('does NOT redact a short business number even when it contains a hyphen (e.g. a range)', () => {
+    const result = redactPersonalInfo('Delivery takes 4-7 business days')
+    expect(result.text).toBe('Delivery takes 4-7 business days')
     expect(result.hits).toEqual([])
   })
 })

@@ -28,6 +28,7 @@ interface Fixture {
 }
 
 let fixture: Fixture
+let lastUpsertOnConflict: string | null = null
 let mockCallClaudeChat: ReturnType<typeof vi.fn>
 
 const CLIENT_A = '4ae76381-cd45-43bd-85cd-98cfd7604007'
@@ -97,8 +98,9 @@ function fakeFrom(table: string): unknown {
       updatePayload = payload
       return builder
     },
-    upsert: (payload: Row[]) => {
+    upsert: (payload: Row[], options?: { onConflict?: string; ignoreDuplicates?: boolean }) => {
       upsertPayload = payload
+      lastUpsertOnConflict = options?.onConflict ?? null
       return builder
     },
     then: (resolve: (v: { data: unknown; error: { message: string } | null }) => unknown) => {
@@ -117,14 +119,32 @@ function fakeFrom(table: string): unknown {
           if (run) Object.assign(run, updatePayload)
           return resolve({ data: null, error: null })
         }
+        if (table === 'client_knowledge_facts') {
+          const id = filters.id
+          const row = [...fixture.approvedFacts, ...fixture.writtenFacts].find((f) => f.id === id)
+          if (row) Object.assign(row, updatePayload)
+          return resolve({ data: null, error: null })
+        }
         return resolve({ data: null, error: { message: `unexpected update on ${table}` } })
       }
       if (upsertPayload) {
         if (table === 'client_knowledge_facts') {
           const inserted: Row[] = []
           for (const row of upsertPayload) {
-            const dup = fixture.writtenFacts.find(
-              (f) => f.client_id === row.client_id && f.fact_key === row.fact_key && JSON.stringify(f.scope) === JSON.stringify(row.scope),
+            // Models the REAL unique index: (client_id, fact_key, scope,
+            // value_fingerprint), unconditional on status (see migration
+            // 20260913120000). A NULL value_fingerprint (e.g. a manually
+            // created approved fact that never set one) never conflicts
+            // with anything — same as real Postgres NULL semantics in a
+            // unique index — which is exactly why an approved fact lacking
+            // a fingerprint can never silently block a new candidate.
+            const dup = [...fixture.approvedFacts, ...fixture.writtenFacts].find(
+              (f) =>
+                f.client_id === row.client_id &&
+                f.fact_key === row.fact_key &&
+                JSON.stringify(f.scope) === JSON.stringify(row.scope) &&
+                f.value_fingerprint != null &&
+                f.value_fingerprint === row.value_fingerprint,
             )
             if (dup) continue
             const withId = { id: `fact-${fixture.writtenFacts.length + 1}`, ...row }
@@ -154,7 +174,10 @@ function fakeFrom(table: string): unknown {
         return resolve({ data: sliced, error: null })
       }
       if (table === 'client_knowledge_facts') {
-        const rows = applyFilters(fixture.approvedFacts, filters, inFilter, gtFilter)
+        // Combine both fixture arrays — a real table holds every status in
+        // one place. Lets a test simulate "a prior run already wrote an
+        // unreviewed candidate" by seeding fixture.writtenFacts directly.
+        const rows = applyFilters([...fixture.approvedFacts, ...fixture.writtenFacts], filters, inFilter, gtFilter)
         return resolve({ data: rows, error: null })
       }
       if (table === 'client_knowledge_rollout_events') {
@@ -184,6 +207,7 @@ const BUDGET = { maxMessages: 1000, maxModelCalls: 10, maxSpendUsd: 1 }
 
 beforeEach(() => {
   fixture = baseFixture()
+  lastUpsertOnConflict = null
   vi.mocked(supabaseAdmin.from).mockImplementation(fakeFrom as never)
   mockCallClaudeChat = vi.mocked(callClaudeChat)
   mockCallClaudeChat.mockReset()
@@ -191,10 +215,14 @@ beforeEach(() => {
 
 describe('runKnowledgeMining — happy path', () => {
   it('writes a candidate for a repeated, model-approved, number-verified template', async () => {
+    // Two DIFFERENT conversations (distinctConversationCount=2) — a template
+    // sent twice to the same customer in one thread would now correctly be
+    // deal_specific (see mining.test.ts's distinctConversationCount tests).
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
     fixture.messages.push(
-      inbound('what is the rate for parcels under 20kg?', '2026-01-01T00:00:00Z'),
-      outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z'),
-      outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z'),
+      inbound('what is the rate for parcels under 20kg?', '2026-01-01T00:00:00Z', 'conv-1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z', 'c2'),
     )
     mockCallClaudeChat.mockResolvedValueOnce(
       extractionResponse(false, [
@@ -262,9 +290,33 @@ describe('runKnowledgeMining — safety filters actually drop candidates', () =>
     expect(receipt.dealSpecificSkipped).toBe(1)
   })
 
+  // 魏征 review (2026-09-13): proves the wiring uses distinctConversationCount,
+  // not raw send count — 3 sends, all to the SAME conversation, must still
+  // be treated as "occurred once" (one customer, repeatedly told the same
+  // thing), even though `count` itself is 3.
+  it('drops a candidate sent 3 times but all to the SAME conversation (distinctConversationCount=1)', async () => {
+    fixture.messages.push(
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z', 'conv-1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-03T00:01:00Z', 'conv-1'),
+    )
+    mockCallClaudeChat.mockResolvedValueOnce(
+      extractionResponse(false, [
+        { fact_key: 'rate.x', scope: {}, statement: 'Under 20 kg: NZD 4/kg', structured_value: { unit: 'NZD/kg', rate: 4 } },
+      ]),
+    )
+    const receipt = await runKnowledgeMining(CLIENT_A, BUDGET)
+    expect(receipt.candidatesWritten).toBe(0)
+    expect(receipt.dealSpecificSkipped).toBe(1)
+  })
+
   // Mutation guard §9.14-D anti-hallucination: a fabricated number must never reach the table.
   it('drops a candidate whose number the source message never contained (hallucination)', async () => {
-    fixture.messages.push(outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z'), outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z'))
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
+    fixture.messages.push(
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z', 'c2'),
+    )
     mockCallClaudeChat.mockResolvedValueOnce(
       extractionResponse(false, [
         // NZD 9/kg never appears anywhere in REAL_MAIN_TEMPLATE
@@ -370,7 +422,11 @@ describe('runKnowledgeMining — conflict grouping against approved facts', () =
       client_confirmed_at: null,
       client_confirmation_fingerprint: null,
     })
-    fixture.messages.push(outbound('Under 20 kg: NZD 9/kg', '2026-01-01T00:01:00Z'), outbound('Under 20 kg: NZD 9/kg', '2026-01-02T00:01:00Z'))
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
+    fixture.messages.push(
+      outbound('Under 20 kg: NZD 9/kg', '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound('Under 20 kg: NZD 9/kg', '2026-01-02T00:01:00Z', 'c2'),
+    )
     mockCallClaudeChat.mockResolvedValueOnce(
       extractionResponse(false, [
         { fact_key: 'rate.parcel.per_kg', scope: {}, statement: 'Under 20 kg: NZD 9/kg', structured_value: { unit: 'NZD/kg', rate: 9 } },
@@ -380,6 +436,126 @@ describe('runKnowledgeMining — conflict grouping against approved facts', () =
     expect(receipt.candidatesWritten).toBe(1)
     expect(receipt.conflictGroups).toBe(1)
     expect(fixture.writtenFacts[0].conflict_group_id).toBeTruthy()
+  })
+
+  // 子牙 + 魏征 review (2026-09-13), blocker B1: a candidate proposing a
+  // DIFFERENT value than an already-approved fact at the same identity must
+  // never be silently dropped by the write-time conflict target. This is
+  // the exact scenario the old (client_id,fact_key,scope)-only ON CONFLICT
+  // target would eat — asserted explicitly here, not just via candidatesWritten.
+  it('never silently drops a candidate that conflicts with an approved fact of the identical (fact_key, scope)', async () => {
+    fixture.approvedFacts.push({
+      id: 'approved-1',
+      client_id: CLIENT_A,
+      fact_key: 'rate.parcel.per_kg',
+      scope: {},
+      statement: 'Under 20 kg: NZD 4/kg',
+      structured_value: { unit: 'NZD/kg', rate: 4 },
+      status: 'approved',
+      visibility: 'internal_only',
+      sensitivity: 'general',
+      valid_from: '2026-01-01T00:00:00Z',
+      valid_until: null,
+      approved_by_email: null,
+      approved_at: null,
+      client_confirmed_by_email: null,
+      client_confirmed_at: null,
+      client_confirmation_fingerprint: null,
+    })
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
+    fixture.messages.push(
+      outbound('Under 20 kg: NZD 9/kg', '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound('Under 20 kg: NZD 9/kg', '2026-01-02T00:01:00Z', 'c2'),
+    )
+    mockCallClaudeChat.mockResolvedValueOnce(
+      extractionResponse(false, [
+        { fact_key: 'rate.parcel.per_kg', scope: {}, statement: 'Under 20 kg: NZD 9/kg', structured_value: { unit: 'NZD/kg', rate: 9 } },
+      ]),
+    )
+    const receipt = await runKnowledgeMining(CLIENT_A, BUDGET)
+    expect(receipt.candidatesWritten).toBe(1)
+    expect(fixture.writtenFacts).toHaveLength(1)
+    // The approved row is untouched, AND the new, differing candidate exists
+    // as its own row — neither silently overwrote nor silently dropped the
+    // other.
+    expect(fixture.approvedFacts[0].statement).toBe('Under 20 kg: NZD 4/kg')
+    expect(fixture.writtenFacts[0].statement).toBe('Under 20 kg: NZD 9/kg')
+    // The in-memory mock's own dedup logic doesn't consult this option (it
+    // always keys on value_fingerprint, mirroring the real unique index) —
+    // so it can't by itself catch a regression back to the old,
+    // approved-blocking conflict target. Assert the literal string mining.ts
+    // actually sends, so THAT regression is still caught here directly.
+    expect(lastUpsertOnConflict).toBe('client_id,fact_key,scope,value_fingerprint')
+  })
+
+  // 魏征 review (2026-09-13), blocker B2: a conflict spanning a PRIOR run's
+  // still-unreviewed candidate and a fresh one from this run must land under
+  // the SAME conflict_group_id, not fragment into two disconnected groups.
+  it('links a new conflicting candidate to a conflict group from a prior, unreviewed mining run', async () => {
+    fixture.writtenFacts.push({
+      id: 'prior-candidate-1',
+      client_id: CLIENT_A,
+      fact_key: 'rate.parcel.per_kg',
+      scope: {},
+      statement: 'Under 20 kg: NZD 7/kg',
+      structured_value: { unit: 'NZD/kg', rate: 7 },
+      status: 'candidate',
+      visibility: 'internal_only',
+      sensitivity: 'price',
+      valid_until: '2099-01-01T00:00:00Z',
+      source_kind: 'conversation_mining',
+      evidence: {},
+      conflict_group_id: null, // was solo, no conflict seen yet as of the prior run
+      value_fingerprint: 'prior-fp',
+    })
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
+    fixture.messages.push(
+      outbound('Under 20 kg: NZD 6/kg', '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound('Under 20 kg: NZD 6/kg', '2026-01-02T00:01:00Z', 'c2'),
+    )
+    mockCallClaudeChat.mockResolvedValueOnce(
+      extractionResponse(false, [
+        { fact_key: 'rate.parcel.per_kg', scope: {}, statement: 'Under 20 kg: NZD 6/kg', structured_value: { unit: 'NZD/kg', rate: 6 } },
+      ]),
+    )
+    const receipt = await runKnowledgeMining(CLIENT_A, BUDGET)
+    expect(receipt.candidatesWritten).toBe(1)
+    const priorRow = fixture.writtenFacts.find((f) => f.id === 'prior-candidate-1')
+    const newRow = fixture.writtenFacts.find((f) => f.id !== 'prior-candidate-1')
+    expect(priorRow?.conflict_group_id).toBeTruthy() // backfilled — it was null before this run
+    expect(newRow?.conflict_group_id).toBe(priorRow?.conflict_group_id) // same group, not a fresh disconnected one
+  })
+
+  it('reuses an EXISTING conflict group id rather than minting a new one when the prior candidate already had one', async () => {
+    fixture.writtenFacts.push({
+      id: 'prior-candidate-2',
+      client_id: CLIENT_A,
+      fact_key: 'rate.parcel.per_kg',
+      scope: {},
+      statement: 'Under 20 kg: NZD 7/kg',
+      structured_value: { unit: 'NZD/kg', rate: 7 },
+      status: 'candidate',
+      visibility: 'internal_only',
+      sensitivity: 'price',
+      valid_until: '2099-01-01T00:00:00Z',
+      source_kind: 'conversation_mining',
+      evidence: {},
+      conflict_group_id: 'existing-group-xyz',
+      value_fingerprint: 'prior-fp',
+    })
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
+    fixture.messages.push(
+      outbound('Under 20 kg: NZD 6/kg', '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound('Under 20 kg: NZD 6/kg', '2026-01-02T00:01:00Z', 'c2'),
+    )
+    mockCallClaudeChat.mockResolvedValueOnce(
+      extractionResponse(false, [
+        { fact_key: 'rate.parcel.per_kg', scope: {}, statement: 'Under 20 kg: NZD 6/kg', structured_value: { unit: 'NZD/kg', rate: 6 } },
+      ]),
+    )
+    await runKnowledgeMining(CLIENT_A, BUDGET)
+    const newRow = fixture.writtenFacts.find((f) => f.id !== 'prior-candidate-2')
+    expect(newRow?.conflict_group_id).toBe('existing-group-xyz')
   })
 })
 

@@ -88,14 +88,68 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
   )
 );
 
--- 同客户 + 同 fact_key + 同 scope 值唯一：重复萃取走更新不走新增。
--- 直接对 jsonb 列建（本机 PG 17 实测过：jsonb 列可以直接进 btree 唯一索引，
--- 不需要转 (scope::text) 表达式索引）——这样调用方写 `upsert(...,
--- { onConflict: 'client_id,fact_key,scope' })` 时，冲突目标列表能跟这条
--- 索引逐字对上；用表达式索引会导致 Postgres 报"没有匹配 ON CONFLICT 规格
--- 的唯一约束"，那种写法在写入路径接上（萃取工作流）之前不会被任何测试发现。
+-- 🔴 子牙 + 魏征复审（2026-09-13，PR #1616 第三次提交）联合发现并修正：
+-- 这条索引原来不分 status，直接盖在 (client_id, fact_key, scope) 上。
+-- 后果本机 Postgres 实测复现过——萃取工作流写入候选时用
+-- `upsert(rows, { onConflict: 'client_id,fact_key,scope', ignoreDuplicates: true })`,
+-- 如果新萃取出的候选跟一条**已批准**事实撞上同一个身份键、但提议的值不同
+-- （比如价格变了），这条新候选会被 `ON CONFLICT DO NOTHING` 静默吞掉、
+-- 完全不落库——而这恰恰是最该被人看见的情况（设计 §3.2 步骤6"与已批条目
+-- 矛盾"）。同一批次内两条候选撞上同一身份键时（例如模型把"20kg 4/kg"和
+-- "20kg 7/kg"判成了同一个 fact_key+scope）也是同样的静默丢弃，直接违反
+-- §6 验证清单"51/28 两个模板绝不能被合并"的红线——不是被合并，是被丢弃。
+--
+-- 🔴 本机实测踩过一个坑，记录下来避免以后重犯：一开始按"身份唯一只管
+-- approved 行"设计成两条**局部（partial）唯一索引**，SQL 层面完全正确
+-- （手工用 `ON CONFLICT (...) WHERE status='approved' DO NOTHING` 验证过），
+-- 但 Supabase 的 upsert 是经 PostgREST 转译的，PostgREST 的 `on_conflict`
+-- 参数只接受一份列名清单、**不支持带 WHERE 谓词的局部索引**——用
+-- supabase-js 调用会复现一模一样的"没有匹配 ON CONFLICT 规格的唯一约束"
+-- 报错，等于换了个地方犯同一个错。所以这里改回**一条无条件的普通唯一
+-- 索引**（任何 status 都受它约束），"同一时刻一个身份只能有一条 approved"
+-- 这条业务规则挪到下面的触发器里用查询显式检查——触发器不受
+-- PostgREST/upsert 语法能力限制，直接对着真实 INSERT/UPDATE 生效。
+--
+-- 候选内容指纹：由写入方（目前只有萃取工作流）算好填入，不含时间相关字段
+-- （不能用 fingerprint.ts 的确认指纹——那个含 validUntil，每次写入都用
+-- `now()+90天`现算，同一个值每次重跑都会得到不同指纹，直接破坏幂等性）。
+-- 留空（NULL）安全：Postgres 唯一索引把多个 NULL 视为互不相同，所以手工
+-- 建的事实哪怕不填这一列也不会跟别的行意外冲突。
+ALTER TABLE public.client_knowledge_facts ADD COLUMN IF NOT EXISTS value_fingerprint text;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_facts_identity
-  ON public.client_knowledge_facts (client_id, fact_key, scope);
+  ON public.client_knowledge_facts (client_id, fact_key, scope, value_fingerprint);
+
+-- 同一时刻一个身份（client_id+fact_key+scope）只能有一条 status='approved'
+-- 的行——防止审核流程把两条互相矛盾的事实同时标成"正在生效"。
+-- 用触发器而不是局部唯一索引实现（原因见上）。
+CREATE OR REPLACE FUNCTION public.client_knowledge_facts_single_approved_per_identity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.status = 'approved' AND EXISTS (
+    SELECT 1 FROM public.client_knowledge_facts
+     WHERE client_id = NEW.client_id
+       AND fact_key  = NEW.fact_key
+       AND scope     = NEW.scope
+       AND status    = 'approved'
+       AND id <> NEW.id
+  ) THEN
+    RAISE EXCEPTION
+      'client_knowledge_facts: another approved row already exists for this identity (client_id=%, fact_key=%, scope=%)',
+      NEW.client_id, NEW.fact_key, NEW.scope;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS client_knowledge_facts_single_approved_per_identity_trigger
+  ON public.client_knowledge_facts;
+CREATE TRIGGER client_knowledge_facts_single_approved_per_identity_trigger
+  BEFORE INSERT OR UPDATE ON public.client_knowledge_facts
+  FOR EACH ROW EXECUTE FUNCTION public.client_knowledge_facts_single_approved_per_identity();
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_facts_client_status
   ON public.client_knowledge_facts (client_id, status);

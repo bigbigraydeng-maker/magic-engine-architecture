@@ -84,7 +84,18 @@ export interface RawMessage {
 export interface MessageTemplate {
   normalizedKey: string
   sampleBody: string
+  /** Total number of times this exact template was sent, across all conversations. */
   count: number
+  /**
+   * How many DISTINCT conversations this template appeared in — the number
+   * that actually matters for "is this a reusable house rule or one
+   * customer being told the same thing repeatedly" (§9.7: "只在一段对话
+   * 出现过...不能成为通用候选"). 魏征 review (2026-09-13) caught that using
+   * raw `count` for this conflates "sent to 51 different customers" with
+   * "repeated 51 times to the SAME customer in one thread" — the latter is
+   * not evidence of a business-wide rule no matter how many times it recurs.
+   */
+  distinctConversationCount: number
   firstSeenAt: string
   lastSeenAt: string
   /** The customer message immediately preceding the FIRST occurrence, if any — LLM context only, not evidence. */
@@ -107,7 +118,9 @@ export function groupMessagesIntoTemplates(messages: RawMessage[]): MessageTempl
   }
 
   const templates = new Map<string, MessageTemplate>()
-  for (const list of byConversation.values()) {
+  const conversationsByKey = new Map<string, Set<string>>()
+
+  for (const [conversationId, list] of byConversation.entries()) {
     for (let i = 0; i < list.length; i++) {
       const m = list[i]
       if (m.direction !== 'outbound') continue
@@ -122,12 +135,16 @@ export function groupMessagesIntoTemplates(messages: RawMessage[]): MessageTempl
         }
       }
 
+      if (!conversationsByKey.has(key)) conversationsByKey.set(key, new Set())
+      conversationsByKey.get(key)!.add(conversationId)
+
       const existing = templates.get(key)
       if (!existing) {
         templates.set(key, {
           normalizedKey: key,
           sampleBody: m.body,
           count: 1,
+          distinctConversationCount: 0, // filled in below, once all messages are seen
           firstSeenAt: m.sentAt,
           lastSeenAt: m.sentAt,
           precedingCustomerQuestion,
@@ -139,6 +156,11 @@ export function groupMessagesIntoTemplates(messages: RawMessage[]): MessageTempl
       }
     }
   }
+
+  for (const [key, template] of templates.entries()) {
+    template.distinctConversationCount = conversationsByKey.get(key)?.size ?? 0
+  }
+
   return [...templates.values()].sort((a, b) => b.count - a.count)
 }
 
@@ -151,12 +173,24 @@ export function groupMessagesIntoTemplates(messages: RawMessage[]): MessageTempl
 
 const EMAIL_PATTERN = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi
 
-// NZ/AU/CN mobile numbers and any other 6+ digit run — long enough to catch
-// phone numbers and postal codes (real NAL postcode: "510890") without ever
-// catching a business number seen in real data (largest was "NZD 656.50",
-// i.e. 3 digits before the decimal point; weights/prices/percentages in this
-// domain never run to 6 consecutive digits).
-const LONG_DIGIT_RUN_PATTERN = /\d{6,}/g
+// Phone-number-or-postcode SHAPE: a digit, then a run of digits/space/tab/
+// hyphen/parens/dot, ending in a digit. Deliberately permissive about the
+// separators — 魏征 review (2026-09-13) found the original `\d{6,}` (no
+// separators allowed) missed every real ANZ phone format, which is almost
+// always written WITH separators ("021 234 5678", "021-234-5678",
+// "+64 21 234 5678", "(09) 123 4567"); only a bare, unspaced digit run like
+// NAL's real postcode "510890" happened to match it. Operates per-LINE
+// (never on the raw multi-line text) so `\s` here can only match spaces/tabs
+// within one line, not swallow across lines. The actual digit-count check
+// (not match length) happens in the replace callback below — a match's
+// *length* can be inflated by punctuation without its *digit count* being a
+// real phone number, so length alone isn't the gate.
+const PHONE_CANDIDATE_PATTERN = /\+?\(?\d[\d \t\-().]{2,}\d\)?/g
+const MIN_PHONE_DIGITS = 6
+
+function countDigits(text: string): number {
+  return (text.match(/\d/g) ?? []).length
+}
 
 // Order/tracking numbers: 2-6 letters immediately followed by 4-8 digits,
 // e.g. NAL's real "TJJ28967" / "TJJ28037" shipping-mark codes.
@@ -187,13 +221,23 @@ export function redactPersonalInfo(input: string): RedactResult {
       hits.add('address')
       return '[已抹去:地址]'
     }
-    let out = line
-    if (EMAIL_PATTERN.test(out)) hits.add('email')
-    out = out.replace(EMAIL_PATTERN, '[已抹去:邮箱]')
-    if (TRACKING_NUMBER_PATTERN.test(out)) hits.add('tracking_number')
-    out = out.replace(TRACKING_NUMBER_PATTERN, '[已抹去:单号]')
-    if (LONG_DIGIT_RUN_PATTERN.test(out)) hits.add('phone_or_postcode')
-    out = out.replace(LONG_DIGIT_RUN_PATTERN, '[已抹去:号码]')
+    // Every pattern below uses a replace-callback (not test-then-replace) so
+    // there is exactly one pass per pattern and no reliance on a global
+    // regex's lastIndex state between the "did it match" check and the
+    // substitution itself.
+    let out = line.replace(EMAIL_PATTERN, () => {
+      hits.add('email')
+      return '[已抹去:邮箱]'
+    })
+    out = out.replace(TRACKING_NUMBER_PATTERN, () => {
+      hits.add('tracking_number')
+      return '[已抹去:单号]'
+    })
+    out = out.replace(PHONE_CANDIDATE_PATTERN, (match) => {
+      if (countDigits(match) < MIN_PHONE_DIGITS) return match
+      hits.add('phone_or_postcode')
+      return '[已抹去:号码]'
+    })
     return out
   })
 
@@ -238,6 +282,13 @@ export type CandidateSpecificity = 'template' | 'suspected_deal_specific' | 'dea
  * the model says; a number that matches what the CUSTOMER themselves quoted
  * (their own weight/value) is flagged suspected rather than dropped outright
  * so a human can look at it once, not to auto-approve or auto-reject it.
+ *
+ * `occurrenceCount` MUST be `MessageTemplate.distinctConversationCount`, not
+ * `.count` — the design's "只在一段对话出现过...不能成为通用候选" means
+ * "appeared in only one distinct conversation", not "was sent N times in
+ * total" (魏征 review, 2026-09-13: raw send count conflates "sent to 51
+ * different customers" with "repeated 51 times to the same customer in one
+ * thread", which is not evidence of a business-wide rule either way).
  */
 export function classifyCandidateSpecificity(input: {
   occurrenceCount: number
@@ -254,11 +305,23 @@ export function classifyCandidateSpecificity(input: {
 // ── Conflict grouping ────────────────────────────────────────────────────
 
 export interface ConflictMember {
-  origin: 'approved' | 'candidate'
+  /**
+   * 'existing_candidate' — a `status='candidate'` row already sitting in the
+   * table from a PRIOR mining run, not yet reviewed. Distinct from
+   * 'candidate' (this run's freshly extracted, not-yet-written proposals) so
+   * a conflict spanning both a prior run's unresolved candidate and a new
+   * one can reuse the prior row's `conflict_group_id` instead of minting a
+   * new, disconnected one (魏征 review, 2026-09-13: without this, the same
+   * real-world disagreement fragments into multiple conflict groups across
+   * runs and a reviewer never sees them side by side).
+   */
+  origin: 'approved' | 'candidate' | 'existing_candidate'
   refId: string
   factKey: string
   unit: string | null
   valueSignature: string
+  /** Only set for 'existing_candidate' — the conflict group it already belongs to, if any. */
+  existingConflictGroupId?: string | null
 }
 
 export interface ConflictGroup {
@@ -444,6 +507,24 @@ interface PriorRunRow {
   high_watermark_at: string | null
 }
 
+interface ExistingCandidateRow {
+  id: string
+  fact_key: string
+  structured_value: unknown
+  conflict_group_id: string | null
+}
+
+/** Every not-yet-reviewed candidate for this client — needed so a new conflict can be linked to one already sitting in the table from a prior run (see ConflictMember.origin docs). */
+async function fetchExistingCandidateFacts(clientId: string): Promise<ExistingCandidateRow[]> {
+  const { data, error } = await supabaseAdmin
+    .from('client_knowledge_facts')
+    .select('id, fact_key, structured_value, conflict_group_id')
+    .eq('client_id', clientId)
+    .eq('status', 'candidate')
+  if (error) throw new Error(`fetchExistingCandidateFacts: read failed for client ${clientId}: ${error.message}`)
+  return asRows<ExistingCandidateRow>(data)
+}
+
 async function fetchWatermark(clientId: string): Promise<string | null> {
   const { data, error } = await supabaseAdmin
     .from('client_knowledge_mining_runs')
@@ -514,6 +595,19 @@ async function fetchMessagesSince(
 // even before FDE review sets a considered value.
 const DEFAULT_CANDIDATE_VALID_DAYS = 90
 
+/**
+ * Identifies a candidate's asserted CONTENT (statement + structured value),
+ * independent of scope (already part of the row identity) and of any
+ * time-varying field. Used as the write-time dedup/conflict key —
+ * deliberately NOT `fingerprint.ts#computeFactFingerprint` (that one folds
+ * in `validUntil`, which this function computes fresh as `now() + 90d` on
+ * every insert — reusing it would make the same value get a different
+ * fingerprint on every re-mining run and defeat idempotency).
+ */
+export function computeCandidateFingerprint(statement: string, structuredValue: unknown): string {
+  return JSON.stringify({ statement, value: computeValueSignature(structuredValue) })
+}
+
 interface NewFactRow {
   client_id: string
   fact_key: string
@@ -527,6 +621,7 @@ interface NewFactRow {
   source_kind: 'conversation_mining'
   evidence: Record<string, unknown>
   conflict_group_id: string | null
+  value_fingerprint: string
 }
 
 interface SurvivingCandidate {
@@ -550,10 +645,52 @@ interface SurvivingCandidate {
 export async function runKnowledgeMining(clientId: string, budget: MiningBudget): Promise<MiningRunReceipt> {
   assertMiningBudget(budget)
 
-  const watermark = await fetchWatermark(clientId)
-  const conversationIds = await fetchConversationIds(clientId)
-  const messages = await fetchMessagesSince(conversationIds, watermark, budget.maxMessages)
-  const templates = groupMessagesIntoTemplates(messages)
+  let watermark: string | null
+  let conversationIds: string[]
+  let messages: RawMessage[]
+  let templates: MessageTemplate[]
+  try {
+    watermark = await fetchWatermark(clientId)
+    conversationIds = await fetchConversationIds(clientId)
+    messages = await fetchMessagesSince(conversationIds, watermark, budget.maxMessages)
+    templates = groupMessagesIntoTemplates(messages)
+  } catch (error) {
+    // 魏征 review (2026-09-13, I2): a failure here previously left NO trace
+    // in client_knowledge_mining_runs at all (the run row didn't exist yet)
+    // — an operator could only find out via Inngest's own execution log,
+    // which this repo has already hit access problems reading in production
+    // (see reference-inngest-run-evidence-without-local-keys.md). Every
+    // failure mode gets a receipt now, per CLAUDE.md's Inngest rule that
+    // every key stage needs a machine-readable one.
+    const message = error instanceof Error ? error.message : String(error)
+    const { data: failedRunRow } = await supabaseAdmin
+      .from('client_knowledge_mining_runs')
+      .insert({
+        client_id: clientId,
+        status: 'failed',
+        error: message,
+        max_messages: budget.maxMessages,
+        max_model_calls: budget.maxModelCalls,
+        max_spend_usd: budget.maxSpendUsd,
+        finished_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single()
+    return {
+      runId: (failedRunRow as { id: string } | null)?.id ?? '',
+      status: 'failed',
+      conversationsScanned: 0,
+      messagesScanned: 0,
+      templatesMerged: 0,
+      candidatesWritten: 0,
+      conflictGroups: 0,
+      dealSpecificSkipped: 0,
+      provenanceRejected: 0,
+      modelCallsUsed: 0,
+      costUsd: 0,
+      error: message,
+    }
+  }
 
   const { data: runRow, error: runInsertError } = await supabaseAdmin
     .from('client_knowledge_mining_runs')
@@ -604,7 +741,7 @@ export async function runKnowledgeMining(clientId: string, budget: MiningBudget)
           validateNumberProvenance(candidate.statement, candidate.structuredValue, template.precedingCustomerQuestion)
 
         const specificity = classifyCandidateSpecificity({
-          occurrenceCount: template.count,
+          occurrenceCount: template.distinctConversationCount,
           modelSaysDealSpecific: candidate.isDealSpecific,
           numbersMatchCustomerQuestion,
         })
@@ -642,14 +779,69 @@ export async function runKnowledgeMining(clientId: string, budget: MiningBudget)
       unit: entry.unit,
       valueSignature: computeValueSignature(entry.candidate.structuredValue),
     }))
-    const conflictGroups = groupCandidatesByConflict([...approvedMembers, ...candidateMembers]).filter(
-      (g) => g.hasConflict,
-    )
+
+    // 魏征 review (2026-09-13): a conflict must be linked to one already
+    // sitting in the table from a PRIOR, still-unreviewed mining run — not
+    // just to already-approved facts — or the same real disagreement
+    // fragments into a fresh, disconnected conflict_group_id every run.
+    const existingCandidateFacts = await fetchExistingCandidateFacts(clientId)
+    const existingCandidateMembers: ConflictMember[] = existingCandidateFacts.map((fact) => {
+      const structured = fact.structured_value as Record<string, unknown> | null
+      return {
+        origin: 'existing_candidate',
+        refId: fact.id,
+        factKey: fact.fact_key,
+        unit: typeof structured?.unit === 'string' ? structured.unit : null,
+        valueSignature: computeValueSignature(fact.structured_value),
+        existingConflictGroupId: fact.conflict_group_id,
+      }
+    })
+
+    const conflictGroups = groupCandidatesByConflict([
+      ...approvedMembers,
+      ...existingCandidateMembers,
+      ...candidateMembers,
+    ]).filter((g) => g.hasConflict)
+
     const conflictGroupIdByCandidateIndex = new Map<number, string>()
+    // Existing candidate rows this run's conflicts touch but that don't yet
+    // carry a conflict_group_id — a group formed for the first time around
+    // an old, previously-solo candidate needs to retroactively tag it too,
+    // or the review page still can't show them together.
+    const existingCandidateIdsToBackfill = new Map<string, string>() // existing row id -> group id
+
     for (const group of conflictGroups) {
-      const groupId = randomUUID()
+      // Reuse a group id already present among this group's existing
+      // candidate rows (from a prior run) instead of minting a new one —
+      // that's what actually keeps the same disagreement in one place
+      // across runs. If members disagree on which existing group id to
+      // reuse (a fragmentation that already happened before this fix
+      // shipped), deterministically pick the smallest one rather than
+      // silently picking whichever the Set/Map iteration happened to hit
+      // first.
+      const existingGroupIds = group.members
+        .filter((m) => m.origin === 'existing_candidate' && m.existingConflictGroupId)
+        .map((m) => m.existingConflictGroupId as string)
+      const groupId = existingGroupIds.length > 0 ? [...existingGroupIds].sort()[0] : randomUUID()
+
       for (const member of group.members) {
-        if (member.origin === 'candidate') conflictGroupIdByCandidateIndex.set(Number(member.refId), groupId)
+        if (member.origin === 'candidate') {
+          conflictGroupIdByCandidateIndex.set(Number(member.refId), groupId)
+        } else if (member.origin === 'existing_candidate' && member.existingConflictGroupId !== groupId) {
+          existingCandidateIdsToBackfill.set(member.refId, groupId)
+        }
+      }
+    }
+
+    if (existingCandidateIdsToBackfill.size > 0) {
+      for (const [factId, groupId] of existingCandidateIdsToBackfill) {
+        const { error: backfillError } = await supabaseAdmin
+          .from('client_knowledge_facts')
+          .update({ conflict_group_id: groupId })
+          .eq('id', factId)
+        if (backfillError) {
+          throw new Error(`conflict_group_id backfill failed for existing candidate ${factId}: ${backfillError.message}`)
+        }
       }
     }
 
@@ -670,13 +862,27 @@ export async function runKnowledgeMining(clientId: string, budget: MiningBudget)
         last_seen_at: entry.template.lastSeenAt,
       },
       conflict_group_id: conflictGroupIdByCandidateIndex.get(index) ?? null,
+      value_fingerprint: computeCandidateFingerprint(entry.candidate.statement, entry.candidate.structuredValue),
     }))
 
     let candidatesWritten = 0
     if (rows.length > 0) {
+      // 🔴 子牙 + 魏征复审（PR #1616）：this target MUST include
+      // value_fingerprint. Conflicting only on (client_id,fact_key,scope) —
+      // the row's IDENTITY, which an already-approved fact also occupies —
+      // silently drops a candidate proposing a genuinely different value for
+      // that identity via ON CONFLICT DO NOTHING (verified against a real
+      // local Postgres instance: the dropped row never existed, no error,
+      // no trace). Including value_fingerprint makes the conflict target
+      // "this exact proposed content", so only a byte-for-byte identical
+      // re-mining result gets deduplicated — a differing value always
+      // becomes its own row for a human to see. See migration
+      // 20260913120000's idx_knowledge_facts_identity comment for why this
+      // is a plain (not partial) index — PostgREST's upsert cannot target a
+      // partial index's WHERE predicate.
       const { data: inserted, error: insertError } = await supabaseAdmin
         .from('client_knowledge_facts')
-        .upsert(rows, { onConflict: 'client_id,fact_key,scope', ignoreDuplicates: true })
+        .upsert(rows, { onConflict: 'client_id,fact_key,scope,value_fingerprint', ignoreDuplicates: true })
         .select('id')
       if (insertError) throw new Error(`candidate write failed: ${insertError.message}`)
       candidatesWritten = asRows<{ id: string }>(inserted).length
