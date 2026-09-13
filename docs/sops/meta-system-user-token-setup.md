@@ -1,6 +1,6 @@
 # SOP — Meta System User Token 配置（CTS + Oztop）
 
-> ⚠️ **新客户请走通用版**：[`client-meta-ads-onboarding.md`](./client-meta-ads-onboarding.md)。本文档是 CTS / Oztop 当初配置时留的记录，两家已配完不用重做；这里的步骤本身没错，但缺一条关键前提——**所有客户共用 Magic Engine 同一个应用（App ID `1752513682785923`），不要为新客户单独建应用**，通用版里补了这条。
+> ⚠️ **新客户请走通用版**：[`client-meta-ads-onboarding.md`](./client-meta-ads-onboarding.md)。本文档是 CTS / Oztop 当初配置时留的记录，两家已配完不用重做。2026-09-13 给 Magic Picks 接入时发现：本文档"新建系统用户 + 挂应用"这条路在新业务账户上会卡死（挂应用只能靠转移所有权，走不通），改用了更简单的"业务账户互为合作伙伴，直接共享广告户"路径，全程不用碰应用/系统用户。如果只是要让 Magic Engine 能管客户的广告户，走通用版就够；只有需要服务器自动调 API 发广告时才可能还要用到本文档的令牌部分。
 
 > **目的**：拿到 **永不过期** 的 Meta System User Token，让 ME 后台能调 Meta Ads API 跑广告闭环。
 > **执行人**：PM
