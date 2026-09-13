@@ -170,15 +170,16 @@ describe('isConversationOptedOut', () => {
   // -------------------------------------------------------------------------
   // 变异测试：伪造 client_id 跨客户读退订状态 —— 4 轴红线之一。
   // -------------------------------------------------------------------------
-  it('🔴 变异测试：contact_id 撞上另一个客户名下的行，不许读到那个客户的 DNC 状态', async () => {
+  it('🔴 变异测试：contact_id 撞上另一个客户名下的行，必须 fail-closed 拦下，不许放行', async () => {
     // 会话属于 CLIENT_A，contact_id = CONTACT。但 `contacts` / `contact_touchpoints`
     // 里唯一能查到的 CONTACT 行挂在 CLIENT_B 名下、且被标了 DNC —— 模拟「数据被
     // 拼错 client_id」或「攻击者伪造跨客户查询」的场景。
     //
     // 实现必须同时按 `contact_id` 和「会话自己带的」`client_id` 过滤
-    // （跟 `lib/crm/dnc` 路由的 IDOR 闸同一个写法）。少了 `client_id` 这道过滤，
-    // 这条测试就会翻车：会读到 CLIENT_B 那一行 `do_not_contact: true`，
-    // 错误地把 CLIENT_A 的这条会话也判成退订。
+    // （跟 `lib/crm/dnc` 路由的 IDOR 闸同一个写法），这道过滤会让按 CLIENT_A
+    // 过滤的查询查不到任何行（`data: null`）。查不到不等于「没被标 DNC」——
+    // 这已经是数据异常（`contact_id` 挂错了客户），必须 fail-closed 拦下，
+    // 而不是把「查不到」悄悄当成「放行」（Codex 复审 2026-09-13）。
     const supabase = makeFakeSupabase({
       conversations: [{ id: CONVO, client_id: CLIENT_A, contact_id: CONTACT, optout_unlinked: false }],
       contacts: [{ id: CONTACT, client_id: CLIENT_B, do_not_contact: true }],
@@ -191,7 +192,7 @@ describe('isConversationOptedOut', () => {
         },
       ],
     })
-    expect(await isConversationOptedOut(CONVO, supabase)).toBe(false)
+    expect(await isConversationOptedOut(CONVO, supabase)).toBe(true)
   })
 
   it('查会话失败 → fail-closed，返回 true（宁可拦一条，不许放过一条）', async () => {
@@ -213,7 +214,11 @@ describe('isConversationOptedOut', () => {
 // ---------------------------------------------------------------------------
 
 describe('recordOptOutKeywordTouch', () => {
-  function makeWritableFake() {
+  /**
+   * `existingTouchpoints`：这个联系人「已经存在」的触点（不含本次要写的这一条）——
+   * 用来模拟「写镜像列之前，先看一眼有没有更晚的人工纠正」这一步查到的数据。
+   */
+  function makeWritableFake(existingTouchpoints: Row[] = []) {
     const inserted: Row[] = []
     const updates: Row[] = []
     const supabase = {
@@ -227,6 +232,13 @@ describe('recordOptOutKeywordTouch', () => {
                   maybeSingle: async () => ({ data: { id: 'tp-1' }, error: null }),
                 }),
               }
+            },
+            select: () => {
+              const builder: Record<string, unknown> = {}
+              builder.eq = () => builder
+              ;(builder as { then: PromiseLike<unknown>['then'] }).then = (resolve, reject) =>
+                Promise.resolve({ data: existingTouchpoints, error: null }).then(resolve, reject)
+              return builder
             },
           }
         }
@@ -288,6 +300,54 @@ describe('recordOptOutKeywordTouch', () => {
         channel: 'whatsapp',
         conversationId: CONVO,
         messageId: 'msg-2',
+      },
+      supabase,
+    )
+    expect(updates).toEqual([{ do_not_contact: true }])
+  })
+
+  it('🔴 变异测试：旧 webhook 重放，重放时已有更晚的人工纠正 dnc_cleared → 不许覆盖镜像列', async () => {
+    // 场景：客人很早以前发过一条退订消息（这条事件本身的 occurredAt 更早），
+    // 之后人已经走 /dnc 纠正路由清除过（写了一条更晚的 dnc_cleared 触点，
+    // 镜像列被放回 false）。现在 Meta 的 at-least-once webhook 把那条很旧的
+    // 退订消息又送达一次（同一个 sourceRef，upsert 会被 ignoreDuplicates 吃掉）。
+    // 这次重放不该把镜像列重新推回 true —— 否则 /dnc 刚做完的纠正会被
+    // 一条旧事件的重试悄悄推翻，且没有任何报错提示。
+    const { supabase, updates } = makeWritableFake([
+      {
+        occurred_at: '2026-09-13T00:00:00Z',
+        metadata: { outcome: 'dnc_cleared', do_not_contact: false },
+      },
+    ])
+    await recordOptOutKeywordTouch(
+      {
+        clientId: CLIENT_A,
+        contactId: CONTACT,
+        channel: 'messenger',
+        conversationId: CONVO,
+        messageId: 'msg-1',
+        occurredAt: '2026-09-01T00:00:00Z', // 早于上面那条 dnc_cleared
+      },
+      supabase,
+    )
+    expect(updates).toEqual([])
+  })
+
+  it('没有更晚的人工纠正时，镜像列照常放下 true（不因为新增的重放检查漏掉正常路径）', async () => {
+    const { supabase, updates } = makeWritableFake([
+      {
+        occurred_at: '2026-08-01T00:00:00Z',
+        metadata: { outcome: 'dnc_cleared', do_not_contact: false },
+      },
+    ])
+    await recordOptOutKeywordTouch(
+      {
+        clientId: CLIENT_A,
+        contactId: CONTACT,
+        channel: 'messenger',
+        conversationId: CONVO,
+        messageId: 'msg-1',
+        occurredAt: '2026-09-01T00:00:00Z', // 晚于那条早年的 dnc_cleared
       },
       supabase,
     )

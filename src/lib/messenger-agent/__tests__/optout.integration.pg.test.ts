@@ -107,6 +107,24 @@ function pgBackedSupabase(pg: Client): SupabaseClient {
       const res = await pg.query(`SELECT * FROM ${table} ${clause} LIMIT 1`, values)
       return { data: res.rows[0] ?? null, error: null }
     }
+    // `optout.ts` 在重放保护那一步直接 `await` select 的结果（不调
+    // `.maybeSingle()`）拿多行 —— 跟真实 supabase-js 的 filter builder 本身
+    // 是 thenable 一致，见 `isConversationOptedOut()` 查 `contact_touchpoints`
+    // 那一段的同款写法。
+    type Settle = (value: unknown) => unknown
+    ;(api as { then: (onFulfilled: Settle, onRejected: Settle) => Promise<unknown> }).then = (
+      resolve,
+      reject,
+    ) => {
+      const { clause, values } = whereOf(1)
+      return pg
+        .query(`SELECT * FROM ${table} ${clause}`, values)
+        .then(
+          (res) => resolve({ data: res.rows, error: null }),
+          (err: Error) => resolve({ data: null, error: { message: err.message } }),
+        )
+        .catch(reject)
+    }
 
     api.update = (patch: Record<string, unknown>) => {
       const cols = Object.keys(patch)

@@ -44,7 +44,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase'
-import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+import { isDoNotContact, dncClearedAt, type DncTouch } from '@/lib/crm/dnc'
 
 // ---------------------------------------------------------------------------
 // 1) 关键词检测 —— 纯函数，不碰数据库。
@@ -176,8 +176,18 @@ export async function isConversationOptedOut(
     )
     return true
   }
+  if (!contactResult.data) {
+    // contactId 有值，但按「同一个 client_id」过滤后查不到这一行 ——
+    // 要么这条会话的 contact_id 挂错了客户（外键只约束 contacts(id) 存在，
+    // 不约束同一个 client_id），要么数据本身就是坏的。这已经是异常状态，
+    // 不能把「查不到」悄悄当成「没被标 DNC」放行，同样按 fail-closed 处理。
+    console.error(
+      `[messenger-agent/optout] contact 不属于会话的 client_id contactId=${contactId} clientId=${clientId}`,
+    )
+    return true
+  }
 
-  const contactFlag = (contactResult.data as ContactRow | null)?.do_not_contact === true
+  const contactFlag = (contactResult.data as ContactRow).do_not_contact === true
   const touches: DncTouch[] = ((touchResult.data as TouchpointRow[] | null) ?? []).map((t) => {
     const meta = t.metadata ?? {}
     return {
@@ -223,10 +233,17 @@ export interface RecordOptOutKeywordTouchResult {
  * 是至少一次投递，同一条消息重复到达不能记成两笔触点。
  *
  * 写法跟 `lib/crm/touchpoints.ts` 的 `recordManualTouchpoint()` 一致：
- * 先幂等写触点，镜像列的更新**总是执行**（哪怕触点命中幂等键没有真插），
- * 让重试收敛。这一步失败会抛错，调用方按同一个幂等键重试即可收敛
- * ——跟 `recordManualTouchpoint` 的约定相同，这里不重复处理「报警但不阻断」
+ * 先幂等写触点，镜像列的更新**默认执行**（哪怕触点命中幂等键没有真插），
+ * 让「首次镜像更新失败」这种情况靠同一个幂等键重试收敛 ——跟
+ * `recordManualTouchpoint` 的约定相同，这里不重复处理「报警但不阻断」
  * 这类调用方策略。
+ *
+ * 唯一的例外：Meta 的 webhook 是至少一次投递，一条很旧的退订消息可能在
+ * 人已经走 `/dnc` 纠正（`dnc_cleared`，见 `lib/crm/dnc.ts`）之后才重放到达。
+ * 这时触点真相已经以那次更晚的人工纠正为准，这里**不能**无条件把镜像列
+ * 覆盖回 `true`——那会让 `/dnc` 刚做完的纠正在下一次 webhook 重试时被
+ * 悄悄推翻，且没有任何报错提示。所以写镜像列之前会看一眼这个联系人
+ * 现在最新的 `dnc_cleared` 时间点：晚于这条事件本身的时间戳，就跳过覆盖。
  */
 export async function recordOptOutKeywordTouch(
   input: RecordOptOutKeywordTouchInput,
@@ -263,7 +280,34 @@ export async function recordOptOutKeywordTouch(
     throw new Error(`写退订触点失败: ${error.message}`)
   }
 
-  // 镜像列总是更新（幂等），配合调用方带同 sourceRef 重试收敛 ——
+  // 重放保护：这条事件之后如果已经有更晚的人工纠正（dnc_cleared），
+  // 说明镜像列现在的值就该是那次纠正定的，不该被一条旧事件的重放推翻。
+  const { data: existingTouches, error: touchErr } = await supabase
+    .from('contact_touchpoints')
+    .select('occurred_at, metadata')
+    .eq('contact_id', contactId)
+    .eq('client_id', clientId)
+
+  if (touchErr) {
+    throw new Error(`查已有触点失败: ${touchErr.message}`)
+  }
+
+  const touches: DncTouch[] = ((existingTouches as TouchpointRow[] | null) ?? []).map((t) => {
+    const meta = t.metadata ?? {}
+    return {
+      outcome: (meta.outcome as string | undefined) ?? null,
+      flagged: meta.do_not_contact === true,
+      occurredAt: t.occurred_at,
+    }
+  })
+
+  if (dncClearedAt(touches) > new Date(occurredAt).getTime()) {
+    // 已经有更晚的人工纠正 —— 这条事件（大概率是旧 webhook 的重放）
+    // 不许覆盖回去，镜像列维持纠正后的状态。
+    return { touchpointId: (data as { id: string } | null)?.id ?? null }
+  }
+
+  // 镜像列更新（幂等），配合调用方带同 sourceRef 重试收敛 ——
   // 跟 recordManualTouchpoint() 的约定一致。
   const { error: updateErr } = await supabase
     .from('contacts')
