@@ -106,6 +106,7 @@ interface ContactRow {
 interface TouchpointRow {
   occurred_at: string
   metadata: Record<string, unknown> | null
+  source_ref?: string | null
 }
 
 /**
@@ -139,9 +140,16 @@ export async function isConversationOptedOut(
   const row = convo as ConversationRow
   const contactId = row.contact_id
 
+  // 关联转换闸（Codex 复审）：`link-contacts.ts` 会在原本 contact_id 为空的会话
+  // 补上联系人，但全仓目前没有把 optout_unlinked 转移成联系人级 DNC 的生产路径——
+  // 补挂的新联系人大概率没有任何 DNC 触点/镜像。这个兜底列必须继续认，不能因为
+  // 「现在有 contact_id 了」就改道去查一个还没继承退订状态的联系人，否则同一
+  // 会话补上联系人的瞬间就会重新获准外发。
+  if (row.optout_unlinked === true) return true
+
   if (!contactId) {
-    // 挂不上人的会话：退回这条会话自己的兜底列，不经过任何缓存。
-    return row.optout_unlinked === true
+    // 挂不上人的会话，又没命中兜底列：没有更多材料可查，放行。
+    return false
   }
 
   // IDOR 闸：contact / 触点查询必须同时按 contact_id 和「这条会话自己的」
@@ -244,6 +252,25 @@ export interface RecordOptOutKeywordTouchResult {
  * 覆盖回 `true`——那会让 `/dnc` 刚做完的纠正在下一次 webhook 重试时被
  * 悄悄推翻，且没有任何报错提示。所以写镜像列之前会看一眼这个联系人
  * 现在最新的 `dnc_cleared` 时间点：晚于这条事件本身的时间戳，就跳过覆盖。
+ *
+ * 🔴 **判「晚于」用的是落库的事件时间，不是调用时刻**（Codex 复审）。
+ * `occurredAt` 合法地可以不传（调用方没有更精确的消息时间），这时不能拿
+ * `new Date().toISOString()` 去跟 `dnc_cleared` 比——同一条 webhook 每次重试
+ * 都会把它重算成「现在」，于是这条比较永远不会触发（重试的「现在」几乎总是
+ * 晚于任何历史上的人工纠正），保护形同虚设。这里改成：先看这条触点
+ * （按 `sourceRef` 幂等键）第一次落库时到底记的是哪个时间——`ignoreDuplicates`
+ * 保证同一个 `sourceRef` 只会被写一次，之后每次重放都读到那个冻结的原值，
+ * 而不是重新算。
+ *
+ * 🔴 **写镜像列之后再回验一次**（Codex 复审，TOCTOU 缩窗）。「查最新纠正 →
+ * 写镜像列」这两步之间仍有极小的窗口：人工纠正恰好插在两者中间。
+ * `isConversationOptedOut` 的判据本身不受影响（它每次都直接从触点重新算，
+ * 详见 `lib/crm/dnc.ts` 的 `isDoNotContact`——`dnc_cleared` 是最后一次判决时
+ * 连 `contacts` 那一列都不算数），但仓库里还有别处直接读 `contacts.do_not_contact`
+ * 这一列（`/dnc` 路由注释里点名的今日待办、群发接口）。写完之后立刻重新查一遍
+ * 触点，发现纠正确实抢在了中间，就把镜像列直接纠正回来，别把窗口期里
+ * 那条「压对了」的纠正晾在一边等下一次触发。真正的强一致需要事务/行锁，
+ * 这里没有引入新迁移，只把这个已知窗口从「无限期」收窄到「本次调用内自愈」。
  */
 export async function recordOptOutKeywordTouch(
   input: RecordOptOutKeywordTouchInput,
@@ -284,7 +311,7 @@ export async function recordOptOutKeywordTouch(
   // 说明镜像列现在的值就该是那次纠正定的，不该被一条旧事件的重放推翻。
   const { data: existingTouches, error: touchErr } = await supabase
     .from('contact_touchpoints')
-    .select('occurred_at, metadata')
+    .select('occurred_at, metadata, source_ref')
     .eq('contact_id', contactId)
     .eq('client_id', clientId)
 
@@ -292,7 +319,8 @@ export async function recordOptOutKeywordTouch(
     throw new Error(`查已有触点失败: ${touchErr.message}`)
   }
 
-  const touches: DncTouch[] = ((existingTouches as TouchpointRow[] | null) ?? []).map((t) => {
+  const touchRows = (existingTouches as TouchpointRow[] | null) ?? []
+  const touches: DncTouch[] = touchRows.map((t) => {
     const meta = t.metadata ?? {}
     return {
       outcome: (meta.outcome as string | undefined) ?? null,
@@ -301,7 +329,14 @@ export async function recordOptOutKeywordTouch(
     }
   })
 
-  if (dncClearedAt(touches) > new Date(occurredAt).getTime()) {
+  // 这条触点第一次落库时冻结的时间 —— 幂等键命中时，找不到自己这条刚好说明
+  // 上面的 upsert 没有真插（`ignoreDuplicates`），那就沿用调用方这次传入 /
+  // 默认出的时间；找得到就必须用落库的那个原值，不能用这次调用临时算出来的。
+  const persistedOccurredAt =
+    touchRows.find((t) => t.source_ref === sourceRef)?.occurred_at ?? occurredAt
+  const persistedOccurredAtMs = new Date(persistedOccurredAt).getTime()
+
+  if (dncClearedAt(touches) > persistedOccurredAtMs) {
     // 已经有更晚的人工纠正 —— 这条事件（大概率是旧 webhook 的重放）
     // 不许覆盖回去，镜像列维持纠正后的状态。
     return { touchpointId: (data as { id: string } | null)?.id ?? null }
@@ -318,6 +353,37 @@ export async function recordOptOutKeywordTouch(
   if (updateErr) {
     throw new Error(`更新 contacts.do_not_contact 失败: ${updateErr.message}`)
   }
+
+  // 回验：写完这一刻再看一眼有没有更晚的人工纠正在检查和写入之间插了进来。
+  // 有就立刻纠正回去 —— 不是完整的事务隔离，但把「镜像列错误地卡在 true」
+  // 的窗口从无限期收窄到这次调用内自愈（见函数头部注释）。
+  const { data: recheckTouches, error: recheckErr } = await supabase
+    .from('contact_touchpoints')
+    .select('occurred_at, metadata')
+    .eq('contact_id', contactId)
+    .eq('client_id', clientId)
+
+  if (!recheckErr) {
+    const recheckDncTouches: DncTouch[] = ((recheckTouches as TouchpointRow[] | null) ?? []).map(
+      (t) => {
+        const meta = t.metadata ?? {}
+        return {
+          outcome: (meta.outcome as string | undefined) ?? null,
+          flagged: meta.do_not_contact === true,
+          occurredAt: t.occurred_at,
+        }
+      },
+    )
+    if (dncClearedAt(recheckDncTouches) > persistedOccurredAtMs) {
+      await supabase
+        .from('contacts')
+        .update({ do_not_contact: false })
+        .eq('id', contactId)
+        .eq('client_id', clientId)
+    }
+  }
+  // 回验查询本身失败：不额外抛错阻断主流程（镜像列的写入已经成功且方向
+  // 正确，回验只是缩窗用的补充动作，跟主路径的 fail-closed 方向不冲突）。
 
   return { touchpointId: (data as { id: string } | null)?.id ?? null }
 }
