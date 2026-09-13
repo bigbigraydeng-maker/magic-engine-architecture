@@ -128,11 +128,29 @@ const GENERIC_OBJECT_WORDS = new Set([
   'sets', 'landscape', 'landscapes', 'crowd', 'crowds', 'walking', 'standing', 'sitting', 'smiling',
 ])
 
-/** prompt 分词与一组 object 短语的重叠数,`keywordFallback` 排序和 `keywordOverlap` 判定共用。 */
+/** 光排除笼统名词不够——"the Forbidden City courtyard" 跟错误素材 "the Great Wall"
+ *  两边都有 "the",这个虚词不在名词清单里,原样会被判成重叠(P1 复审第二轮指出)。
+ *  这里再排除一批英语功能词(冠词/介词/连词/代词等),它们不携带任何主体信息,
+ *  命中它们不能算"文对图对"。 */
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'if', 'so', 'to', 'of', 'in', 'on', 'at', 'by', 'for',
+  'with', 'from', 'into', 'onto', 'out', 'off', 'over', 'under', 'up', 'down', 'near', 'about',
+  'is', 'was', 'were', 'are', 'be', 'been', 'being', 'as', 'this', 'that', 'these', 'those',
+  'it', 'its', 'not', 'no', 'yes', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other',
+  'some', 'such', 'only', 'own', 'same', 'too', 'very', 'just', 'also', 'still', 'while', 'during',
+  'before', 'after', 'above', 'below', 'between', 'through', 'per', 'than', 'then', 'here', 'there',
+])
+
+/** prompt 分词与一组 object 短语的重叠数,`keywordFallback` 排序和 `keywordOverlap` 判定共用。
+ *  objects 理论上是 string[],但 vision_metadata 来自 unknown 的 jsonb 读入
+ *  (`analyseImage()` 只查过 `Array.isArray`,没查过数组元素类型),老数据/坏数据可能塞进
+ *  非字符串元素——直接 `.toLowerCase()` 会抛出未捕获异常,把整条自动选图链路炸掉
+ *  (P2 复审指出)。这里先判元素是不是字符串,不是就跳过,不让一条坏数据拖垮整批。 */
 function objectOverlap(promptWords: Set<string>, objects: string[]): number {
   return objects.reduce((n, obj) => {
+    if (typeof obj !== 'string') return n
     const words = obj.toLowerCase().split(/[^a-z0-9]+/)
-    return n + (words.some((w) => !GENERIC_OBJECT_WORDS.has(w) && promptWords.has(w)) ? 1 : 0)
+    return n + (words.some((w) => !GENERIC_OBJECT_WORDS.has(w) && !STOPWORDS.has(w) && promptWords.has(w)) ? 1 : 0)
   }, 0)
 }
 

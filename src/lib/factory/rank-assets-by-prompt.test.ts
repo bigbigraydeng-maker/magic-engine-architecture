@@ -78,6 +78,15 @@ describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选�
     expect(picks).toEqual([])
   })
 
+  it('虚词(the/and/with...)单独命中也不算重叠,不能靠它蒙混过 requireConfidentMatch', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // "the Forbidden City courtyard" 跟错误素材 "the Great Wall" 光凭 the 这个虚词就有
+    // 表面重叠,但两者根本不是同一个地方。
+    const assets = [asset('wrong-wall', { vision_metadata: { objects: ['the Great Wall'], quality_score: 9 } })]
+    const picks = await rankAssetsByPrompt('the Forbidden City courtyard', assets, 1, { requireConfidentMatch: true })
+    expect(picks).toEqual([])
+  })
+
   it('大素材池、真正走 LLM 排序分支时,LLM 选出的图跟 prompt 零重叠照样会被过滤（复现 2026-09-14 真实故障链路：素材池里明明有 palace 那张对的图,LLM 却选了 great-wall）', async () => {
     vi.resetModules()
     vi.doMock('@/lib/ai/openai-client', () => ({
@@ -109,6 +118,23 @@ describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选�
     const picks = await rankAssetsByPrompt('forbidden city courtyard', assets, 1, { requireConfidentMatch: true })
     expect(picks).toEqual([])
     vi.doUnmock('@/lib/ai/openai-client')
+  })
+})
+
+describe('rankAssetsByPrompt — objects 里混进非字符串元素不炸', () => {
+  it('vision_metadata.objects 含 null/数字这类坏数据时,跳过它而不是抛异常', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // 小素材池(<=topN)分支已经会算 keywordOverlap(requireConfidentMatch 过滤时调用),
+    // objects 里混进非字符串元素不该让整条判断炸掉。
+    const assets = [
+      asset('bad-data', {
+        vision_metadata: { objects: ['palace', null, 123] as unknown as string[], quality_score: 8 },
+      }),
+    ]
+    const picks = await rankAssetsByPrompt('forbidden city palace courtyard', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks.map((p) => p.id)).toEqual(['bad-data'])
   })
 })
 
