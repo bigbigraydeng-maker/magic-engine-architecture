@@ -37,6 +37,17 @@ describe('external observation run orchestration', () => {
     expect(result).toMatchObject({ runId: 'run-2', persisted: 0, duplicates: 0, writeFailures: 1 })
   })
 
+  it('drops industry observations outside the client market before persistence', async () => {
+    collect.mockResolvedValue({ observations: [observation('https://example.com/egypt')], rejected: 0, runId: 'run-3' })
+    const persist = vi.fn().mockResolvedValue('id-3')
+    const result = await collectAndRecordExternalObservations({
+      actorId: 'actor/news', actorInput: {}, sourceId: 'travel-today', clientId: observation('').client_id,
+      observedAt: '2026-09-11T00:00:00Z', relevanceTerms: ['china'], persist,
+    })
+    expect(result).toMatchObject({ runId: 'run-3', rejected: 1, persisted: 0 })
+    expect(persist).not.toHaveBeenCalled()
+  })
+
   it('persists traffic direction observations through the shared path', async () => {
     collectTraffic.mockResolvedValue({
       observations: [observation('https://www.similarweb.com/website/wendywutours.co.nz/')],
