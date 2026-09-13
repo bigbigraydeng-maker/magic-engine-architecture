@@ -6,6 +6,7 @@ export type ExternalRunReceipt = ApifyExternalCollection & {
   persisted: number
   duplicates: number
   writeFailures: number
+  filtered: number
 }
 
 async function persistCollection(collection: ApifyExternalCollection, persist: (observation: ExternalObservation) => Promise<string>): Promise<ExternalRunReceipt> {
@@ -21,7 +22,7 @@ async function persistCollection(collection: ApifyExternalCollection, persist: (
       else writeFailures += 1
     }
   }
-  return { ...collection, persisted, duplicates, writeFailures }
+  return { ...collection, persisted, duplicates, writeFailures, filtered: 0 }
 }
 
 /**
@@ -41,12 +42,13 @@ export async function collectAndRecordExternalObservations(input: {
   persist?: (observation: ExternalObservation) => Promise<string>
 }): Promise<ExternalRunReceipt> {
   const collection = await collectApifyExternalObservations(input)
+  let filtered = 0
   if (input.relevanceTerms?.length) {
     const terms = input.relevanceTerms.map(term => term.trim().toLowerCase()).filter(Boolean)
-    collection.rejected += collection.observations.filter(observation => !terms.some(term => `${observation.title}\n${observation.excerpt}`.toLowerCase().includes(term))).length
+    filtered = collection.observations.filter(observation => !terms.some(term => `${observation.title}\n${observation.excerpt}`.toLowerCase().includes(term))).length
     collection.observations = collection.observations.filter(observation => terms.some(term => `${observation.title}\n${observation.excerpt}`.toLowerCase().includes(term)))
   }
-  return persistCollection(collection, input.persist ?? recordExternalObservation)
+  return { ...(await persistCollection(collection, input.persist ?? recordExternalObservation)), filtered }
 }
 
 /** Persist the Apify traffic-direction signal through the same shared path. */

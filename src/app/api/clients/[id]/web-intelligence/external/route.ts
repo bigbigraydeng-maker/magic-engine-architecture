@@ -83,6 +83,7 @@ export async function POST(req: Request, { params }: Context) {
       persisted: collection.persisted,
       duplicates: collection.duplicates,
       rejected: collection.rejected,
+      filtered: collection.filtered,
       write_failures: collection.writeFailures,
       run_id: collection.runId,
       error: collection.error ?? null,
