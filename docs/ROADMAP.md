@@ -21,6 +21,25 @@
 
 ---
 
+## 广告支柱 IMPACT 闭环升级 · 阶段 0 止血 + 阶段 1 只读诊断（2026-09-14 已开 PR，待 PM go）
+
+设计定稿：`~/.claude/plans/ads-impact-loop-capability.md`（§14 为验收条款）。阶段 0：PR #1656（看板查错列）、#1657（STATE.md 内核事实）、#1658（替代 #1080 的广告写路径归属校验 + 主页绑定只许员工改）。阶段 1：#1659（设置快照表 + 视频/广告组日数据）→ #1662（角色判定 + 结果阶梯配置界面）→ 诊断 D1/D3/D4/D5/D7/D8 → 内部版日报；#1660（行业词下沉剧本 + 回读去客户名）。
+
+- [ ] **PM go**：按依赖顺序合并（#1659 → #1662 → 诊断 → 内部日报），并单独授权 apply migration `20260914000001_ad_entity_snapshots_and_video_metrics.sql`、`20260914000002_ad_strategy_configs_outcome_ladder.sql`。表建好前新诊断不启用，原日报照旧。
+- [ ] **合并上线后正式站验证（登录后台页）**：`/dashboard/ad-engine`「汇总数字有没有在骗人」出数据；客户设置页「广告结果怎么算」面板能存。
+- [ ] **FDE 给在投客户配结果阶梯**（NAL / CTS / Oztop）：没配之前「花钱没结果」「钱和结果错配」会一直判不了，内部日报会提醒。
+- [ ] **客户真实情况待确认（P0-4）**：Roman HU / 30 Kiteroa 现在真正在投的是哪个账户（`act_1260456876069575` 读不到 403 / `act_1018365291238494` 能读、8/20–8/27 仍有花费未入库）；Oztop 8/19 起零花费是有意停投还是付款/审核问题。
+- [ ] **老接口鉴权**：`/api/clients/[id]/ad-strategy-config` PATCH 客户成员能关掉广告引擎（诊断随之停）——已登记独立任务；`domain` 绑定接口同类问题未查。
+- [ ] **主页改绑补全**：查「这个主页是否已绑给别的客户」+ 写 `client_binding_audit`（复用 #1649 引入的审计表，#1649 合并后做）。
+- [ ] **共用账户根治（G15 / M9）**：落广告系列级归属表；之前共用账户只做账户级诊断；老的系列级/广告级日数据同步仍会把共用账户写进两个客户名下。
+- [ ] **行业词表加 `logistics`**（物流剧本目前选不中），`E-commerce …` 自由文本行业值归一。
+- [ ] **L3 Meta Connector 收口**：Graph 版本统一（v19/v20/v21 混用）；`src/lib/meta/client.ts` 已超 800 行需拆文件；快照取令牌（`getMetaTokenForClient`）与每日同步 cron 的令牌口径统一。
+- [ ] **诊断后续**：D2（按角色的疲劳模型，学习期排除）、D6（行业先验，需 ≥2 客户证据）；Meta 实验排除扩展到止损与素材同步（§14 M7，写路径，阶段 2 收口）；诊断事件链接 Inngest（§4.4）。
+- [ ] **阶段 2（内核 + 执行）/ 阶段 3（客户版 + 剧本 + 调优）**：按设计 §4.1 硬前置与 §14 K1–K14、C1–C9 推进。
+- [ ] **P0 遗留**：CTS 网站仓库草稿 chinatravel#136 关或合、CTS 自动化策略 `5d66c469` 没有结束日期（P0-3）；Oztop 2026-08-16 那行 `level='adset'` 孤行来自旧电脑手写 SQL 的 `oztop-meta-daily-monitor` 定时任务，确认该任务已停（P0-6）。
+
+---
+
 ## Creatomate Connector 落地后续
 
 > 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2）。2026-09-13 端到端真实验证已跑通（PR #1570/#1594/#1604，见 memory `project-cts-video-factory-decision-ledger` 完整记录），下面只留还没做完的。
