@@ -27,6 +27,8 @@ export type NotComparableReason =
   | 'audience_below_floor'
   | 'audience_too_new'
   | 'page_audience_unverifiable'
+  | 'no_video_creatives'
+  | 'missing_data'
   | 'cbo_internal'
   | 'shared_account'
   | 'below_min_sample'

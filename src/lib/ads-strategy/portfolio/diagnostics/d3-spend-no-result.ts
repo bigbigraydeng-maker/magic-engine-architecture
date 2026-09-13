@@ -29,13 +29,15 @@ export function diagnoseSpendNoResult(ctx: AccountContext, input: DiagnosisInput
 
   const { outcome } = input
   const target = outcome.targetCostPerPrimary
-  if (!input.outcomeConfigured || outcome.primary === null || target === null) {
+  // 结果阶梯整个没配：D7 客户级已经报「还没设置广告结果怎么算」，这里不重复出（子牙复审）
+  if (!input.outcomeConfigured || outcome.primary === null) return []
+  if (target === null) {
     const spend = round2(spending.reduce((a, x) => a + sumSpend(x.rows), 0))
     return [{
       code: 'D3',
       status: 'not_comparable',
-      notComparableReason: outcome.primary === null ? 'outcome_not_configured' : 'target_cost_not_configured',
-      title: '花钱没结果这条判不了：客户还没设置目标单次成本' + (outcome.primary === null ? '和主结果' : ''),
+      notComparableReason: 'target_cost_not_configured',
+      title: '花钱没结果这条判不了：客户还没设置目标单次成本',
       units: spending.map(x => unitOf(ctx, 'adset', x.s.entity_id)),
       evidence: { window_start: ctx.window[0], window_end: ctx.date, acquisition_spend: spend, target_cost: target },
       sample: [{ label: '近 7 天有花费的获客/再营销广告组', value: spending.length }],

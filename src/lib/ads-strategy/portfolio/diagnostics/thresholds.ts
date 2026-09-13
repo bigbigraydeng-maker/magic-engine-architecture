@@ -48,5 +48,9 @@ export const D5_MIN_SHARE_GAP = 0.15
 // ── D7 授权/数据体检 ────────────────────────────────────────
 /** 有在投设置但日数据停更超过几天 → 命中 */
 export const D7_STALE_DATA_DAYS = 2
-/** 内部邮箱域名（日报只许发内部） */
-export const INTERNAL_EMAIL_DOMAINS = ['magicengine.com.au', 'magicengine.cloud', 'magiclab.co.nz'] as const
+/**
+ * 内部邮箱域名（日报只许发内部）。2026-09-14 按仓库内实际使用的内部地址核对：
+ * magicengine.cloud（默认收发件）、magicengine.com.au、magiclab.com、magiclab.com.au。
+ * 另认环境变量 ADMIN_EMAIL_DOMAIN / ADMIN_EMAILS（见 internal-email.ts）。
+ */
+export const INTERNAL_EMAIL_DOMAINS = ['magicengine.cloud', 'magicengine.com.au', 'magiclab.com', 'magiclab.com.au'] as const

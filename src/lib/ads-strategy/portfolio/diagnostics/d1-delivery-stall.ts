@@ -12,7 +12,10 @@
  * M5：另看前 2 天是否在同一时刻（±1 小时）也停投——是则多半是账户单日花费上限。
  * 检测时延（detection_lag_hours）写进证据：cron 一天一次，最快隔天发现。
  *
- * Meta 实验中的广告组（§14 M7）不计入花费、预算与小时数据。
+ * D1 是账户级「钱花不出去」的判断，**不排除** Meta 实验中的单位（§14 M7 只要求排除出 D2/D5/处方/止损/素材同步；
+ * 排除后实验期间账户花费会被低估，D1 基本失明——2026-09-14 子牙复审）。实验单位在别的诊断里照样被排除。
+ * 预算只算评估日结束时仍在投的单位；暂停的单位（哪怕当天花过钱）不算。
+ * 已知检测时延：cron 一天一次评估前一天，当天正在进行的卡住要到次日才报（证据里写 detection_lag_hours）。
  */
 
 import type { AccountContext } from './context'
@@ -33,7 +36,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100
 
 function daySpend(ctx: AccountContext, day: string): number {
   return round2(ctx.account.daily
-    .filter(r => r.level === 'adset' && r.insight_date === day && !ctx.experimentIds.has(r.entity_id))
+    .filter(r => r.level === 'adset' && r.insight_date === day)
     .reduce((s, r) => s + r.spend, 0))
 }
 
@@ -49,25 +52,29 @@ export function hourlySeries(ctx: AccountContext, day: string): number[] | null 
   if (!rows) return null
   const out = Array.from({ length: 24 }, () => 0)
   for (const r of rows) {
-    if (r.adset_id && ctx.experimentIds.has(r.adset_id)) continue
     if (r.hour >= 0 && r.hour < 24) out[r.hour] += r.spend
   }
   return out.map(round2)
 }
 
-/** 最长连续零花费小时段 [start, endExclusive)。 */
-export function longestZeroRun(series: number[]): { start: number; end: number } | null {
-  let best: { start: number; end: number } | null = null
+/** 全部连续零花费小时段 [start, endExclusive)，按出现顺序。 */
+export function zeroRuns(series: number[]): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = []
   let start = -1
   for (let h = 0; h <= 24; h++) {
     const zero = h < 24 && series[h] <= 0
     if (zero && start < 0) start = h
     if (!zero && start >= 0) {
-      if (!best || h - start > best.end - best.start) best = { start, end: h }
+      out.push({ start, end: h })
       start = -1
     }
   }
-  return best
+  return out
+}
+
+/** 最长连续零花费小时段。 */
+export function longestZeroRun(series: number[]): { start: number; end: number } | null {
+  return zeroRuns(series).reduce<{ start: number; end: number } | null>((best, r) => (!best || r.end - r.start > best.end - best.start ? r : best), null)
 }
 
 function localDayHour(iso: string, tz: string | null): { day: string; hour: number } {
@@ -97,11 +104,11 @@ export function diagnoseDeliveryStall(ctx: AccountContext, evaluatedAt: string):
   if (!d1NeedsHourly(ctx)) return null
   const priorMedian = round2(median(prior))
 
-  const live = ctx.budgetUnits.filter(u => {
-    const row = u.level === 'campaign' ? ctx.campaigns.get(u.id) : ctx.adsets.get(u.id)
-    return isDelivering(row) || u.adsetIds.some(id => ctx.account.daily.some(r => r.level === 'adset' && r.entity_id === id && r.insight_date === D && r.spend > 0))
-  })
+  // 只认评估日结束时仍在投的单位（2026-09-14 魏征复审：当天花过钱、后来被暂停的不算——那是主动停投不是卡住）
+  const live = ctx.budgetUnits.filter(u => isDelivering(u.level === 'campaign' ? ctx.campaigns.get(u.id) : ctx.adsets.get(u.id)))
   const dailyBudget = round2(live.reduce((s, u) => s + (minorToMajor(u.dailyBudgetMinor) ?? 0), 0))
+  // 「当天有预算剩余」是命中前提：没有在投单位 / 读不到任何日预算 → 不判
+  if (live.length === 0) return null
   const unit = { level: 'account' as const, id: ctx.account.adAccountId, name: ctx.accountRow?.entity_name ?? null, adAccountId: ctx.account.adAccountId }
   const base = {
     code: 'D1' as const,
@@ -117,17 +124,21 @@ export function diagnoseDeliveryStall(ctx: AccountContext, evaluatedAt: string):
   if (live.some(u => u.lifetimeBudgetMinor !== null)) {
     return notComparable('scheduled_delivery', '有用总预算/排期投放的在投单位，零投放时段可能是排期')
   }
-  if (dailyBudget > 0 && spendD >= dailyBudget * 0.98) return null
+  if (dailyBudget <= 0 || spendD >= dailyBudget * 0.98) return null
 
   const today = hourlySeries(ctx, D)
   if (!today) return notComparable('no_hourly_data', `当天花费比前 3 天中位数低很多，但没拿到按小时数据${ctx.account.hourlyError ? `（${ctx.account.hourlyError}）` : ''}`)
-  const run = longestZeroRun(today)
-  if (!run || run.end - run.start < D1_MIN_STALL_HOURS) return null
-
-  const runExtra = { stall_start_hour: run.start, stall_hours: run.end - run.start }
-  if (run.start >= D1_NIGHT_START_HOUR && run.end <= D1_NIGHT_END_HOUR) {
-    return notComparable('night_trough', `零投放时段 ${run.start}:00–${run.end}:00 全在夜间低谷`, runExtra)
+  const runs = zeroRuns(today).filter(r => r.end - r.start >= D1_MIN_STALL_HOURS)
+  if (runs.length === 0) return null
+  const isNight = (r: { start: number; end: number }) => r.start >= D1_NIGHT_START_HOUR && r.end <= D1_NIGHT_END_HOUR
+  // 夜间零投放和白天真卡住可能同时存在：优先看白天的最长段（魏征复审：只看最长段会被夜间段挡掉真问题）
+  const daytime = runs.filter(r => !isNight(r)).sort((a, b) => (b.end - b.start) - (a.end - a.start))
+  if (daytime.length === 0) {
+    const night = runs[0]
+    return notComparable('night_trough', `零投放时段 ${night.start}:00–${night.end}:00 全在夜间低谷`, { stall_start_hour: night.start, stall_hours: night.end - night.start })
   }
+  const run = daytime[0]
+  const runExtra = { stall_start_hour: run.start, stall_hours: run.end - run.start }
   const evalLocal = localDayHour(evaluatedAt, ctx.account.timezone)
   const sinceGapEnd = hoursFrom(D, run.end, evalLocal.day, evalLocal.hour)
   if (sinceGapEnd < D1_REPORT_LAG_HOURS) {

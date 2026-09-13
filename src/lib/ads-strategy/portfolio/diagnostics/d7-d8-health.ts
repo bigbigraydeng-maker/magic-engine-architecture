@@ -13,7 +13,8 @@ import type { AccountContext } from './context'
 import { adsetRows, isDelivering, shiftDate, sumSpend } from './context'
 import { countOutcome, OUTCOME_STEP_LABEL } from '../outcome-ladder'
 import type { Diagnosis, DiagnosisInput } from './types'
-import { D7_STALE_DATA_DAYS, INTERNAL_EMAIL_DOMAINS } from './thresholds'
+import { D7_STALE_DATA_DAYS } from './thresholds'
+import { isInternalEmail, splitAddresses } from './internal-email'
 
 const accountUnit = (ctx: AccountContext) => ({ level: 'account' as const, id: ctx.account.adAccountId, name: ctx.accountRow?.entity_name ?? null, adAccountId: ctx.account.adAccountId })
 
@@ -32,6 +33,28 @@ export function diagnoseAccountHealth(ctx: AccountContext, input: DiagnosisInput
       manualTask: {
         what: `广告账户 ${ctx.account.adAccountId} 读不到（${accountCapture.error}），这个账户的广告诊断全部停摆。`,
         how: '先确认这是不是客户现在真正在投的账户；是的话，请客户在自己的 Meta 业务后台把该广告账户的查看权限分给 Magic Engine 业务组合；不是的话，在客户设置页把广告账户改回正确的号。',
+        href: settingsHref,
+      },
+    })
+  }
+
+  // 「没数据」不能显示成「健康」（2026-09-14 魏征复审）：
+  //   - 非共用账户却没有任何实体级设置快照 → 实体级诊断全部跑不了
+  //   - 窗口里有系列级日数据、却没有任何广告组级日数据 → D3/D4/D5/D8 都拿不到判定单位的花费
+  const hasEntitySnapshots = ctx.campaigns.size + ctx.adsets.size > 0
+  const windowSet = new Set(ctx.window)
+  const campaignRowsInWindow = ctx.account.daily.some(r => r.level === 'campaign' && windowSet.has(r.insight_date) && r.spend > 0)
+  const adsetRowsInWindow = ctx.account.daily.some(r => r.level === 'adset' && windowSet.has(r.insight_date))
+  if (!ctx.account.shared && (!hasEntitySnapshots || (campaignRowsInWindow && !adsetRowsInWindow))) {
+    const why = !hasEntitySnapshots ? '没有这个账户的广告设置快照' : '有系列级花费，但广告组级日数据还没进来'
+    out.push({
+      code: 'D7', status: 'hit', clientVisible: false, units: [unit],
+      title: `诊断缺数据：${why}，除「投放卡住」外的诊断这几天都跑不了`,
+      evidence: { entity_snapshots: hasEntitySnapshots, campaign_spend_rows: campaignRowsInWindow, adset_rows: adsetRowsInWindow },
+      sample: [], reasons: ['没数据不等于没问题'],
+      manualTask: {
+        what: `广告账户 ${ctx.account.adAccountId}：${why}。`,
+        how: '先看每 3 小时的「广告设置快照」和每天的广告数据同步任务有没有报错（运行记录里按账户号搜）；是授权问题就按「读不到这个广告账户」处理。',
         href: settingsHref,
       },
     })
@@ -61,9 +84,8 @@ export function diagnoseClientConfigHealth(input: DiagnosisInput): Diagnosis[] {
   const out: Diagnosis[] = []
   const unit = { level: 'account' as const, id: input.clientId, name: null, adAccountId: '' }
   const href = `/dashboard/clients/${input.clientId}/settings`
-  const external = input.digestRecipients.filter(e => {
-    const domain = e.split('@')[1]?.toLowerCase() ?? ''
-    return !INTERNAL_EMAIL_DOMAINS.some(d => domain === d)
+  const external = splitAddresses(input.digestRecipients).filter(e => {
+    return !isInternalEmail(e)
   })
   if (external.length > 0) {
     out.push({
