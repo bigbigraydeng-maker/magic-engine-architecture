@@ -149,6 +149,7 @@ describe('日报内容（真实回放诊断）', () => {
     const { html } = buildInternalDigest({ clientName: 'C', date: '2026-09-13', run, decision: 'alert', legacyNeedsAction: [], droppedRecipients: 0 })
     expect(html).not.toContain('<script>')
     expect(html).toContain('&lt;script&gt;')
+    expect(html).toContain('&quot;x&quot;')
   })
 
   it('NAL 9/13：命中按角色分组（破冰下面是攒了人没收割），D8 也在', () => {
