@@ -143,4 +143,9 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '行程转路线地图生成器（按 Tour 结构化行程数据——城市顺序 + 交通方式 + 停留天数——自动画出风格化路线图，供社媒/广告/落地页使用）',
     reviewDate: '2026-10-13',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '私信/WhatsApp 对话内容判断有效咨询/成交 → 回传 Meta CAPI',
+    reviewDate: '2026-10-13',
+  },
 ]
