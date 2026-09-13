@@ -21,19 +21,26 @@ import { prescribe, type PrescribeInput } from '../prescription'
 import { buildBody } from '../digest'
 import { checkLaunch, type LaunchReadbackInput } from '../launch-readback'
 
-const WORD_FIELDS = ['resultNoun', 'primaryOutcomeNoun', 'costPerResultLabel', 'expectedGeoNoun'] as const
+const WORD_FIELDS = ['resultNoun', 'costPerResultLabel', 'expectedGeoNoun'] as const
 const wordsOf = (p: AdsPlaybook): string[] => WORD_FIELDS.map(f => p[f])
 
 describe('resolveAdsPlaybook — picks words by industry', () => {
   it.each([
-    ['logistics',   '真实询价', '合格物流询盘', '每个询价',     '服务地区'],
-    ['travel',      '咨询',     '报团',         '每个咨询',     '客户服务市场'],
-    ['real_estate', '估价线索', '签委托',       '每个估价线索', '房源'],
-    ['retail',      '订单',     '成交',         '每个订单',     '配送市场'],
-  ])('%s', (industry, resultNoun, primaryOutcomeNoun, costPerResultLabel, expectedGeoNoun) => {
+    ['logistics',   '真实询价', '每个询价', '服务地区'],
+    ['travel',      '咨询',     '每个咨询', '客户服务市场'],
+    ['real_estate', '线索',     '每个线索', '房源'],
+    ['retail',      '订单',     '每个订单', '配送市场'],
+  ])('%s', (industry, resultNoun, costPerResultLabel, expectedGeoNoun) => {
     const p = resolveAdsPlaybook(industry)
     expect(p.key).toBe(industry)
-    expect(p).toMatchObject({ resultNoun, primaryOutcomeNoun, costPerResultLabel, expectedGeoNoun })
+    expect(p).toEqual({ key: industry, resultNoun, costPerResultLabel, expectedGeoNoun })
+  })
+
+  it('real_estate words are industry-generic, not one client\'s play (valuation / listing mandate)', () => {
+    for (const w of wordsOf(resolveAdsPlaybook('real_estate'))) {
+      expect(w).not.toContain('估价')
+      expect(w).not.toContain('委托')
+    }
   })
 
   it('null / empty / unknown industry → default', () => {
@@ -91,9 +98,9 @@ describe('judgeCampaign reason text follows the playbook', () => {
   const reasonFor = (industry: string | null) =>
     judgeCampaign(costBlowup(), undefined, industry).metrics.find(m => m.metric === 'cost_per_result')!.reason
 
-  it('travel → 咨询 · real_estate → 估价线索 · null → 结果', () => {
+  it('travel → 咨询 · real_estate → 线索 · null → 结果', () => {
     expect(reasonFor('travel')).toContain('每个咨询成本')
-    expect(reasonFor('real_estate')).toContain('每个估价线索成本')
+    expect(reasonFor('real_estate')).toContain('每个线索成本')
     expect(reasonFor(null)).toContain('每个结果成本')
     expect(reasonFor(null)).not.toContain('询盘')
   })
@@ -110,9 +117,9 @@ describe('prescribe review_offer copy follows the playbook', () => {
     industry,
   })
 
-  it('travel → 咨询 · real_estate → 估价线索 · null → 结果', () => {
+  it('travel → 咨询 · real_estate → 线索 · null → 结果', () => {
     expect(prescribe(input('travel'))?.why).toContain('每个咨询变贵了')
-    expect(prescribe(input('real_estate'))?.why).toContain('每个估价线索变贵了')
+    expect(prescribe(input('real_estate'))?.why).toContain('每个线索变贵了')
     expect(prescribe(input(null))?.why).toContain('每个结果变贵了')
     expect(prescribe(input(null))?.why).not.toContain('询盘')
   })
@@ -129,11 +136,11 @@ describe('digest buildBody result words follow the playbook', () => {
     ],
   }
 
-  it('travel → 咨询 · real_estate → 估价线索 · null → 结果', () => {
+  it('travel → 咨询 · real_estate → 线索 · null → 结果', () => {
     const travel = buildBody(payload, 'alert', 'https://x', 'travel')
     expect(travel).toContain('咨询 8')
     expect(travel).toContain('每个咨询 $12.5')
-    expect(buildBody(payload, 'alert', 'https://x', 'real_estate')).toContain('每个估价线索 $12.5')
+    expect(buildBody(payload, 'alert', 'https://x', 'real_estate')).toContain('每个线索 $12.5')
     const neutral = buildBody(payload, 'alert', 'https://x', null)
     expect(neutral).toContain('结果 8')
     expect(neutral).toContain('每个结果 $12.5')

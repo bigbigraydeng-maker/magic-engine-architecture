@@ -180,6 +180,9 @@ export async function sendAdHealthDigest(
         .eq('id', clientId)
         .maybeSingle(),
     ])
+    if (clientRes.error) {
+      console.warn('[ads-strategy/digest] 读客户行业失败，文案改用中性词', { clientId, error: clientRes.error.message })
+    }
     const industry = (clientRes.data as { industry?: string | null } | null)?.industry ?? null
 
     const payload = todayRes.data?.payload as NarrativePayload | undefined

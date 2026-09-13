@@ -7,7 +7,6 @@ import type { AdsPlaybook } from './types'
 export const DEFAULT_ADS_PLAYBOOK: AdsPlaybook = {
   key: 'default',
   resultNoun: '结果',
-  primaryOutcomeNoun: '最终成果',
   costPerResultLabel: '每个结果',
   expectedGeoNoun: '客户业务',
 }

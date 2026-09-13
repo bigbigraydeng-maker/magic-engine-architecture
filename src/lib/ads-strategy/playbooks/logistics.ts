@@ -9,7 +9,6 @@ import type { AdsPlaybook } from './types'
 export const LOGISTICS_ADS_PLAYBOOK: AdsPlaybook = {
   key: 'logistics',
   resultNoun: '真实询价',
-  primaryOutcomeNoun: '合格物流询盘',
   costPerResultLabel: '每个询价',
   expectedGeoNoun: '服务地区',
 }

@@ -4,7 +4,6 @@ import type { AdsPlaybook } from './types'
 export const TRAVEL_ADS_PLAYBOOK: AdsPlaybook = {
   key: 'travel',
   resultNoun: '咨询',
-  primaryOutcomeNoun: '报团',
   costPerResultLabel: '每个咨询',
   expectedGeoNoun: '客户服务市场',
 }

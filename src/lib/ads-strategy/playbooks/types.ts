@@ -20,8 +20,6 @@ export interface AdsPlaybook {
   readonly key: AdsPlaybookKey
   /** 广告的「结果」在这个行业叫什么（内部日报 / 体检文案用），如 默认「结果」、旅游「咨询」。 */
   readonly resultNoun: string
-  /** 这个行业真正要的主结果，如 地产「签委托」、旅游「报团」。 */
-  readonly primaryOutcomeNoun: string
   /** 单个结果成本的叫法，拼成「每个咨询 $12.6」「每个咨询成本」。 */
   readonly costPerResultLabel: string
   /** 投放地区对照时客户那一侧叫什么，拼成「房源在「Auckland」」。 */

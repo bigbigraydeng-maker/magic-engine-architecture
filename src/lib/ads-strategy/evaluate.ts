@@ -246,11 +246,14 @@ export async function evaluateClientAdHealth(
 
     // Industry only picks the result noun in the copy (ads playbook, G11). A failed
     // read falls back to the neutral default words — never guessed from client name/ID.
-    const { data: clientRow } = await supabaseAdmin
+    const { data: clientRow, error: industryError } = await supabaseAdmin
       .from('clients')
       .select('industry')
       .eq('id', clientId)
       .maybeSingle()
+    if (industryError) {
+      console.warn('[ads-strategy/evaluate] 读客户行业失败，文案改用中性词', { clientId, error: industryError.message })
+    }
     const industry = (clientRow as { industry?: string | null } | null)?.industry ?? null
 
     const payload = buildNarrativePayload(groupByCampaign(rows), insightDate, cfg, industry)

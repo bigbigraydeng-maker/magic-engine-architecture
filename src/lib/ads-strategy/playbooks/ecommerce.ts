@@ -4,7 +4,6 @@ import type { AdsPlaybook } from './types'
 export const ECOMMERCE_ADS_PLAYBOOK: AdsPlaybook = {
   key: 'retail',
   resultNoun: '订单',
-  primaryOutcomeNoun: '成交',
   costPerResultLabel: '每个订单',
   expectedGeoNoun: '配送市场',
 }
