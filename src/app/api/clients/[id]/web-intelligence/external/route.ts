@@ -23,7 +23,7 @@ function text(value: unknown): string | undefined {
 
 function queryList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
-  return value.filter((item): item is string => typeof item === 'string' && item.trim()).map(item => item.trim()).slice(0, 10)
+  return value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map(item => item.trim()).slice(0, 10)
 }
 
 /** Admin-only bounded entry point for non-competitor WI channels. */
