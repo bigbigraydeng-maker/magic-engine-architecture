@@ -529,6 +529,7 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **TD.16** 未做月报端到端测试（CTS Tours 实际客户）
 - [ ] **TD.17** 聚合器架构文档缺失
 - [ ] **TD.18** 缺少聚合器性能 / 错误监控仪表板
+- [ ] **TD.19** 私信 AI 摘要的 `trip`（旅游行程专属字段）在 schema 层被建成"通用必填对象"——`src/lib/messenger/brief-schema.ts` 的 `TripDetailsSchema` 永远存在、永远带默认值，`MessengerBriefSchema.trip` 没有"这个客户要不要这个字段"的开关。2026-09-13 修复私信 AI 摘要冒充 CTS 身份的事故（[#1629](https://github.com/bigbigraydeng-maker/magic-engine/pull/1629)，分支 `feat/messenger-brief-declients-fix-agent`）时，止血方案只在代码层加了一道硬闸：`generateBrief`（`src/lib/messenger/brief.ts`）按 `clients.industry` 是否命中旅游关键词（复用 `hasIndustryFeature`）决定 `trip` 能不能非空，命中不了的客户一律强制清空成 `NULL_TRIP`，不管模型实际返回了什么。这是挡住"身份冒用 + 编造旅游需求"的最小止血，不是"行业专属字段该怎么建模"的长期方案——下一个需要专属结构化字段的行业（例如地产的"看房意向"）会重复同一种补丁思路。长期应随「客户知识库」项目（PM 已拍板，见 [docs/DECISIONS.md「2026-09-13 · 客户知识库作为 Governed Lead-Reply Agent 的事实层」](./DECISIONS.md)）把 `trip` 重新建模成客户可配置的行业专属结构化字段，而不是永远把旅游一个特例硬编码进通用 schema。本次未动 schema：这次任务范围是止血身份冒用 bug，重新设计 schema 牵连 `brief-cycle.ts` 调用链、数据库列形状和历史数据兼容，超出一次 A 级止血 PR 该做的事。子牙架构复审在设计阶段已指出这一点（见 #1629 PR 描述里的复审记录）。发现：Claude Code 会话，2026-09-13。
 
 ## Phase 11 — Creative Intelligence Engine（未来重点开发方向）
 
