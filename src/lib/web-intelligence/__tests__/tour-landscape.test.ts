@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ensureActionableTourLandscape, tourLandscapePrompt, validateTourLandscape } from '../tour-landscape'
+import { ensureActionableTourLandscape, formatTourLandscapeChatReply, tourLandscapePrompt, validateTourLandscape } from '../tour-landscape'
 
 describe('tour landscape summary', () => {
   it('validates bounded summary output', () => {
@@ -35,6 +35,14 @@ describe('tour landscape summary', () => {
     const prompt = tourLandscapePrompt({ client_name: 'Example', client_products: [], competitor_products: [], memory_context: 'x'.repeat(10000) })
     expect(prompt).not.toContain('x'.repeat(5001))
     expect(prompt).toContain('x'.repeat(5000))
+  })
+
+  it('renders JSON chat replies as readable business sections', () => {
+    const result = formatTourLandscapeChatReply('```json\n{"headline":"先核查 Signature","market_summary":"CTS 18天产品为 NZD 7,999。","client_opportunities":["核对路线差异"],"client_risks":["不要立即降价"]}\n```')
+    expect(result).toContain('结论：先核查 Signature')
+    expect(result).toContain('依据：CTS 18天产品为 NZD 7,999。')
+    expect(result).toContain('建议：\n- 核对路线差异')
+    expect(result).not.toContain('```json')
   })
 
   it('fills missing action sections without replacing a concrete AI market summary', () => {
