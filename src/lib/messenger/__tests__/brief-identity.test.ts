@@ -37,14 +37,19 @@ vi.mock('openai', () => ({
 
 let clientsRow: { name: string; industry: string | null } | null = null
 let clientsError: string | null = null
+let clientsQueryCount = 0
 
 vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: {
     from: () => ({
       select: () => ({
         eq: () => ({
-          maybeSingle: async () =>
-            clientsError ? { data: null, error: { message: clientsError } } : { data: clientsRow, error: null },
+          maybeSingle: async () => {
+            clientsQueryCount++
+            return clientsError
+              ? { data: null, error: { message: clientsError } }
+              : { data: clientsRow, error: null }
+          },
         }),
       }),
     }),
@@ -118,6 +123,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   clientsRow = null
   clientsError = null
+  clientsQueryCount = 0
   process.env.OPENAI_API_KEY = 'test-key'
 })
 
@@ -207,6 +213,19 @@ describe('buildSystemPrompt — 身份与事实必须来自参数，不能写死
     // 而是 clientFactsBlock 真正拼出事实区块时才会出现的完整标题。
     expect(prompt).not.toContain('CLIENT FACTS — the only extra facts')
   })
+
+  it('🔴 industry 是自由文本（生产库真实存量值 "Travel — Tour Operator"）也要认成旅游客户', () => {
+    // 魏征实施后复审发现：裸字符串相等 `=== 'travel'` 会漏判 clients.industry
+    // 里的自由文本历史值，生产库里 Kiwi Silk Road Travel (DEMO) 存的正是这个值。
+    // isTravelIndustry 改用仓库已有的 hasIndustryFeature 之后必须认得出它。
+    const freeTextTravelClient: ClientIdentity = {
+      name: 'Kiwi Silk Road Travel',
+      industry: 'Travel — Tour Operator',
+    }
+    const prompt = buildSystemPrompt(freeTextTravelClient, null)
+    expect(prompt).toContain('NAMES — tour names')
+    expect(prompt).not.toContain('MUST be null')
+  })
 })
 
 describe('generateBrief — 端到端：钓鱼广告短路，不进模型', () => {
@@ -215,6 +234,20 @@ describe('generateBrief — 端到端：钓鱼广告短路，不进模型', () =
     expect(brief.customer_needs).toEqual([])
     expect(brief.summary).not.toContain('旅游')
     expect(mockCreate).not.toHaveBeenCalled()
+    expect(clientsQueryCount).toBe(0)
+  })
+})
+
+describe('generateBrief — 未配置模型 API key（dev/test 环境）', () => {
+  it('🔴 没有 key 时零网络调用：不查 clients 表，也不调模型，直接走确定性 fallback', async () => {
+    delete process.env.OPENAI_API_KEY
+    clientsRow = NAL_IDENTITY
+
+    const brief = await generateBrief(NAL_GENUINE_MESSAGES, NAL_CLIENT_ID)
+
+    expect(brief.summary).toContain('未生成 AI 摘要')
+    expect(mockCreate).not.toHaveBeenCalled()
+    expect(clientsQueryCount).toBe(0)
   })
 })
 
@@ -337,5 +370,32 @@ describe('generateBrief — 回归：CTS 真实客户（industry=travel）质量
     expect(sentPrompt).toContain('CTS Tours NZ')
     expect(sentPrompt).toContain('operated in New Zealand for 25 years')
     expect(sentPrompt).not.toContain('New Asian Logistics')
+  })
+})
+
+describe('generateBrief — 端到端：industry 是自由文本的旅游客户不被硬闸误清空', () => {
+  it('🔴 生产库真实存量值 "Travel — Tour Operator" 也要保留行程信息，不当成非旅游客户清空', async () => {
+    // 魏征实施后复审发现：裸字符串相等会漏判这种自由文本，生产库里
+    // Kiwi Silk Road Travel (DEMO) 存的正是这个值。改用 hasIndustryFeature 后
+    // 这里必须跟标准值 'travel' 走同一条路径。
+    clientsRow = { name: 'Kiwi Silk Road Travel', industry: 'Travel — Tour Operator' }
+    mockModelReply({
+      ...BASE_REPLY_FIELDS,
+      summary: '客户对 "Silk Road Explorer" 感兴趣。',
+      customer_needs: ['了解更多关于 "Silk Road Explorer" 的信息'],
+      trip: {
+        tour_interest: 'Silk Road Explorer',
+        travel_window: null,
+        party_size: null,
+        departure_city: null,
+        first_time_to_china: null,
+        budget_signal: null,
+      },
+      draft_reply: '',
+    })
+
+    const brief = await generateBrief(CTS_REAL_MESSAGES, 'd0000000-0000-0000-0000-000000000002')
+
+    expect(brief.trip.tour_interest).toBe('Silk Road Explorer')
   })
 })

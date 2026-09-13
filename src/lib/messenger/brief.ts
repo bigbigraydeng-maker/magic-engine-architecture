@@ -32,6 +32,7 @@ import {
   type TripDetails,
 } from './brief-schema'
 import { CLIENT_BRIEF_FACTS, type ClientBriefFacts } from './brief-client-facts'
+import { hasIndustryFeature } from '@/lib/clients/industry-features'
 
 /** Wait this long after the last message before summarising. */
 export const QUIET_PERIOD_MS = 30 * 60 * 1000
@@ -87,21 +88,30 @@ export interface ClientIdentity {
   industry: string | null
 }
 
-const TRAVEL_INDUSTRY = 'travel'
-
+/**
+ * Reuses the same industry-keyword matcher the admin UI already uses to
+ * decide whether a client sees travel-only features (`src/lib/clients/industry-features.ts`).
+ * `clients.industry` has free-text history ("Travel — Tour Operator", not
+ * just "travel") — matching only the exact string "travel" would silently
+ * repeat this incident's shape for any client whose industry wasn't typed
+ * in the canonical form (confirmed against production: at least one travel
+ * client is stored as free text, not the canonical 'travel' value).
+ */
 function isTravelIndustry(identity: ClientIdentity): boolean {
-  return identity.industry === TRAVEL_INDUSTRY
+  return hasIndustryFeature(identity.industry, 'tailor_made')
 }
 
 /**
  * Read who we are summarising for straight from `clients` — never assume it.
  *
  * A real read failure (network blip, connection reset) THROWS rather than
- * degrading to a neutral identity: `generateDueBriefs` already catches and
- * retries per-conversation failures (brief-cycle.ts), so a transient error
- * here costs one retry, not a silently wrong identity. Only a genuinely
- * missing row (queried fine, no such client) falls back to a neutral name —
- * it must NEVER fall back to another client's name.
+ * degrading to a neutral identity: `generateDueBriefs` already catches
+ * per-conversation failures and counts them as `failed` (brief-cycle.ts) —
+ * this conversation simply has no brief written this run and is picked up
+ * again on a later run (it still qualifies under `shouldGenerateBrief`),
+ * rather than a transient error silently producing a wrong identity right
+ * now. Only a genuinely missing row (queried fine, no such client) falls
+ * back to a neutral name — it must NEVER fall back to another client's name.
  */
 async function loadClientIdentity(clientId: string): Promise<ClientIdentity> {
   const { data, error } = await supabaseAdmin
@@ -298,11 +308,13 @@ export async function generateBrief(
 ): Promise<MessengerBrief> {
   if (looksLikeAutomatedSpam(messages)) return noiseBrief()
 
-  const identity = await loadClientIdentity(clientId)
-
+  // apiKey gate stays BEFORE any network call (including the clients lookup
+  // below) — dev/test with no key configured must still make zero network
+  // calls, per this function's own contract (see docstring above).
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) return fallbackBrief(messages)
 
+  const identity = await loadClientIdentity(clientId)
   const facts = CLIENT_BRIEF_FACTS[clientId] ?? null
   const { default: OpenAI } = await import('openai')
   const client = new OpenAI({ apiKey })
