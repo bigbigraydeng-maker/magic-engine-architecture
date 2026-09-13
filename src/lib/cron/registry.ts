@@ -118,10 +118,13 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   // 补登记（2026-09-05 对账测试抓出）：Magic Insight 每日资讯管道，2026-08-20 就进了 render.yaml，
   // 清单里一直没有。老任务不补 addedAt（理由同上面 ad-readback-sweep-daily 那条）。
   { service: 'market-intel-daily', jobName: 'market-intel-daily', schedule: '0 18 * * *', logsRuns: true },
-  // 🔴 schedule 2026-09-13 起从 `10 * * * *` 改成 `10 */2 * * *`（issue #1581，H14）：
-  //    `/api/webhooks/meta/messenger` 上线后这条降级成 webhook 的兜底，不用再每小时跑。
-  //    名字仍叫 messenger-hourly / messenger-sync-hourly，没有跟着改（见 render.yaml 同一处注释）。
-  { service: 'messenger-hourly', jobName: 'messenger-sync-hourly', schedule: '10 */2 * * *', logsRuns: true },
+  // ⏸️ 降频到每 2 小时的计划（issue #1581，H14）已从这版代码抽出、暂不落地——
+  //    Meta 生产企业验证（issue #1299）截至提交时仍未过，`/api/webhooks/meta/messenger`
+  //    webhook 订阅打不开，这条 cron 仍是唯一在收真实私信的路径，现在降频只会让消息
+  //    进系统变慢，没有任何东西补上腾出来的窗口。保持 `10 * * * *` 不变，等 webhook
+  //    真正收到生产流量、验证过延迟确实缩短之后，再单独一个 PR 改这条 schedule
+  //    （同时改 render.yaml 和下面 messenger-brief-hourly 那条，两处要一起动）。
+  { service: 'messenger-hourly', jobName: 'messenger-sync-hourly', schedule: '10 * * * *', logsRuns: true },
   // 🔴 同一条 Render 服务里的**第二个**任务：startCommand 是 `curl 私信同步 && curl 私信简报`，
   //    两条 curl 各写各的运行记录。清单原来一条服务只登记一个 jobName，第二条就此隐形 ——
   //    这正是它能停 14 天没人发现的原因。
@@ -139,16 +142,13 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   //    都没执行过，销售的客户需求卡停更 14 天。现在改成同步跑完发一张条子、
   //    `cloud-messenger-brief-after-sync` 收到就写。
   //
-  //    schedule 跟着 messenger-hourly 那条私信同步走，因为它由同步跑完发的条子触发。
-  //    2026-09-13 起私信同步改成每 2 小时一次（issue #1581，H14：webhook 上线后同步降级
-  //    成兜底），这条写卡任务的实际节奏也跟着变成每 2 小时一次 —— 这里的 schedule 同步
-  //    改成 `10 */2 * * *`，否则健康检查会拿「该 1 小时一轮」的旧门槛去卡「现在 2 小时
-  //    一轮」的真实节奏，天天误报「过期没跑」。
+  //    schedule 跟着 messenger-hourly 那条私信同步走，因为它由同步跑完发的条子触发——
+  //    上面那条私信同步这次没有降频（见其注释），这里也保持 `10 * * * *` 不变。
   //
   //    🔴 **故意不填 `addedAt`。** 它不是新任务，是一条停了 14 天的老任务改了触发方式。
   //       填今天的日期会给它约 62 小时宽限期，而这段时间正好会盖住「Inngest 那边忘了
   //       重新 Sync、它其实还是没跑」—— 那恰恰是这次最该被喊出来的失败形态。
-  { service: 'inngest:cloud-messenger-brief-after-sync', jobName: 'messenger-brief-hourly', schedule: '10 */2 * * *', logsRuns: true, scheduler: 'inngest' },
+  { service: 'inngest:cloud-messenger-brief-after-sync', jobName: 'messenger-brief-hourly', schedule: '10 * * * *', logsRuns: true, scheduler: 'inngest' },
   { service: 'meta-leads-hourly', jobName: 'meta-leads-sync', schedule: '25 * * * *', logsRuns: true },
   { service: 'oztop-seo-optimizer', jobName: 'oztop-seo-optimizer', schedule: '0 5 * * 1', logsRuns: true },
   { service: 'pm-daily-todo', jobName: 'pm-daily-todo', schedule: '0 19 * * 0-4', logsRuns: true },

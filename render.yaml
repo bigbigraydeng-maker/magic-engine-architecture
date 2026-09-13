@@ -924,15 +924,17 @@ services:
   # 所以新增客户不需要动这里。
   # max-time 跟接口的 maxDuration 对齐(600s)再留一点余量。
   #
-  # 🔴 **频率从每小时改成每 2 小时**（issue #1581，H14）：`/api/webhooks/meta/messenger`
-  #    上线后，实时收信已经改由那条 webhook 负责（见其文件头），这条任务降级成
-  #    「webhook 掉线/漏投时的兜底」，不再需要每小时跑。`src/lib/messenger/sync.ts`
-  #    的 `storeConversation` 配套改成「只在本轮数据比已存的新时才覆盖
-  #    participant_name/last_message_at/last_message_from」，见该文件注释——
-  #    否则这条兜底任务的旧快照会把 webhook 刚写的最新状态冲掉。
-  #    名字仍叫 messenger-hourly / messenger-sync-hourly，没有跟着改名，避免
-  #    触发 Render 把它当新服务开一个（旧服务需要人工去后台删），CRON_REGISTRY
-  #    的对账测试也是按这个字面量认它——只改 schedule 这一处。
+  # ⏸️ **降频到每 2 小时的改动已从本 PR 抽出，暂不落地**（issue #1581，H14 原计划）：
+  #    方案是"`/api/webhooks/meta/messenger` 上线后，实时收信改由那条 webhook 负责，
+  #    这条任务降级成兜底"，但截至提交这版代码，Meta 生产企业验证仍未通过
+  #    （issue #1299 仍是 OPEN），webhook 订阅还打不开。这条 cron 现在仍是**唯一在收
+  #    真实消息的路径**——这时候降频 = 私信进系统的延迟从 ≤1h 变成 ≤2h，是纯粹的倒退，
+  #    没有任何东西在补它腾出来的窗口。CTS/NAL 广告私信留资流程正在依赖这条延迟
+  #    （2026-09-13 CTS 广告顾问窗口反馈）。**保持每小时不变，等 #1299 关闭、webhook
+  #    真正收到生产流量、并用真实数据验证过之后，再单独一个 PR 改这条 schedule。**
+  #    `src/lib/messenger/sync.ts` 的 `storeConversation` 防覆写改动（"只在本轮数据比
+  #    已存的新时才覆盖 participant_name/last_message_at/last_message_from"）不受这条
+  #    影响，正常保留——那是数据正确性修复，跟频率无关，任何频率下都成立。
   #
   # ⚠️ 这条 curl **本来就会超时**(网关约 125 秒掐断返 524,而接口跑约 140 秒),
   #    Render 的运行日志里会看到 `curl: (22) ... error: 524` / `Exited with status 22`。
@@ -941,7 +943,7 @@ services:
   - type: cron
     name: messenger-hourly
     env: node
-    schedule: "10 */2 * * *"
+    schedule: "10 * * * *"
     buildCommand: ""
     startCommand: |
       curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
