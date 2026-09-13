@@ -37,9 +37,15 @@ export async function collectAndRecordExternalObservations(input: {
   observedAt: string
   validUntil?: string | null
   timeoutMs?: number
+  relevanceTerms?: string[]
   persist?: (observation: ExternalObservation) => Promise<string>
 }): Promise<ExternalRunReceipt> {
   const collection = await collectApifyExternalObservations(input)
+  if (input.relevanceTerms?.length) {
+    const terms = input.relevanceTerms.map(term => term.trim().toLowerCase()).filter(Boolean)
+    collection.rejected += collection.observations.filter(observation => !terms.some(term => `${observation.title}\n${observation.excerpt}`.toLowerCase().includes(term))).length
+    collection.observations = collection.observations.filter(observation => terms.some(term => `${observation.title}\n${observation.excerpt}`.toLowerCase().includes(term)))
+  }
   return persistCollection(collection, input.persist ?? recordExternalObservation)
 }
 
