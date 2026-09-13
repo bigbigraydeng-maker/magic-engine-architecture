@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
 
-import { classifyConversation } from '../classify'
+import { classifyConversation, TOURISM_POST_SALE_POLICY } from '../classify'
 import { supabaseAdmin } from '@/lib/supabase'
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
@@ -21,19 +21,101 @@ interface Row {
   sent_at: string
 }
 
+/** 旅游行业判据里的关键词清单，直接复用 `TOURISM_POST_SALE_POLICY`，不再自己维护一份副本。 */
+const KEYWORDS = TOURISM_POST_SALE_POLICY.postSaleKeywords
+
 /**
- * 拿一组消息行（已经按 sent_at 排好序）喂给 mock 的 supabase 链式调用。
- * `.range(from, to)` 真的按请求的区间切片返回——这样能测出「读全部消息要靠
- * 分页」这件事本身，而不是靠 mock 一次性把所有行都吐出来蒙混过关。
+ * 关键词现在整体加引号转义（`body.ilike."%kw%"`），引号内可能含原样的逗号 /
+ * 括号，不能再直接 `.split(',')` —— 按是否在引号内手动切分子句。
+ */
+function splitOrClauses(filterExpr: string): string[] {
+  const clauses: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < filterExpr.length; i++) {
+    const ch = filterExpr[i]
+    if (ch === '\\' && inQuotes) {
+      current += ch + (filterExpr[i + 1] ?? '')
+      i += 1
+      continue
+    }
+    if (ch === '"') {
+      inQuotes = !inQuotes
+      current += ch
+      continue
+    }
+    if (ch === ',' && !inQuotes) {
+      clauses.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current) clauses.push(current)
+  return clauses
+}
+
+/** 反转实现里的两层转义（ilike 通配符层 + PostgREST 引号层），还原成原始关键词。 */
+function unescapeIlikeValue(clause: string): string | undefined {
+  const match = clause.match(/^body\.ilike\."%([\s\S]*)%"$/)
+  if (!match) return undefined
+  // PostgREST 引号解析和 ilike 默认转义字符都是「反斜杠吃掉下一个字符」，两层各还原一次。
+  return match[1].replace(/\\(.)/g, '$1').replace(/\\(.)/g, '$1')
+}
+
+/** 从实现拼出的 `.or()` 过滤表达式里还原关键词列表。 */
+function keywordsFromOrFilter(filterExpr: string): string[] {
+  return splitOrClauses(filterExpr)
+    .map(unescapeIlikeValue)
+    .filter((kw): kw is string => kw !== undefined)
+}
+
+function containsAnyKeyword(body: string | null, keywords: string[]): boolean {
+  if (!body) return false
+  const lower = body.toLowerCase()
+  return keywords.some((kw) => lower.includes(kw.toLowerCase()))
+}
+
+/**
+ * 拿一组消息行（不要求预先排序）喂给 mock 的 supabase 链式调用，模拟实现
+ * 现在会发出的三条独立查询：关键词存在性查询（`.or()` + `limit(1)`，直接
+ * `await` 链本身）、首条 / 末条消息时间查询（`.order() + .limit(1).maybeSingle()`）。
+ * 关键词从实际传进 `.or()` 的过滤表达式里还原，而不是写死一份 tourism 关键词 ——
+ * 这样测试才能验证「调用方传什么 policy，查询就按什么 policy 过滤」。
  */
 function stubMessages(rows: Row[]) {
   mockFrom.mockImplementation((table: string) => {
     if (table !== 'conversation_messages') throw new Error(`fake supabase: 表 '${table}' 没建模`)
+
+    let orFilterKeywords: string[] | null = null
+    let ascending = true
+
+    const sortedAsc = [...rows].sort(
+      (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+    )
+
     const chain: Record<string, unknown> = {
       select: () => chain,
       eq: () => chain,
-      order: () => chain,
-      range: async (from: number, to: number) => ({ data: rows.slice(from, to + 1), error: null }),
+      or: (filterExpr: string) => {
+        orFilterKeywords = keywordsFromOrFilter(filterExpr)
+        return chain
+      },
+      order: (_col: string, opts?: { ascending?: boolean }) => {
+        ascending = opts?.ascending ?? true
+        return chain
+      },
+      limit: () => chain,
+      maybeSingle: async () => {
+        const edge = ascending ? sortedAsc[0] : sortedAsc[sortedAsc.length - 1]
+        return { data: edge ?? null, error: null }
+      },
+      then: (resolve: (v: { data: Row[] | null; error: null }) => unknown) => {
+        const matched = orFilterKeywords
+          ? rows.filter((r) => containsAnyKeyword(r.body, orFilterKeywords as string[])).slice(0, 1)
+          : rows
+        return Promise.resolve({ data: matched, error: null }).then(resolve)
+      },
     }
     return chain as never
   })
@@ -63,13 +145,13 @@ describe('classifyConversation', () => {
     for (const { label, body } of cases) {
       it(label, async () => {
         stubMessages([{ body, sent_at: iso(0) }])
-        await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
+        await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('post_sale')
       })
     }
 
     it('关键词大小写不敏感（BOOKING 全大写也要认）', async () => {
       stubMessages([{ body: 'Question about my BOOKING reference', sent_at: iso(0) }])
-      await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
+      await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('post_sale')
     })
   })
 
@@ -85,7 +167,7 @@ describe('classifyConversation', () => {
     for (const { label, body } of cases) {
       it(label, async () => {
         stubMessages([{ body, sent_at: iso(0) }])
-        await expect(classifyConversation(CONVO)).resolves.toBe('lead_intake')
+        await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('lead_intake')
       })
     }
   })
@@ -98,7 +180,7 @@ describe('classifyConversation', () => {
         { body: '你好，请问有没有团期', sent_at: iso(0) },
         { body: '好的，谢谢', sent_at: iso(THIRTY_DAYS_MS) },
       ])
-      await expect(classifyConversation(CONVO)).resolves.toBe('lead_intake')
+      await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('lead_intake')
     })
 
     it('30 天零 1 秒 → post_sale', async () => {
@@ -106,84 +188,76 @@ describe('classifyConversation', () => {
         { body: '你好，请问有没有团期', sent_at: iso(0) },
         { body: '好的，谢谢', sent_at: iso(THIRTY_DAYS_MS + 1000) },
       ])
-      await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
+      await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('post_sale')
     })
   })
 
   it('没有消息（比如 conversationId 传错）→ 保守判 lead_intake', async () => {
     stubMessages([])
-    await expect(classifyConversation(CONVO)).resolves.toBe('lead_intake')
+    await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('lead_intake')
+  })
+
+  describe('判据必须由调用方显式传入（Codex 复审 P1）', () => {
+    it('地产客户传自己的 policy 时，"booking" 不再误判成售后', async () => {
+      stubMessages([
+        {
+          body: "I'd like to make a booking for an appraisal/consultation",
+          sent_at: iso(0),
+        },
+      ])
+      const realEstatePolicy = {
+        postSaleKeywords: ['已签约', '已付定金'],
+        postSaleSpanMs: 30 * 24 * 60 * 60 * 1000,
+      }
+      await expect(classifyConversation(CONVO, realEstatePolicy)).resolves.toBe('lead_intake')
+    })
+  })
+
+  describe('policy 关键词含 PostgREST / ilike 特殊字符（Codex 复审 P2）', () => {
+    it('关键词含逗号、括号、双引号仍能正确拼过滤表达式并命中', async () => {
+      const body = '好的，我已确认(订单号 A1"B)，谢谢'
+      stubMessages([{ body, sent_at: iso(0) }])
+      const policy = {
+        postSaleKeywords: ['已确认(订单号 A1"B)'],
+        postSaleSpanMs: 30 * 24 * 60 * 60 * 1000,
+      }
+      await expect(classifyConversation(CONVO, policy)).resolves.toBe('post_sale')
+    })
+
+    it('关键词含 % / _ 只当字面量匹配，不当通配符误判', async () => {
+      // 正文里出现的是任意字符夹在中间，如果 % / _ 被当通配符会误命中；
+      // 只有正文里出现字面量 "50%_off" 才应该判 post_sale。
+      stubMessages([{ body: '随便什么内容都不该命中', sent_at: iso(0) }])
+      const policy = {
+        postSaleKeywords: ['50%_off'],
+        postSaleSpanMs: 30 * 24 * 60 * 60 * 1000,
+      }
+      await expect(classifyConversation(CONVO, policy)).resolves.toBe('lead_intake')
+    })
+
+    it('空关键词数组不抛错，也不会生成无效的 .or(\'\')', async () => {
+      stubMessages([{ body: '你好，请问有没有团期', sent_at: iso(0) }])
+      const policy = { postSaleKeywords: [], postSaleSpanMs: 30 * 24 * 60 * 60 * 1000 }
+      await expect(classifyConversation(CONVO, policy)).resolves.toBe('lead_intake')
+    })
   })
 
   it('查询报错要往上抛，不能吞掉当作"没有消息"', async () => {
     mockFrom.mockImplementation((table: string) => {
       if (table !== 'conversation_messages') throw new Error(`fake supabase: 表 '${table}' 没建模`)
+      const error = { message: 'network down' }
       const chain: Record<string, unknown> = {
         select: () => chain,
         eq: () => chain,
+        or: () => chain,
         order: () => chain,
-        range: async () => ({ data: null, error: { message: 'network down' } }),
+        limit: () => chain,
+        maybeSingle: async () => ({ data: null, error }),
+        then: (resolve: (v: { data: null; error: typeof error }) => unknown) =>
+          Promise.resolve({ data: null, error }).then(resolve),
       }
       return chain as never
     })
-    await expect(classifyConversation(CONVO)).rejects.toThrow('network down')
-  })
-
-  describe('分页读取（Codex 复审 P2：单次查询不能依赖 PostgREST 默认行数上限）', () => {
-    it('对话消息数超过一页（500 条），售后关键词出现在第 501 条也要能命中', async () => {
-      const rows: Row[] = []
-      for (let i = 0; i < 500; i++) {
-        rows.push({ body: `第 ${i} 条闲聊消息`, sent_at: iso(i * 1000) })
-      }
-      // 第 501 条（下标 500，超过单页 500 条的边界）才带售后关键词。
-      rows.push({ body: '我已付了尾款', sent_at: iso(500 * 1000) })
-
-      stubMessages(rows)
-      await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
-    })
-
-    it('对话消息数超过一页时，"最后一条消息"要是真正的最后一条，不是第一页的最后一条', async () => {
-      const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
-      const rows: Row[] = []
-      for (let i = 0; i < 500; i++) {
-        rows.push({ body: `第 ${i} 条闲聊消息`, sent_at: iso(i * 1000) })
-      }
-      // 真正的最后一条跨度超过 30 天，但如果分页没做全，第一页最后一条（下标 499）
-      // 跨度远不到 30 天，会被误判成 lead_intake。
-      rows.push({ body: '好的谢谢', sent_at: iso(THIRTY_DAYS_MS + 1000) })
-
-      stubMessages(rows)
-      await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
-    })
-  })
-
-  describe('关键词/跨度可覆盖（Codex 复审 P1：默认值不是全平台硬编码）', () => {
-    it('传入自定义关键词时，CTS 默认关键词不再生效，只认传入的那一份', async () => {
-      stubMessages([{ body: '我已付了定金', sent_at: iso(0) }])
-      // 自定义策略里没有"我已付"，CTS 默认值里有——验证真的切换成了传入的策略。
-      await expect(
-        classifyConversation(CONVO, { postSaleKeywords: ['appraisal booking'] }),
-      ).resolves.toBe('lead_intake')
-    })
-
-    it('传入自定义关键词命中时判 post_sale', async () => {
-      stubMessages([{ body: "I'd like an appraisal booking please", sent_at: iso(0) }])
-      await expect(
-        classifyConversation(CONVO, { postSaleKeywords: ['appraisal booking'] }),
-      ).resolves.toBe('post_sale')
-    })
-
-    it('传入自定义跨度阈值时，按传入值判断，不是固定 30 天', async () => {
-      const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
-      stubMessages([
-        { body: '你好', sent_at: iso(0) },
-        { body: '谢谢', sent_at: iso(SEVEN_DAYS_MS + 1000) },
-      ])
-      // 默认 30 天阈值下这跨度判不了 post_sale；传入 7 天阈值应该判成 post_sale。
-      await expect(classifyConversation(CONVO)).resolves.toBe('lead_intake')
-      await expect(
-        classifyConversation(CONVO, { postSaleSpanMs: SEVEN_DAYS_MS }),
-      ).resolves.toBe('post_sale')
-    })
+    await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).rejects.toThrow('network down')
   })
 })
