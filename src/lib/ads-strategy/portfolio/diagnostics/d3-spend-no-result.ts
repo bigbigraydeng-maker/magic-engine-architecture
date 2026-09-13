@@ -9,7 +9,7 @@
  */
 
 import type { AccountContext } from './context'
-import { adsetRows, sumSpend, unitOf } from './context'
+import { adsetRows, money, sumSpend, unitOf } from './context'
 import { countOutcome, OUTCOME_STEP_LABEL } from '../outcome-ladder'
 import type { Diagnosis, DiagnosisInput } from './types'
 import { D3_COST_MULTIPLE } from './thresholds'
@@ -75,8 +75,8 @@ export function diagnoseSpendNoResult(ctx: AccountContext, input: DiagnosisInput
     out.push({
       code: 'D3', status: 'hit',
       title: results === 0
-        ? `花钱没结果：近 7 天花了 ${spend}，${OUTCOME_STEP_LABEL[outcome.primary]} 0 个`
-        : `花钱结果太少：近 7 天花了 ${spend}，${OUTCOME_STEP_LABEL[outcome.primary]} ${results} 个，每个 ${cpr}（目标 ${target}）`,
+        ? `花钱没结果：近 7 天花了 ${money(ctx, spend)}，${OUTCOME_STEP_LABEL[outcome.primary]} 0 个`
+        : `花钱结果太少：近 7 天花了 ${money(ctx, spend)}，${OUTCOME_STEP_LABEL[outcome.primary]} ${results} 个，每个 ${money(ctx, cpr)}（目标 ${money(ctx, target)}）`,
       units: [unit],
       evidence: { window_start: ctx.window[0], window_end: ctx.date, spend, results, cost_per_result: cpr, target_cost: target, multiple: D3_COST_MULTIPLE },
       sample: [{ label: OUTCOME_STEP_LABEL[outcome.primary], value: results }, { label: '有花费的天数', value: rows.filter(r => r.spend > 0).length }],

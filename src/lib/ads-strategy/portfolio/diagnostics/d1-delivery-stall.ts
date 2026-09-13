@@ -19,7 +19,7 @@
  */
 
 import type { AccountContext } from './context'
-import { isDelivering, minorToMajor, shiftDate } from './context'
+import { isDelivering, minorToMajor, money, shiftDate } from './context'
 import type { Diagnosis, HourlyRow } from './types'
 import {
   D1_MIN_STALL_HOURS,
@@ -166,7 +166,12 @@ export function diagnoseDeliveryStall(ctx: AccountContext, evaluatedAt: string):
   return {
     ...base,
     status: 'hit',
-    title: `投放卡住：当天 ${run.start}:00 起连续 ${run.end - run.start} 小时零投放${remaining !== null ? `，日预算还剩 ${remaining}` : ''}`,
+    title: `投放卡住：当天 ${run.start}:00 起（账户时区 ${ctx.account.timezone ?? 'UTC'}）连续 ${run.end - run.start} 小时零投放${remaining !== null ? `，日预算还剩 ${money(ctx, remaining)}` : ''}`,
+    manualTask: {
+      what: `广告账户 ${ctx.account.adAccountId} 在 ${D} ${run.start}:00 之后钱花不出去。`,
+      how: '只看不改：打开广告后台看这个账户下午为什么没花钱（账户单日花费上限、付款方式、广告审核）；是单日上限就去账单页处理。',
+      href: `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${ctx.account.adAccountId.replace(/^act_/, '')}`,
+    },
     evidence: {
       ...base.evidence,
       ...runExtra,

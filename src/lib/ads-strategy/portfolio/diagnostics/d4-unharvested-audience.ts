@@ -10,7 +10,7 @@
  */
 
 import type { AccountContext } from './context'
-import { adsetRows, isDelivering, localDayEndUtc, sumSpend, unitOf } from './context'
+import { adsetRows, isDelivering, localDayEndUtc, money, sumSpend, unitOf } from './context'
 import type { Diagnosis } from './types'
 import { D4_AUDIENCE_FLOOR, D4_AUDIENCE_MIN_AGE_HOURS, D4_MIN_AWARENESS_DAYS, D4_MIN_AWARENESS_SPEND } from './thresholds'
 
@@ -63,7 +63,7 @@ export function diagnoseUnharvestedAudience(ctx: AccountContext): Diagnosis | nu
     }
     return {
       ...base, status: 'hit',
-      title: `攒了人没收割：近 7 天破冰花了 ${spend}（${activeDays} 天），但没有任何受众在收看过这些视频的人`,
+      title: `攒了人没收割：近 7 天破冰广告花了 ${money(ctx, spend)}（${activeDays} 天），但没有建「看过这些视频的人」这个受众，看过的人没被找回来`,
       evidence: baseEvidence,
       reasons: ['没有建「看过这些视频的人」这个受众（按视频编号核对，不按名字猜）'],
     }
