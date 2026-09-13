@@ -1,0 +1,281 @@
+-- ============================================================================
+-- Client Knowledge Base — step 2/6 (Issue #1644, depends on #1643)
+--
+-- 目的：AI 对客户说价格/时效/承诺/政策类事实之前，必须先过"ME 内部批准 +
+-- 客户本人确认"两道闸（双签）。这个迁移建立那道闸的**存储层**：
+--   1. client_knowledge_facts        — 逐条知识事实，双签字段落在行上
+--   2. client_knowledge_mining_runs  — 萃取回执（扫了什么、花了多少、结果如何）
+--   3. client_knowledge_events       — 只增不改的开关/阶段事件流
+--
+-- 本迁移只建表。不接萃取工作流、不接审核页面（见 Issue #1644"明确不做"）。
+-- 🔴 上生产库需 PM 显式 go，本 issue 只在本机 PG 沙盘重放验证。
+-- ============================================================================
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 1. client_knowledge_facts —— 逐条知识事实 + 双签
+--
+-- 🔴 双签的方向性：approved_* 是 ME 内部审核（谁批的/什么时候），
+--    client_confirmed_* 是客户本人确认（谁确认的/什么时候/如果拒绝写了什么）。
+--    两者互相独立，`getClientKnowledge()` 的 customer_reply 用途会同时要求
+--    两者都非空（对 price/timeline/commitment/policy 四类敏感条目）。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
+  id                          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id                   uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+
+  -- 事实身份：同客户下 fact_key + scope 唯一 —— 重复萃取到同一条事实必须走
+  -- UPDATE，不许开一条新行（否则同一件事在库里会有多个"当前"版本）。
+  fact_key                    text NOT NULL,
+  -- 产品线/线路/门店……等细分范围。无范围区分的事实用 '{}'::jsonb。
+  scope                       jsonb NOT NULL DEFAULT '{}'::jsonb,
+
+  statement                   text NOT NULL,
+  -- 机器可核对的结构化值（如 { "amount": 4, "currency": "NZD", "unit": "kg" }）。
+  -- 可空：有些事实（政策类）没有单一数值。
+  structured_value            jsonb,
+
+  status                      text NOT NULL DEFAULT 'candidate'
+                               CHECK (status IN ('candidate','approved','rejected','retired','superseded')),
+  visibility                  text NOT NULL
+                               CHECK (visibility IN ('customer_ok','internal_only','forbidden')),
+  -- 用 #1643 的 detectSensitivity()/resolveSensitivity() 在**写入时**判定，
+  -- 不是查询时现算——sensitivity 决定的是"这条事实该不该经过客户确认"，
+  -- 必须在事实定型的那一刻钉死，不能随判定函数以后调整而回溯改变历史行为。
+  sensitivity                 text NOT NULL
+                               CHECK (sensitivity IN ('price','timeline','commitment','policy','general')),
+
+  valid_from                  timestamptz NOT NULL DEFAULT now(),
+  valid_until                 timestamptz,
+  last_verified_at            timestamptz,
+
+  -- 萃取/录入来源类型。故意不加 CHECK enum——萃取管道（后续 issue）会引入
+  -- 新的来源类型，这里不预先猜它的词表。
+  source_kind                 text NOT NULL,
+
+  -- 🔴 只存引用（对话 id / 消息 id / 出现次数……），不复制客户原文本身。
+  evidence                    jsonb NOT NULL,
+
+  -- 冲突分组：萃取管道发现同一 fact_key 在不同对话里有矛盾说法时，
+  -- 把冲突的候选行打上同一个组号（应用层概念，这里不建外键目标表）。
+  conflict_group_id           uuid,
+
+  -- ME 内部批准（第一道闸）
+  approved_by_email           text,
+  approved_at                 timestamptz,
+
+  -- 客户本人确认（第二道闸）
+  client_confirmed_by_email   text,
+  client_confirmed_at         timestamptz,
+  client_rejection_note       text,
+  -- 客户确认的**是哪一版内容**——存 computeContentFingerprint() 在确认那一刻
+  -- 算出的指纹。读取入口用它跟"当前内容重新算一遍的指纹"比对：不一致 =
+  -- 客户确认的是旧版本，这条对 customer_reply 视为未确认。
+  client_confirmed_fingerprint text,
+
+  created_at                  timestamptz NOT NULL DEFAULT now(),
+  updated_at                  timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT valid_window_sane CHECK (valid_until IS NULL OR valid_until > valid_from),
+
+  -- approved_by_email / approved_at 必须成对出现
+  CONSTRAINT approval_pairing CHECK ((approved_by_email IS NULL) = (approved_at IS NULL)),
+  -- client_confirmed_by_email / client_confirmed_at 必须成对出现
+  CONSTRAINT confirmation_pairing CHECK ((client_confirmed_by_email IS NULL) = (client_confirmed_at IS NULL)),
+  -- 确认了就必须留下"确认的是哪一版"——否则读取入口没有指纹可比对，
+  -- 双签机制的"版本没变过"这条防线直接失效。
+  CONSTRAINT confirmation_fingerprint_pairing
+    CHECK ((client_confirmed_fingerprint IS NULL) = (client_confirmed_at IS NULL)),
+  -- status = 'approved' 必须已经有 ME 批准人——不能"标成已批准但查不到谁批的"。
+  CONSTRAINT approved_status_requires_approver
+    CHECK (status <> 'approved' OR (approved_by_email IS NOT NULL AND approved_at IS NOT NULL)),
+  -- 🔴 双签变异测试②：同一个邮箱不能既是批准人又是确认人。写入层面直接拒绝，
+  --    比读取时再判定更彻底——库里永远不会出现这种脏数据，也不依赖每一个
+  --    读取路径都记得重新检查一遍。
+  CONSTRAINT approver_confirmer_differ
+    CHECK (
+      client_confirmed_by_email IS NULL
+      OR approved_by_email IS NULL
+      OR lower(client_confirmed_by_email) <> lower(approved_by_email)
+    )
+);
+
+-- 同客户下 fact_key + scope 唯一——重复萃取走 UPDATE。
+-- jsonb 有默认 btree 操作符类（对象内部按已排序的键存储），可以直接建唯一索引。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_client_knowledge_facts_key_scope
+  ON public.client_knowledge_facts (client_id, fact_key, scope);
+
+CREATE INDEX IF NOT EXISTS idx_client_knowledge_facts_client_status
+  ON public.client_knowledge_facts (client_id, status);
+
+ALTER TABLE public.client_knowledge_facts ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+  -- 🔴 必须写 TO service_role。漏掉 = 对匿名访客敞开读写。不给 anon/authenticated
+  --    建任何 policy——这张表只能由服务端读取入口经过准入闸之后再读。
+  CREATE POLICY "service_role_full" ON public.client_knowledge_facts
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE OR REPLACE FUNCTION public.client_knowledge_facts_touch_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS client_knowledge_facts_touch_updated_at_trigger
+  ON public.client_knowledge_facts;
+CREATE TRIGGER client_knowledge_facts_touch_updated_at_trigger
+  BEFORE UPDATE ON public.client_knowledge_facts
+  FOR EACH ROW EXECUTE FUNCTION public.client_knowledge_facts_touch_updated_at();
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 2. client_knowledge_mining_runs —— 萃取回执
+--
+-- 本迁移只建表，不接萃取工作流本身（那是后续独立 issue）。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.client_knowledge_mining_runs (
+  id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- 外部调用方的幂等键（如 Inngest event id）。同一个 request_id 只应该有一条回执。
+  request_id               text NOT NULL,
+  client_id                uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+
+  conversations_scanned    integer NOT NULL DEFAULT 0,
+  messages_scanned         integer NOT NULL DEFAULT 0,
+  candidates_found         integer NOT NULL DEFAULT 0,
+  conflict_groups_found    integer NOT NULL DEFAULT 0,
+  llm_cost_usd             numeric,
+
+  status                   text NOT NULL DEFAULT 'queued'
+                            CHECK (status IN ('queued','running','succeeded','failed')),
+  error                    text,
+
+  started_at               timestamptz,
+  finished_at              timestamptz,
+  created_at               timestamptz NOT NULL DEFAULT now(),
+  updated_at               timestamptz NOT NULL DEFAULT now(),
+
+  -- 计数字段不许是负数——负数只可能是写入方算错了，不该被库悄悄收下。
+  CONSTRAINT mining_run_counts_non_negative CHECK (
+    conversations_scanned >= 0 AND messages_scanned >= 0
+    AND candidates_found >= 0 AND conflict_groups_found >= 0
+  ),
+  CONSTRAINT mining_run_cost_is_real_amount CHECK (
+    llm_cost_usd IS NULL OR (llm_cost_usd >= 0 AND llm_cost_usd <> 'NaN'::numeric)
+  ),
+  -- failed 必须留下 error；其余状态不许挂着一条 error 误导排查。
+  CONSTRAINT mining_run_error_matches_status CHECK (
+    (status = 'failed') = (error IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_client_knowledge_mining_runs_request_id
+  ON public.client_knowledge_mining_runs (request_id);
+CREATE INDEX IF NOT EXISTS idx_client_knowledge_mining_runs_client
+  ON public.client_knowledge_mining_runs (client_id, created_at DESC);
+
+ALTER TABLE public.client_knowledge_mining_runs ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+  CREATE POLICY "service_role_full" ON public.client_knowledge_mining_runs
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE OR REPLACE FUNCTION public.client_knowledge_mining_runs_touch_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS client_knowledge_mining_runs_touch_updated_at_trigger
+  ON public.client_knowledge_mining_runs;
+CREATE TRIGGER client_knowledge_mining_runs_touch_updated_at_trigger
+  BEFORE UPDATE ON public.client_knowledge_mining_runs
+  FOR EACH ROW EXECUTE FUNCTION public.client_knowledge_mining_runs_touch_updated_at();
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 3. client_knowledge_events —— 只增不改的开关/阶段事件流
+--
+-- 当前状态 = 按 (client_id, dimension) 取 created_at 最新的一条。
+--
+-- 🔴 照抄 20260808000003_me2_execution_kernel_v1.sql:210-245
+--    （authorization_decisions 的 append-only 触发器）的写法，但这次**删掉
+--    "允许把 consumed_at 从 NULL 写成一次值"那个例外**——本表任何字段、
+--    任何时候都不许 UPDATE，行也不许 DELETE。要记录新状态就 INSERT 新事件。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.client_knowledge_events (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id     uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+
+  -- 事件所属的维度：'kill_switch'（整个客户知识库开关）或 'phase'（阶段状态：
+  -- 如 mining/review/live/retired，具体阶段词表留给后续萃取/审核 issue 定义，
+  -- 这里故意不对 value 加 enum，避免抢在那些 issue 之前替它们发明词表）。
+  dimension     text NOT NULL CHECK (dimension IN ('kill_switch','phase')),
+  value         text NOT NULL,
+
+  reason        text,
+  payload       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  actor_email   text NOT NULL,
+
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_knowledge_events_client_dimension
+  ON public.client_knowledge_events (client_id, dimension, created_at DESC);
+
+ALTER TABLE public.client_knowledge_events ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+  CREATE POLICY "service_role_full" ON public.client_knowledge_events
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE OR REPLACE FUNCTION public.client_knowledge_events_append_only()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'client_knowledge_events is append-only: rows cannot be deleted';
+  END IF;
+  -- 🔴 跟 authorization_decisions 不同：这里**没有任何例外**——不像那张表
+  --    留了"consumed_at 可以从 NULL 写一次"的口子。任何 UPDATE 一律拒绝，
+  --    包括看起来无害的字段。要变更状态就 INSERT 一条新事件。
+  RAISE EXCEPTION 'client_knowledge_events is append-only: rows cannot be updated (insert a new event instead)';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS client_knowledge_events_append_only_trigger
+  ON public.client_knowledge_events;
+CREATE TRIGGER client_knowledge_events_append_only_trigger
+  BEFORE UPDATE OR DELETE ON public.client_knowledge_events
+  FOR EACH ROW EXECUTE FUNCTION public.client_knowledge_events_append_only();
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 4. getKnowledgeEntitlement() 复用 client_automation_policies（执行内核已有的
+--    按客户/按动作/带版本和生效期的授权模型），不新造会员系统。
+--
+-- 复用方式：action_key = 'client_knowledge.read'，mode='auto_approve' 表示
+-- 已授予、'deny' 或没有生效行表示未授予（fail-closed：查不到行 = 拒绝，
+-- 跟 client_automation_policies 本身"默认 deny 是没有行"的既有约定完全一致）。
+--
+-- 缺的是 basis（fde_managed/tier_499/enterprise）——client_automation_policies
+-- 原本没有地方放这个。新增一个 nullable 的 metadata jsonb 列，只存
+-- { "basis": "..." }，是全表唯一新增列，不影响任何既有查询（都用显式列名
+-- select，不会因为多一列而变化）。
+-- ────────────────────────────────────────────────────────────────────────────
+ALTER TABLE public.client_automation_policies
+  ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+COMMENT ON COLUMN public.client_automation_policies.metadata IS
+  'Issue #1644：client_knowledge.read 授权记录用它存 {"basis": "fde_managed"|"tier_499"|"enterprise"}。其余 action_key 的行留空对象，不强制使用。';
