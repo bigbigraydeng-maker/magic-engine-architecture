@@ -14,8 +14,12 @@
  * Verifier policy (Issue D) both read through here instead of trusting the website
  * or the model's own training knowledge.
  *
- * Platform note: this loader is client-agnostic (`clientId` picks the YAML file) —
- * only `config/clients/<clientId>/offerings.yaml` itself is client-specific data.
+ * Platform note: this loader is client-agnostic (`clientId` — a DB `client_id`,
+ * mapped to a config directory slug — picks the YAML file) — only
+ * `config/clients/<slug>/offerings.yaml` itself is client-specific data.
+ * `clientId` has no default: this is a shared, multi-client entry point, so a
+ * caller that omits it must fail loudly instead of silently reading another
+ * client's facts.
  */
 
 import { promises as fs } from 'fs'
@@ -121,14 +125,33 @@ interface CacheEntry {
 
 let cache: CacheEntry | null = null
 
+/**
+ * `conversations.client_id` is a DB UUID (e.g. CTS is
+ * `c0000000-0000-0000-0000-000000000000`), but `config/clients/*` directories
+ * use human-readable slugs so PM/FDE can find and edit them by hand. This is
+ * the one explicit, stable mapping between the two — callers must never
+ * assume a DB client_id doubles as a directory slug.
+ */
+const CLIENT_ID_TO_CONFIG_SLUG: Record<string, string> = {
+  'c0000000-0000-0000-0000-000000000000': 'cts',
+}
+
 export function offeringsPathFor(clientId: string): string {
-  return path.join(process.cwd(), 'config', 'clients', clientId, 'offerings.yaml')
+  const slug = CLIENT_ID_TO_CONFIG_SLUG[clientId] ?? clientId
+  return path.join(process.cwd(), 'config', 'clients', slug, 'offerings.yaml')
 }
 
 export interface LoadOfferingsOptions {
-  /** Defaults to 'cts'. Ignored when `filePath` is given. */
+  /**
+   * Required unless `filePath` is given. This is a DB `client_id`
+   * (`conversations.client_id`), resolved to a config slug via
+   * `CLIENT_ID_TO_CONFIG_SLUG`. There is no default — this loader backs a
+   * shared, multi-client Agent/Verifier entry point, so a caller that forgot
+   * to pass a client must fail loudly instead of silently reading (and then
+   * quoting) another client's private tour facts.
+   */
   clientId?: string
-  /** Overrides the computed `config/clients/<clientId>/offerings.yaml` path — mainly for tests. */
+  /** Overrides the computed `config/clients/<slug>/offerings.yaml` path — mainly for tests. */
   filePath?: string
   /** Skip the in-memory cache and re-read + re-validate the file. */
   forceRefresh?: boolean
@@ -139,13 +162,24 @@ export interface LoadOfferingsOptions {
 /**
  * Load, validate, and cache a client's offerings.yaml.
  *
- * Throws if the file is missing or fails Zod validation — callers (Agent tool
- * layer, Verifier policy) must treat a throw as "fact layer unavailable" and
- * fail closed (do not let the model answer tour-availability questions from
- * its own knowledge), not silently fall back to no facts at all.
+ * Throws if `clientId`/`filePath` are both missing, the file is missing, or
+ * it fails Zod validation — callers (Agent tool layer, Verifier policy) must
+ * treat a throw as "fact layer unavailable" and fail closed (do not let the
+ * model answer tour-availability questions from its own knowledge, and never
+ * fall back to a different client's facts), not silently fall back to no
+ * facts at all.
  */
 export async function loadOfferings(options: LoadOfferingsOptions = {}): Promise<OfferingsFile> {
-  const filePath = options.filePath ?? offeringsPathFor(options.clientId ?? 'cts')
+  let filePath = options.filePath
+  if (!filePath) {
+    if (!options.clientId) {
+      throw new Error(
+        'loadOfferings requires clientId (or filePath) — refusing to guess a client, ' +
+          'since that could leak one client\'s tour facts into another client\'s reply',
+      )
+    }
+    filePath = offeringsPathFor(options.clientId)
+  }
   const clock = options.clock ?? systemClock
   const now = clock.now()
 

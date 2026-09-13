@@ -278,11 +278,20 @@ describe('loadOfferings — caching', () => {
       loadOfferings({ filePath: path.join(tmpDir, 'missing.yaml'), clock }),
     ).rejects.toThrow()
   })
+
+  it('throws (fails closed) when neither clientId nor filePath is given, instead of defaulting to some client', async () => {
+    await expect(loadOfferings({ clock })).rejects.toThrow(/requires clientId/)
+  })
 })
 
 describe('offeringsPathFor', () => {
   it('builds config/clients/<clientId>/offerings.yaml under the repo root', () => {
     const p = offeringsPathFor('cts')
+    expect(p.endsWith(path.join('config', 'clients', 'cts', 'offerings.yaml'))).toBe(true)
+  })
+
+  it('resolves the real CTS DB client_id (UUID) to the cts config slug', () => {
+    const p = offeringsPathFor('c0000000-0000-0000-0000-000000000000')
     expect(p.endsWith(path.join('config', 'clients', 'cts', 'offerings.yaml'))).toBe(true)
   })
 })
