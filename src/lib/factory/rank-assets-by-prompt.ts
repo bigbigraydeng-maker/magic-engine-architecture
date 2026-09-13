@@ -114,10 +114,16 @@ function promptWordsOf(prompt: string): Set<string> {
 }
 
 /** 太笼统的名词自己撑不起"文对图对"——比如 prompt 是 "Forbidden City courtyard",
- *  错误素材标了 "city skyline",光凭 city 就会被 `objectOverlap` 判成重叠,让
+ *  错误素材标了 "city skyline",光凭 city 就会被 `subjectOverlap` 判成重叠,让
  *  `requireConfidentMatch` 把文不对题的图当可信匹配继续放行(P1 复审指出)。这里把
  *  常见到跟任何画面都能扯上关系的词排除在重叠判定之外,只有地标/主体这类有区分度
- *  的词命中才算数。 */
+ *  的词命中才算数。
+ *
+ *  第三轮复审补充:光靠具体名词不够,"sunset"/"ancient"/"traditional" 这类时间/氛围/
+ *  年代描述词同样能挂在任何主体上("sunset at the Forbidden City" 跟错误素材
+ *  "Great Wall at sunset" 共享 sunset,却不代表主体对得上)——这里一并排除常见的
+ *  时段/光线/年代/风格类描述词。这份清单本质是黑名单,不可能穷尽;新发现漏网词
+ *  就继续加,不必因此推翻黑名单这个机制。 */
 const GENERIC_OBJECT_WORDS = new Set([
   'city', 'cities', 'town', 'towns', 'people', 'person', 'persons', 'man', 'men', 'woman', 'women',
   'child', 'children', 'kid', 'kids', 'building', 'buildings', 'photo', 'photos', 'picture', 'pictures',
@@ -126,6 +132,12 @@ const GENERIC_OBJECT_WORDS = new Set([
   'streets', 'road', 'roads', 'sky', 'skyline', 'water', 'tree', 'trees', 'car', 'cars', 'room', 'rooms',
   'house', 'houses', 'light', 'lights', 'color', 'colors', 'style', 'styles', 'type', 'types', 'set',
   'sets', 'landscape', 'landscapes', 'crowd', 'crowds', 'walking', 'standing', 'sitting', 'smiling',
+  'sunset', 'sunsets', 'sunrise', 'sunrises', 'dusk', 'dawn', 'twilight', 'morning', 'evening',
+  'afternoon', 'noon', 'midnight', 'ancient', 'historic', 'historical', 'traditional', 'modern',
+  'contemporary', 'old', 'new', 'golden', 'scenic', 'iconic', 'famous', 'beautiful', 'stunning',
+  'picturesque', 'aerial', 'panoramic', 'distant', 'nearby', 'foreground', 'sunny', 'cloudy', 'rainy',
+  'sunlit', 'misty', 'foggy', 'calm', 'busy', 'quiet', 'peaceful', 'vibrant', 'colorful', 'colourful',
+  'bright', 'dark', 'warm', 'cool',
 ])
 
 /** 光排除笼统名词不够——"the Forbidden City courtyard" 跟错误素材 "the Great Wall"
@@ -141,25 +153,47 @@ const STOPWORDS = new Set([
   'before', 'after', 'above', 'below', 'between', 'through', 'per', 'than', 'then', 'here', 'there',
 ])
 
-/** prompt 分词与一组 object 短语的重叠数,`keywordFallback` 排序和 `keywordOverlap` 判定共用。
- *  objects 理论上是 string[],但 vision_metadata 来自 unknown 的 jsonb 读入
- *  (`analyseImage()` 只查过 `Array.isArray`,没查过数组元素类型),老数据/坏数据可能塞进
- *  非字符串元素——直接 `.toLowerCase()` 会抛出未捕获异常,把整条自动选图链路炸掉
- *  (P2 复审指出)。这里先判元素是不是字符串,不是就跳过,不让一条坏数据拖垮整批。 */
+/** vision_metadata.objects 理论上是 string[],但来自 unknown 的 jsonb 读入
+ *  (`analyseImage()` 只查过字段存不存在,没查过它到底是不是数组),老数据/坏数据可能把
+ *  整个字段存成字符串/对象而不是数组——这种情况下字段本身就不是数组,直接 `.reduce`
+ *  会在拿到任何元素之前就抛出 TypeError,把整条自动选图链路炸掉(P2 复审指出:第二轮
+ *  只挡了"数组里混进坏元素",没挡"这个字段压根不是数组")。这里先用 `Array.isArray`
+ *  归一化,不是数组就当空数组处理。 */
+function asObjectList(objects: unknown): string[] {
+  return Array.isArray(objects) ? objects : []
+}
+
+/** prompt 分词与一组 object 短语的原始重叠数,不做通用词过滤——排序阶段(`keywordFallback`,
+ *  含人工素材搜索的降级路径)哪怕命中的是 "city"/"people" 这类笼统词,也是比"完全不看
+ *  关键词、只按质量分排"更有效的相关性信号(P2 复审指出:generic-word 过滤本该只用在
+ *  置信度门,不该连累人工搜索排序,否则 "city skyline at night" 这类本就通用的 prompt
+ *  会让所有候选 overlap 都是 0,退化成纯质量分排序)。置信度门请用 `subjectOverlap`。 */
 function objectOverlap(promptWords: Set<string>, objects: string[]): number {
-  return objects.reduce((n, obj) => {
+  return asObjectList(objects).reduce((n, obj) => {
+    if (typeof obj !== 'string') return n
+    const words = obj.toLowerCase().split(/[^a-z0-9]+/)
+    return n + (words.some((w) => promptWords.has(w)) ? 1 : 0)
+  }, 0)
+}
+
+/** 置信度门专用的重叠数——只认主体/地标级别的词命中,常见笼统名词/时段氛围描述词/
+ *  英语虚词都不算数(见 `GENERIC_OBJECT_WORDS`/`STOPWORDS` 注释)。跟 `objectOverlap`
+ *  分开是因为两者用途不同:这里要的是"文对图对"的强信号,排序打分要的是"多少有点关系"
+ *  的弱信号,同一套过滤规则套两个用途会顾此失彼(P2 复审指出)。 */
+function subjectOverlap(promptWords: Set<string>, objects: string[]): number {
+  return asObjectList(objects).reduce((n, obj) => {
     if (typeof obj !== 'string') return n
     const words = obj.toLowerCase().split(/[^a-z0-9]+/)
     return n + (words.some((w) => !GENERIC_OBJECT_WORDS.has(w) && !STOPWORDS.has(w) && promptWords.has(w)) ? 1 : 0)
   }, 0)
 }
 
-/** prompt 与素材 objects 的名词重叠数——挑图理由文字读着再确定,这个数字对不上就不算数。
+/** prompt 与素材 objects 的主体/地标重叠数——挑图理由文字读着再确定,这个数字对不上就不算数。
  *  只看 `vision_metadata.objects`(最多 5 项"主要物体"),不看自由文本的 `ai_notes`——
  *  地标名字只写在 ai_notes 里、没挤进 objects 的图会被误判成零重叠,即使排序本来选对了。
  *  这是"宁可错杀不可放过"的保守选择,不是遗漏;objects 命中率不够再考虑纳入 ai_notes。 */
 function keywordOverlap(prompt: string, pick: AssetPick): number {
-  return objectOverlap(promptWordsOf(prompt), pick.metadata?.objects ?? [])
+  return subjectOverlap(promptWordsOf(prompt), pick.metadata?.objects ?? [])
 }
 
 // 让 GPT-4o-mini 挑最匹配的几张。模型不可用/返回不可用结果时降级关键词重叠打分。

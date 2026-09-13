@@ -87,6 +87,19 @@ describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选�
     expect(picks).toEqual([])
   })
 
+  it('时段/氛围描述词(sunset/ancient/traditional...)单独命中也不算重叠,不能靠它蒙混过 requireConfidentMatch', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // "sunset at the Forbidden City courtyard" 跟错误素材 objects=['Great Wall', 'sunset']
+    // 光凭 sunset 这个氛围词就有表面重叠,但主体(Great Wall vs Forbidden City)根本对不上。
+    const assets = [
+      asset('wrong-wall', { vision_metadata: { objects: ['Great Wall', 'sunset'], quality_score: 9 } }),
+    ]
+    const picks = await rankAssetsByPrompt('sunset at the Forbidden City courtyard', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks).toEqual([])
+  })
+
   it('大素材池、真正走 LLM 排序分支时,LLM 选出的图跟 prompt 零重叠照样会被过滤（复现 2026-09-14 真实故障链路：素材池里明明有 palace 那张对的图,LLM 却选了 great-wall）', async () => {
     vi.resetModules()
     vi.doMock('@/lib/ai/openai-client', () => ({
@@ -135,6 +148,43 @@ describe('rankAssetsByPrompt — objects 里混进非字符串元素不炸', () 
       requireConfidentMatch: true,
     })
     expect(picks.map((p) => p.id)).toEqual(['bad-data'])
+  })
+
+  it('vision_metadata.objects 字段本身不是数组(存成字符串/对象)时,当空数组处理而不是抛异常', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // 老数据/坏数据可能把整个 objects 字段存成字符串而不是数组,.reduce 之前就该被挡住。
+    const assets = [
+      asset('bad-shape', {
+        vision_metadata: { objects: 'palace' as unknown as string[], quality_score: 8 },
+      }),
+    ]
+    const picks = await rankAssetsByPrompt('forbidden city palace courtyard', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    // objects 归一化成空数组 → 零重叠 → 被 requireConfidentMatch 挡住,不炸异常。
+    expect(picks).toEqual([])
+  })
+})
+
+describe('rankAssetsByPrompt — 人工搜索降级路径(不开 requireConfidentMatch)保留通用主体的相关性排序', () => {
+  it('LLM 不可用时,通用词(city/people...)照样贡献排序信号,不退化成纯质量分排序', async () => {
+    vi.resetModules()
+    vi.doMock('@/lib/ai/openai-client', () => ({
+      getOpenAIClient: () => {
+        throw new Error('no client in test')
+      },
+    }))
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // 素材数 > topN,强制走 LLM 分支(进而触发 catch → keywordFallback)。
+    // "city skyline at night" 全是通用词,但人工搜索场景下这仍是有效相关性信号——
+    // 应该排在跟 prompt 毫无关系的素材前面,而不是两者都 overlap=0 靠质量分定胜负。
+    const assets = [
+      asset('right-skyline', { vision_metadata: { objects: ['city skyline'], quality_score: 5 } }),
+      asset('unrelated', { vision_metadata: { objects: ['peking duck'], quality_score: 9 } }),
+    ]
+    const picks = await rankAssetsByPrompt('city skyline at night', assets, 1)
+    expect(picks.map((p) => p.id)).toEqual(['right-skyline'])
+    vi.doUnmock('@/lib/ai/openai-client')
   })
 })
 
