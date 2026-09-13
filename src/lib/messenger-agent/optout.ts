@@ -1,0 +1,279 @@
+/**
+ * 跨渠道退订检测 —— CTS Governed Reply Agent 用它决定「这条会话还能不能回」。
+ *
+ * issue #1575：v3 对 v2 的唯一 blocker（F1 没查拉黑）的正式解法，也是三审第 1 轮
+ * 被打回重设计过一次的部分。第一版设计过 `conversations.opted_out`，被指出
+ * **换渠道就失效、也没有撤销路径** —— 客人在 Messenger 上说了「退订」，
+ * 那一列只挡得住 Messenger，WhatsApp 照样会发；而一旦标错，系统里没有任何
+ * 入口能把人放回来。
+ *
+ * 这里**不新建判断逻辑**：判据只有一份 —— `lib/crm/dnc.ts` 的
+ * `isDoNotContact()`，全仓统一用它判「这个人还能不能联系」，跟销售手打备注、
+ * 私信提醒走的是同一份材料（`contact_touchpoints`）。撤销也是**零新代码**：
+ * 直接复用已存在的 `/api/clients/[id]/crm/contacts/[cid]/dnc` 纠正路由 ——
+ * 那条路由已经把「先写触点、后放列、两步都要成」焊死了，这里不重复。
+ *
+ * ## 有 contact_id / 没有 contact_id，两条完全不同的路
+ *
+ * 大多数会话在建立时就通过 `resolveContact()`（`lib/crm/identity.ts`）挂上了
+ * 真人 —— 这时退订状态**跨渠道**：同一个人在 Messenger 说过退订，WhatsApp 那边
+ * 也会读到同一份触点，不看渠道。这正是这次换底座换来的核心能力（v3 vs v2）。
+ *
+ * 但少数会话挂不上人（该渠道身份还合并不到任何人，比如只在 FB 聊过、从没留过
+ * 电话邮箱）—— 这时没有 `contacts` 行可查，只能退回查这条会话自己的
+ * `conversations.optout_unlinked` 兜底列（issue #1574 新增，**不经过任何缓存**，
+ * 直查这一条会话，因为它天生就是会话级、不是人级的判断）。
+ *
+ * ## IDOR 闸：`client_id` 只认会话自己带的，不接受外部传入
+ *
+ * `isConversationOptedOut` 只收 `conversationId` 一个参数 —— 调用方给不出、
+ * 也不该给 `client_id`。查 `contacts` / `contact_touchpoints` 时用的
+ * `client_id` 永远是**从这条会话本身查出来的那一个**，且查询同时按
+ * `contact_id` 和这个 `client_id` 过滤（跟 `dnc` 路由的 IDOR 闸同一个写法）。
+ * 少了这道过滤，理论上可能因为查询拼装错误而读到别的客户名下同一个 UUID
+ * 撞出来的行 —— 虽然 `contact_id` 是全局唯一的外键，但「同时按两个键过滤」
+ * 是这个仓库对触点类查询的统一纪律，不因为这里看似用不上就省掉。
+ *
+ * ## 出错时宁可拦一条，不放过一条
+ *
+ * 查会话 / 查 contact / 查触点任何一步失败，都当作「退订」处理（返回 true，
+ * 拦下这条回复）而不是当「没退订」放行。这是「对外发消息」这类有副作用的
+ * 判断该有的方向（CLAUDE.md 铁律「发布…必须 fail-closed」）—— 少发一条消息，
+ * 代价远小于给一个已经明确说过别再联系的人发消息。
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { supabaseAdmin } from '@/lib/supabase'
+import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+
+// ---------------------------------------------------------------------------
+// 1) 关键词检测 —— 纯函数，不碰数据库。
+// ---------------------------------------------------------------------------
+
+/**
+ * 中英双语退订关键词，SMS 行业的老规矩：整条消息就是这个词（允许两边带标点/
+ * 空白），不是「消息里出现了这个词」。
+ *
+ * 为什么不做子串匹配：`STOP`/`stop` 这类词一旦允许出现在句子中间，
+ * 「please don't stop the tour」「can you stop by our hotel」这种正常问句
+ * 全部会被误判成退订 —— 那是比「漏判一条」更糟的事故（活人被系统静默拉黑，
+ * 且没有人知道为什么，直到对方投诉「你们怎么不理我了」）。SMS 行业早就用
+ * 整条消息匹配解决了这个问题（Twilio 的 STOP/UNSUBSCRIBE/CANCEL/END/QUIT
+ * 关键词表就是整条消息比对），这里跟随同一个约定。
+ */
+const OPT_OUT_KEYWORDS_EN = new Set(['stop', 'unsubscribe'])
+const OPT_OUT_KEYWORDS_ZH = new Set(['退订', '取消关注'])
+
+/** 两边的标点/空白都不算数：「STOP.」「退订!」「  stop  」都要认出来。 */
+function normalizeForKeywordMatch(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/^[\s.,!?~。，！？～、]+|[\s.,!?~。，！？～、]+$/g, '')
+}
+
+/**
+ * 这句话是不是一条退订指令。中英双语、大小写不敏感，整条消息匹配
+ * （见上方注释——不是子串匹配）。
+ */
+export function isOptOutKeyword(text: string): boolean {
+  if (typeof text !== 'string') return false
+  const normalized = normalizeForKeywordMatch(text)
+  if (!normalized) return false
+  return OPT_OUT_KEYWORDS_EN.has(normalized) || OPT_OUT_KEYWORDS_ZH.has(normalized)
+}
+
+// ---------------------------------------------------------------------------
+// 2) 跨渠道退订判定 —— 有 I/O，可注入 supabase client 供测试用假数据源。
+// ---------------------------------------------------------------------------
+
+interface ConversationRow {
+  id: string
+  client_id: string
+  contact_id: string | null
+  /**
+   * issue #1574 新增列（本 PR 提交时尚未合并主分支）。**假设它存在**，
+   * 但任何依赖它真实存在于数据库里的测试都不许在本 PR 里真跑
+   * ——见 PR 描述。
+   */
+  optout_unlinked: boolean | null
+}
+
+interface ContactRow {
+  do_not_contact: boolean | null
+}
+
+interface TouchpointRow {
+  occurred_at: string
+  metadata: Record<string, unknown> | null
+}
+
+/**
+ * 这条会话现在算不算「退订了」。
+ *
+ * @param conversationId 会话 id（`conversations.id`）。
+ * @param supabase 默认生产客户端；测试注入假数据源（跟
+ *   `lib/crm/messenger-stop-signal.ts` 的 `findMessengerStopSignals` 同一个
+ *   可测试写法）。
+ */
+export async function isConversationOptedOut(
+  conversationId: string,
+  supabase: SupabaseClient = supabaseAdmin,
+): Promise<boolean> {
+  const { data: convo, error: convErr } = await supabase
+    .from('conversations')
+    .select('id, client_id, contact_id, optout_unlinked')
+    .eq('id', conversationId)
+    .maybeSingle()
+
+  if (convErr) {
+    console.error(`[messenger-agent/optout] 查会话失败 conversationId=${conversationId}:`, convErr.message)
+    return true // fail-closed：查不出来就当拦下处理，见文件头注释。
+  }
+  if (!convo) {
+    // 会话都不存在：没有「该不该回」这回事，但也不能装作「能回」。
+    console.error(`[messenger-agent/optout] 会话不存在 conversationId=${conversationId}`)
+    return true
+  }
+
+  const row = convo as ConversationRow
+  const contactId = row.contact_id
+
+  if (!contactId) {
+    // 挂不上人的会话：退回这条会话自己的兜底列，不经过任何缓存。
+    return row.optout_unlinked === true
+  }
+
+  // IDOR 闸：contact / 触点查询必须同时按 contact_id 和「这条会话自己的」
+  // client_id 过滤 —— 不接受任何外部传入的 client_id（本函数压根不收这个参数）。
+  const clientId = row.client_id
+
+  const [contactResult, touchResult] = await Promise.all([
+    supabase
+      .from('contacts')
+      .select('do_not_contact')
+      .eq('id', contactId)
+      .eq('client_id', clientId)
+      .maybeSingle(),
+    supabase
+      .from('contact_touchpoints')
+      .select('occurred_at, metadata')
+      .eq('contact_id', contactId)
+      .eq('client_id', clientId),
+  ])
+
+  if (contactResult.error) {
+    console.error(
+      `[messenger-agent/optout] 查 contact 失败 contactId=${contactId}:`,
+      contactResult.error.message,
+    )
+    return true
+  }
+  if (touchResult.error) {
+    console.error(
+      `[messenger-agent/optout] 查触点失败 contactId=${contactId}:`,
+      touchResult.error.message,
+    )
+    return true
+  }
+
+  const contactFlag = (contactResult.data as ContactRow | null)?.do_not_contact === true
+  const touches: DncTouch[] = ((touchResult.data as TouchpointRow[] | null) ?? []).map((t) => {
+    const meta = t.metadata ?? {}
+    return {
+      outcome: (meta.outcome as string | undefined) ?? null,
+      flagged: meta.do_not_contact === true,
+      occurredAt: t.occurred_at,
+    }
+  })
+
+  // 判据只有一份：lib/crm/dnc.ts。不在这里重新发明「怎么判 DNC」。
+  return isDoNotContact(contactFlag, touches)
+}
+
+// ---------------------------------------------------------------------------
+// 3) 关键词命中后写一条触点 —— 复用既有表结构，不新建字段、不新建判断逻辑。
+// ---------------------------------------------------------------------------
+
+export interface RecordOptOutKeywordTouchInput {
+  clientId: string
+  contactId: string
+  /** `contact_touchpoints.channel` 的 CHECK 约束子集——这个模块只处理这两条渠道。 */
+  channel: 'messenger' | 'whatsapp'
+  conversationId: string
+  messageId: string
+  /** 默认当前时间；补记场景可传入消息本身的发送时间。 */
+  occurredAt?: string
+}
+
+export interface RecordOptOutKeywordTouchResult {
+  touchpointId: string | null
+}
+
+/**
+ * 客人这条消息命中了退订关键词 —— 写一条触点，让 `lib/crm/dnc.ts` 的判据
+ * **跨渠道**立刻看到它，并同步反规范化镜像列 `contacts.do_not_contact`。
+ *
+ * 字段形状是 issue #1575 钉死的：`outcome` 必须在 `metadata` 里，
+ * 不是顶层列 —— `contact_touchpoints` 表压根没有顶层 `outcome` 列
+ * （见 `supabase/migrations/20260726000005_contact_touchpoints.sql`），
+ * 照字面写顶层字段会插入失败。
+ *
+ * 幂等键用 `${conversationId}:optout:${messageId}` —— Meta 的 webhook
+ * 是至少一次投递，同一条消息重复到达不能记成两笔触点。
+ *
+ * 写法跟 `lib/crm/touchpoints.ts` 的 `recordManualTouchpoint()` 一致：
+ * 先幂等写触点，镜像列的更新**总是执行**（哪怕触点命中幂等键没有真插），
+ * 让重试收敛。这一步失败会抛错，调用方按同一个幂等键重试即可收敛
+ * ——跟 `recordManualTouchpoint` 的约定相同，这里不重复处理「报警但不阻断」
+ * 这类调用方策略。
+ */
+export async function recordOptOutKeywordTouch(
+  input: RecordOptOutKeywordTouchInput,
+  supabase: SupabaseClient = supabaseAdmin,
+): Promise<RecordOptOutKeywordTouchResult> {
+  const { clientId, contactId, channel, conversationId, messageId } = input
+  const occurredAt = input.occurredAt ?? new Date().toISOString()
+  const sourceRef = `${conversationId}:optout:${messageId}`
+
+  const { data, error } = await supabase
+    .from('contact_touchpoints')
+    .upsert(
+      {
+        client_id: clientId,
+        contact_id: contactId,
+        channel,
+        direction: 'inbound',
+        occurred_at: occurredAt,
+        summary: '系统自动判定：客户消息命中退订关键词',
+        metadata: {
+          outcome: 'do_not_contact',
+          do_not_contact: true,
+          detected_by: 'keyword',
+        },
+        source: channel,
+        source_ref: sourceRef,
+      },
+      { onConflict: 'client_id,source,source_ref', ignoreDuplicates: true },
+    )
+    .select('id')
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`写退订触点失败: ${error.message}`)
+  }
+
+  // 镜像列总是更新（幂等），配合调用方带同 sourceRef 重试收敛 ——
+  // 跟 recordManualTouchpoint() 的约定一致。
+  const { error: updateErr } = await supabase
+    .from('contacts')
+    .update({ do_not_contact: true })
+    .eq('id', contactId)
+    .eq('client_id', clientId)
+
+  if (updateErr) {
+    throw new Error(`更新 contacts.do_not_contact 失败: ${updateErr.message}`)
+  }
+
+  return { touchpointId: (data as { id: string } | null)?.id ?? null }
+}
