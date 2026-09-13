@@ -7,6 +7,37 @@
 
 ---
 
+## 2026-09-13 · 客户知识库作为 Governed Lead-Reply Agent 的事实层，替代 offerings.yaml 路线
+
+**决策**：AI 对终端客人说出口的业务事实（价格、时效、承诺、退改政策、在售/停售产品等），统一存放在**逐条治理的客户知识表**里，而不是按客户放 `config/clients/<client>/offerings.yaml` 文件。该知识表是已登记 L1 候选「Governed Lead-Reply Agent」（`docs/registry/platform-candidates.md`）的**事实层子能力**，不另立 L1。原方案"3 个客户后再抽 `client_offerings` 表"作废。
+
+**PM 拍板（2026-09-13）**：
+1. **双签**：ME/FDE 先批草稿；价格/时效/承诺/政策类条目必须**客户本人确认**后才对终端客人生效。确认人由全局管理员单独登记，经发到客户邮箱的一次性链接、点按钮提交确认；确认人不得是任何 ME 身份，不得是登记人或批草稿的人。
+2. **先做功能，套餐准入延后**：原"仅 NZ$499 档以上或 FDE 托管客户开放"暂不实现（五档会员在代码里尚不存在，`clients.plan_tier` 仍是老三档 starter/growth/enterprise）；v1 只做单客户开通开关（默认关）。
+3. **必须和客户一起测试上线**：内部整理 → 客户共测（AI 出草稿不发送，双方抽查）→ 上线。首个试点客户 = New Asian Logistics。
+
+**为什么**：
+- 文件 + PR 路线做不到逐条客户确认、有效期、证据溯源；改一次价格要合一次代码。
+- ME 已有 6 套互不相通的"AI 脑子"（`master_briefs`、`voice_knowledge_documents`、`voice_tenants.settings.brain`、`src/lib/messenger/brief.ts` 提示词、规划中的 offerings.yaml、ME 之外的 ElevenLabs 提示词），其中 `brief.ts` 把 CTS 的事实写死在所有客户共用的代码里，且 `brief-cycle.ts` 调用时不传 clientId——非 CTS 客户拿到的也是 CTS 提示词。
+- NAL 真实私信证明对话不能直接当训练材料：同一价格有 4/2、7/5、6/4 多个版本，一个快捷回复模板把"20 公斤以下"写成"10 公斤以下"已发给 28 位顾客。
+
+**影响**：
+- Governed Lead-Reply Agent 方案的 Layer 1 改读知识库读取入口；数字核实闸核对"已批 + 客户已确认 + 有效期内"的值；自动确认回复不得读知识库事实。随该方案 2026-09-15 三审同步修改。
+- 对话知识萃取永不自动上线；敏感度用确定性规则判定（出现任意数字即非 general），不依赖 AI 标签。
+- 回复草稿在显示和发送前各做一次输出检查，草稿里的数字对不上生效条目即撤回转人工。
+- 上线发送走 Governed Reply 的"草稿 → 人工点发"链路，不经执行内核（内核 v1 拒绝撤不回的对外动作）。
+- 设计与两轮复审记录：本机 plan `client-knowledge-base-capability.md` §9–§9.14。实施按 A 级分 6 个 PR，每个实施后复审。
+
+## 2026-08-22 · 产品定位与 IMPACT v1.0 冻结：Digital Marketing Growth Intelligence System
+
+**决策**：Magic Engine 的正式产品类别冻结为 **Digital Marketing Growth Intelligence System（数字营销增长智能系统）**。唯一端到端产品闭环冻结为 **IMPACT = Inspect → Measure → Prescribe → Act → Check → Tune**。DAPE 保留为内部工作方法，主要服务 IMPACT 前四段，不能与 IMPACT 互换，也不能用执行完成代替 Check、Outcome 与 Tune。
+
+**产品边界**：ME 自建 Digital Marketing Growth State、Opportunity Intelligence、Next Best Digital Marketing Action、营销策略与资产 Intelligence、Measurement/Attribution、Outcome/Failure Intelligence、Learning Promotion 与 Governed Execution。CRM、预约、POS、库存、支付、旅游预订、移民/留学案件、通用 OAuth/Workflow/Observability 等成熟经营或基础设施能力默认通过 API、Webhook、MCP 或成熟外部产品连接，不重复建设系统本体。
+
+**权威来源**：[`docs/strategy/ME_PRODUCT_DEFINITION.md`](./strategy/ME_PRODUCT_DEFINITION.md)。该文件是产品定位、IMPACT、DAPE、Connector、Build vs Connect 和行业版本边界的最高优先级定义。代码、测试、Issue、PR 和部署只证明实现状态，不能反向改写产品定义；当前运行事实仍以 `STATE.md`、生产证据和最新 Build Control 为准。
+
+**影响**：`CLAUDE.md` 将本文件设为所有 Agent 必读入口。后续 Roadmap、WP、行业方案和客户交付必须说明所属 IMPACT 阶段、Build vs Connect 判断、Connector 边界、验证方法与 Outcome。旧文档若与本决定冲突，以产品权威文件为准，并分阶段修正，不一次性扩大 runtime 或迁移范围。
+
 ## 2026-08-19 · ai-tracker（系统 B）退役删除：AI 可见度判断归一到 M1，老诊断打分重做
 
 > **本条推翻同日早前版本**（原标题「三系统整合：判断层统一到 M1，ai-tracker 降级为采集层」，原结论是「降级保留 ai-tracker 采集层 + 五阶段小心迁移」）。PO **2026-08-19 追加授权做减法**（删老功能）：ai-tracker 不是降级保留，是**退役删除**。原判决的证据段（44% 抽取失败、子串匹配、`ai_visibility_score` 实读系统 C）全部成立、予以保留，只把结论从「保留采集层」改成「删」。

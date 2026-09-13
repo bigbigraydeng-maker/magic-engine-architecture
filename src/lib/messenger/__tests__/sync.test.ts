@@ -44,15 +44,30 @@ interface Captured {
  * Chainable supabase stub. Every builder method returns the same object; the
  * object is awaitable and also exposes .single()/.maybeSingle().
  */
-function stubSupabase(opts: { watermarkRow?: { meta_updated_time: string } | null }): Captured {
+function stubSupabase(opts: {
+  watermarkRow?: { meta_updated_time: string } | null
+  /**
+   * Existing (participant_name, last_message_at) for the conversation being
+   * stored — what `loadExistingSummary` (the webhook-vs-cron overwrite guard,
+   * issue #1581 H14) reads. `undefined` = no existing row (brand-new thread,
+   * matches every pre-existing test in this file).
+   */
+  existingSummaryRow?: { participant_name: string | null; last_message_at: string | null } | null
+}): Captured {
   const captured: Captured = { conversations: [], messages: [] }
 
   mockFrom.mockImplementation((table: string) => {
     let result: unknown = { data: null, error: null }
+    // Distinguishes loadExistingSummary's select (.eq('conversation_id', …)) from
+    // getWatermark's (.not('meta_updated_time', …)) — both hit `conversations`.
+    let sawConversationIdFilter = false
 
     const chain: Record<string, unknown> = {
       select: () => chain,
-      eq: () => chain,
+      eq: (col: string) => {
+        if (col === 'conversation_id') sawConversationIdFilter = true
+        return chain
+      },
       not: () => chain,
       order: () => chain,
       limit: () => chain,
@@ -62,7 +77,12 @@ function stubSupabase(opts: { watermarkRow?: { meta_updated_time: string } | nul
       lt: () => chain,
       update: () => chain,
       single: async () => result,
-      maybeSingle: async () => result,
+      maybeSingle: async () => {
+        if (table === 'conversations' && sawConversationIdFilter) {
+          return { data: opts.existingSummaryRow ?? null, error: null }
+        }
+        return result
+      },
       then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
       upsert: (payload: Record<string, unknown> | Record<string, unknown>[]) => {
         if (table === 'conversations') {
@@ -86,6 +106,7 @@ function stubSupabase(opts: { watermarkRow?: { meta_updated_time: string } | nul
 
     if (table === 'conversations') {
       // The SELECT path (watermark lookup) resolves to the configured row.
+      // (loadExistingSummary's select is intercepted separately above.)
       result = { data: opts.watermarkRow ?? null, error: null }
     }
 
@@ -110,6 +131,7 @@ function convo(lastDirection: 'inbound' | 'outbound') {
         senderName: 'CTS Tours',
         body: 'Best of China departs 3 Nov.',
         sentAt: '2026-07-26T09:00:00+0000',
+        tags: [],
       },
       {
         messageId: 'mid.2',
@@ -118,6 +140,7 @@ function convo(lastDirection: 'inbound' | 'outbound') {
         senderName: lastDirection === 'inbound' ? 'Sarah Mitchell' : 'CTS Tours',
         body: 'Thanks, that helps.',
         sentAt: '2026-07-26T10:00:00+0000',
+        tags: [],
       },
     ],
   }
@@ -210,6 +233,77 @@ describe('syncClientMessenger — storing', () => {
     expect(rows).toHaveLength(2)
     expect(rows.every((r) => r.conversation_id === 'row-uuid')).toBe(true)
     expect(rows.map((r) => r.direction)).toEqual(['outbound', 'inbound'])
+  })
+})
+
+/**
+ * issue #1581 (H14): the Messenger webhook now writes participant_name /
+ * last_message_at / last_message_from in real time. This cron is a 2-hourly
+ * fallback — its Graph API snapshot can be older than what the webhook already
+ * wrote, and must not regress it.
+ */
+describe('syncClientMessenger — cron must not overwrite fresher webhook data', () => {
+  it('no existing row (brand-new thread) → writes forward as before', async () => {
+    const captured = stubSupabase({ watermarkRow: null, existingSummaryRow: null })
+    mockFetch.mockResolvedValue([convo('inbound')])
+
+    await syncClientMessenger(CLIENT)
+
+    expect(captured.conversations[0]).toMatchObject({
+      participant_name: 'Sarah Mitchell',
+      last_message_at: '2026-07-26T10:00:00+0000',
+      last_message_from: 'customer',
+    })
+  })
+
+  it('existing last_message_at is NEWER than this snapshot (webhook already got a later message) → does not touch it', async () => {
+    const captured = stubSupabase({
+      watermarkRow: null,
+      // Webhook already recorded a message an hour after this Graph snapshot's last message.
+      existingSummaryRow: { participant_name: 'Sarah Mitchell', last_message_at: '2026-07-26T11:00:00+0000' },
+    })
+    mockFetch.mockResolvedValue([convo('inbound')]) // last message at 10:00
+
+    await syncClientMessenger(CLIENT)
+
+    expect(captured.conversations[0]).not.toHaveProperty('last_message_at')
+    expect(captured.conversations[0]).not.toHaveProperty('last_message_from')
+    expect(captured.conversations[0]).not.toHaveProperty('participant_name')
+    // Cron-owned columns still get refreshed every run.
+    expect(captured.conversations[0]).toMatchObject({
+      client_id: CLIENT.id,
+      conversation_id: 't_100',
+      participant_psid: 'psid_9',
+      message_count: 2,
+    })
+  })
+
+  it('existing last_message_at is OLDER than this snapshot (cron caught up on something webhook missed) → overwrites forward', async () => {
+    const captured = stubSupabase({
+      watermarkRow: null,
+      existingSummaryRow: { participant_name: 'Sarah M.', last_message_at: '2026-07-26T09:00:00+0000' },
+    })
+    mockFetch.mockResolvedValue([convo('inbound')]) // last message at 10:00 — newer
+
+    await syncClientMessenger(CLIENT)
+
+    expect(captured.conversations[0]).toMatchObject({
+      participant_name: 'Sarah Mitchell',
+      last_message_at: '2026-07-26T10:00:00+0000',
+      last_message_from: 'customer',
+    })
+  })
+
+  it('existing last_message_at is EQUAL to this snapshot → does not touch it (no regression either way)', async () => {
+    const captured = stubSupabase({
+      watermarkRow: null,
+      existingSummaryRow: { participant_name: 'Sarah Mitchell', last_message_at: '2026-07-26T10:00:00+0000' },
+    })
+    mockFetch.mockResolvedValue([convo('inbound')])
+
+    await syncClientMessenger(CLIENT)
+
+    expect(captured.conversations[0]).not.toHaveProperty('last_message_at')
   })
 })
 

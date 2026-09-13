@@ -6,7 +6,13 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { FACTORY_BUCKET, isWorkerAuthorized, workerClientWhitelist } from '@/lib/factory/worker-guard'
+import {
+  FACTORY_BUCKET,
+  isWorkerAuthorized,
+  workerClaimClientIds,
+  workerClientWhitelist,
+} from '@/lib/factory/worker-guard'
+import { deriveRecipeIntent } from '@/lib/factory/recipe'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -34,19 +40,27 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  let body: Record<string, unknown> = {}
+  let parsedBody: unknown
   try {
-    body = (await req.json()) as Record<string, unknown>
+    parsedBody = await req.json()
   } catch {
-    // body 可选:worker_id 缺省用 host 标识
+    return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 })
   }
+  if (!parsedBody || typeof parsedBody !== 'object' || Array.isArray(parsedBody)) {
+    return NextResponse.json({ error: 'body must be a JSON object' }, { status: 400 })
+  }
+  const body = parsedBody as Record<string, unknown>
   const workerId = typeof body.worker_id === 'string' && body.worker_id.trim()
     ? body.worker_id.trim()
     : 'local-mac'
+  const claimClientIds = workerClaimClientIds(body, whitelist)
+  if (!claimClientIds) {
+    return NextResponse.json({ error: 'client_id must be allowlisted when provided' }, { status: 403 })
+  }
 
   const { data, error } = await supabaseAdmin.rpc('factory_claim_work_order', {
     p_worker_id: workerId,
-    p_client_ids: whitelist,
+    p_client_ids: claimClientIds,
   })
   if (error) {
     return NextResponse.json({ error: `claim rpc failed: ${error.message}` }, { status: 500 })
@@ -58,8 +72,32 @@ export async function POST(req: NextRequest) {
   }
 
   const workOrderId = row.work_order_id as string
-  const clientId = row.client_id as string
+  const clientId = row.client_id
+  if (typeof clientId !== 'string'
+    || !claimClientIds.some((id) => id.toLowerCase() === clientId.toLowerCase())) {
+    return NextResponse.json({ error: 'claim returned a client outside the requested scope' }, { status: 500 })
+  }
   const brief = (row.brief ?? {}) as Record<string, unknown>
+
+  // R3:客户当前 recipe 意图 —— worker 拿它对比 brief.creative_recipe。
+  // 配置非法 = 让 worker fail-closed(不静默走 legacy 分支)。
+  // clients.factory_config 查库失败:也 fail-closed(500)—— 之前的静默降级会让 recipe
+  // 客户被当成 legacy 跑,可能绕过 recipe 强约束。查成功 + 无 creative_recipe = null intent,
+  // 保留 legacy 客户老路径不变。
+  const { data: clientRow, error: clientErr } = await supabaseAdmin
+    .from('clients')
+    .select('factory_config')
+    .eq('id', clientId)
+    .maybeSingle()
+  if (clientErr) {
+    return NextResponse.json(
+      { error: `client factory_config lookup failed: ${clientErr.message}` },
+      { status: 500 },
+    )
+  }
+  const { recipeIntent, recipeIntentInvalidReason } = deriveRecipeIntent(
+    clientRow?.factory_config,
+  )
 
   // clip URL 清单:brief.segments[].clip_ids → 签名下载 URL
   const clipIds = new Set<string>()
@@ -75,7 +113,7 @@ export async function POST(req: NextRequest) {
     const { data: clipRows, error: clipErr } = await supabaseAdmin
       .from('video_clips')
       .select('id, storage_url')
-      .in('id', [...clipIds])
+      .in('id', Array.from(clipIds))
     if (clipErr) {
       return NextResponse.json({ error: `clip lookup failed: ${clipErr.message}` }, { status: 500 })
     }
@@ -164,5 +202,8 @@ export async function POST(req: NextRequest) {
     clips,
     uploads,
     clip_uploads: clipUploads,
+    // R3:worker 侧 assertClientRecipeIntentMatchesBrief 用它;意图非法则 worker 抛 CONFIG_INVALID。
+    recipe_intent: recipeIntent,
+    recipe_intent_invalid_reason: recipeIntentInvalidReason,
   })
 }

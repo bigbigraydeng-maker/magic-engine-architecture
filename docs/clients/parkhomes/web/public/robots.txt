@@ -1,0 +1,39 @@
+# Park Homes — parkhomes.nz
+#
+# Schedule A.3.4 / A.4.2 of the website upgrade agreement: the site pays for AI
+# visibility (GEO) optimisation targeting ChatGPT, Perplexity, Claude and
+# Gemini by name (Kimi has no confirmed standalone crawler user-agent as of
+# this writing, so it isn't listed below — it's still covered by the
+# wildcard Allow rule, and Cloudflare's default list doesn't block it either).
+#
+# Cloudflare's zone-level "managed robots.txt" feature (Security Settings >
+# Bot traffic) disallows several of the named crawlers by default and is
+# prepended ahead of this file — the explicit Allow rules below win ties
+# against it for spec-compliant crawlers, but the zone setting should still be
+# turned off so this file is the only thing served. Handoff task filed to
+# check/turn off that Cloudflare toggle (see PM chip / manual task list).
+
+User-agent: *
+Allow: /
+
+# ChatGPT (OpenAI)
+User-agent: GPTBot
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+
+# Claude (Anthropic)
+User-agent: ClaudeBot
+Allow: /
+User-agent: anthropic-ai
+Allow: /
+
+# Perplexity
+User-agent: PerplexityBot
+Allow: /
+
+# Gemini / Google AI features
+User-agent: Google-Extended
+Allow: /
+
+Sitemap: https://parkhomes.nz/sitemap-index.xml

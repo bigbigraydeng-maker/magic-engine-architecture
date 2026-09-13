@@ -57,6 +57,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | **社媒内容矩阵** | ✅ 成熟 | `lib/{brief,content,social,reels,visual,images,publer,scheduling}` · `api/clients/[id]/{brief,campaign}` · `api/content/route-{a,b,c}` · `api/visual` | `master_briefs` `campaign_briefs` `content_posts` `visual_assets` `reels_drafts` |
 | **AI Content Factory** (P21) | 🔄 建设中 | `lib/{factory,ai-factory,winner-reel-sync}` · `api/factory` · `scripts/factory-worker/` | `content_work_orders` `content_work_order_clips` `factory_balance_ledger` `factory_angle_blocklist` |
 | **Ads Intelligence** | 🔄 建设中 | `lib/{meta,google-ads,tiktok-ads,ads-strategy}` · `api/clients/[id]/ad-health` | `ad_daily_insights` `ad_strategy_configs` `ad_health_narratives` |
+| **Leads 营销中心**（多渠道私信 / CRM） | 🔄 建设中 | `lib/{messaging,messenger,whatsapp,crm}` · `api/clients/[id]/{messenger,crm,business-inbox}` · **`api/webhooks/whatsapp`**（对外 endpoint，Meta 推送入口） | `conversations` `conversation_messages` `conversation_briefs` `conversation_outbound_log` `contacts` `contact_identities` `contact_touchpoints` |
 | **策略层**（Goal→Initiative→Action） | ✅ 上线 | `lib/{strategy,marketing-plan,execution,zhuge}` · `api/{goals,initiatives}` | `goals` `initiatives` `marketing_plans` `execution_items` |
 | **飞轮数据闭环** (P12) | ✅ 上线 | `lib/flywheel` · `api/flywheel` | `flywheel_actions` `flywheel_metrics` `flywheel_outcomes` |
 | **诊断 / 数据回流** | ✅ 上线 | `lib/{diagnostic,scoring,ga4,gbp,places,competitors,monthly-report,reports}` | `diagnostic_{runs,findings,narratives}` `ga4_traffic_snapshots` `anomaly_signals` |
@@ -89,7 +90,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 4. 定时任务全表
 
-### 4.1 Render Cron（**47 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
+### 4.1 Render Cron（**47 个在跑 + 1 个已暂停 factory-stock-refill**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
 
 | Cron 名 | 调度 (UTC) | 端点 |
 |---|---|---|
@@ -117,6 +118,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | anomaly-detector-daily | `0 5 * * *` | `/api/cron/anomaly-detector` |
 | daily-cron-digest | `0 6 * * *` | `/api/cron/daily-cron-digest` |
 | winner-reel-sync-daily | `0 15 * * *` | `/api/cron/winner-reel-sync-daily` |
+| cron-run-logs-cleanup | `50 16 * * *` | `/api/cron/cron-run-logs-cleanup` —— 清运行记录自己的旧行（2026-09-07 从表上的触发器搬过来）|
 | proposal-view-digest | `0 19 * * *` | `/api/cron/proposal-view-digest` |
 | factory-order-scheduler | `0 20 * * *` | `/api/cron/factory-order-scheduler` |
 | content-factory-intake | `0 22 * * *` | `/api/cron/content-factory-intake` |
@@ -132,7 +134,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | oztop-seo-optimizer | `0 5 * * 1` | `/api/cron/oztop-seo-optimizer?max=8` |
 | cts-seo-optimizer | `30 5 * * 1` | `/api/cron/cts-seo-optimizer` |
 | agent-learning-rollup | `0 7 * * 1` | `/api/cron/agent-learning-rollup` |
-| factory-stock-refill | `0 19 * * 1` | `/api/cron/factory-stock-refill` |
+| ~~factory-stock-refill~~ | ~~`0 19 * * 1`~~ | **已暂停 2026-09-08**（PM 停抓图：抓来的图无人消费，白花 Apify 钱；render.yaml/registry 已注释） |
 | blog-weekly | `0 3 * * 2` | `/api/cron/blog-weekly` |
 
 **2026-08-12 补录 —— `render.yaml` 里有、本表此前漏了的 7 条**：
@@ -163,7 +165,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | 端点 | 判断 |
 |---|---|
 | `admin-key-expiry` | ❓ 需确认是有意停用还是漏配 |
-| `flywheel-seo-weekly` | ❓ 同上（Phase 12.I 建的，ROADMAP 标已完成） |
+| `flywheel-seo-weekly` | ✅ **2026-09-07 上线**（PM 拍板开）。调度改由 Inngest 自带定时器：每周一 05:15 NZ 派单，一个客户一单跑。`/api/cron/flywheel-seo-weekly` 保留为手动补触发（只发事件、不自己干活）。⚠️ 新增 / 改 Inngest 函数后要去 Inngest 后台对 `/api/inngest` 手动 Sync 一次，否则安静地不跑 |
 | `memory-extractor` | ❓ 同上（Phase 23 Memory Layer）。⚠️ 注意：**它没被调度 ≠ 从没跑过** —— `client_learned_lessons` 里已有 21 行，是别的路径写进去的 |
 | `factory-review-sweeper` | ✅ **有意退役** —— 审核已搬到 `/dashboard/factory`（PR #581），Airtable 停用后该端点必 500 |
 
@@ -181,25 +183,28 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 5. 外部服务
 
-| 服务 | 用途 | 对外封装名 |
-|---|---|---|
-| OpenAI GPT-4o-mini | 文案 / Vision / Realtime | **Content Engine** |
-| Anthropic Claude Sonnet | Brief / 策略 / 诸葛亮 | **Strategy Engine** |
-| Muapi (ModelsLab) | 图 / 视频（P21.J 后主用） | **Visual Studio / Video Studio** |
-| Atlas Cloud (WaveSpeed / Seedance) | 图 / 视频 | 同上 |
-| HeyGen | 数字人头像视频 | **Avatar Studio** |
-| DataForSEO | 关键词 / SERP / 外链（**主数据源**） | **Keyword Intelligence** |
-| SerpAPI | SERP / Google AI Overviews | — |
-| Publer | 多平台排期发布 | **Publishing Hub** |
-| Stripe | MTC 充值 | — |
-| Resend | 全部事务邮件 | — |
-| Cloudflare AI Gateway | OpenAI / Anthropic 代理 | — |
-| Apify | scraper（Pinterest / IG / FB 等） | — |
-| Unsplash | 免费商用图库 | — |
-| Jina.ai Reader | 网页抓取 | **Site Analyzer** |
-| Airtable | **正在退役** — 代码仅剩 3 处引用 | **Content Workspace** |
-| SEMrush | **已被 DataForSEO 取代** — 代码 0 引用（`SEMRUSH_DB` 除外） | **Keyword Intelligence** |
-| Zapier | **已完全移除** | — |
+| 服务 | 用途 | 对外封装名 | **已有封装（调用前先看这里）** |
+|---|---|---|---|
+| OpenAI GPT-4o-mini | 文案 / Vision / Realtime | **Content Engine** | `src/lib/geo-module/` · `src/lib/geo-baseline/parser.ts` |
+| Anthropic Claude Sonnet | Brief / 策略 / 诸葛亮 | **Strategy Engine** | `src/lib/anthropic/` |
+| Muapi (ModelsLab) | 图 / 视频（P21.J 后主用） | **Visual Studio / Video Studio** | `src/lib/muapi/` |
+| Atlas Cloud (WaveSpeed / Seedance) | 图 / 视频 | 同上 | 同上 |
+| HeyGen | 数字人头像视频 | **Avatar Studio** | `src/lib/mcp/vendor-filter.ts`（仅过滤，无直调封装） |
+| DataForSEO | 关键词 / SERP / 外链（**主数据源**） | **Keyword Intelligence** | **`src/lib/dataforseo/`**（9 模块：search-volume / serp / labs / onpage / business-data …） |
+| SerpAPI | SERP / Google AI Overviews | — | `src/lib/dataforseo/search-volume.ts` 内混用 |
+| Publer | 多平台排期发布 | **Publishing Hub** | `src/lib/publer/` |
+| Stripe | MTC 充值 | — | `src/lib/mtc/` |
+| Resend | 全部事务邮件 | — | `src/lib/market-intel/pipeline.ts` 等按需引用 |
+| Cloudflare AI Gateway | OpenAI / Anthropic 代理 | — | （代理层，无独立封装） |
+| Apify | scraper（Pinterest / IG / FB 等） | — | `src/lib/apify/` |
+| Unsplash | 免费商用图库 | — | `src/lib/images/unsplash.ts` |
+| Jina.ai Reader | 网页抓取 | **Site Analyzer** | `src/lib/luban/tools.ts` |
+| Airtable | **正在退役** — 代码仅剩 3 处引用 | **Content Workspace** | 正在退役，勿新增引用 |
+| SEMrush | **已被 DataForSEO 取代** — 代码 0 引用（`SEMRUSH_DB` 除外） | **Keyword Intelligence** | **已废弃，一律改用 DataForSEO** |
+| Zapier | **已完全移除** | — | 已移除 |
+| **AI 可见度 / LLM 问答**（Perplexity · ChatGPT · Claude · Gemini） | 问 AI 看它怎么回答、引用谁 | — | **`src/lib/geo-baseline/`** · **`src/lib/industry-ai-visibility/`** · 契约在 `src/lib/geo-measurement/` |
+
+> 🔴 **第 4 列是防重复造轮子用的**：任何要调外部 API 的动作（含调研脚本、一次性探针）之前先查这一列。2026-08-30 有过一次实例——做市场调研时手写脚本直调 DataForSEO 与 AI 可见度接口，而两者的封装早已存在，错误认知进而污染了后续两轮架构判断。
 
 > **UI / 报告 / 客户交付物中禁止出现真实供应商名**，只用封装名。API 路由内部、错误日志、环境变量可用真名。
 
@@ -245,7 +250,7 @@ bash scripts/doctor.sh --md     # 输出 Markdown，可直接粘回本文件 §8
 ✅  已被调度           44 个 (render.yaml + .github/workflows)
 ❌  admin-key-expiry           有路由但没有任何调度器 → 永远不会自动跑
 ❌  benchmark-accumulator      有路由但没有任何调度器 → 永远不会自动跑
-❌  flywheel-seo-weekly        有路由但没有任何调度器 → 永远不会自动跑
+✅  flywheel-seo-weekly        2026-09-07 上线：Inngest 定时器每周一 05:15 NZ（PM 拍板开）
 ❌  kpi-backfill               有路由但没有任何调度器 → 永远不会自动跑
 ❌  memory-extractor           有路由但没有任何调度器 → 永远不会自动跑
 ⚠️  factory-review-sweeper     无调度 — 已知有意退役（Airtable 停用）

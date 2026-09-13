@@ -46,6 +46,10 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<vo
         display_name:      input.displayName,
         scopes:            input.scopes,
         status:            CONNECTION_STATUS.ACTIVE,
+        // Only touch last_synced_at when the caller just re-verified the grant.
+        // Omitting the key entirely (rather than writing null) keeps an
+        // existing value intact on an upsert that is not a fresh sync.
+        ...(input.lastSyncedAt ? { last_synced_at: input.lastSyncedAt.toISOString() } : {}),
         updated_at:        new Date().toISOString(),
       },
       { onConflict: 'client_id,provider,account_id' },

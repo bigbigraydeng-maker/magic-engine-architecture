@@ -28,7 +28,7 @@ describe('the guard only applies to the lane the auto-fix leg can push to', () =
   })
 
   it('does not apply elsewhere — humans keep working normally', () => {
-    for (const branch of ['main', 'docs/whatever', 'fix/issue-939', 'claude/not-me2']) {
+    for (const branch of ['main', 'docs/whatever', 'fix/issue-939', 'feat/issue-939']) {
       const r = checkFixScope({ branch, files: [file('.github/workflows/anything.yml')] })
       expect(r.applies, branch).toBe(false)
       expect(r.ok, branch).toBe(true)

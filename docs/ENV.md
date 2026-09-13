@@ -27,9 +27,9 @@
 
 | 变量 | 用途 | 配在哪 | 登记 |
 |---|---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL（前端可见） | Render-web + worker `content-factory-render-worker` | ✅ |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 匿名 key | Render-web + worker `content-factory-render-worker` | ✅ |
-| `SUPABASE_SERVICE_ROLE_KEY` | 服务端全权 key — ME 全部数据访问走它（不用 end-user RLS） | Render-web + worker `content-factory-render-worker` | ✅ |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase 项目 URL（前端可见） | Render-web | ✅ |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 匿名 key | Render-web | ✅ |
+| `SUPABASE_SERVICE_ROLE_KEY` | 服务端全权 key — ME 全部数据访问走它（不用 end-user RLS） | Render-web | ✅ |
 | `CRON_SECRET` | 所有 `/api/cron/*` 的 Bearer 鉴权 | Render-web + 全部 cron + **GH** | ✅ |
 | `APP_URL` | 应用自身域名（邮件链接 / OAuth callback 拼接） | Render-web | ✅ |
 | `NEXT_PUBLIC_APP_URL` | 同上，前端可见版本 | Render-web | ✅ |
@@ -39,16 +39,19 @@
 | `RENDER_EXTERNAL_URL` | Render 自动注入的服务 host | 无需配 | ✅ |
 | `RENDER_INSTANCE_ID` | Render 自动注入的实例 ID | 无需配 | — |
 | `NODE_ENV` `PORT` `HOME` | 运行时标准变量 | 无需配 | — |
+| `INNGEST_SIGNING_KEY` | Inngest 云端回调本应用 `/api/inngest` 时的签名校验密钥。**生产必须配**，否则接收端拒签、云端函数不执行（#1346）。已在 crazycontent/Render-web 上（2026-09-04 核实存在） | Render-web | ✅ |
+| `INNGEST_EVENT_KEY` | 发事件到 Inngest 的密钥（`sendInngestEvent` 用）。已在 Render-web 上 | Render-web | ✅ |
+| `INNGEST_DEV` | ⚠️ **生产绝不可设成真值**：设了会让 SDK 进 dev 模式、静默关掉 `/api/inngest` 的签名校验（任何人可触发函数）。仅本地/预览用。`/api/inngest` 请求期有 fail-closed 守卫，生产设了它会 500 拒服务（#1346） | 仅本地 | ❌ |
 
 ## 2. AI 模型
 
 | 变量 | 用途 | 配在哪 | 登记 |
 |---|---|---|---|
-| `OPENAI_API_KEY` | GPT-4o-mini 文案 / Vision / Realtime | Render-web + worker `content-factory-render-worker` | ✅ |
+| `OPENAI_API_KEY` | GPT-4o-mini 文案 / Vision / Realtime | Render-web | ✅ |
 | `OPENAI_BASE_URL` | 走 Cloudflare AI Gateway 代理（值已内联 render.yaml） | Render-web | ✅ |
-| `ANTHROPIC_API_KEY` | Claude Sonnet（Brief / 策略 / 诸葛亮）；worker 经 `render-pipeline → scene-plan → anthropic/client` 分镜时也要 | Render-web + worker `content-factory-render-worker` | ✅ |
+| `ANTHROPIC_API_KEY` | Claude Sonnet（Brief / 策略 / 诸葛亮） | Render-web | ✅ |
 | `ANTHROPIC_BASE_URL` | 走 Cloudflare AI Gateway 代理（值已内联 render.yaml） | Render-web | ✅ |
-| `CF_AIG_TOKEN` | Cloudflare AI Gateway 鉴权；跟 `ANTHROPIC_API_KEY` 同一条链，worker 也要 | Render-web + worker `content-factory-render-worker` | ✅ (仅 example) |
+| `CF_AIG_TOKEN` | Cloudflare AI Gateway 鉴权；跟 `ANTHROPIC_API_KEY` 同一条链 | Render-web | ✅ (仅 example) |
 | `PERPLEXITY_API_KEY` | AI 可见度追踪引擎之一 | Render-web | ✅ |
 | `GEMINI_API_KEY` | Google Gemini（AI 可见度追踪第 4 引擎） | Render-web | ❌ |
 | `AI_TRACKER_ENABLE_CLAUDE` | 开关：AI Tracker 是否跑 Claude 引擎 | Render-web | ❌ |
@@ -58,8 +61,9 @@
 | 变量 | 用途 | 配在哪 | 登记 |
 |---|---|---|---|
 | `ATLAS_CLOUD_API_KEY` | WaveSpeed 图片 + Seedance 视频（共用一把 key） | Render-web | 🔴 见下方 |
-| `MUAPI_API_KEY` | Muapi 图生视频（Visual Studio）；worker 经 `render-pipeline → broll-clip → muapi/client` 生成空镜时必需，缺了做片任务直接失败 | Render-web + worker `content-factory-render-worker` | ✅ |
-| `FACTORY_CJK_FONT` | 拼片烧中文字幕用的字体文件路径 —— 不设会 fallback 到 macOS 本机字体（`Arial Unicode.ttf`），在 Linux 容器里那个路径不存在 | worker `content-factory-render-worker`（`render.yaml` 里带默认值 `/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc`，Dockerfile 也 `ENV` 了一份，**不用手工配**） | ✅ |
+| `MUAPI_API_KEY` | Muapi 图生视频（Visual Studio） | Render-web | ✅ |
+| `CREATOMATE_API_KEY` | Creatomate 模板渲染（Video Studio）——`src/lib/creatomate/client.ts`，PM 2026-09-09 已订阅 Essential $54/月 | Render-web | ❌ 落地 PR 需补 |
+| `FACTORY_CJK_FONT` | 🔴 已废弃（2026-09-02）—— 只被已退役的 `content-factory-render-worker` 读，现在没有任何服务读它。CTS/Oztop 拼片改走本机 `scripts/factory-worker`，字体在 make_promo.py 那边另配 | — | ❌ |
 | `HEYGEN_API_KEY` | 数字人头像视频 | Render-web | ✅ |
 | `HEYGEN_DEFAULT_AVATAR_ID` / `HEYGEN_DEFAULT_VOICE_ID` | HeyGen 默认形象/音色 | Render-web | ✅ |
 | `MODELSLAB_API_KEY` | Muapi 图/视频引擎（P21.J 后主用） | Render-web | ❌ |
@@ -133,6 +137,7 @@
 | `INTERNAL_API_KEY` | 内部服务间调用（`api/factory/signals`） | Render-web | ✅ |
 | `INTERNAL_WORKER_TOKEN` | Voice worker 内部鉴权 | Render-web | ✅ |
 | `FACTORY_WORKER_TOKEN` | Factory worker 认领工单鉴权 | Render-web + worker | ❌ |
+| `FACTORY_WORKER_TARGET_CLIENT_ID` | 本地 Factory worker 可选单客户 claim 目标；提供时服务端必须再与 `FACTORY_WORKER_CLIENT_IDS` 求交集，不提供时沿用现有全白名单行为 | worker-local `.env` | ❌ |
 | `UPLOAD_LINK_SECRET` | 客户免登录上传链接签名（未配时 fallback 到 `CRON_SECRET`） | Render-web | ❌ |
 | `ADMIN_KEY_KILL_SWITCH` | 紧急关停全部 admin API key（设 `true` 生效） | Render-web | ❌ |
 | `OPENAI_WEBHOOK_SECRET` | OpenAI Realtime webhook 校验 | Render-web | ✅ |
@@ -160,7 +165,10 @@
 | `OUTBOUND_CALLING_ENABLED` | 🔴 **外呼总闸**，当前 `false`（板桥硬闸 #3） | Render-web | ✅ |
 | `DEFAULT_COUNTRY` / `DEFAULT_TIMEZONE` | `NZ` / `Pacific/Auckland` | Render-web | ✅ |
 | `TELEPHONY_PROVIDER` `TWILIO_ACCOUNT_SID` `TWILIO_AUTH_TOKEN` `DEFAULT_HUMAN_TRANSFER_URI` `WEBHOOK_REPLAY_WINDOW_SECONDS` | `.env.example` 有，代码 0 引用（已切 OpenAI 原生 SIP） | — | ⚠️ 待清理 |
-| `WHATSAPP_ACCESS_TOKEN` / `_BUSINESS_ACCOUNT_ID` / `_PHONE_NUMBER_ID` | `.env.example` 有，代码 0 引用（P1 未开工） | — | ⚠️ 待清理 |
+| `WHATSAPP_ACCESS_TOKEN` / `_PHONE_NUMBER_ID` | **WhatsApp 收发的关键路径依赖**（`lib/whatsapp/send.ts`）。`_PHONE_NUMBER_ID` 必须与该客户 `clients.whatsapp_phone_number_id` 一致，不一致时发送会被主动挡下（防止用别的客户号码发消息） | Render-web | ⬜ 待配 |
+| `META_APP_SECRET` | WhatsApp webhook 验签用（`/api/webhooks/whatsapp`）。**缺了 POST 直接 500**，Meta 重试几轮后会停掉整个订阅 | Render-web | ⬜ 待配 |
+| `META_VERIFY_TOKEN` | WhatsApp webhook 订阅握手用。缺了在 Meta 后台**订阅不上** | Render-web | ⬜ 待配 |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID` | `.env.example` 有，代码 0 引用 | — | ⚠️ 待清理 |
 
 ## 11. 功能开关 / 灰度
 
@@ -173,6 +181,8 @@
 | `JOB_SIGNAL_INGEST_ENABLED` / `JOB_SIGNAL_KEYWORDS` | 招聘信号采集开关（默认 **关**）+ 关键词。开关在 `/api/cron/job-boards-weekly` 路由里读，同样是 web 进程 | Render-web |
 | `ATTRIBUTION_DUAL_WINDOW_ENABLED` | 归因双窗口总闸（默认 **关**）。开了之后被转交的动作会同时按 GSC 的 28 天节奏和 pass 1 的窗口各算一次。**在 `src/lib/memory/` 的消费方（extractor / learning-rollup）改成按动作计样本、并且分页读全之前不许开**（那 5 条查询也没分页，光去重不分页等于没修） —— 这是唯一还没改的一类；本 PR 已经把其余读取方（行业基准、三个信心读取、后台聚合页 `/api/admin/flywheel/aggregate`、执行看板 `/api/clients/[id]/execution`）**既改成按动作折叠、也改成分页读全**（只折叠不分页照样错：折叠是在读到的行里挑代表，带目标指标那行被截掉就会挑错代表，那不是少算是算错） —— 现在开会让同一个动作在学习和行业基准里被重复计数（Issue #859）。关着的时候两个写入方还会顺手清掉自己在非权威窗口上的旧行（老版本留下的），因为只拒绝新写入挡不住已经存在的第二个窗口；这一步只在权威窗口真的写进去之后才做，所以还算不出结果的动作会暂时保留那一行，等算得出来那一轮再清。⚠️ 配在 **web service** 上：`attribution-cron` 只是 `curl` 打这个接口，读 env 的是接请求的 web 进程；配到 cron 上开关不会生效，而且是静默不生效 | Render-web |
 | `SOCIAL_COMMENT_AUTOREPLY_KILL` | 社媒评论自动回复紧急关停 | Render-web |
+| `EMAIL_REPLY_DIGEST_ENABLED` | 🔴「客人来信没人回」汇总信总闸，默认 **关**（未配 = 不发，安全态）。开关在 `/api/cron/email-reply-digest` 路由里读 —— 是 web 进程，配到 cron job 自己身上不生效。2026-09-03 上线当天即由 PM 拍板暂停：现有排除只挡「自己人域名」和「同行域名」，挡不住陌生公司群发的推销，CTS 当天 32 条候选里噪音占七成，而排序按「等最久」，前 10 条有 8 条是营销邮件。**加好噪音过滤并用生产数据验证准确率之后才可开**；开的时候 `render.yaml` 里那段调度也要一起取消注释（两道闸） | Render-web |
+| `LINKEDIN_PROGRESS_POST_ENABLED` | 🔴 ME 产品动态自动发 LinkedIn 总闸，默认关（未配 = 禁用，不用配才是安全态）。开关在 `/api/cron/linkedin-progress-post-{mon,thu}` 路由里读——那是 web 进程，两条 cron 只负责 `curl`；配到 cron job 自己的环境变量上不会生效。上线前提：PM 已在 Publer 连好个人 LinkedIn 账号，并在 Magic Lab Class 客户的 connectors 设置页把账号 ID 填进 Publer 绑定 | Render-web |
 | `SWEEP_CITIES` / `SWEEP_INDUSTRIES` | 线索扫描城市 / 行业范围。`src/lib/prospecting/sweep.ts` 里读（走 `envList('SWEEP_CITIES', …)`，变量名是字符串传进去的），调用方是 web 路由 `/api/cron/prospecting-sweep` | Render-web |
 | `ENABLE_REAL_GENERATION` | `.env.example` 有，代码 0 引用 | ⚠️ 待清理 |
 

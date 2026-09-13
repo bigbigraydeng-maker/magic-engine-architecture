@@ -25,8 +25,46 @@ import {
 /**
  * 这些是**知会**，不是待办 —— 单独一栏，也不计进「今天有几件事」。
  * 判断标准：PM 不动手也不会出事。会出事的一律留在「需要你动手」那栏。
+ *
+ * 2026-09-07 `diagnostic_findings` 挪进来：跟 SEO 巡逻发现是同一条纪律 ——
+ * 本周体检查到的严重问题**已经**由每周方案自动排成了执行看板的建议卡
+ * （见 manual-items.ts:1741-1758 how 原文「不用你挑」），本就不是要 PM
+ * 单独动手处理的事，之前算进「今天有几件事」是口径 bug（跟 91 那次
+ * 「巡逻发现被数两遍」是同一类错，PM 2026-08-04 拍板）。
  */
-const INFORMATIONAL_KINDS: ManualItemKind[] = ['prescription_updated']
+const INFORMATIONAL_KINDS: ManualItemKind[] = ['prescription_updated', 'diagnostic_findings']
+
+/**
+ * 这些条目的 how 字段自己都写着「回我一句我去改」/「回我一句我去查」——
+ * 本质是**我们代码 / 基础设施的欠账**，不是 PM 该动手的活，之前塞进
+ * 「🙋 需要你动手」栏是把 dev 的活假装成 PM 的活（每天骚扰 PM 一遍，
+ * PM 也没法真的做，只能转给 Ray/dev）。挪进单独一栏「🛠 系统欠账」：
+ *
+ *   - 不进 `totalItems`（不算 PM 的活）
+ *   - 单独渲染成一节，标题写清「不影响你 · Ray 转给 dev 就好」
+ *   - 保留可见性 —— 铁律 3 下半「发现不许死在日志里」照样满足，
+ *     只是这栏不再算作要 PM 处理的待办
+ *
+ * 后续正确形态是自动开 GitHub issue / spawn dev-task，但那需要另立项
+ * （所有权分配 / 去重 / 关闭跟踪）；本次先做管道分流，别让"应该由 dev
+ * 修的 bug"每天早上都到 PM 的动手栏里刷屏。
+ */
+const DEV_OWNED_KINDS: ManualItemKind[] = [
+  // auto-run cron 三次都失败停手 → how 自己写「回我一句「查一下这条」我去看」
+  'auto_run_stuck',
+  // 归因黑洞三个子情况（cross_flywheel / scope_mismatch / scope_skip）→
+  // how 全是「这条不用你动手 —— 是我们这边把指标配到了错的战线... 回我一句我去改」
+  'action_unattributable',
+  // 归因 audit 查询挂了 → how 写「这条不用你动手 —— 是我们这边查询挂了」
+  'attribution_audit_failed',
+  // 读客户表失败 → how 写「这条不用你动手 —— 是我们这边读客户表失败了」
+  'client_list_unreadable',
+  // cron 接口没接 startCronRun → how 写「这条不用你动手 —— 是我们代码里的欠账」
+  // 当前 registry 里全部 logsRuns=true，这条实际为空；新增 CI 守卫
+  // （cron-registry-logs-runs.test.ts）阻止未来回归。留在 DEV_OWNED_KINDS 作为
+  // 双保险：万一 CI 漏了，运行时也不再往 PM 邮件的「需要你动手」里塞。
+  'cron_blind',
+]
 
 /** FDE focus clients: CTS + Oztop. */
 export const FOCUS_CLIENT_IDS = [
@@ -78,9 +116,20 @@ const REEL_REVIEW_STATUSES = ['video_ready', 'images_ready', 'in_review'] as con
 
 const APP_BASE = 'https://app.magicengine.com.au'
 
-/** 板桥审：给 PM/FDE 看的 GBP 待办文案（含「用谁的账号」这个最易翻车点）。 */
+/**
+ * 板桥审：给 PM/FDE 看的 GBP 待办文案（含「用谁的账号」这个最易翻车点）。
+ *
+ * 2026-09-07 铁律 3 「遇卡点必自动化」落地：这条 setup 从前只覆盖商家页一个
+ * scope，Ray 还得再单独点一次 Google Search Console / Analytics 授权 ——
+ * 每客户要跳两遍 Google consent。合到 `/api/auth/google/connect` 之后，一次
+ * 点完覆盖商家页 + Search Console + Analytics + 收录申请，同一个 Google 账号
+ * 只跳一次；用户不用在同一个客户上二次授权。判据仍是 `client_connectors.gbp`
+ * / `platform_oauth_connections.google_gbp` 上有活跃行 + location_name 有值，
+ * 所以商家页仍然是这条待办的触发条件（有些客户没 GSC/GA4 也没关系）。
+ */
 const GBP_CONNECT_LABEL =
-  '连接 Google 商家页 · 约 1 分钟。连上后不会自动发东西，每条帖子仍要你点确认才发。' +
+  '一次点完客户全部 Google 权限 · 约 1 分钟。覆盖商家页 + Search Console + Analytics + 收录申请，' +
+  '同一个 Google 账号只跳一次同意页。连上后不会自动发东西，每条帖子仍要你点确认才发。' +
   '跳到 Google 后要用「能管理这家客户商家页的那个账号」登录 —— 通常是客户老板的账号，不是你自己的；' +
   '用错账号连不上，退出重来一次就行，不会弄坏任何东西。一般由 Ray 或客户老板本人点，FDE 看到转给 Ray 就行。'
 
@@ -143,7 +192,8 @@ export async function loadGbpSetupTasks(
       label: connectedButUnlocated.has(c.id) ? GBP_LOCATION_LABEL : GBP_CONNECT_LABEL,
       href: connectedButUnlocated.has(c.id)
         ? `${APP_BASE}/dashboard/clients/${c.id}/settings`
-        : `${APP_BASE}/api/auth/google/gbp/start?clientId=${c.id}`,
+        // combined flow: 一次授权覆盖 GBP + GSC + GA4 + Indexing（见 GBP_CONNECT_LABEL 头注）
+        : `${APP_BASE}/api/auth/google/connect?client_id=${c.id}`,
     }))
     .sort((a, b) => a.name.localeCompare(b.name))
 }
@@ -315,8 +365,11 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
   //    往里塞不用动手的通知，等于每周每个客户往里加一行噪音；栏目一被稀释，
   //    真正等他动手的那条（比如"出片余额用完了"）会被一起划过去。
   //    所以纯知会型的单独一栏，且不计进"要你办的事"。
-  const actionItems = manualItems.filter((m) => !INFORMATIONAL_KINDS.includes(m.kind))
+  const actionItems = manualItems.filter(
+    (m) => !INFORMATIONAL_KINDS.includes(m.kind) && !DEV_OWNED_KINDS.includes(m.kind),
+  )
   const infoItems = manualItems.filter((m) => INFORMATIONAL_KINDS.includes(m.kind))
+  const devOwnedItems = manualItems.filter((m) => DEV_OWNED_KINDS.includes(m.kind))
 
   if (actionItems.length > 0) {
     const rows = actionItems.map((m) => `
@@ -337,6 +390,18 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
     // 就是让 PM 知道客户的方向被自动改成了什么 —— 他不用干活，但必须过目。
     // 「看一眼就行」两件事一起说清楚。
     sections.push(sectionCard('📣', '这周系统替你做了什么（看一眼就行）', rows))
+  }
+
+  if (devOwnedItems.length > 0) {
+    const rows = devOwnedItems.map((m) => `
+      <div style="margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9">
+        <p style="margin:0 0 2px;font-size:14px;color:#0f172a"><b>${esc(m.client_name)}</b>：${esc(m.what)}</p>
+        <p style="margin:0;font-size:13px;color:#475569">→ ${esc(m.how)}${m.href ? ` · <a href="${esc(m.href)}" style="color:#0891b2">去看看</a>` : ''}</p>
+      </div>`)
+    // 🛠 这栏是**我们代码 / infra 欠账**的清单，转给 Ray/dev 就好 —— 不算你要办的事。
+    //    见 DEV_OWNED_KINDS 头注：这几个 kind 的 how 字段自己都写「回我一句我去改」，
+    //    本就不是 PM 能动手解决的，塞到「🙋 需要你动手」栏是把 dev 的活假装成 PM 的活。
+    sections.push(sectionCard('🛠', '系统欠账（不影响你 · Ray 转给 dev 就好）', rows))
   }
 
   const totalDrafts = counts.draftsByClient.reduce((s, c) => s + c.drafts, 0)

@@ -14,9 +14,9 @@ const schema = {
   publisher: {
     '@type': 'Organization',
     name: 'The Park Homes Ltd',
-    logo: { '@type': 'ImageObject', url: 'https://parkhomes-site.pages.dev/img/logo-tree-ivory.png' },
+    logo: { '@type': 'ImageObject', url: 'https://parkhomes.nz/img/logo-tree-ivory.png' },
   },
-  mainEntityOfPage: { '@type': 'WebPage', '@id': `https://parkhomes-site.pages.dev/journal/${f.slug}/` },
+  mainEntityOfPage: { '@type': 'WebPage', '@id': `https://parkhomes.nz/journal/${f.slug}/` },
 };
 const faqSchema = f.faq && f.faq.length
   ? {
@@ -48,6 +48,8 @@ const faqSchema = f.faq && f.faq.length
 
   <section>
     <div class="wrap"><article class="post">
+      {f.hero && <img src={f.hero} alt={f.heroAlt || f.title} loading="lazy" />}
+      {f.hero && f.heroCaption && <p class="img-cap">{f.heroCaption}</p>}
       <slot />
     </article></div>
   </section>
@@ -76,6 +78,7 @@ const faqSchema = f.faq && f.faq.length
     </div>
   </section>
 
-  <!-- AI VISIBILITY BLOCK -->
-  <div class="ai-instructions" style="display:none" aria-hidden="true" set:html={f.aiBlock} />
+  <!-- AI VISIBILITY BLOCK (ME_GEO_BLOCK_V2 — see Base.astro for why three
+       redundant hiding signals instead of a single inline style) -->
+  <div hidden aria-hidden="true" class="me-geo-instructions seo-instructions" data-me-geo="v2" set:html={f.aiBlock} />
 </Base>

@@ -22,13 +22,13 @@ describe('buildTodoEmail · setup tasks', () => {
       name: 'CTS Tours NZ',
       id: 'cid-1',
       label: '连接 Google 商家页（点一次授权，之后自动发帖）',
-      href: 'https://app.magicengine.com.au/api/auth/google/gbp/start?clientId=cid-1',
+      href: 'https://app.magicengine.com.au/api/auth/google/google/connect?client_id=cid-1',
     },
     {
       name: 'oztop',
       id: 'cid-2',
       label: '连接 Google 商家页（点一次授权，之后自动发帖）',
-      href: 'https://app.magicengine.com.au/api/auth/google/gbp/start?clientId=cid-2',
+      href: 'https://app.magicengine.com.au/api/auth/google/google/connect?client_id=cid-2',
     },
   ]
 
@@ -38,8 +38,8 @@ describe('buildTodoEmail · setup tasks', () => {
     expect(email.totalItems).toBe(2)
     expect(email.subject).toContain('2 件')
     expect(email.html).toContain('去连接')
-    expect(email.html).toContain('gbp/start?clientId=cid-1')
-    expect(email.html).toContain('gbp/start?clientId=cid-2')
+    expect(email.html).toContain('google/connect?client_id=cid-1')
+    expect(email.html).toContain('google/connect?client_id=cid-2')
   })
 
   it('setup card is rendered above the routine review queues', () => {
@@ -86,7 +86,9 @@ describe('loadGbpSetupTasks', () => {
   it('lists clients with no connection at all', async () => {
     const tasks = await loadGbpSetupTasks(makeSupabase(CLIENTS, []) as never)
     expect(tasks.map((t) => t.id)).toEqual(['cts', 'oz'])
-    expect(tasks[0].href).toContain('gbp/start?clientId=cts')
+    // 2026-09-07 铁律 3：合并流一次授权覆盖 GBP + GSC + GA4 + Indexing
+    expect(tasks[0].href).toContain('/api/auth/google/connect?client_id=cts')
+    expect(tasks[0].href).not.toContain('gbp/start')
   })
 
   it('a connected client WITHOUT a confirmed storefront stays on the list', async () => {
@@ -111,7 +113,7 @@ describe('loadGbpSetupTasks', () => {
       ]) as never,
     )
     expect(tasks.map((t) => t.id)).toEqual(['cts'])
-    expect(tasks[0].href).toContain('gbp/start')
+    expect(tasks[0].href).toContain('/api/auth/google/connect?client_id=cts')
   })
 
   it('fully set up → empty list', async () => {
@@ -164,6 +166,98 @@ describe('buildTodoEmail', () => {
     }, '31 Jul')
     expect(many.totalItems).toBe(0)
     expect(many.subject).toContain('无事')
+  })
+
+  /**
+   * 2026-09-07 铁律 3：以下 kind 是**我们代码 / infra 欠账**——每条的 how
+   * 都是「回我一句我去改」，PM 没法真的动手，塞进「🙋 需要你动手」栏是把
+   * dev 的活假装成 PM 的活。这条测试锁死：它们进单独一栏「🛠 系统欠账」，
+   * 不进「🙋 需要你动手」，不进「📣 系统替你做了什么」，不抬高总数。
+   */
+  it.each([
+    'auto_run_stuck',
+    'action_unattributable',
+    'attribution_audit_failed',
+    'client_list_unreadable',
+    'cron_blind',
+  ] as const)('🛠 %s 走「系统欠账」栏，不进「需要你动手」，不抬高总数', (kind) => {
+    const email = buildTodoEmail(3, {
+      ...EMPTY,
+      manualItems: [
+        {
+          kind,
+          client_id: 'infra',
+          client_name: 'Magic Engine 后台',
+          what: '（dev 该看的）',
+          how: '回我一句我去改',
+          href: 'https://app.magicengine.com.au/dashboard/admin/cron-health',
+        },
+      ],
+    }, '31 Jul')
+    expect(email.html).toContain('系统欠账')
+    expect(email.html).not.toContain('需要你动手')
+    // 这些不是"系统替你做了什么"（那是给成功事件用的），也不属于那栏
+    const infoAt = email.html.indexOf('这周系统替你做了什么')
+    expect(infoAt).toBe(-1)
+    expect(email.totalItems).toBe(0)
+    expect(email.subject).toContain('无事')
+  })
+
+  it('🛠 系统欠账栏与「需要你动手」栏共存时，只有 action 类算进总数', () => {
+    const email = buildTodoEmail(3, {
+      ...EMPTY,
+      manualItems: [
+        {
+          kind: 'video_credits_out',
+          client_id: 'infra',
+          client_name: 'Magic Engine 后台',
+          what: 'AI 出片余额用完了',
+          how: '打开链接充值',
+          href: 'https://muapi.ai/topup',
+        },
+        {
+          kind: 'action_unattributable',
+          client_id: 'infra',
+          client_name: 'Magic Engine 后台',
+          what: '（dev 该看的）',
+          how: '回我一句我去改',
+          href: '',
+        },
+      ],
+    }, '31 Jul')
+    expect(email.html).toContain('需要你动手')
+    expect(email.html).toContain('系统欠账')
+    // 只有 video_credits_out 算一件
+    expect(email.totalItems).toBe(1)
+    expect(email.subject).toContain('1 件')
+  })
+
+  /**
+   * 2026-09-07 铁律 3 下半（PR #1442）：`diagnostic_findings` 走「系统替你
+   * 做了什么」栏，见 daily-todo.ts:29 INFORMATIONAL_KINDS 头注。此条测试
+   * 保护那份契约，跟上面 dev-owned 契约互不重叠。
+   */
+  it('🔴 本周体检查到的严重问题走「系统替你做了什么」栏，不进「需要你动手」，不抬高总数', () => {
+    const email = buildTodoEmail(3, {
+      ...EMPTY,
+      manualItems: [
+        {
+          kind: 'diagnostic_findings',
+          client_id: 'cid-1',
+          client_name: 'CTS Tours NZ',
+          what: '本周体检查出 3 个严重、5 个高优先问题。最要紧的一条：首页 H1 缺失',
+          how: '不用你挑 —— 每周方案会把这些自动排成看板上的动作',
+          href: 'https://app.magicengine.com.au/dashboard/clients/cid-1/execution',
+        },
+      ],
+    }, '31 Jul')
+    // 不进「需要你动手」，走「系统替你做了什么」
+    expect(email.html).not.toContain('需要你动手')
+    expect(email.html).toContain('系统替你做了什么')
+    expect(email.html).toContain('CTS Tours NZ')
+    // 不抬高总数
+    expect(email.totalItems).toBe(0)
+    expect(email.subject).toContain('无事')
   })
 
   it('zero-count sections are omitted entirely', () => {

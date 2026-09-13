@@ -230,6 +230,18 @@ export interface PublishedRef {
   video_id?: string
   published_at: string
   permalink?: string
+  /**
+   * 这条回执对应的是真·公开发布(PUBLISHED)还是草稿(DRAFT)。
+   * 由 adapter 按 draft 参数盖戳 —— publish-worker 只在 PUBLISHED 时才 emit 发布信号,
+   * 草稿绝不通知下游建广告(草稿不可 promote 成广告)。undefined = 来路不明(如 findExisting
+   * 补记),保守当作"不确定" —— 不 emit、不补发,等真查过 video_state 再说。
+   */
+  video_state?: 'DRAFT' | 'PUBLISHED'
+  /**
+   * 发布信号(me/factory.reel.published)的 Inngest 回执 id。
+   * 有值 = 已喊过下游;空/缺 = 还没喊成 → 补发对账会重发(仅当 video_state=PUBLISHED)。
+   */
+  event_ids?: string[]
 }
 
 /**

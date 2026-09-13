@@ -1,7 +1,23 @@
 ---
 import Base from '../layouts/Base.astro';
+import Faq from '../components/Faq.astro';
 import { projects } from '../data/projects.js';
 import { agent } from '../data/agent.js';
+
+const faqs = [
+  {
+    q: 'Who handles enquiries for Park Homes?',
+    a: `All sales enquiries across every development are handled by our appointed agent, ${agent.name} of ${agent.company} — ${agent.phone} or ${agent.email}.`,
+  },
+  {
+    q: 'Is Park Homes a licensed builder?',
+    a: 'Yes — Park Homes work is delivered under a Licensed Building Practitioner (LBP), with quality checks held at every stage.',
+  },
+  {
+    q: 'Do you build across all of Auckland?',
+    a: 'Current developments are on the North Shore, East Auckland and South Auckland, with new sites planned for West Auckland — use the "Area of interest" field below to be matched to the right one.',
+  },
+];
 ---
 <Base title="Contact — Park Homes" active="contact" desc="Enquiries for all Park Homes developments.">
 
@@ -31,11 +47,11 @@ import { agent } from '../data/agent.js';
 
       <div>
         <h2 style="color:#fff;font-size:clamp(22px,3vw,30px);margin-bottom:20px">Send an enquiry</h2>
-        <form class="reg" onsubmit="return false">
-          <div><label>Name</label><input type="text" placeholder="Your name" /></div>
-          <div><label>Phone</label><input type="text" placeholder="Your phone" /></div>
-          <div class="full"><label>Email</label><input type="text" placeholder="you@email.com" /></div>
-          <div class="full"><label>I'm looking to</label>
+        <form class="reg" id="enquiry-form" novalidate>
+          <div><label for="enq-name">Name</label><input type="text" id="enq-name" name="name" placeholder="Your name" required /></div>
+          <div><label for="enq-phone">Phone</label><input type="text" id="enq-phone" name="phone" placeholder="Your phone" required /></div>
+          <div class="full"><label for="enq-email">Email</label><input type="email" id="enq-email" name="email" placeholder="you@email.com" /></div>
+          <div class="full"><label for="looking">I'm looking to</label>
             <select id="looking">
               <option>Not sure yet</option>
               <option>Buy my first home</option>
@@ -44,7 +60,7 @@ import { agent } from '../data/agent.js';
               <option>Invest in property</option>
             </select>
           </div>
-          <div class="full"><label>Area of interest</label>
+          <div class="full"><label for="area">Area of interest</label>
             <select id="area">
               <option value="">Any area</option>
               <option value="north-shore">North Shore</option>
@@ -53,21 +69,31 @@ import { agent } from '../data/agent.js';
               <option value="west">West Auckland (coming soon)</option>
             </select>
           </div>
-          <div class="full"><label>Project of interest</label>
-            <select>
+          <div class="full"><label for="project">Project of interest</label>
+            <select id="project">
               <option>Any / not sure yet</option>
               {projects.map((p) => <option>{p.name} — {p.status.toLowerCase()}</option>)}
             </select>
           </div>
-          <div class="full"><label>Message</label><input type="text" placeholder="Anything you'd like us to know" /></div>
-          <div class="full"><button class="btn btn-primary btn-lg" style="width:100%">Send enquiry</button></div>
+          <div class="full"><label for="message">Message</label><input type="text" name="message" id="message" placeholder="Anything you'd like us to know" /></div>
+          {/* Honeypot — real visitors never see or fill this; bots that auto-fill every field do. */}
+          <div style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden" aria-hidden="true">
+            <label>Company<input type="text" name="company_hp" tabindex="-1" autocomplete="off" /></label>
+          </div>
+          <div class="full" id="enquiry-error" style="display:none;color:#ff9b9b;font-size:13px;margin-bottom:4px"></div>
+          <div class="full" id="enquiry-success" style="display:none;color:#8fd9b6;font-size:14px;padding:14px 0">
+            Thanks — your enquiry has been sent. {agent.name} will be in touch shortly.
+          </div>
+          <div class="full" id="enquiry-submit-row"><button class="btn btn-primary btn-lg" type="submit" style="width:100%">Send enquiry</button></div>
         </form>
         <p style="font-size:12px;color:var(--mute);margin-top:12px">Your enquiry is passed to our appointed agent, Roman Hu (Ray White Mission Bay).</p>
       </div>
     </div>
   </section>
 
-  <script is:inline>
+  <Faq items={faqs} heading="Before you get in touch" />
+
+  <script is:inline define:vars={{ leadsEndpoint: 'https://app.magicengine.com.au/api/clients/19e025b7-555b-44fd-ba87-debc62a447a7/leads' }}>
     (function () {
       var q = new URLSearchParams(location.search);
       // "I'm looking to" — prefill by persona (from buyer-journey cards)
@@ -91,6 +117,87 @@ import { agent } from '../data/agent.js';
           if (asel.options[j].value === a) { asel.selectedIndex = j; break; }
         }
       }
+
+      // ── Submit ──────────────────────────────────────────────────────────
+      var form    = document.getElementById('enquiry-form');
+      var errorEl = document.getElementById('enquiry-error');
+      var okEl    = document.getElementById('enquiry-success');
+      var submitRow = document.getElementById('enquiry-submit-row');
+      var btn     = submitRow.querySelector('button');
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        errorEl.style.display = 'none';
+        errorEl.textContent = '';
+
+        // Honeypot — bots that fill every field get a fake success, nothing is sent.
+        if (form.elements['company_hp'].value) {
+          form.style.display = 'none';
+          okEl.style.display = 'block';
+          return;
+        }
+
+        var name  = form.elements['name'].value.trim();
+        var phone = form.elements['phone'].value.trim();
+        var emailVal = form.elements['email'].value.trim();
+        if (!name || !phone) {
+          errorEl.textContent = 'Please fill in your name and phone number.';
+          errorEl.style.display = 'block';
+          return;
+        }
+        // A malformed email fails the whole submission server-side (email is
+        // otherwise optional) — catch it here with a specific message instead
+        // of losing the lead behind a generic "something went wrong".
+        if (emailVal && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(emailVal)) {
+          errorEl.textContent = "That email doesn't look right — please check it, or leave it blank.";
+          errorEl.style.display = 'block';
+          return;
+        }
+
+        // Real-estate-specific context has no matching field on the shared ME
+        // leads schema (that schema's project_type enum belongs to a different
+        // client's industry) — folded into the free-text message instead of
+        // forcing a mismatch.
+        var lookingSel = document.getElementById('looking');
+        var projectSel = document.getElementById('project');
+        var parts = [];
+        if (lookingSel.value && lookingSel.value !== 'Not sure yet') parts.push('Looking to: ' + lookingSel.value);
+        if (projectSel.value && projectSel.value.indexOf('Any') !== 0) parts.push('Project: ' + projectSel.value);
+        var freeText = form.elements['message'].value.trim();
+        if (freeText) parts.push(freeText);
+
+        var payload = {
+          name:        name,
+          phone:       phone,
+          email:       emailVal,
+          suburb:      asel.options[asel.selectedIndex].text !== 'Any area' ? asel.options[asel.selectedIndex].text : '',
+          message:     parts.join(' — '),
+          source_url:  window.location.href,
+          referrer:    document.referrer || null,
+          submitted_at: new Date().toISOString(),
+        };
+
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
+
+        fetch(leadsEndpoint, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body:    JSON.stringify(payload),
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            form.style.display = 'none';
+            okEl.style.display = 'block';
+            if (typeof gtag === 'function') gtag('event', 'generate_lead', { form_id: 'enquiry-form' });
+          })
+          .catch(function () {
+            errorEl.textContent = "Something went wrong sending that — please call or email us directly (details on this page).";
+            errorEl.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = 'Send enquiry';
+          });
+      });
     })();
   </script>
 

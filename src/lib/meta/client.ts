@@ -210,7 +210,7 @@ export interface MetaCampaignDailyRow {
   cpc:           number | null
   leads:         number        // action_type 'lead' (Lead Form submissions)
   messaging_conversations: number // CTWA conversations started
-  results:       number        // leads + messaging_conversations (the north-star unit)
+  results:       number        // max(leads, messaging) — the north-star unit, NEVER summed (see parseDailyMetrics)
   cost_per_result: number | null
 }
 
@@ -243,7 +243,21 @@ function parseDailyMetrics(row: GraphCampaignDailyRow): DailyMetrics {
 
   const leads     = pickAction(row.actions, LEAD_ACTION_PRIORITY)
   const messaging = pickAction(row.actions, MESSAGING_ACTION_PRIORITY)
-  const results   = leads + messaging
+  // NEVER `leads + messaging`. For a Lead Form campaign whose page has
+  // Messenger auto-reply / lead-form-to-Messenger handoff enabled (CTS's
+  // setup), Meta reports the SAME conversion under BOTH LEAD_ACTION_PRIORITY
+  // and MESSAGING_ACTION_PRIORITY — the 27 form submits on 2026-09-06 also
+  // showed up as 25 messaging_conversations, and summing gave 52 = a 2×
+  // over-count that showed the PM $3.9 CPL when Meta itself said $7.6.
+  // See docs/history/CHANGELOG.md 2026-09-08.
+  //
+  // `max` picks the dominant metric per row without ever inflating: it's the
+  // right answer for the overlap case, and for a pure-messaging or pure-lead
+  // campaign one of the two is 0 so max returns the non-zero one intact. The
+  // theoretical case (independent leads AND independent messaging on the same
+  // ad, no overlap) would under-count by min(leads, messaging) — accepted
+  // because it's rare in practice and safer than the alternative.
+  const results   = Math.max(leads, messaging)
 
   return {
     spend:         base.spend,

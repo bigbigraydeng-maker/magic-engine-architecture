@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase'
+import type { TailorMadeBrochure } from './brochure-types'
 import {
   buildQuoteRef,
   createBlankItinerary,
@@ -145,6 +146,40 @@ export async function saveItinerary(
 
   if (error) throw new Error(`保存行程单失败：${error.message}`)
   return data as TailorMadeRecord
+}
+
+/**
+ * 保存画册。
+ *
+ * 画册与行程单是同一行上的两个 payload，分开写：顾问在画册标签页里改图改文案时，
+ * 不该把行程单那一份也重写一遍 —— 两边同时打开时后写的会盖掉先写的。
+ */
+export async function saveBrochure(
+  clientId: string,
+  id: string,
+  brochure: TailorMadeBrochure,
+): Promise<TailorMadeRecord> {
+  const { data, error } = await supabaseAdmin
+    .from(TABLE)
+    .update({ brochure })
+    .eq('client_id', clientId)
+    .eq('id', id)
+    .select('*')
+    .single()
+
+  if (error) throw new Error(`保存画册失败：${error.message}`)
+  return data as TailorMadeRecord
+}
+
+/** 删除画册（保留行程单）。null 表示这份报价单没有画册。 */
+export async function clearBrochure(clientId: string, id: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from(TABLE)
+    .update({ brochure: null })
+    .eq('client_id', clientId)
+    .eq('id', id)
+
+  if (error) throw new Error(`删除画册失败：${error.message}`)
 }
 
 export async function deleteItinerary(clientId: string, id: string): Promise<void> {

@@ -146,6 +146,10 @@ export class GithubClient {
 
   /**
    * Open a pull request from `head` branch into `base` branch.
+   *
+   * `draft: true` opens the PR in Draft state (GitHub REST supports this
+   * natively on `POST /repos/{owner}/{repo}/pulls`). Defaults to `false`
+   * to keep existing callers' behavior unchanged.
    */
   async createPullRequest(
     owner: string,
@@ -155,12 +159,33 @@ export class GithubClient {
       body:  string
       head:  string   // source branch
       base:  string   // target branch (e.g. "main")
+      draft?: boolean // open as Draft PR (structural anti-auto-merge)
     },
   ): Promise<GitHubPullRequest> {
     return this.request<GitHubPullRequest>(
       'POST',
       `/repos/${owner}/${repo}/pulls`,
-      params,
+      { ...params, draft: params.draft ?? false },
+    )
+  }
+
+  /**
+   * List PRs whose head is `head` branch (formatted `owner:branch`).
+   *
+   * `state` default `'open'` — used by open_pr 422 idempotency recovery.
+   * `state: 'all'` — used by rollback to also see closed / merged PRs on the
+   * same head (rollback must refuse to write when a merged PR exists on the
+   * owned head).
+   */
+  async listPullRequestsByHead(
+    owner: string,
+    repo: string,
+    headBranch: string,
+    state: 'open' | 'closed' | 'all' = 'open',
+  ): Promise<GitHubPullRequest[]> {
+    return this.request<GitHubPullRequest[]>(
+      'GET',
+      `/repos/${owner}/${repo}/pulls?state=${state}&head=${owner}:${encodeURIComponent(headBranch)}`,
     )
   }
 
@@ -187,6 +212,117 @@ export class GithubClient {
       merged: pr.merged === true,
       mergedAt: pr.merged_at,
     }
+  }
+
+  /**
+   * Read a PR's **full ownership shape** — draft/state/head/base/body/merged.
+   *
+   * Used by `page.apply_optimization_request` capability to prove the PR we're
+   * about to close (rollback) or the PR we just created (happy-path readback)
+   * actually belongs to the current run:
+   *   body contains `- kernel_run_id: <runId>` + `- authorization_decision_id: <decisionId>`,
+   *   head === owned branch, base === live default_branch,
+   *   draft === true, merged === false.
+   * Kept separate from `getPullRequestState` so existing pr-sync callers stay
+   * on the smaller return type.
+   */
+  async getPullRequestDetail(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<{
+    number: number
+    state: 'open' | 'closed'
+    merged: boolean
+    mergedAt: string | null
+    draft: boolean
+    headRef: string
+    baseRef: string
+    title: string
+    body: string
+    htmlUrl: string
+  }> {
+    const pr = await this.request<{
+      number: number
+      state: 'open' | 'closed'
+      merged: boolean
+      merged_at: string | null
+      draft?: boolean
+      head: { ref: string }
+      base: { ref: string }
+      title: string
+      body: string | null
+      html_url: string
+    }>('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`)
+    return {
+      number: pr.number,
+      state: pr.state,
+      merged: pr.merged === true,
+      mergedAt: pr.merged_at,
+      draft: pr.draft === true,
+      headRef: pr.head.ref,
+      baseRef: pr.base.ref,
+      title: pr.title,
+      body: pr.body ?? '',
+      htmlUrl: pr.html_url,
+    }
+  }
+
+  /**
+   * Read a commit's message — used by page.apply rollback and stepCommit 422
+   * ownership check to look for the `[kernel run <runId>]` marker embedded in
+   * the commit convention. Minimal shape — only what ownership check needs.
+   */
+  async getCommit(
+    owner: string,
+    repo: string,
+    sha: string,
+  ): Promise<{ sha: string; message: string }> {
+    const commit = await this.request<{
+      sha: string
+      commit: { message: string }
+    }>('GET', `/repos/${owner}/${repo}/commits/${sha}`)
+    return { sha: commit.sha, message: commit.commit.message }
+  }
+
+  /**
+   * Atomically create a branch **AND** its identity-marker commit so the
+   * branch is never observable in a state where its tip is the shared base
+   * SHA. Used by page.apply_optimization_request to guarantee that same-run
+   * crash recovery has a provider-readable exact run marker via getCommit
+   * from the moment the branch first exists.
+   *
+   * Two-step Git Data API:
+   *   1. POST /git/commits — a marker commit reusing the base tree
+   *      (an "empty" commit), parent = fromSha; message carries the marker.
+   *   2. POST /git/refs — publish the branch pointing at that commit.
+   *
+   * If step 2 throws 422 ("Reference already exists"), the branch already
+   * existed —— caller MUST verify tip ownership before proceeding.
+   *
+   * Returns the marker commit SHA (branch tip after this call).
+   */
+  async createBranchWithMarker(
+    owner: string,
+    repo: string,
+    newBranch: string,
+    fromSha: string,
+    markerMessage: string,
+  ): Promise<string> {
+    const baseCommit = await this.request<{ tree: { sha: string } }>(
+      'GET',
+      `/repos/${owner}/${repo}/git/commits/${fromSha}`,
+    )
+    const markerCommit = await this.request<{ sha: string }>(
+      'POST',
+      `/repos/${owner}/${repo}/git/commits`,
+      { message: markerMessage, tree: baseCommit.tree.sha, parents: [fromSha] },
+    )
+    await this.request('POST', `/repos/${owner}/${repo}/git/refs`, {
+      ref: `refs/heads/${newBranch}`,
+      sha: markerCommit.sha,
+    })
+    return markerCommit.sha
   }
 
   /**

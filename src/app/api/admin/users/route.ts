@@ -10,6 +10,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { guardAdmin } from '@/lib/auth/require-admin'
 import { getUserPermissions } from '@/lib/auth/whitelist'
 import { ACCESS_TYPE_VALUES, type AccessType } from '@/lib/auth/access-types'
+import { sendPortalInviteForClient } from '@/lib/email/send-portal-invite-for-client'
 
 // Reuse the canonical list of access_type values + 'all' filter sentinel
 // used by the FDE user-management UI.
@@ -63,6 +64,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!body.access_type || !ACCESS_TYPE_VALUES.includes(body.access_type as AccessType)) {
       return NextResponse.json({ error: `access_type must be one of: ${ACCESS_TYPE_VALUES.join(' | ')}.` }, { status: 400 })
     }
+    // self_serve is the free-signup tier — the /auth/callback path grants a
+    // 500 MTC welcome bonus on first sign-in for that access_type. Letting an
+    // admin invite someone as self_serve would silently mint the bonus for
+    // an invitee they never intended to gift. Refuse it here.
+    if (body.access_type === 'self_serve') {
+      return NextResponse.json(
+        { error: 'self_serve access_type cannot be granted via invite — use portal / dashboard / fde / both / client.' },
+        { status: 400 },
+      )
+    }
 
     email        = body.email.trim().toLowerCase()
     client_id    = body.client_id as string
@@ -78,10 +89,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Super-admin emails do not need portal/FDE rows.' }, { status: 400 })
   }
 
-  // Verify client exists
+  // Verify client exists (and grab display name for the invite email)
   const { data: client } = await supabaseAdmin
     .from('clients')
-    .select('id')
+    .select('id, name')
     .eq('id', client_id)
     .maybeSingle()
 
@@ -108,5 +119,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ user: data }, { status: 201 })
+  const invite = await sendPortalInviteForClient({
+    email,
+    clientId: client_id,
+    clientName: client.name ?? '',
+    displayName: display_name,
+  })
+  if (!invite.sent) {
+    console.warn('[api/admin/users] invite email not sent:', invite.reason)
+  }
+
+  return NextResponse.json({ user: data, invite }, { status: 201 })
 }

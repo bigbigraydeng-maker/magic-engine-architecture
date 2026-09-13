@@ -148,6 +148,99 @@ export const ACTION_BRIDGE_FORBIDDEN_IMPORTS = [
 ] as const
 
 /**
+ * `src/lib/action-submission/**` —— PageOptimizationRequest → Kernel 的**平台级
+ * submission adapter**。它的职责就一条：接一份 request + 一个 candidate identity，
+ * 走 bridge 拿 ActionKey，走 Kernel 的 `runAction` 交付。禁止清单跟 bridge 类似，
+ * 但**允许** import Kernel 与 bridge（这正是它的工作），只**禁止**：
+ *
+ * 🔴 capability / provider-write —— 它不是执行方，是提交方。
+ * 🔴 直连 supabase 客户端 —— 数据访问一律走注入进来的 `KernelDeps`。
+ * 🔴 域模块（`@/lib/growth`, `@/lib/geo-module`）—— 把 GEO 语义写进 shared
+ *    submission runtime 就把它绑死在首个域了；下一次接第二个域会需要它再 import
+ *    一次，跟 Kernel 不许 import 域是同一个理由。触发端（trigger script）可以自由
+ *    import 域模块把 `CandidateIdentity` 传进来 —— 但 shared caller 自己不 import。
+ * 🔴 legacy 执行路径（`@/lib/execution`, `@/lib/zhuge`）—— 不该有第二条 submit path。
+ * 🔴 page-optimization 除了 type 之外的实现（`@/lib/page-optimization/draft` / diff /
+ *    validate / resolve / snapshot）—— caller 不重跑 WP06 pipeline，只接受结果。
+ *    只允许 type-only import：`@/lib/page-optimization`（顶级 barrel）与
+ *    `@/lib/page-optimization/types`。子路径运行时 import 都算绕过。
+ */
+export const ACTION_SUBMISSION_FORBIDDEN_IMPORTS = [
+  '@/lib/capabilities',
+  '@/lib/supabase',
+  '@supabase/supabase-js',
+  '@/lib/execution',
+  '@/lib/zhuge',
+  '@/lib/growth',
+  '@/lib/geo-module',
+  '@/lib/cms/',
+  '@/lib/publer/',
+  '@/lib/gbp/',
+  '@/lib/gsc/',
+  '@/lib/page-optimization/draft',
+  '@/lib/page-optimization/diff',
+  '@/lib/page-optimization/validate',
+  '@/lib/page-optimization/resolve',
+] as const
+
+/**
+ * Kernel progression API 的调用面。
+ *
+ * `runAction` / `submitActionRun` / `approveAndRun` / `rejectPendingRun` /
+ * `resumeDeadLetterRun` / `recoverDeniedRun` 是 Kernel 对外**仅有**的几个进
+ * 状态机的入口（runner.ts §注释）。为了防止将来又冒出"直接 import 一下就自己
+ * submit"的第二条路径，这里锁死**只有**下面这些目录能在生产代码里 import 它们：
+ *   · Kernel 自己（内部互相调用）
+ *   · `src/lib/action-submission/**`（本轮新增的平台级 caller）
+ *   · `src/lib/kernel-approval/**`（人点头之后的授权路径，见现有代码）
+ *
+ * 🔴 这条闸只管 runtime code（walker 排除 tests / __tests__ 目录 —— tests 需要
+ *    直接调 Kernel 来验证 progression 语义，那是正当用途）。
+ *
+ * 🔴 新增一条 caller = 拆一次架构评审（改 boundaries.ts 就是一次要过 review 的
+ *    diff），不是随便加。加之前先问：现有 caller 能不能承载？
+ */
+export const KERNEL_RUNNER_ALLOWED_CALLER_DIRS = [
+  'src/lib/kernel/',
+  'src/lib/action-submission/',
+  'src/lib/kernel-approval/',
+] as const
+
+/**
+ * 🔴 **哪些模块暴露 progression 符号**。两条都要看：
+ *
+ *    · `@/lib/kernel/runner` —— 定义地
+ *    · `@/lib/kernel`        —— barrel re-export（见 kernel/index.ts）
+ *
+ *    只盯 runner 会漏 barrel bypass：`import { runAction } from '@/lib/kernel'`
+ *    完全绕过一条"只 ban 了 runner 路径"的规则。所以两条都进闸。
+ *
+ * 🔴 **不 ban 整个 barrel** —— `@/lib/kernel` 还导出类型、`createKernel`、
+ *    `ACTION_REGISTRY` 之类的合法东西。判据是**符号级**：只有
+ *    `KERNEL_RUNNER_SYMBOLS` 里的名字在这两条路径下被具名导入时才算违规。
+ *    type-only imports 不算（拿签名类型不能真调 progression）。
+ */
+export const KERNEL_RUNNER_SOURCE_MODULES = ['@/lib/kernel/runner', '@/lib/kernel'] as const
+
+/**
+ * 🔴 **Kernel progression 符号清单**。只列真能推 run 状态的东西，不列类型
+ *    （`SubmitActionInput` / `ActionRunOutcome` 等）—— 那些是形状描述，
+ *    不是执行入口。
+ *
+ * 🔴 加一个新的 progression 入口（例如未来的 `resumeXxx`）必须回到这里显式加名，
+ *    否则新入口不会被这道闸覆盖。这条 boundary 的默认答案是"不许"，
+ *    穷举白名单而不是黑名单否定，同一个仓库反复踩过的坑。
+ */
+export const KERNEL_RUNNER_SYMBOLS = [
+  'runAction',
+  'submitActionRun',
+  'approveAndRun',
+  'rejectPendingRun',
+  'resumeDeadLetterRun',
+  'recoverDeniedRun',
+] as const
+
+/**
  * `supabase/migrations` 里**已经存在**的重复版本号 —— 同样只准变短。
  *
  * 🔴 这不是新问题，是查出来的旧账：`origin/main` 上已经有 **23 组**不同文件

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess, requirePaidClientAccess } from '@/lib/auth/client-access'
 import { ACCESS_TYPE_VALUES } from '@/lib/auth/access-types'
+import { sendPortalInviteForClient } from '@/lib/email/send-portal-invite-for-client'
 
 type Params = { params: { id: string } }
 
@@ -42,17 +43,58 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ success: false, error: '无效的 access_type' }, { status: 400 })
   }
 
-  const { data, error } = await supabaseAdmin
+  // Insert first and only fall back to an update on conflict — the unique
+  // constraint on (email, client_id) makes this atomic, so isNew reflects
+  // which request actually created the row instead of guessing from
+  // created_at (two concurrent requests could both read the same freshly
+  // created row and both decide they were "new").
+  type Row = { id: string; email: string; display_name: string; access_type: string; created_at: string }
+  let data: Row | null = null
+  let isNew = false
+
+  const { data: inserted, error: insertError } = await supabaseAdmin
     .from('client_portal_users')
-    .upsert(
-      { email, client_id: params.id, display_name, access_type },
-      { onConflict: 'email,client_id' }
-    )
+    .insert({ email, client_id: params.id, display_name, access_type })
     .select('id, email, display_name, access_type, created_at')
     .single()
 
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, user: data })
+  if (insertError) {
+    if (insertError.code !== '23505') {
+      return NextResponse.json({ success: false, error: insertError.message }, { status: 500 })
+    }
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('client_portal_users')
+      .update({ display_name, access_type })
+      .eq('email', email)
+      .eq('client_id', params.id)
+      .select('id, email, display_name, access_type, created_at')
+      .single()
+    if (updateError) return NextResponse.json({ success: false, error: updateError.message }, { status: 500 })
+    data = updated
+  } else {
+    data = inserted
+    isNew = true
+  }
+
+  let invite: { sent: boolean; reason?: string } | undefined
+  if (isNew) {
+    const { data: client } = await supabaseAdmin
+      .from('clients')
+      .select('name')
+      .eq('id', params.id)
+      .maybeSingle()
+    invite = await sendPortalInviteForClient({
+      email,
+      clientId: params.id,
+      clientName: client?.name ?? '',
+      displayName: display_name,
+    })
+    if (!invite.sent) {
+      console.warn('[api/clients/[id]/users] invite email not sent:', invite.reason)
+    }
+  }
+
+  return NextResponse.json({ success: true, user: data, invite })
 }
 
 // DELETE /api/clients/[id]/users — remove a user by email. Paid only.

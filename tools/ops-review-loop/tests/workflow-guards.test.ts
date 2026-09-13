@@ -122,17 +122,31 @@ describe('the request-review workflow', () => {
     expect(guard).toContain("startsWith(github.event.pull_request.head.ref, 'claude/')")
   })
 
-  it('is scoped wider than the auto-push leg, and only this leg is', () => {
-    // Asymmetry on purpose: asking for a review posts one comment and can
-    // collide with nothing, so every agent branch gets it. Dispatching a fix
-    // pushes commits, and this repo runs one window per branch (CLAUDE.md §6),
-    // so that leg stays in the ME2 lane. If someone ever "tidies up" these two
-    // guards into matching prefixes, the auto-push leg silently gains reach
-    // over branches a live window is holding — this pins the difference.
+  it('shares the same claude/ branch scope as the auto-push leg, guarded by staleness instead of a narrower prefix', () => {
+    // Used to be asymmetric on purpose: asking for a review posts one comment
+    // and can collide with nothing, so every agent branch got it, while
+    // dispatching a fix pushes commits and stayed pinned to the narrow
+    // `claude/me2-*` pilot lane so it could never land on a branch a live
+    // window was holding (CLAUDE.md §6, one window per branch). That lane
+    // validated end-to-end (PR #1174) before widening to match this leg's
+    // scope. What replaces the narrower scope as the collision guard is
+    // handle-review.mjs re-fetching the PR right before dispatch and skipping
+    // if the head has moved past the sha Codex reviewed — pinned below so the
+    // two guards can't quietly drift back into having different prefixes
+    // without also losing that check.
     const requestGuard = Object.values(request.doc.jobs ?? {})[0]?.if ?? ''
     const fixGuard = Object.values(fix.doc.jobs ?? {})[0]?.if ?? ''
-    expect(requestGuard).not.toContain("'claude/me2-'")
-    expect(fixGuard).toContain("'claude/me2-'")
+    for (const prefix of GUARDED_BRANCH_PREFIXES) {
+      expect(requestGuard, `request-review guard must cover ${prefix}`).toContain(prefix)
+      expect(fixGuard, `fix guard must cover ${prefix}`).toContain(prefix)
+    }
+    const handleReviewSource = readFileSync(
+      join(process.cwd(), 'tools/ops-review-loop/src/handle-review.mjs'),
+      'utf8',
+    )
+    expect(handleReviewSource, 'the staleness guard that replaced the narrow lane must still exist').toContain(
+      'isStale',
+    )
   })
 
   it('checks out the control-plane script from main, not the PR head', () => {
@@ -185,12 +199,12 @@ describe('the codex-to-claude-fix workflow', () => {
     expect((fix.triggers.pull_request_review as { types: string[] }).types).toEqual(['submitted'])
   })
 
-  it('guards the Codex bot actor, same-repo, base=main, and the claude/me2- branch prefix', () => {
+  it('guards the Codex bot actor, same-repo, base=main, and the claude/ branch prefix', () => {
     const guard = Object.values(fix.doc.jobs ?? {})[0]?.if ?? ''
     expect(guard).toContain('chatgpt-codex-connector')
     expect(guard).toContain('head.repo.full_name == github.repository')
     expect(guard).toContain("base.ref == 'main'")
-    expect(guard).toContain("startsWith(github.event.pull_request.head.ref, 'claude/me2-')")
+    expect(guard).toContain("startsWith(github.event.pull_request.head.ref, 'claude/')")
   })
 
   it('never grants contents: write to the ambient GITHUB_TOKEN', () => {

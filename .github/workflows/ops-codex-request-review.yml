@@ -46,20 +46,23 @@ jobs:
     # this workflow does not need to run for it), targeting main, on any
     # agent-authored claude/* branch, and still open.
     #
-    # WHY claude/* HERE BUT claude/me2-* IN THE SIBLING WORKFLOW
-    # ----------------------------------------------------------
-    # These two legs carry very different blast radius, so they get different
-    # scopes on purpose:
+    # WHY THIS LEG AND to-claude-fix NOW SHARE THE SAME claude/* SCOPE
+    # ------------------------------------------------------------------
+    # This file (posts ONE comment) and the sibling workflow (dispatches
+    # Claude to PUSH) used to carry different scopes on purpose — this leg
+    # covered all of `claude/*` (a review request can't collide with
+    # anything), while to-claude-fix stayed pinned to the narrow
+    # `claude/me2-*` pilot lane, because an unattended push landing on a
+    # branch a live window was holding would fight that window for the same
+    # working tree (CLAUDE.md §6, one window per branch).
     #
-    #   this file        posts ONE comment           → widening is free
-    #   to-claude-fix    dispatches Claude to PUSH   → widening is not
-    #
-    # Every agent branch benefits from being reviewed, and a review request
-    # cannot collide with anything. Auto-pushing is different: this repo runs
-    # one window per branch (CLAUDE.md §6), so a fix dispatched onto a branch
-    # another window is actively holding would fight that window for the same
-    # working tree. That leg stays pinned to the ME2 lane, where the
-    # one-window-per-Work-Package rule is explicit and enforced.
+    # That pilot lane validated end-to-end (PR #1174: Codex flagged a seeded
+    # bug P2, the fix dispatched, Claude pushed a correct commit) before the
+    # scope widened to match this leg's. The collision risk itself is now
+    # handled at dispatch time, not by scope: to-claude-fix re-fetches the
+    # PR right before dispatching and skips the round if the head has moved
+    # past the sha Codex reviewed — see `isStale` in
+    # tools/ops-review-loop/src/handle-review.mjs.
     if: |
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == 'main' &&

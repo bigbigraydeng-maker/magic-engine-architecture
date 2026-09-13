@@ -27,6 +27,7 @@ function mail(over: Partial<MailMessage> & { direction: 'inbound' | 'outbound' }
     preview: '你好，我想问……',
     receivedAt: '2026-08-01T00:00:00.000Z',
     counterparty: { address: 'susan@gmail.com', name: 'Susan Lee' },
+    hasAttachment: false,
     ...over,
   }
 }

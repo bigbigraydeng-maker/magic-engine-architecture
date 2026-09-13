@@ -5,6 +5,539 @@
 
 ---
 
+### 2026-09-13（视频工厂：资料包自助管理界面 + 视频归属选择 + CTS 真实 7 团接入）
+
+同一天会话继续：PM 追问"这个能力在 Magic Engine 里是不是真的做完了"，倒逼出两块此前一直靠工程手改数据库的界面。
+
+1. **资料包管理界面**（客户设置页 → 内容 tab → 视频工厂配置）：FDE/PM 现在能自己增删"团/档位"及其真实字段（团名/路线/价格/出发日期，或任何客户/行业需要的字段），不用再找工程改 JSON。顺手修复一个真实存在的老 bug：Settings 页的保存接口（`mergeFactoryConfig`）此前完全没有回写 `offers`/`post_field_sources`/`static_overrides`/`required_post_fields` 这四个字段——新界面加了也会保存到空气里，现已修正为"没带就沿用、带 null 就清空、带合法值就覆盖"的正确合并语义。
+2. **视频归属选择框**（内容工厂看板"确认做"这一步）：客户配了 ≥2 个资料包时，必须先选这条视频对应哪个团才能确认，选不了就直接拦下，不让系统瞎猜——这条红线延续自 PR #1632 的设计。
+3. **对抗性复审抓出并修复两个真洞**：①`offer_key` 写入前此前不校验是否真的存在于客户当前配置里，选错/选到刚被删掉的档位，视频会先"确认成功"、几十秒后才在 Inngest 渲染任务里默默失败——已改成确认这一刻同步查库校验，不存在直接 400 拦下（顺带把这次查询和后面判断出片引擎的查询合并成一次，没多打库）。②资料包表单里如果手滑建了两个同名档位，后一个会静默覆盖前一个、保存显示成功但内容悄悄丢了——已改成检测到重复直接报错挡住保存。
+4. **CTS 真实 7 个在售团接入**：没有凭空编数据——发现另一个并行会话已经为"私信自动回复"功能做过一遍"CTS 现在卖哪些团"的真实调研（`config/clients/cts/offerings.yaml`，PM 已核实），直接复用这份数据导入视频工厂的资料包配置（Golden China / 圣诞团奥克兰+基督城两个出发城市 / Best of China / 丝路 / 双城记 / 上海周边），没有重新造一遍轮子。在生产环境用真实数据完整跑通一次闭环：看板选团 → 系统核对团存在 → 自动填对片尾信息（团名/路线/价格/日期）→ Creatomate 渲染成功。
+5. **顺带记录一个待还的技术债**：CTS 现在有两套"卖哪些团"的真实数据（视频工厂一套、私信回复 Agent 一套），语义重叠，以后团有变动要改两个地方——记入 ROADMAP，不在这轮解决。
+
+**Reuse Statement**：两块新界面都是共享连接器/看板代码的自然扩展（跟 `staticOverrides`/`requiredPostFields` 同级别的字段，不是 CTS 专属新能力），换客户/换行业都不用改代码，只是配置的资料包内容不同。CTS 的 7 团真实事实是客户私有数据，来自另一个已完成的调研工作，本轮只做了导入和格式转换，没有重新研究或编造。
+
+### 2026-09-13（视频工厂：字幕不再写死 + 片尾信息真正自动化 + 模板风格探索）
+
+同一天会话继续：PM 反馈"看不出 CTS 视频区别、NAL 视频就是发过的那条"，追问"视频里的文字该由 AI 统一想清楚存起来，不该 Creatomate 自己每次现设计"，推动了两处真正的架构修复。
+
+1. **字幕不再写死（配置改动，无需新代码）**——发现 `SceneSlotFieldMap.caption` 字段代码里早就存在，但 CTS 配置从未真正用上：长城/故宫/兵马俑/上海四镜头的字幕此前是模板固定文字，改成读 `scene_field_map` 里的 `caption` 映射后，字幕直接由分镜阶段（`planScenes`）逐镜头生成，跟着脚本内容变。已用真实渲染验证：两条不同脚本产出的字幕内容确实不同、非写死。
+2. **换了 3 个 Creatomate 自带模板风格试渲染**（Photo Collage / Search Field w/ Rating [16:9-only，中途放弃] / Searchlight Reveal）——验证"不用请设计师、Creatomate 自带模板库可直接换风格"这条能力路径，全部走"备份现有配置→临时切模板→真实渲染→验证→立刻还原"的安全流程。PM 反馈三个都"不像短视频爆款"，随后按 CLAUDE.md §8 规矩查了 `viral_reference_library` 里的真实高播放旅游参考数据（10 条，最高 2.6 亿播放）：发现共同点不是"切得快"（多条播放量最高的反而全片零剪辑），而是全部为真实动态画面/真人出镜/真实瞬间，没有一条是"照片+图形标题"形式——现有模板路线的天花板由此确认：不是参数能调出来的，而是内容形态本身的差异。
+3. **片尾信息此前的"自动化"其实是假的，全靠人工代填数据库**——PR #1613（见下一条 09-13 记录）设计了 `requiredPostFields`+`endcard` 机制，但复核发现全仓库没有任何代码真的往 `content_posts.generation_context_snapshot.endcard` 写值，此前两次"验证通过"全靠这个会话手动跑脚本代填，撞了"该给人填的字段不能只让人进数据库后台手填"这条红线。新增自动写入机制（PR [#1632](https://github.com/bigbigraydeng-maker/magic-engine/pull/1632)）：`CreatomateTemplateContract` 新增 `offers`（按团/出发城市变体分的真实事实字典）+ `postFieldSources`（元素名→事实字段的确定性映射，不走 LLM，杜绝幻觉/改写风险）；`resolveOfferFacts` 在"没指定用哪个团 + 客户配了 ≥2 个团"时 fail-closed 抛错，不会猜一份不相关的事实套上去（这条红线是"子牙"+"魏征"设计复审时明确要堵的：CTS 圣诞团奥克兰/基督城两个出发城市变体同时在打广告，套错团的价格/日期比模板写死的占位文字更危险）。实施完的复审又抓出一处真 bug：字段解析必须排在花钱生成分镜素材之前，否则一旦触发 fail-closed，job 会卡进无法自愈的状态（改配置也救不回来）——已修正执行顺序并补测试。
+4. **顺带发现并修正一条过期客户数据**：CTS 官网实测（`ctstours.co.nz/tours/china/discovery/beijing-xian`）发现 `factory_config.verified_cta.departure` 存的"15 Oct 2026"已过期（该场次已 sold out），官网当前显示下一场是"18 Mar 2027"——已更正。
+5. **`MUAPI_API_KEY` 生产环境确认缺失并已修复**——三次全新脚本真实渲染测试均在"某镜头配不到真实照片、回退 AI 生成动态画面"这一步失败（此前 09-13 早些时候的记录曾错误判断这个环境变量"命中率低不再紧迫"），PM 直接在 Render 后台补上，已用真实渲染验证 Muapi 回退路径恢复正常。
+6. **端到端真实渲染验证**：合并 PR #1632 并等 Render 部署完成后，用真实产品数据重新渲染一条 CTS 视频，`generation_context_snapshot.endcard` 全部字段自动写对（团名"China Discovery — A Tale of Two Cities"、路线"Beijing (Great Wall · Forbidden City) → Xi'an (Terracotta Warriors)"、价格"10 Days · From NZD $3,480 pp"、日期"Next departure 18 Mar 2027"），成片渲染成功（`ready_for_review`），全程零人工数据库写入。
+
+**Reuse Statement**：字幕修复是配置层面接入既有共享代码（`SceneSlotFieldMap.caption` 早就是连接器契约的一部分），未新增代码。`offers`/`postFieldSources`/自动写入机制是共享连接器能力（跟 `staticOverrides`/`requiredPostFields` 同级），对所有走 Creatomate 的客户生效，不是 CTS 专属；具体填哪些团、哪些事实值是 CTS 自己的客户配置。`viral_reference_library` 查询结论（爆款靠真实动态画面而非剪辑节奏）是行业级洞察，未来给其他旅游客户设计模板时同样适用，建议沉淀进对应的 Industry Playbook。
+
+### 2026-09-13（视频工厂：修复真实照片池致命 bug + 片尾信息动态化 + CTS/NAL 双客户内容量产）
+
+PM 要求给 CTS 和 NAL 各准备一批新内容，过程中发现并修复了两个真正阻塞出片的生产 bug，最终两个客户的内容都做出来了：
+
+1. **修复致命 bug：自动选真实照片功能几乎完全失效**（PR [#1615](https://github.com/bigbigraydeng-maker/magic-engine/pull/1615)）——`loadRankableClientAssets`（出片自动选真实照片的核心查询）和素材库人工搜索接口，都用 `.not('vision_metadata->>kind', 'eq', 'video')` 在数据库层排除视频行；但只有视频行才会写这个字段，绝大多数照片行根本没有它，PostgREST 对着"字段不存在"的行算出来是 NULL，被数据库整行排除——CTS 47 张已核实真实照片，命中这个 bug 后自动出片只能看到 1 张。这解释了本次会话早些时候就记录过的"MUAPI_API_KEY 缺失"报错：真正原因不是环境变量偶尔缺失，是几乎每次新脚本都因为这个 bug 配不到真实照片、被迫掉进 AI 兜底路径。改成跟同文件里已经写对的逻辑一致（内存里判断 kind==='video'，没有这个字段按"不是视频"处理）。修复后真实照片池从 1 张恢复到 50 张。
+2. **片尾信息（团名/路线/天数价格/出发日期）此前 100% 是模板作者写死的示例内容**（PR [#1613](https://github.com/bigbigraydeng-maker/magic-engine/pull/1613)）——每条视频不管实际推广哪个团，片尾显示的都是同一份跟内容无关的占位信息。新增 `CreatomateTemplateContract.requiredPostFields` 声明"这几个元素每条视频必须各自提供值"，读自 `content_posts.generation_context_snapshot.endcard`，缺字段直接拦渲染，绝不静默套用旧内容。经"子牙"（架构）+"魏征"（挑刺）两轮设计复审后落地。
+3. **CTS 新内容**：2 条视频（"Best of China"真实团，长城/故宫/兵马俑/上海真实照片+真实价格 NZD $4,080/15 天；"China Awaits"通用宣传片）+ 3 条图文（25 年品牌信任状、丝路 2027 团、双城记 10 天团），均已用真实渲染自检确认画面和片尾信息正确。
+4. **NAL（New Asian Logistics，物流客户）首次接入视频工厂**——此前完全空白（无模板、无素材）。真实素材取自 NAL 自己已发布的 Facebook 内容（Graph API 官方接口拿原图/原视频，非网页截图），做了 1 条视频（真实仓库/装柜实拍 + logo 水印 + 品牌结尾卡，ffmpeg 本地合成，未走 Creatomate）+ 1 条图文。
+
+**Reuse Statement**：两处 bug 修复都是共享连接器代码（`src/lib/factory/client-asset-pool.ts`、素材库搜索路由），修完对所有客户生效，不是 CTS 专属；`requiredPostFields`/`endcard` 机制同样是共享连接器能力（跟 `staticOverrides` 同级），具体填什么值是每个客户自己的内容。CTS 的 5 条内容、NAL 的账号研究结论和真实素材，均为客户私有，未进共享代码。NAL 目前用 ffmpeg 本地合成而非 Creatomate 模板，是该客户当前规模下的判断，不代表放弃 Creatomate 路线。
+
+### 2026-09-13（视频工厂：背景音乐接入 + 补齐胡同/西安城墙真实照片 + 清理僵尸 Render 服务）
+
+上一轮会话收尾后 PM 追加三个决定，当场处理完：
+
+1. **背景音乐**：PM 上传 3 首新曲目到 Dropbox（`MagicLab_Studio/Music/`）。检查 Creatomate 模板源码时发现模板其实自带一个通用 `Music` 音频图层（此前记录模板结构时漏记了这个，只记了画面/文字元素）。3 首曲目已转存到正式素材库，PM 选定 `Horizon's Call` 作为默认背景音乐，通过已有的 `static_overrides` 机制接入（跟 logo 覆盖用的是同一套机制，**不需要改代码**）。已用一条真实渲染验证音轨确实有声音（-16.8dB 均值，非静音桩轨）。
+2. **胡同/西安城墙真实照片**：PM 本让去 Unsplash 找，核实后发现公司自己的 Dropbox 素材库（`CTS/footage/photos/`）里其实早就有 2 张胡同 + 1 张西安城墙真实照片，只是从未录入 `client_assets`——不需要外部素材。已上传、PM 过目确认、标记 `client_verified`。这两个 landmark 目前仍不在该客户的 `scene_field_map` 里（脚本目前只生成 4 个镜头），要真正出现在成片里还需要后续把内容扩到 6 个镜头，记入 ROADMAP。
+3. **清理僵尸 Render 服务**：PM 拍板彻底删除此前发现的"退役但没真正关掉"的老服务 `content-factory-render-worker`（[render.yaml](../../render.yaml) 里早已没有这条声明，只留了一条归档注释，删除不会被下次部署复活）。已在 Render 后台执行删除，服务已不存在。
+
+**顺带发现一个新的生产缺口**：测试渲染时触发了"某镜头没配到真实照片、退回 AI 现画兜底"这条路径，暴露出生产环境的 `MUAPI_API_KEY` 环境变量实际上没配置（此前 `docs/ENV.md` 标记✅是错的，这条兜底路径此前从未被真实触发过）。按资源优先级三维打分定为 P3，记入 ROADMAP，不阻塞当前工作。
+
+另外发现 Render 账户当前有"Payment failed"提示（信用卡扣款失败），已单独告知 PM——这个不是工程优先级问题，是需要尽快更新付款方式的运营事项，拖下去可能导致全部 Render 服务被暂停。
+
+**Reuse Statement**：音乐/logo 都复用同一个 `staticOverrides` 通用机制（客户中立，哪个元素名对应哪个资产完全是每个客户自己的配置）；CTS 的曲目选择、真实照片素材、僵尸服务清理均为 CTS 客户私有配置/运维操作，未写入共享代码，本次也没有新增代码。
+
+### 2026-09-13（视频工厂：Creatomate 真实照片渲染链路端到端验证通过，附带修复两个生产事故）
+
+真实照片喂进 Creatomate "Golden China" 模板、渲染出正确成片，这条链路从代码合并到真人验证全部走完，产出多条真实渲染成片。过程中发现并处理了两个此前不知道的生产问题：
+
+1. **一个 2026-09-02"已退役"的老 ffmpeg 拼片工人（Render 服务 `content-factory-render-worker`）其实从未真正关闭**——只是摘掉了触发它的 cron，服务容器本体一直在运行。这次合并代码触发 Render 自动重新部署，该服务苏醒后抢占了新提交的渲染任务，写入旧数据格式，导致新 Creatomate 链路完全跑不起来。已在 Render 后台手动 Suspend（未删除，是否彻底移除待 PM 拍板）。
+2. **Creatomate 渲染产物下载被自己代码里的域名白名单拦下**——`src/lib/creatomate/store-result.ts` 原假设产物从 `cdn.creatomate.com` 出，实测实际存在 Backblaze B2（`f002.backblazeb2.com`）。PR [#1594](https://github.com/bigbigraydeng-maker/magic-engine/pull/1594) 已修复。
+
+另新增 `CreatomateTemplateContract.staticOverrides` 支持覆盖 `EndLogo`/`Watermark` 等不参与逐镜头轮换的固定品牌图层（PR [#1604](https://github.com/bigbigraydeng-maker/magic-engine/pull/1604)），CTS 收尾画面的 logo 已从模板作者放的占位白图换成真实品牌红白配色版本。
+
+同时从 Creatomate 模板编辑页面的 Code 视图直接读出了"Golden China"模板的完整真实结构（8 个镜头槽位各自写死的地名文案、EndCard 各元素名），此前靠试错渲染猜测的槽位映射（如误以为兵马俑在 Still-6）已全部更正为源码确认的真实值，记入 memory `project-cts-video-factory-decision-ledger`，以后不用再重新试错。
+
+CTS 真实素材库 47 张照片人工过目，44 张标记 `client_verified`（3 张文件名标注换脸/换 logo/AI 生成的确认排除），自动选真实照片功能现在对 CTS 真正有可用素材。
+
+**未完成**：Hutong（Still-5）、西安城墙（Still-6）两个镜头位置目前素材库没有专属真实照片；PM 拍板"AI 配音统一用 ElevenLabs"，但账号是免费版无法通过 API 调用任何声音，需要决定是否升级付费，配音这一步至今没有真正测试过。完整清单见 [ROADMAP.md](../ROADMAP.md) Creatomate Connector 落地后续。
+
+**Reuse Statement**：`staticOverrides` 是 Creatomate L3 Connector 契约的扩展，客户中立（哪个元素名对应哪个品牌资产完全是每个客户自己的配置，不进 shared runtime）；CTS 的模板真实结构、素材核实结果、logo 资产均为 CTS 客户私有配置，未写入共享代码。
+
+### 2026-09-13（视频工厂：Creatomate 出片真实照片优先 + 老 ffmpeg 引擎归档标注）
+
+PR [#1570](https://github.com/bigbigraydeng-maker/magic-engine/pull/1570) 已合并（PR #1569 因改动 835 行撞了 `claude/*` 自动修车道 800 行上限，换 `feat/*` 分支重开，代码不变）。`src/lib/creatomate/scene-assets.ts` 出片时先按镜头描述去客户真实素材库（`client_assets`）里找匹配的真实照片（只认 `client_verified`/`fde_shot` 核实过的来源，见 `src/lib/assets/provenance.ts::canBackRealPrice`），命中就直接用真照片，不再走 AI 现画（`generateImage`）也不再走 AI 逐帧重画（`imageToClip`）；素材库没有匹配的镜头（如已知空白地标：西藏/长江三峡）才回退到原有 AI 现画路径。真实照片的"动"交给 Creatomate 模板本身在编辑器里给槽位配置的入场/推拉动画，ME 侧不实现 Ken Burns（三层架构冻结决策：填槽不造槽）。
+
+顺手给 5 个已于 2026-09-02 退役的老 ffmpeg 拼片文件（`render-assemble.ts`/`render-pipeline.ts`/`render-queue.ts`/`lecture-render.ts`/`scripts/render-worker/worker.ts`）加了"已退役"说明注释，不改逻辑，防止被误当活代码维护或复活。
+
+**审查流程**：设计阶段子牙（架构）+ 魏征（挑刺）复审打回两条（素材真实性过滤缺失、动态化验收缺乏机制）→ 按两条修正后实施 → 实施后子牙+魏征再审一次，均判定可合并。复审留的 3 项后续小任务已登记 [ROADMAP.md](../ROADMAP.md)：真实照片路径补质量分门槛、`visualSource` 字段接入人工分镜自检表 UI、排图 LLM 调用补计费。
+
+**验证**：新增 `rank-assets-by-prompt.ts`（从 `asset-library/search` 路由抽出的共享排图逻辑）+ 25 个新增/改动测试全部通过；`tsc --noEmit` 触碰文件零错误；`npm run build` 成功；全仓 vitest 42 个失败均为触碰前既有、与本次改动无关的 baseline（cron/attribution、huatuo、kernel-approval、kernel、places）。
+
+**Reuse Statement**：`rank-assets-by-prompt.ts` 是 `asset-library/search` 路由与 `scene-assets.ts` 共用的 L3 Connector 内部实现细节修正（非新增能力线，未登记 platform-candidates）；复用既有 `client-asset-pool.ts::loadClientAssetPool`（新增 `requireVerified` 选项，默认 false 不影响 `evaluate.ts` 现有调用）与 `provenance.ts::canBackRealPrice`。`client_assets.source` 核实口径是平台共享判断，CTS/客户具体照片内容仍是客户配置，无客户名/客户 ID/行业规则写入 shared runtime。
+
+### 2026-09-10（竞争分析收敛为 IMPACT 单入口）
+
+PR [#1525](https://github.com/bigbigraydeng-maker/magic-engine/pull/1525) 已合并并部署生产（`66a17018`）。Industry Baselines 的入口改为「竞争分析」，决策者只需点一次「开始竞争分析」，系统便按 core 优先读取全部已配置业务页面；页面只把本轮真实启动的请求计入覆盖，未完成、失败或未启动的页面都会阻止整体「没有变化」结论。主界面按 IMPACT 展示发现、衡量和建议，明确标记尚未执行；配置、成本、运行记录和原始证据收进折叠区。
+
+生产 CTS 验收：对 Wendy Wu 的产品列表、`new-tours/` 和 `wonders-of-china.htm` 详情页启动同一批次，处理中从 0/3、1/3、2/3 逐步刷新，最终达到 3/3。三条均 `SUCCEEDED` 并各结算 NZ$0.02，本轮 NZ$0.06，CTS 当月累计由 NZ$0.39 增至 NZ$0.45；页面只在全量完成后显示「本轮没有发现需要调衡的竞争变化」。业务内容无可靠变化，因此三条均未调用 LLM（分析 US$0.00），没有自动执行动作。工作日志已写入 CTS 客户页。
+
+**验证**：84 项 Web Intelligence 针对性测试、changed-file ESLint、生产构建及 PR 全部检查通过；设计和实现复审无剩余 P0/P1。无 migration、无新 provider、无生产配置改动。
+
+**Reuse Statement**：复用既有竞品解析、监控网址、Apify 采集、snapshot/evidence、market signal、原子预算预留、Inngest 和 Industry Baselines。批次请求恢复、覆盖判定和 IMPACT 呈现属于 platform-shared；Tour 拆解仍位于既有 Travel profile；Wendy Wu 网址和 CTS 背景仍为客户配置。共享运行时没有加入客户名称、ID、私有事实或旅游行业判断，也没有把客户学习升级到行业或全局记忆。
+
+### 2026-09-10（CTS 竞品 Tour 具名对比上线）
+
+PR [#1523](https://github.com/bigbigraydeng-maker/magic-engine/pull/1523) 已合并并由 Render 将提交 `3ba2439` 部署为 Live。Travel profile 将产品列表归一化为具名 Tour 记录，对比名称、天数、价格、促销、评价、包含项目与路线；展示顺序及未绑定到具体 Tour 的重复促销标签不再形成业务信号。LLM 只可引用明确的 Tour 与变化前后值，证据不足必须判为无需行动。
+
+生产验收对 Wendy Wu `new-tours/` 连续采集两次：请求 `0b053d17-d17a-4f4e-9f5b-d13d97c10813` 建立 `me-travel-v2` 基线，请求 `72b981dc-b6fb-49a1-9641-eb9c6b9e2436` 对同一业务内容复采；两次均 `SUCCEEDED`、各结算 NZ$0.02，均未调用 LLM（分析 US$0.00），第二次没有新增 market signal。CTS 当月累计 NZ$0.39，低于 NZ$30 目标与 NZ$50 hard stop。历史 55% 误报保留作审计记录，没有冒充本轮结果。
+
+**验证**：77 项针对性测试、ESLint、本地生产构建，以及 PR 的类型检查、应用构建、CRM 回归、编排测试、Claude Review 和 Cloudflare 预览全部通过。无 migration、无新 provider、无自动执行动作。
+
+**Reuse Statement**：复用现有 Apify、snapshot/evidence、market signal、Inngest 和 Industry Baselines。共享层只增加可选行业投影与解释指引接口；Tour 规则位于 L2 Travel profile，CTS 只通过既有监控配置使用，客户名称、ID 和事实未写入共享运行时。
+
+### 2026-09-09（Creatomate Connector 落地——重新点亮已退役的确认出片入口）
+
+PR [#1513](https://github.com/bigbigraydeng-maker/magic-engine/pull/1513) 已合并。给内容工厂接入 Creatomate 模板渲染引擎（PM 已订阅 Essential $54/月），把 2026-09-02 主动关掉的"确认选题→自动出片"入口重新点亮——只对配置了 `factory_config.render.engine='creatomate'` 的客户生效，其余客户维持原状不受影响。
+
+**为什么不是"接现有渲染管线"**：起草阶段（子牙+鲁班+魏征三方并行复审 Spec v1）发现原方案打算接的 `content_factory_render_jobs` 管线早在 2026-09-02 就已退役、两周零产出、没有 worker 消费。Spec 改版为独立的新入口，不依赖任何死管线，但复用了该管线遗留下来的表结构（加两列，不新建表）和 `planScenes`/`generateImage`/`classifyRenderMode`/`imageToClip`/`generateVoiceover` 等现成生成函数——顺带把 PR #1373 的 `classifyRenderMode` 闸接上了第一个真实调用方。
+
+**实现阶段复审**（子牙+魏征审真代码）挑出并修复了三个真实缺陷：付费步骤的 `retries:0` 只写在注释里没真加（Inngest 默认重试会重复扣钱）；提交前的异常此前不会把任务标记失败，人工待办机制永远看不见；音频时长保护挡的是一个真实数据永远不会触发的假想场景（已移除这个自相矛盾的半成品功能）。
+
+**架构要点**：Inngest 工作流全程 `retries:0` + 幂等检查；webhook 无法验证来源（官方未提供签名机制），事件类型上就不带 status/url，不管哪条分支唤醒都独立回读 `GET /v2/renders/{id}` 确认真实状态；超时后有限次数轮询兜底，仍未完成则转人工待办（替代已随旧管线退役的 `reapStale()`）；成本记账同时覆盖 i2v/配音实际花费和 Creatomate credits 估算。
+
+**验证**：新增 41 个测试全部通过；`factory-creatomate-render.ts`（此前零覆盖）补齐装配测试 + 关键路径测试；全仓 vitest 14531 passed（42 failed 均为触碰前既有的无关 baseline，与本次改动前后一致）；`tsc --noEmit` 触碰文件零错误；`npm run build` 编译成功。
+
+**未接通真实客户流量**（登记进 [ROADMAP.md](../ROADMAP.md)）：API key 待配置、webhook 真实字段结构待第一条真实渲染验证、超额计费规则待人工确认、试点客户模板待在 Settings 面板配置。
+
+**Reuse Statement**：`src/lib/creatomate/` 是新的 platform-shared L3 Connector；复用 `content_factory_render_jobs` 表、`content_posts` 字段、`enqueueRenderJob()`、五个现成生成函数、`flywheel-seo-weekly.ts` 的 Inngest 云端函数+`retries:0`+回执范式、`safe-remote-fetch.ts` 域名校验模式（向后兼容扩展）、`FactoryConfigPanel.tsx` 现有 Settings 面板、`manual-items.ts` 人工待办栏。`factory_config.render.creatomate.{template_id, scene_field_map, output_width/height/frame_rate}` 是客户配置，未写入 shared runtime。
+
+### 2026-09-09（CTS Web Intelligence 生产试点启用）
+
+PR #1500 已上线；用户明确批准生产数据库更新后应用 6 张隔离表及受限 RPC，仅允许 CTS 启用。复用原竞品名单及 Industry Baselines 后台、Apify 和 Inngest，Wendy Wu 首页按 24 小时间隔检查；只检测、理解、建议，无自动营销动作。预算目标 NZ$30 / hard stop NZ$50，499 NZD/月仅预留 entitlement 字段。
+
+实际验收：生产 run `e7b5e805-e56f-45b5-9814-7ca9708f1f00` 经后台提交完成，Apify `X60junDpOkJqCAOig` SUCCEEDED，快照 `efb3fd1d-5cab-4b01-9acd-fcdec05ef3f6` 含 19,393 字符，基准跳过模型。供应商 US$0.0009246626，含间接成本记账 NZ$0.0215774744。启用暴露的既有客户 GUID / Actor 必需代理兼容问题已通过最小补丁 #1506/#1507 修复；后者 88 项相关测试、lint、远端构建及双人复审通过。
+
+真实变化的模型建议仍待独立回执。复用边界：共享 adapter / evidence / budget / workflow；CTS ID、网址、市场语境仅配置，无客户语义写入共享运行时代码，无行业/全局学习晋升。详细记录见 [rollout receipt](../specs/2026-09-09-web-intelligence-v01.md)。
+
+### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
+
+**问题**：`ads-health` 看板给 CTS 显示的每条线索成本比 Meta 官方数字便宜近一倍（看板 $3.9-4.7，Meta 官方 $7.6-11.8）。核对发现 `src/lib/meta/client.ts` 的 `results = leads + messaging_conversations` 违反了同文件 `objective-metrics.ts` 自己写的「NEVER sum across action types」规则：CTS 的 Lead Form 广告开了 Messenger 自动回复，同一个人提交表单会被 Meta 同时计入 `lead` 和 `onsite_conversion.messaging_conversation_started_7d` 两个 action_type，简单相加造成 2× 双算。2026-08-31 实测：CTS Reborn 广告当天 leads=10、messaging=9，是同一批人，不是 19 个人举手。
+
+**修复**：`results` 改为 `Math.max(leads, messaging)` —— 两者重叠时取较大值而非相加；纯表单或纯私信广告仍取到正确的非零值。同步修正 `src/lib/listings/ad-benchmarks.ts` 里同样的相加逻辑。`src/lib/ads-strategy/ad-level-breakdown.ts` 的单位一致性闸注释更新为反映新公式（该模块的「表单/私信混合不可比价」判断本身不受影响，仍然生效）。
+
+**验证**：`campaign-daily-insights.test.ts` / `ad-daily-insights.test.ts` / `ad-benchmarks.test.ts` 新增回归测试锁死「表单+私信重叠时不相加」的行为；18 个测试文件、314 个测试全绿；`ad-level-breakdown.ts` 相关的 13 个测试无需改动（该模块本来就不假设单一单位）。
+
+**影响范围**：`ad_health_narratives` 每日日报、`ads-health` dashboard、地产广告基准对比（`ad-benchmarks.ts`）读的都是同一份被污染的历史数据；本次只修复未来写入的计算逻辑，不回填历史 `ad_daily_insights` 行（过去的行仍然是双算过的，读的人需要知道这一点）。
+
+**风险级 B**（普通业务逻辑修复，无 schema/权限变更）。
+
+**Reuse Statement**：修复位于既有平台层 `src/lib/meta/client.ts`（Meta insights 解析，服务所有客户），不是 CTS 专属代码；`ad-benchmarks.ts` 是地产行业线的复用点，同一个 bug 一并修掉；无新增依赖、无新表、无客户专属逻辑写入 shared runtime。
+
+---
+
+### 2026-09-07（销售的客户需求卡停更 14 天：`&&` 守错了信号，改走 Inngest）
+
+**修的是什么**：给销售写「客户需求卡」的那条任务从 **2026-08-23 00:12 起 14 天一次都没跑过**（[#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440) 的对账测试顺带挖出来的，当时登记为 TD.15「原因待人工确认」）。原因这次查到底了，**不在 Render 后台，在本仓的 `render.yaml` 里**：
+
+`messenger-hourly` 那条服务的启动命令是 `curl 私信同步 && curl 写需求卡`。意图是对的 ——「同步没跑成，就别拿半截数据写卡给销售看」—— 但 **`&&` 守的是 curl 的退出码，而退出码回答的是「网关有没有在超时前把响应给我」，不是「同步有没有跑完」**。两者从 2026-08-17 07:10 起分家：那一轮起私信同步的服务端耗时从约 25 秒跳到约 140 秒，网关掐断返 524 → `curl -f` 退出码 22 → `&&` 短路 → 第二条 curl 从此一次都没执行。服务端每一轮都跑完了、每一轮都写了运行记录，所以监控上「私信同步每小时正常」。
+
+**先把机制钉死才动手**（生产库 `cron_run_logs` 501 条运行记录实测）：闸门不在 100 秒，在**约 125 秒**。跟着跑成功的那些，同步耗时最大 124.5 秒；没跟着跑的，最小 124.98 秒 —— 零反例。这正好解释了 8/21（9 次）和 8/22（16 次）为什么还有卡：那两天同步刚好快到 119~128 秒，反复在那条线上下浮动，落在线内的小时就写了卡；8/23 01:10 之后再没低于过 125 秒，于是彻底停。
+
+**为什么慢的**：2026-08-17 06:00 那个提交（`628c7b2e`「点私信开场白里的电话邮箱补进档案」）给同步加了一条**按人逐个查**的存量扫描 —— CTS + Roman 共 314 个候选人，每人两次查询，**628 次串行往返**，把这条任务从 25 秒推到 140 秒。
+
+**改了三件事**：
+1. **判据换成真的**：同步路由跑到最后一行发一张 `me/messenger.sync.completed` 条子（带服务端自己的回执：几个客户 / 几条消息 / 失败几个），Inngest 上的 `cloud-messenger-brief-after-sync` 收到就写卡。响应有没有在网关那条线以内送达，跟写不写卡**完全无关**。同步中途整个挂掉走不到那一行 → 卡照旧不写，原来那个意图完整保留。
+2. **写卡改成分段跑**：整轮 160~210 秒，一个请求装不下。现在每段最多 12 张卡（实测每张约 3.2 秒 ≈ 40 秒一段），失败只重试那一段，已经写好的卡不重写。`/api/cron/messenger-brief-hourly` 保留为手动补触发，且**故意不写运行记录** —— 手动点一下写进去会把「人手补的」伪装成「定时链路正常」。
+3. **把那 140 秒压回去**：存量扫描从「一个人查两次」改成「一批人查一次、在内存里分组」，往返次数从 600+ 降到个位数，判据一个字没改。顺带补上分页 —— Supabase 默认最多返回 1000 行**而且不报错**，批量查一不小心就会静默截断，截掉的正好可能是某人的开场白那条。
+
+**顺手加的两道闸，防同一类事故再来一次**：
+- `render.yaml` 里**任何 cron 都不许再用 `&&` 串第二个 `/api/cron/` 调用**（对账测试锁死，把第二条 curl 加回去当场红）。串在 `&&` 后面的健康检查上报不受影响 —— 它漏掉的方向是「误报没跑」，会响；漏掉一件活儿的方向是安静地不干，不会响。
+- 清单的扫描器现在也认 `startCronRunId`。跨步骤跑的任务（Inngest 那批）开运行记录用的是它，原来只认 `startCronRun` —— 每周 SEO 快照和这次的私信简报都属于「写着运行记录却扫不出来」，跟「这个任务不存在」长得一模一样。
+
+⚠️ **合并后必须做一步**：`curl -sS -X PUT https://app.magicengine.com.au/api/inngest`，返回 `modified:true` 才算真上线。Render 不是 Vercel，没有自动同步，新函数没 Sync 的表现是**安静地不跑**。这条链路已登记进 `CRON_REGISTRY`（`scheduler: 'inngest'`，故意不填 `addedAt` 宽限期），真没跑起来健康检查会喊「过期没跑」。
+
+**两份复审（子牙架构 + 魏征变异检验）抓到的必改项，全部已修**：
+- **`retries: 0` 写反了**（子牙）。查了 Inngest 3.54.0 的类型定义：`retries` 是「**这个函数所有 step 的最大重试次数**」，不是「整条重试次数」。写 0 = 任何一段抛错整条立刻判死 —— 第 3 段挂了第 4、5 段全不跑，更要命的是收尾那步（一次 Supabase update）也零重试，网络抖一下那行 `cron_run_logs` 就**永远停在「在跑」**，而这条链路的全部立论就是「那些记录是真的」。「重试会重复花钱」的担心也不成立：每段是独立 memoized step，重试只重跑挂掉那一段。改成 `retries: 2`，跟同仓样板一致（多段编排用 2，单段干活的 worker 才用 0，第一版把 worker 的值抄到了编排上）。
+- **4 个漏网变异**（魏征，逐个真跑过）：`brief-cycle.ts` 当时**一个测试文件都没有** —— 文件头把「读失败必须抛，不能返回空」「只认私信渠道」「50 张是花钱的闸」三条写成红线，但三条全是注释，把它们逐个改坏全套测试照样 80/80 全绿。**注释不是闸。** 另外整条新链路的引信（同步跑完发条子那一行）也没有任何断言，拔掉它等于事故原样复现，测试一条不红。补了 `brief-cycle.test.ts`（15 条）和 `messenger-sync-hourly/route.test.ts`（10 条），5 个变异复验全部转红。
+
+**已知遗留，本次不修**：写卡那一轮**每小时都顶满 50 张的上限**（2026-08-20~23 每一轮都是 candidates=50 / generated=50），说明积压排不干净或存在重复重写，每天约 1200 次模型调用。属这条链路上线前就有的旧账，单独查。
+
+---
+
+### 2026-09-08（Gate B 步骤 1-3 上线：Daily Plan 页面能显示效果建议了，Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413#issuecomment-5570599894)）
+
+**上线内容**：三个 PR 依次合入 main —— [#1451](https://github.com/bigbigraydeng-maker/magic-engine/pull/1451) evaluator 纯函数 + 类型契约、[#1452](https://github.com/bigbigraydeng-maker/magic-engine/pull/1452) cohort loader（两步查读侧）、[#1453](https://github.com/bigbigraydeng-maker/magic-engine/pull/1453) endpoint + UI badge。系统现在**能**在 Daily Plan 页面每条已发布帖子下面显示一行「REPEAT / ITERATE / STOP / 数据不够」的效果建议 —— 从 Gate A 收回来的成绩 → evaluator 纯函数打分 → UI badge 展示，全链路只读。
+
+**规则**（PM 2026-09-07 拍板 & Issue #1413 Scope 冻结）：
+- 可比样本 < 3 → `数据还不够说话`（不猜）
+- delta ≥ +30% → `重复这个路数`
+- delta ≤ -30% → `别做了`
+- 中间灰区 → `微调再试`
+- 缺 T+72 / target 不可测 / 无共同主指标 → 各自的 INCONCLUSIVE 原因
+- shares 缺失（token 无 `read_insights` 是已知能力边界）进 caveats，不影响主指标
+
+阈值全部走 `DEFAULT_THRESHOLDS` 参数，Playbook / Profile 未来可覆盖，不硬编码到客户 / 行业。
+
+**Review 双岗**：
+- **子牙（架构）**：7 项全通过（复用边界 / `tune/` vs `intelligence/attribution/` 目录职责 / 两步查合理性 / 类型契约稳定性 / endpoint map / UI client 组件雷区 / 测试假件与真 schema）。
+- **魏征（挑刺）一审**：找出 4 条 —— 1 必修 + 3 建议同 PR 补：
+  1. **#7 fail-open 伪装成「未到点」**（必修）：`CampaignDailyPublishPanel.tsx` useEffect 的 500 / 403 / 网络断静默 → UI 显示「等 T+72」占位，PM 误以为「时间没到」实际后台挂了。命中 PITFALLS「读失败别显示空输入框」。
+  2. #8 useEffect 依赖 `publishedPosts.length` 漏拉「撤一条 + 发一条」场景。
+  3. #9 原 16 Panel 测试没触发新 useEffect，「全过 ≠ 我没破坏」。
+  4. #5 `normalizeStatus` 静默降级无 log，将来 DB 加 `'timeout'` / `'rate_limited'` 会让 partial 数据无声消失。
+- **修复 commit `233b4919`** 全部落地：`TuneSuggestionInline` 新增 `fetchFailed` prop（短路优先级高于 suggestion）；useEffect 依赖改 `publishedPosts.map(p=>p.post_id).join(',')`；新增 4 条 Panel 集成测试（真触发 useEffect + `waitFor` 断言 fetch URL + 500/异常路径显式排除「等 T+72」）；两处 `normalizeStatus` 加 `console.warn` + spy 断言。
+- **魏征二审**：逐条判「已修 / 未修」→ 可以合。
+
+**验证**：79 tests passed（20 evaluator + 14 cohort + 8 batch + 8 route + 9 badge + 20 Panel）；`tsc --noEmit` 新文件零错误；`npm run build` ✓。
+
+**产品意义**：能力上线，但因为 CTS 只有 2026-09-03 一条 Daily Plan Post（其余 6 条已撤回），凑不齐 min=3 样本，UI 实际渲染永远是「数据还不够说话」占位 —— 与规则一致，不是 bug。要看到真 REPEAT / STOP，得等 Gate B/4（保存计划时记 lineage）之后再跑几轮。已在 hello@magicengine.cloud 日历排 2026-09-09 09:30 NZST 做部署自检。
+
+**风险级 B**（读侧 / 无副作用 / fail-closed）。整体 Gate B 是 A 级但每单步 B 级。未动 Daily Plan 保存路径 / 发布路径 / Inngest / cron / migration / RLS / provider。
+
+**未修的（登记为后续，非本次范围）**：
+- 魏征 #2 evaluator cohort 全 0 → REPEAT + Infinity（缺 `cohort_all_zero` caveat）
+- #3 阈值浮点边界（`>= 30` / `<= -30` 走原始 deltaPct）
+- #6 `normalizeStatus` 三处复制（future refactor 时下沉到共享 helper）
+
+**Reuse Statement**：
+- **复用**：Gate A 建的 `flywheel_actions` / `social_post_measurement_receipts` / `record_post_measurement_snapshot` RPC；`requireDashboardClientAccess`；`supabaseAdmin`；`PublishReceipt.published[].post_id` UI 契约。
+- **platform-shared 新增**：`src/lib/flywheel/tune/{types, social-post-evaluator, social-post-cohort, campaign-tune-suggestions}.ts` + `/api/clients/[id]/campaign-daily-plan/tune-suggestions` + `TuneSuggestionInline` badge。**无客户名 / 客户 ID / 行业阈值** —— Roman / CTS / 未来 ME Real Estate 客户走完全相同路径。
+- **industry-specific**：无。
+- **client-specific**：无。`clientId` 从 URL params（isolation-safe），`campaignId` 从 query，都是必填。
+- **learning**：无升级。当前无 client-private / industry / global memory 写入。
+
+---
+
+### 2026-09-07（Gate A 尾声：给测量回执 RPC 钉住 search_path，Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413#issuecomment-5562430183)）
+
+**上线内容**：把 PR [#1414](https://github.com/bigbigraydeng-maker/magic-engine/pull/1414) 已合并、生产未 apply 的加固补丁 `20260905123025_fix_post_measurement_search_path.sql` 应用到 Supabase 生产（`glbdnayojixmexgofbsd`），生产版本号 `20260906215112`。补丁一行：`ALTER FUNCTION public.record_post_measurement_snapshot(...) SET search_path = pg_catalog, pg_temp;` —— 不改数据、不改权限、不改签名。
+
+**为什么补这一条**：`record_post_measurement_snapshot` 是 SECURITY DEFINER RPC（factory Reel → daily-plan post measurement 走它落回执 + 指标）。没钉 `search_path` 意味着 PostgreSQL 名字解析会走会话默认，理论上给「同名对象抢先注册」留了一线。函数体每个表都写全 `public.*`，实际风险贴近零，但 A 级 SECURITY DEFINER 的行业惯例是必须钉死。回读 `pg_proc.proconfig`：apply 前 `NULL` → apply 后 `{search_path=pg_catalog, pg_temp}` ✅。
+
+**顺带发现（不改，仅登记）**：仓库里 `20260905000001_conversion_writeback_v1.sql` 也没进生产库。属另一条 Gate（CAPI 回写基线），本次不在授权范围。
+
+**Gate A 收官盘点**（Issue #1413）：
+- Migration `20260905122541 / social_post_measurement_receipts`（回执表 + RPC 基线）：早已 applied。
+- Migration `20260906215112 / fix_post_measurement_search_path`（本次加固）：applied。
+- `factoryReelMeasurementAdapter` + `daily-plan-post-measurement` 消费者：Inngest production active（生产库里的痕迹作证 —— 2026-09-06 CTS Reel `2259550698170048` 已产生 `social.publish_post` 动作 `5752620a-…` + T+4 回执 `aead0c02-…`，`status=partial`，likes=1/comments=0，shares 因权限缺失被保守省略）。
+- T+72 应测时刻 2026-09-09 16:44Z，未到；已在 hello@magicengine.cloud 日历排 2026-09-10 09:00 NZST 做只读核对。
+- Gate A 授权的「最多一次受控 CTS Reel 回放」名额未使用（已有真实 Reel 走通）。
+- Gate B（Tune runtime）在 T+72 核对通过前不启动。
+
+**验证**：Supabase security advisor 只余 4 条 pre-existing warnings（`group_tours` RLS / `btree_gist` extension / auth OTP / leaked password protection），均与本功能无关；未新增 lint。既有 T+4 回执 `updated_at` apply 前后未变。
+
+**风险级 A**（生产 SECURITY DEFINER 属性变更）。全程未 merge 新代码、未回放事件、未调 Meta provider、未同步 Inngest、未发帖 / 排期 / 花广告预算。
+
+**Reuse Statement**：本次为已合并补丁的运维 apply + 治理证据回填，无新增代码。platform-shared：加固已在 platform 层的 measurement RPC；industry-specific：无；client-specific：CTS 只作为生产验证数据。未新增 shared runtime 字段。
+
+---
+
+### 2026-09-07（把 dev 欠账从 PM 每日待办里分流出去 · `claude/dev-owned-noise-split`）
+
+**上线内容**：新增 `DEV_OWNED_KINDS`（`src/lib/pm-todo/daily-todo.ts`），把五种「how 字段自己写"回我一句我去改"」的欠账类 kind（`auto_run_stuck` · `action_unattributable` · `attribution_audit_failed` · `client_list_unreadable` · `cron_blind`）从「🙋 需要你动手」栏挪进单独的「🛠 系统欠账（不影响你 · Ray 转给 dev 就好）」栏；不进 `totalItems`。同时新增 `src/lib/cron/__tests__/registry-logs-runs.test.ts` —— CI 守卫，`CRON_REGISTRY` 里任何一条 `logsRuns: false` 都直接 fail build，从源头阻止 `cron_blind` 类欠账进 registry。
+
+**为什么这不是删除 PM 可见性**：五个 kind 的 how 字段自己已经写「这条不用你动手 —— 是我们代码里的欠账」/「回我一句我去改」，本就是**dev 的活伪装成 PM 的活**。PM 每天早上收到 → 没法真动手 → 只能转给 Ray → Ray 转给 dev。挪到单独一栏并从"今天有几件"总数里剔除，保留可见性（铁律 3 下半"发现不许死在日志里"照样满足），只是终于不算作 PM 的活了。
+
+**预计效果**：`auto_run_stuck` 平均每周 0-2 条；`action_unattributable` 目前是 3 类子情况都在下发；`attribution_audit_failed` / `client_list_unreadable` 是 catch 类，正常无；`cron_blind` 因新加 CI 守卫从此不会再有。合计每天 PM「需要你动手」栏预计再少 2-6 行 + 总数相应下降。
+
+**后续正确形态**：自动开 GitHub issue / spawn dev-task（含所有权分配 / 去重 / 关闭跟踪），当前先做管道分流不引入新基础设施。
+
+**Reuse Statement**：
+- 复用 `INFORMATIONAL_KINDS` 分流模式（`daily-todo.ts:330-373`），新增第三档 `DEV_OWNED_KINDS`
+- 复用 `CRON_REGISTRY` schema，新增一条完整性守卫测试
+- 平台共享：`DEV_OWNED_KINDS` + registry logs-runs 守卫属 pm-todo / cron kernel L1，无客户/行业语义
+- 一致性：五个 kind 的 what/how 保持原样（不改内容，只改分流去向），单独栏使用与其它栏对称的 sectionCard 模板
+- 层级：L1 内部治理修复，不涉及新能力
+
+---
+
+### 2026-09-07（本周体检严重问题挪出「需要你动手」栏 —— 与 SEO 巡逻发现统一口径 · `claude/diagnostic-findings-informational`）
+
+**上线内容**：`diagnostic_findings` 挪进 `INFORMATIONAL_KINDS`（`src/lib/pm-todo/daily-todo.ts:29`），一行改动。加了一条回归测试锁死"体检发现不进「需要你动手」栏、不抬高'今天有几件事'总数"。
+
+**为什么这是口径修复而不是新功能**：`diagnostic_findings` 每条待办的 how 字段自己写死了"不用你挑 —— 每周方案会把这些自动排成看板上的动作"（`manual-items.ts:1755`）——PM 2026-08-04 拍板的处理方式**本来就是**「不用你单独动手」，只是当时挂到了「🙋 需要你动手」栏里，还算进了「今天有几件事」总数。跟 91 那次「巡逻发现被数两遍」是同一类错：一件事在两栏里各出现一遍 = 总数虚高 → PM 说 "91 件按不动"。这次和巡逻发现口径对齐，从 "action item" 归到 "notice"。
+
+**预计效果**：真实客户上一般每周 3-8 条 `diagnostic_findings`，本身自动汇总成"每客户一条"（`manual-items.ts:1741-1758`），所以邮件正文里少 3-8 条 "🙋 需要你动手" 行、总数下降 3-8。跟对齐后的 SEO 巡逻发现一起看：整封邮件里两条"看一眼就好"通道对称，不再有"点进去发现不用做"的破口径。
+
+**Reuse Statement**：
+- 复用了既有 `INFORMATIONAL_KINDS` 分流机制（`daily-todo.ts:330-352`），本次只增加成员，无新代码
+- 平台共享：`INFORMATIONAL_KINDS` 属 pm-todo kernel L1，无客户/行业语义
+- 一致性：与 `findingsByClient` 单独一栏、不进总数的口径对齐
+- 层级：L1 内部口径修复，不涉及新能力
+
+---
+
+### 2026-09-07（一次授权覆盖客户全部 Google 权限 —— 铁律 3 上半句落地 · `claude/grant-permissions-fix-mdqr2c`）
+
+**上线内容**：把 `business.manage`（GBP 管理）scope 合到 `COMBINED_GOOGLE_SCOPES` 里，`/api/auth/google/callback` 拿到 token 后若含 GBP scope 就顺手把 `platform_oauth_connections.google_gbp` + `client_connectors.gbp` 一起落库；持久化逻辑抽成 `src/lib/gbp/oauth-persist.ts` 让合并流 + 老的 `/api/auth/google/gbp/callback` 共用同一段代码。daily-todo「🔌 要你点一次的连接」的链接从 `/api/auth/google/gbp/start`（只覆盖商家页）改到 `/api/auth/google/connect`（一次点完覆盖商家页 + Search Console + Analytics + 收录申请）。
+
+**为什么这是「遇卡点必自动化」的落地**：邮件里三条「CTS Tours NZ · oztop · Roman HU · 去连接」每客户都要点两次 Google consent —— 一次给 GBP、一次给 GSC/GA4/Indexing —— 用的是同一个 Google 老板账号，只是我们把两条 scope 单独发起。铁律 3 上半说「能自动化就必须自动化」，两次跳同一个 Google 账号本就是我们自己造出来的手工步骤。合并后一次 consent 覆盖全部，同一封邮件的三条条目从「六次点击」压到「三次点击」。GBP scope 单独审核过的产品验证不受影响（`business.manage` 已在同一个 GCP 项目里获批）。
+
+**兼容性**：老的 `/api/auth/google/gbp/start` 入口保留 —— 走同一个 `persistGbpFromTokens` helper，不会分叉；已经只授权过 GBP 或只授权过 GSC 的客户下次跳合并流会拿到全 scope。callback 里 GBP 失败非致命（GSC/GA4 已经写好，daily-todo 明天再浮出来），失败不推翻整条授权。
+
+**验证**：`vitest run` 91 tests passed（daily-todo · gbp/start · gbp/callback · google/callback），加了两条锁契约的测试 —— scope 含 `business.manage` 必调 helper、不含则一定不调；`tsc --noEmit` 我改动文件全绿。
+
+**Reuse Statement**：
+- 复用了 `COMBINED_GOOGLE_SCOPES` 授权机制 · `platform_oauth_connections` / `client_connectors` 表 · `encryptToken` / `resolveGbpLocation` / `requireDashboardClientAccess`
+- 平台共享：新增的 `scopeIncludesGbp` 与 `persistGbpFromTokens` 属 Google OAuth L3 Connector kernel，纯参数化、无客户/行业语义
+- 行业 / 客户特定：无 —— 完全没有客户或行业事实进 shared runtime
+- Memory 泛化：本次改动不写 memory
+- 层级：L3 Connector 内部整合，红线 3 显式排除 L3，不进 `platform-candidates.md`
+
+---
+
+### 2026-09-07（5 个定时任务脱离监控 + 每周 SEO 快照上线，PR [#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440)）
+
+**上线内容一**：代码里调了 `startCronRun`（说明它设计上要被定时触发、要留运行记录）却不在任何名单里的接口，逐个查生产库定性并补进 `CRON_REGISTRY`。`CronRegistryEntry` 新增 `scheduler` 字段（`render` / `github-actions` / `external` / `inngest`）—— 原来「不在 `render.yaml` 里 = 没人调度」这个假设被生产数据推翻了：`baseline-domains-monthly` 每周日都在跑，调度它的是**有人在 Render 后台手工建的** cron（路由自己的成本闸门注释里就写着）；`goals-expiry-check` 由 GitHub Actions 调度，实测触发时刻在 04:10 ~ 15:35 之间飘。`render.yaml` 一行没动 —— 三个都已有人调度，加了就是重复调度。确实不该排班的（`mailbox-sync` 已挂在 `messenger-hourly` 里跑、`email-reply-digest` 已被 PM 叫停）进 `UNSCHEDULED_CRON_ROUTES` 白名单并写明原因；**白名单自己也被检查**：排上班了、或路由没了都会红（合并前它就自动逮到 #1427 落地后本该删掉的那条临时项）。
+
+**顺带查出的生产事故**：`messenger-brief-hourly`（给销售写客户需求卡）**从 2026-08-23 00:12 起停了 14 天**。它是 `messenger-hourly` 那条 Render 服务里的第二条 curl，而清单原来一条服务只登记一个 `jobName`，第二条就此隐形。不是记录丢了 —— `conversation_briefs` 整张表最后被写入也停在 `2026-08-23T00:12:37`。同一条服务的第一条 curl（私信同步）945 次每小时都在跑。~~停因在 Render 那一侧（本仓这段配置自 2026-07-27 未动），代码侧查不到，需人工看那条服务的运行日志。~~ **这句判断错了**（2026-09-07 同日更正）：停因就在本仓 `render.yaml` 那两条 curl 之间的 `&&` 上 —— 配置确实没动，是**同步变慢**让那个一直存在的判据错误第一次显形。详见本文件同日「`&&` 守错了信号」那条。
+
+**上线内容二**：`flywheel-seo-weekly`（每周 SEO 快照）**第一次真正开跑**（PM 2026-09-07 拍板）。代码 2026-05-18 就写好了，生产库 0 条运行记录，2026-08-06 架构审计标「等 PM 拍板」——因为它每周对每个在服务的客户各花一次 DataForSEO 的钱。按铁律 3 的 Inngest 硬约束拆成两段：`cloud-flywheel-seo-weekly-fanout`（每周一 05:15 NZ 派单，自己不打 provider）+ `cloud-flywheel-seo-snapshot-one`（一个客户一单，出机器可读回执：客户 / 网址 / 周编号 / 状态 / 花费上限 / `no_publish` / 时间）。原实现在一个 HTTP 请求里 for 循环跑完所有客户（`maxDuration 900`），跑到第 5 个超时则前 4 个写了后面没写而记录只有一条「完成」。`/api/cron/flywheel-seo-weekly` 改成纯手动补触发（只发同一批条子），**故意不写 `cron_run_logs`** —— 手动点一下写进去会把「人手补的」伪装成「定时器正常」。
+
+**两份复审（子牙架构 + 魏征对抗性）各自独立抓到的必改项，全部已修**：
+- **合并后按下手动按钮就会让全体客户多付一轮钱**，两个独立原因叠加：① Inngest 的事件去重窗口**只有 24 小时**（查了官方文档），而「手动补触发」按定义发生在隔天，原注释「同一周内点多少次钱只花一轮」是错的；② `isoWeekKey` 走 UTC 但定时器是 `TZ=Pacific/Auckland`，NZ 周一 05:15 在 UTC 是周日 —— 同一个 NZ 周一中午 12:00 前后算出的周编号不同，事件 id 全变，24 小时窗口也拦不住。改法：周编号按 NZ 本地日期算；真闸改成花钱**之前**查 `flywheel_metrics` 里该客户最近一条 SEO 记录，不足 156 小时直接跳过，查不出来一律往「不花钱」倒。
+- **派单函数每周会写 3 行假运行记录**：`startCronRun` 放在 `step` 外，而 Inngest 每遇一个 step 就把函数体从头重放（step 结果走缓存、step 外的代码每遍都真跑），两个 step → 插 3 行、其中 2 行永远停在「在跑」。`run-logger` 新增 `startCronRunId()` + `cronRunHandle()`，开记录和收记录各装进独立 step。
+- 回执改说实话：`provider_calls` → `provider_calls_max`（是上限不是账单，被闸拦下时报 0）；`status` 增加 `no_data` 和 `skipped` 两态 —— 底层两层 `allSettled` 意味着 DataForSEO 全挂也返回 0 值不抛异常，原来的 `failed` 分支现实中几乎走不到。
+
+**对账测试补的洞**：原来 26 条只查 `render.yaml ↔ 清单` 两个方向，查不出「代码里写着要定时跑、谁都没排班」这一类。新增「调用处 → 清单」方向，判据是**谁调了 `startCronRun`**而不是「哪个目录下的 `route.ts`」—— 按位置扫的话，把调用挪进 `src/lib/inngest/functions/` 就能让一个任务静默消失（改这条时当场自己踩到）。用 TypeScript AST 而不是正则（`email-reply-digest` 写的是 `startCronRun(JOB_NAME)`，正则版会静默漏掉），并认得 import 别名和命名空间调用。魏征实测出三个「改了也全绿」的空洞（花费常量跟自己比、假 supabase 把 `eq` 入参丢了、别名/命名空间调用），全部堵上并逐条变异复验。
+
+**验证**：916 passed / 3 skipped（62 个测试文件）· `npm run build` 通过 · 变异检验 15 次逐条确认新测试会红。
+
+**⚠️ 上线后必须人工一步**：去 Inngest 后台（Production）对 `https://app.magicengine.com.au/api/inngest` 手动 Sync 一次，新的两个函数才会被认（Render 不是 Vercel，没有自动同步）。没同步的表现是「安静地不跑」；健康检查会喊，但按宽限期算要 17.5 天才响，别指望它把关。
+
+---
+
+### 2026-09-06（接通 IMPACT 的 Tune 段 —— 从结果里学这一步从没跑过，PR [#1427](https://github.com/bigbigraydeng-maker/magic-engine/pull/1427)）
+
+**上线内容**：给 `/api/cron/memory-extractor` 补上调度登记（`render.yaml` + `src/lib/cron/registry.ts` 双写，`30 6 * * *`，密钥走 `fromGroup: me-shared-cron-secret`）。抽取逻辑一行没动。
+
+**为什么是个事故而不是小遗漏**：这条路由、`src/lib/memory/extractor.ts`（717 行）和配套测试从 Phase 23.C 起就在仓库里，但 `render.yaml` 和监控清单**两边都没有登记过它**，`cron_run_logs` 里一条运行记录都没有 —— 从上线起就没跑过。生产实测（2026-09-06）：Check 段近 30 天产出 285 条 `flywheel_outcomes`（confirmed 117 / reversed 146 / inconclusive 22），而 `client_proven_patterns` 14 条 + `client_failed_experiments` 7 条停在 **2026-07-15**，53 天零增长。按 [`ME_PRODUCT_DEFINITION.md`](../strategy/ME_PRODUCT_DEFINITION.md) §4「Tune 没有改变后续决策，就不能称为学习闭环」，IMPACT 最后一段整段没通电，而「没通电」和「一切正常」在监控里长得一模一样 —— 正是 `CRON_REGISTRY` 那张表要解决的病。
+
+**排班位置**按链路先后定：`attribution`(`0 */6`) 算出 outcome → 本任务(`30 6`) 抽成学习 → `agent-learning-rollup`(`0 7` 周一) 汇总。06:30 UTC 在 attribution 06:00 那轮之后半小时（其 `maxDuration` 仅 300s），又在周一汇总之前。
+
+**首跑预演**（按 `keepOneCasePerAction` 真实折叠规则在生产库上算过，非估计）：77 个动作 → `client_proven_patterns`，40 个 → `client_failed_experiments`，涉及 4 个客户，另有 758 条 `client_decision_history.outcome_verdict` 待回填；学习总量 21 → ~117 条。
+
+**排除过一个疑似坑**：原始 outcome 里 `seo.gsc.avg_position` 有 65 个动作判 reversed，其中 42 个实为「曝光 +32.7% 同时平均排名 −21.6%」（页面吃到更多长尾词把平均位置拉低，是成功不是失败）。抽取器**已处理** —— `extractor.ts:148` 调 `keepOneCasePerAction`，`avg_position` 在代表指标序里故意排最后（PR [#862](https://github.com/bigbigraydeng-maker/magic-engine/pull/862) 第 30 轮 Codex 提的）。不需要改。
+
+**顺带扫出、已单独立项**：同类「代码里调了 `startCronRun` 但两边都没登记」的孤儿还有 5 个 —— `flywheel-seo-weekly` / `mailbox-sync` 从没跑过，`messenger-brief-hourly` 跑了 483 次后 2026-08-23 停，`baseline-domains-monthly`（37 次）/ `goals-expiry-check`（9 次，活着）。现有对账只查「render.yaml ↔ 清单」两个方向，查不出这一类，需补「路由 → 清单」方向。
+
+**验证**：`npx vitest run src/lib/memory src/lib/cron` 11 files / 187 passed · `npm run build` 通过 · 3 处变异探针确认对账测试真会红（排班漂移 / 日志名写错 / 清单漏登记）。
+
+**Inngest 豁免声明**（铁律 3 要求：暂不上 Inngest 的必须写明原因 / 恢复条件 / 替代 receipt）：
+
+- **原因**：`memory-extractor` 本身是纯库读库写（读 `flywheel_outcomes` → 写两张 memory 表 + 回填 `client_decision_history`），**不调任何外部服务、无外部副作用、单次同步跑完**，落在铁律 3 自己写的豁免范围内。为单个无副作用的 cron 套工作流层属于「为了用 Inngest 而复杂化」，规矩明确禁止。
+- **但链路耦合是隐式的**：`attribution`(`0 */6`) → 本任务(`30 6`) → `agent-learning-rollup`(`0 7` 周一) 目前**只靠时钟先后串联**，没有事件也没有回执。铁律 3 点名「Outcome 回写」属于应上 Inngest 的场景，所以这是一笔明确的技术债，不是「不适用」。
+- **当前风险量化**：`attribution-cron` 近 30 天 118 次，最长 353s / 平均 236s / **0 次失败**；本任务留 30 分钟间隔，约 5 倍余量。今天不构成实际风险。
+- **替代 receipt 在哪**：`cron_run_logs`（路由已调 `startCronRun('memory-extractor')`，写 processed / completed / failed），配合本次同步登记的 `CRON_REGISTRY` —— `lib/cron/health.ts` 会把「从来没跑过」(`neverRan`) 和「该跑没跑」(`overdue`) 单独报出来，跟只报「跑了但失败」的日报是两条线。
+- **恢复条件（满足任一就把这条链事件化）**：① `attribution-cron` 出现单次超过 25 分钟或连续失败；② 抽取器读到的 outcome 明显滞后于 attribution 那一轮（学到残缺数据）；③ 这条链上再接第四个环节。届时改为 `attribution` 完成后发 `flywheel.outcomes.computed`（带 run id / client 数 / outcome 数），由 Inngest 接力触发抽取与汇总。
+
+**风险级 B**。**平台层级门**：判定 L1 平台基础设施 · Memory / Verification，但**不是新增能力**（能力早在，缺的是调度），归位既有 L1，不占候选名额。
+
+**Reuse Statement**：复用 `CRON_REGISTRY` 对账机制、`run-logger` 的 `startCronRun`、`me-shared-cron-secret` 环境变量组、既有 `memory-extractor` 路由与 `lib/memory/extractor.ts` 全部逻辑 —— **本次没有新增任何代码模块**。platform-shared：两条调度登记。抽取器写的是 client-private memory（两张表均带 `client_id`），未碰 industry / global 泛化边界。industry-specific / client-specific：无。落点与 tier-gate 决策时分类一致。
+
+### 2026-09-05（清掉自动测试与类型检查的红色基线，顺带挖出并修掉 3 个真 bug，PR [#1405](https://github.com/bigbigraydeng-maker/magic-engine/pull/1405)）
+
+**上线内容**：全仓两条质量基线长期是红的，回归藏在里面没人看得见 —— `npx vitest run` 37 个文件红 / 117 条失败，`npx tsc --noEmit` 226 个错。本次清到 **10 条失败 / 7 个类型错误**，且剩余项全部各有归属（7 条等 PR [#1328](https://github.com/bigbigraydeng-maker/magic-engine/pull/1328) 补 `logistics_3pl` 行业分类；3 条是内核文件行数超限，已登记 [#1402](https://github.com/bigbigraydeng-maker/magic-engine/issues/1402)；7 个类型错误分属 PR [#1231](https://github.com/bigbigraydeng-maker/magic-engine/pull/1231) / [#1211](https://github.com/bigbigraydeng-maker/magic-engine/pull/1211) 正在改的文件，为避冲突未动）。
+
+**挖出并修掉的 3 个真 bug**：
+① `meta-ads/execute` 调 `getCampaignDetails` 但从未 import（自 2026-07-24 `f2516fc9` 起）。Meta 改预算会强制暂停广告，这段代码正是用来回读状态把广告救回 ACTIVE 的 —— 崩在这一步等于**「调整预算」静默变成「停掉广告」**，且预算已经改到 Meta 之后才炸，审计记录也不会写。
+② `pages/[pageId]/upgrade/page.tsx` 的 `handleGithubPublish` / `handleExecute` 被写在子组件 `DiffSection` 作用域里，而 `onClick` 在主组件 —— 是**渲染期 ReferenceError**（组件一渲染就炸），不只是按钮失灵。
+③ `CompetitorSnapshotAdapter` 往 `flywheel_metrics.flywheel` 写 `'competitor'`，但该列枚举只有 `seo/geo/ads/social`，每次插入必被数据库整行拒绝。改为 `'seo'`，与 `execution-target.ts` 的 `dimensionToFlywheel('competitor')` 同一口径（竞品靠 `metric_key` 区分）。该 adapter 无调用方，未造成客户可见损失。
+
+**根因**：CI 的 PR 检查只跑 2 个写死的测试文件，type-check 是「跟 base 比不新增就算过」的基线容忍模式 —— 所以 117 条失败能一路累积而 CI 全绿。已登记 [#1401](https://github.com/bigbigraydeng-maker/magic-engine/issues/1401)，待基线全绿后加全量测试 job 并把 type-check 改严格。
+
+**配置与结构性修复**：`tsconfig` 加 `"target": "ES2017"`（原来没设，tsc 按 ES5 判，Set/Map 迭代等到处撞 TS2802/TS1252；Next 用 SWC 按 browserslist 编译，只影响 tsc 判定不改产物）、exclude 加 `scripts/archive`（22 个脚本零调用方）；`vitest` 排除 Playwright spec 与 3 个 `node:test` 文件（**只排这三个** —— 首版误排整个 worker 目录、删掉 142 条正在通过的测试，被子牙复审拦下并修正）；Google 商家档案 / Microsoft 邮箱的 OAuth 常量从 `route.ts` 移入 `src/lib/gbp/oauth.ts` 与 `mail-oauth.ts`（route.ts 只准导出 HTTP 方法，且原 callback 直接 `import from '../start/route'` 把 route 当库用）；`content-factory` 路由改从执行内核豁免清单内的 `flywheel/social-post-publish` 取 `PublerAccount` 类型，L1 边界守卫恢复绿（**未往豁免清单加任何路径**）；补登记 2 个从 8 月上线起就脱离监控的定时任务（`market-intel-daily`、`tailor-made-jobs-sweeper`）；7 份 `stripComments()` 副本同步成解析器版（2 份还是正则版，会把字符串里形似注释的内容整段挖空，放行真实违规）。
+
+**验证**：`npm run build` 通过（186/186 静态页）· `npx vitest run` 13604 通过 / 10 失败 · `npx tsc --noEmit` 7 个错，全部在已归属清单内。新增行 **0 个** `any` / `@ts-ignore` / `@ts-expect-error` / `.skip`，另去掉 12 处旧的 `as any`；删 76 条 `expect` / 增 165 条，断言净增强（删除主要来自月报页测试的整体重写 —— 页面 2 月前已重构，旧断言无一能对上）。
+
+**风险级 A**（自报 B，由仓库自己的 `tools/ops-review-loop/src/risk.mjs` 纠正为 A：触碰 `auth-isolation` / `control-plane` / `kernel-execution` / `production-schedule`）。三审齐全：**子牙**（架构，CONDITIONAL PASS，抓出「vitest 排除误删 142 条测试」这个 blocker，已修）· **狄仁杰**（安全攻击验证，PASS 无 P0，其 P2「`.then(f,g)` 兜不住 f 自己」已改回 catch-all）· **魏征**（挑刺，CONDITIONAL PASS，放行条件即狄仁杰过关，合并前已满足；两条基线数字与三组归属均由其独立复跑核实）。
+
+**Reuse Statement**：复用既有平台契约（`ClientAccessResult`、`WordpressPublishResult`、`FlywheelName` 枚举、`ADS_ACTION_TYPE` 词表、`CRON_REGISTRY`、执行内核 `boundaries.ts` 既有豁免清单），未新造抽象。platform-shared：`src/lib/gbp/oauth.ts`（新增，纯常量，与既有 `microsoft/mail-oauth.ts` 同构）· `cron/registry.ts` 两条登记 · `social-post-publish` 的类型再导出 · 3 个 bug 修复。industry-specific / client-specific：无。未把客户名、客户 ID 或行业判断写进 shared runtime。遗留 follow-up 已全部登记：[#1401](https://github.com/bigbigraydeng-maker/magic-engine/issues/1401)（CI 质量闸）· [#1402](https://github.com/bigbigraydeng-maker/magic-engine/issues/1402)（内核三处超行数，A 级）· [#1403](https://github.com/bigbigraydeng-maker/magic-engine/issues/1403)（GBP 抓评分丢了品牌名核对，可能把隔壁商家评分算到客户头上）· [#1404](https://github.com/bigbigraydeng-maker/magic-engine/issues/1404)（竞品快照写库失败仍假装成功）· [#1406](https://github.com/bigbigraydeng-maker/magic-engine/issues/1406)（改广告状态/预算那条路由零测试覆盖）。
+
+### 2026-09-05（今日待办邮件去刷屏：未收录页面按客户汇总 + LinkedIn 待办去重，PR [#1375](https://github.com/bigbigraydeng-maker/magic-engine/pull/1375)）
+
+**上线内容**：PM/FDE 的今日待办邮件（及后台「今日待办」页，二者共用 `loadTodoCounts`）正文被两类「一条一行」的待办淹没，真正要动手的被埋掉。① 谷歌未收录页面（not_indexed）从「一页一条」改为「一个客户汇总一条」——报总数 + 三类分别计数（内容太薄 / 爬过没收录 / 谷歌还不认识），链接落到该客户 GSC 属性（生产实测 oztop 116 + CTS 6，122 行塌成 2 行）；② LinkedIn 进度贴待办从「一草稿一条、内容逐字重复」改为「按类归堆、一类一条、多于一条带条数」，单条红线话术（已发布勿重发）逐字保留。两条读取均改用平台既有 `fetchAll` 分页读全 + 全序排序，条数永远准、任何一类不因截断被漏掉；未收录读取失败自兜住（`.catch` 隔离），不再拖垮整条人工车道。
+
+**验证**：`npx vitest run src/lib/pm-todo/` 全绿（新增 LinkedIn 三条只出一条 / not_indexed 116+6→2 / 失败隔离 / 分页全序 等回归）；`tsc --noEmit` 改动文件零错误；`npm run build` 通过；直连生产库核对了刷屏来源。子牙+魏征独立复审通过，Codex 六轮复审全部收口。
+
+**Reuse Statement**：复用既有 `pm-todo` 人工车道、其「一客户/一类只出一条」去重纪律与分页读全设施 `fetchAll`；未新增能力线 / 表 / endpoint / 依赖 / 客户专属 runtime。遗留 follow-up：未收录清单做成带本地分类（thin/declined/unknown）的站内可操作视图（需前端改动，已单独登记为任务）。
+
+### 2026-09-04（内容工厂视频线四件套：配方对账 + 图生视频入口 + 分镜自检 + 两道确定性闸）
+
+**上线内容**：给「客户对外视频」这条线补齐四层护栏，从代码到规则各一次。全部来自 CTS 圣诞团 + Golden China 出片时踩到的真实事故，每条都变成 ME 里跨客户共享的能力，不是一次性修补。
+
+- **配方对账规则**（[PR #1351](https://github.com/bigbigraydeng-maker/magic-engine/pull/1351)）：CLAUDE.md §8 新增条目——写视频模板 / 调生图·生视频 API / 拼片出成片前，必须先查 `viral_reference_library` 拿配方并输出对账表。触发绑动作不绑任务名，防止「我以为我在做 X 所以那条不适用我」失效。
+- **`imageToClip()` 入口 + Muapi 单价修正**（[PR #1360](https://github.com/bigbigraydeng-maker/magic-engine/pull/1360)）：`src/lib/factory/broll-clip.ts` 抽出 `imageToClip(imageUrl, motionPrompt) → {clipUrl, costUsd}`；`generateBrollClip()` 委托给它，行为不变。同时修正 i2v 单价：实测 $0.30/条（旧注释写的 $0.15 是错的）；并在 doc comment 里写明 i2v 逐帧重画的题材禁忌（密集人脸/密集小字/复杂地标）。
+- **分镜自检规则**（[PR #1367](https://github.com/bigbigraydeng-maker/magic-engine/pull/1367)）：PITFALLS 新增 D5——对外成片交付前必先出 9 宫格分镜自检表，禁止「先渲一版给 PM 看 → PM 挑错 → 重渲」循环。判断类检查也必须留下产出物。
+- **两道确定性闸**（[PR #1373](https://github.com/bigbigraydeng-maker/magic-engine/pull/1373)）：`src/lib/factory/shot-guards.ts` 新增 `verifyPlaceProvenance`（地点来源核验，避免把「悉尼唐人街」当「China」）+ `classifyRenderMode`（自动判 i2v 还是真实像素，避免糊人脸/糊字）。跨行业跨客户通用。17 个测试全绿，经子牙+魏征两轮复审，高危项全修。
+
+**验证**：全部 4 个 PR merged into main（1351/1360/1367/1373 均由 PM 手动 merge）。首次真上手用在 Golden China 11 月团 reel：`classifyRenderMode` 自动挑出 3 张必须走真实像素的镜头（人物/招牌/兵马俑），配方对账表逐项对照跑通，成片零糊字零糊脸。
+
+**Reuse Statement**：全部 platform-shared，无客户/行业硬编码。复用了既有 `runMuapi()` / `uploadFromUrl()` / `viral_reference_library`。CTS 只作为事故举例出现在注释和 PITFALLS 里，运行时不含客户判断逻辑。相关未完事项已登记 [`docs/registry/platform-candidates.md`](../registry/platform-candidates.md)「分档 AI 视频配额闸」（依赖 Creatomate Connector 大任务落地时接线，10-04 复查）。
+
+---
+
+### 2026-09-05（Articles 首页编辑式视觉重做，PR [#1389](https://github.com/bigbigraydeng-maker/magic-engine/pull/1389)）
+
+**上线内容**：将 `/blog/` 从大面积留白加两张同权重白卡片，重做为 Magic Engine 黑金米白的编辑式入口：首页使用 Field Notes 刊头和真实文章数量版面，明确区分 Articles 实操指南与 Magic Insight 研究简报；两篇现有文章改为一篇主打流程视觉、一篇横向最新指南，形成清楚的阅读层级。未改文章正文、URL、canonical、结构化数据、分析脚本或转化路径。
+
+**验证**：1440×1100 桌面与 390×844 手机浏览器渲染通过；无横向溢出、页面错误或资源失败；深色主打卡片标题对比度已实测为白色；title、description、canonical、H1、JSON-LD 和全部核心链接检查通过。
+
+**Reuse Statement**：复用现有 `next-market.css`、全站导航/页尾、Magic Engine 品牌色与两篇已发布文章；未新增平台 capability、行业规则、客户专属 runtime 或虚构内容。
+
+### 2026-09-05（官网 Technical SEO v1 与 Articles 导航统一，PR [#1387](https://github.com/bigbigraydeng-maker/magic-engine/pull/1387)）
+
+**上线内容**：把 `Articles` 加入当前英文首页、waitlist、Magic Insight、两份报告详情页和中文单页的桌面与移动导航；`/blog/` 及两篇文章从旧版 AU/NZ AI 服务菜单迁移到当前 Magic Engine 黑金米白视觉与「进入下一个市场」定位，页尾和转化入口同步统一。
+
+**SEO 修复**：文章 canonical、Open Graph、JSON-LD、站内链接和 sitemap 全部统一为生产实际使用的无 `.html` URL；补齐 Article、BreadcrumbList 与 FAQPage 结构化数据；移除两篇文章中的隐藏 AI 指令文本；sitemap 从混杂旧服务定位的 42 个 URL 收敛为 11 个当前战略页面、研究、文章和法律页面，并更新过时的 Terms meta description。本轮是 GSC 技术准备，不在没有认证 GSC 数据的情况下声称排名或收录结果。
+
+**验证**：9 个当前战略页面均通过单一 title / description / canonical / H1 检查，JSON-LD 全部可解析，sitemap URL 唯一且无 `.html`；Articles 首页和文章正文完成 1440×900 桌面与 390×844 手机浏览器渲染，无横向溢出或页面脚本错误。
+
+**Reuse Statement**：复用现有静态官网、`next-market.css` 视觉系统、分析脚本与两篇既有文章内容；未新增平台 capability、数据库、Connector、客户专属 runtime 或产品支柱。
+
+### 2026-09-05（官网申请表、中文单页与 Magic Insight 中文报告下载上线，PR [#1384](https://github.com/bigbigraydeng-maker/magic-engine/pull/1384)）
+
+**上线内容**：Join the waitlist 从 `mailto:` 升级为英文在线申请表，收集联系人、国家/当前市场、行业、目标市场、Google / Meta / TikTok 等营销平台与月预算区间；Cloudflare Pages Function 做必填项、长度、邮箱、同意条款和 honeypot 校验，再复用现有 Render `/api/contact` + Resend 发信链路，只有既有链路确认接收才向用户显示成功。修复深色与浅色区块内 CTA 文案因 CSS specificity 被覆盖而显示为空白的问题。
+
+**内容与视觉**：`/cn/` 从旧的澳新 AI/SEO 服务目录重做为中文单页，围绕「中国品牌出海、海外华人企业进入主流市场、成熟品牌进入下一个国家」三类客户和「市场判断 → 本地定位 → 增长执行」一条主线；不是英文站逐句翻译。Magic Insight 两份完整 PDF 已公开下载，卡片、详情页和文件名统一标注 `Chinese version`，下载区同时说明 `English version coming soon`；英文 executive brief 保留在线阅读。
+
+**验证**：表单 endpoint 正常/缺字段路径测试通过；桌面 waitlist、Insights、中文站和移动端 waitlist 完成浏览器渲染检查；两个下载按钮可见且链接有效；Vol.03 / Vol.04 PDF 分别验证为 12 页 / 15 页；Privacy Policy 已补充 waitlist 收集字段与用途。
+
+**Reuse Statement**：复用现有 `website/`、Cloudflare Pages Functions、Render contact/Resend 发信链路、分析脚本、隐私政策和已过数据闸的 Magic Insight PDF；未新增邮件供应商、数据库表、产品支柱或客户专属 runtime。`magicengine.co.nz` 域名绑定属于独立生产配置，因正确 Cloudflare 账号凭证不在当前 CLI 会话而未伪装成已完成。
+
+---
+
+### 2026-09-05（Magic Engine 英文官网重新定位与 Magic Insight 公共研究站上线，PR [#1381](https://github.com/bigbigraydeng-maker/magic-engine/pull/1381)）
+
+**上线内容**：英文首页从按行业罗列服务，改为「帮助成熟企业进入下一个国家市场」的跨市场增长定位，覆盖 China to Global、Diaspora to Mainstream 与 Market to Market 三类客户路径；公开 Pricing 暂停展示并改为分阶段邀请的 Join the waitlist；Magic Insight 上线独立研究入口与两份英文 executive brief；首页补充经署名的跨境货运、国际出行与城市市场图库素材。视觉统一为 Magic Engine 黑、金、米白系统，并完成桌面与移动端检查。
+
+**发布验证**：生产构建、Type-check、Application build、`ai-orchestrator-tests` 与 Cloudflare Pages 检查通过；主域名首页、Magic Insight、waitlist、旧 Pricing 跳转及外部图片均已在线核验。Render 主应用部署成功。Claude Review workflow 两次均在模型执行前以 `is_error:true` 退出，零 review turn、零 finding，属于审查服务故障；合并沿用实施期两名独立 reviewer 的 APPROVE 结论。
+
+**Reuse Statement**：复用现有 `website/` 静态部署、分析脚本、邮箱转化路径和 Client Portal 链接；本次仅新增共享品牌/GTM 展示内容，没有新增平台 capability、API、数据库、Connector 或客户专属 runtime。跨市场客户分组属于市场表达，Magic Insight 仍是研究发布品牌，不是新的产品支柱。
+
+---
+
+### 2026-09-03（Magic Insight 信源健康度提醒修复：meta_ads/tiktok_ads 零命中 + Search Engine Land 反爬停用，PR [#1376](https://github.com/bigbigraydeng-maker/magic-engine/pull/1376)）
+
+**发生了什么**：Magic Insight（market-intel）发来「⚠ 3 项需要检查」健康度提醒——Search Engine Land 连续 16 天 403、分类 `meta_ads` 与 `tiktok_ads` 各连续 5 天候选池零命中。直连生产库（`glbdnayojixmexgofbsd`）逐条核查真实数据，而非按邮件字面猜测。
+
+**真根因（与邮件提示不同）**：两类广告分类零命中**不是信源死了**——覆盖它们的 AdExchanger/Digiday/Social Media Today 全部 `consecutive_fail_count=0`、当天抓取成功。而是**归类逻辑过严**：v1 白名单只认 `"Meta Ads"/"TikTok Ads"` 这类完整产品名短语，真实标题几乎不逐字这么写，条目全被 `matchCategory` 判 null 丢弃（Social Media Today 这种 Meta/TikTok 主力源 14 天 0 条入库）；外加一个顺序 bug——Digiday 声明 `['marketing','tiktok_ads']`，无白名单的 marketing 按声明顺序先吃光所有条目（实测 45 条全落 marketing），tiktok_ads 永远轮不到。
+
+**修了什么**：给三类广告分类加「平台词 + 广告词共现」召回路径（词边界匹配，`"Meta earnings"` 这类只提平台不谈广告的仍不命中）；`matchCategory` 改为受控分类优先于「来源即数」分类。Search Engine Land 是真反爬——`last_success_at` 从上线起始终为 null、生产出口 IP 被站点 WAF 硬拦（403≠404），话题已被 SEJ/SEJ·PPC/Marketing Dive 冗余覆盖，生产库 `enabled=false` 停用止住假警报。一轮对抗式复审又抓出两处误判（`'IG Ads'⊂"big ads"`、平台词 `"Reels"` 撞英文动词），已用 `hasBoundedPhrase` 词边界 + 下放为 `"Reels ad(s)"` 强短语修复。测试 8→19 全绿，`npm run build` 通过。
+
+**Reuse First**：完全复用现有 market-intel 平台管线，未新增能力线/表/对外 endpoint；归类内核改进是 platform-shared，任何行业版本共用；零客户名/客户 ID/行业判断写入 shared runtime。
+
+**遗留**：Search Engine Land 若要恢复，需一条能绕过反爬且可验证的抓取方式（参照 MenaBytes→Campaign Middle East 的换源处理）——本环境无法验证外部抓取，未擅自塞入未验证替代 URL。
+
+---
+
+### 2026-09-03（Magic Insight 研究报告系列：数据完整性事故 + 发布前机械闸上线，PR [#1337](https://github.com/bigbigraydeng-maker/magic-engine/pull/1337)）
+
+**发生了什么**：PM 要求把行业市场研究报告固化为 ME 常规能力，以「Magic Insight 数据研究院」名义面向 499 档高级会员出品。产出 Vol.01（中国入境游）与 Vol.02（中国→澳洲物流）两卷后，PM 追问「这里的数据是真实的吗」——如实核查后确认：**两卷在起草时未跑任何一次实时数据查询**，却给自造数字配上了权威来源标注（ABS、Google Ads Keyword Planner、国家移民管理局、Trip.com 财报），直接违反 CLAUDE.md 铁律 8。
+
+**核查规模与结果**：34 个 agent 并行核查 + 对抗性反驳，**150 条数字里仅 13 条 VERIFIED**（CONTRADICTED 64 · UNVERIFIABLE 32 · NO_SUCH_DATA_EXISTS 26 · CLOSE_BUT_OFF 15）。三类最危险的失败模式：① 引用**根本不存在的数据源航段**（FBX 大洋洲航段）；② 描述一项**从未执行的调研**（「抽样约 40 家 · 审计时间 2026-08」及 16 项百分比）；③ **真假掺杂最难识别**——北京客源表 8 国里 3 个与官方数据逐位吻合，另 5 个编造且系统性低估（法国印为 −2%，官方实为 +24.9%，正负号相反），真数字反而给假数字背了书。两卷 PDF 已删除，不入库。
+
+**上线了什么**：发布前数据核查机械闸（`src/lib/magic-insight/prepublish-check.ts`），7 条规则 5 条 blocking——数量级换算不自洽、自证清白式表述、声称调研无产物、搜索指标无 receipt、头条数字无口径标注。CLI 有 blocking 时退出码 1 可挂 CI。**Reuse First**：复用 `market-intel/grounding.ts` 的数字抽取，补上该模块注释里明确列为「不覆盖的已知边界」的中英数量级换算——那恰好是本次事故的错因。
+
+**⚠️ 闸门的设计边界（不是遗漏）**：只覆盖「机械错」与「措辞风险」两类。「编造」类文本分析看不出来，只能靠 receipt / 产物强制，所以 SOP 第 1 步是「先备齐凭证」而不是「跑脚本」。
+
+**闸门首次实战即抓出自身 3 个误报**：在 Vol.03 上运行时，多组数量级对配错对、以及把诚实的数据缺口声明误判为指标陈述（章节号 `Vol.02` 触发）。三处全部修复并补成回归用例，测试 27 → 34。
+
+**Vol.03（中国→新西兰小批量物流）为首个过闸发布的卷**：全部数字先查一手源再写，核心发现是 NZ$1,000 界线上的 56.7 倍费用悬崖（海运每票 NZ$2.09 → NZ$118.44）与一条专门约束集货拆单的合并计算规则。报告第 07 节公开列出 7 项「查不到所以没写」，包括推翻了开工时自己的假设——「新西兰生物安保全球最严」没有任何政府机构发布过跨国排名，该说法被删除。
+
+**产物**：SOP [`docs/sops/magic-insight-prepublish-data-check.md`](../sops/magic-insight-prepublish-data-check.md) · 出版系列目录 [`docs/magic-insight/`](../magic-insight/)（含 Vol.03 报告源与逐数字数据台账）· 候选登记见 [`docs/registry/platform-candidates.md`](../registry/platform-candidates.md)。
+
+**PM 待拍板（未推进）**：① 法务边界（免责条款 + 三方数据引用授权）② 编委机制（总编 / 各卷主编 / 发布前谁签字）。
+
+---
+
+### 2026-09-02（官网免费体检漏斗 schema 修复 + Insights 博客上线，PR [#1313](https://github.com/bigbigraydeng-maker/magic-engine/pull/1313) + [#1314](https://github.com/bigbigraydeng-maker/magic-engine/pull/1314)）
+
+**发生了什么**：PM 反馈 magicengine.com.au 的「免费体检」功能一直有问题。实测 + 生产库核查（`discovery_leads` 表 0 行）确认：`email` 列建表起就是 `NOT NULL`，但两步漏斗设计里 `scout.js` 第一次插入时不带 email（email 在第二步 `/api/report` 才收集），导致每次插入都撞约束失败。子牙+魏征两轮独立复审后，migration 已 apply 到生产（`glbdnayojixmexgofbsd`）放开该约束。
+
+**⚠️ 这条修复不是当前症状的唯一根因**：直接调用生产 `/api/scout` 验证 `leadId` 返回 `demo-...` 前缀，证实 magicengine.com.au 的 Cloudflare Pages 项目（独立账号，本仓库无权限访问）**完全没有配置 `SUPABASE_URL`/`SUPABASE_SERVICE_KEY`**，`storeLead()` 从未真正连接过数据库——这一步需要 PM 在 Cloudflare 后台手动补，登记在 [ROADMAP.md](../ROADMAP.md) 的手工任务里。
+
+**顺手做的**：官网 `/blog/` 上线（此前 `master_briefs` 对 ME 自己这个 client 是 0 行——ME 的内容引擎从没对自己开过工），两篇首发文章打已验证的关键词簇（`ai training for small business`、`ai agents for business automation`），FAQ/Article JSON-LD + AI 可见度块齐全，内容全部基于 `/ai-training`/`/ai-automation` 页面真实产品事实撰写。同时把全站 35 个文件里两个不一致的对外联系邮箱（`raydeng@magicengine.com.au` 112 处 + 走错域名的 `hello@magicengine.com.au` 1 处）统一成 `hello@magicengine.cloud`。中文版 `/cn/blog/` 按 PM 要求本轮先跳过。
+
+---
+
+### 2026-08-29（`content_factory_render_jobs` RLS 策略补回 `TO service_role`）
+
+**发生了什么**：复审 CTS tailor-made 行程超时修复时顺手翻到 `20260731081328_content_factory_render_jobs.sql`，发现建表 migration 漏写了 `TO service_role`（`CREATE POLICY ... FOR ALL USING (true)` 不写 `TO` 等价于 `TO PUBLIC`，对 anon 生效），跟 2026-08-03 那次 118 条策略泄露事故是同一根因、同一模板遗漏。直连生产 Supabase 查 `pg_policies` 核实：**生产库当前该策略 `roles` 已是 `{service_role}`，不是活的漏洞**——建表时间（07-31）早于 `20260803020000_rls_lock_policies_to_service_role.sql` 那次批量收紧扫描（08-03 02:00），已被顺带收紧，只是源文件本身没跟着改。
+
+**风险评估**：建表到批量扫描之间（07-31 08:45 ~ 08-03 02:00）约 3 天窗口内写入过 25 行数据，全部属于同一 `client_id`（Magic Lab Class，内部自有 IP 品牌，非付费客户），逐条核对 `scenes`/`error`/`vo_urls`/`output_url`/`clip_urls` 字段未发现邮箱、API key、签名 URL 等敏感内容；无法倒查历史访问日志确认是否真被匿名读取过，但即使读到也只是自家内容工厂做片记录，不涉及客户机密。
+
+**修复**：新增 `20260829120000_fix_content_factory_render_jobs_rls_role.sql`，用 `ALTER POLICY`（只改角色不动条件，无「表裸奔」窗口）把源码模板也钉死到 `TO service_role`，跟 `client_connectors`（`20260818000001`）、`client_projects`（`20260819000001`）同一手法——目的是让**源码**（未来任何环境从零重建这张表时会读到的模板）恢复正确，避免下次重建环境时先裸奔一段再指望批量扫描"蒙对"补上。PM 在 Supabase SQL Editor 手工执行（会话内 Supabase MCP 写操作与浏览器自动化均被 auto mode 分类器拦截，无法由 Claude 直接执行），确认 `Success`。
+
+**复审**：子牙（架构，通过）+ 魏征（挑刺）两轮。魏征发现并证伪了一个真实盲区——`client_projects` 表用小写 `create policy` 语法逃过了最初的大小写敏感 grep，且建表时间晚于 08-03 扫描、未被覆盖；核实后确认已于 08-19 由另一次修复（`20260819000001`）合并到 main，不是新坑，但暴露了排查方法论的漏洞（grep 需不区分大小写）。
+
+**未完成**：全仓库还有 ~39 个建表 migration 存在同一模板遗漏（建表时间早于 08-03 扫描，理论上生产已被顺带收紧，但除 `content_factory_render_jobs`/`client_connectors`/`client_projects` 外均未逐张拿 `pg_policies` 核实过）。已作为独立任务（子牙开出的 `task_0550d1f9`）派发，PM 已在另一个会话启动核对。
+
+**Reuse Statement**：复用既有 `ALTER POLICY`（只改角色不动条件）修复手法与验证脚本结构，与 `20260803020000`/`20260818000001`/`20260819000001` 三次同类修复完全一致，无新增抽象。改动只限 `content_factory_render_jobs` 一张表的策略角色，不动条件、不动其他表、不动 app 代码（所有读写路径本就用 service role key）。无客户/行业专属逻辑写入 shared runtime——这是平台安全基线的源码纠偏，不含任何客户判断。
+
+---
+
+### 2026-08-28（Tailor Made 长行程生成失败修复 —— 输出截断 + CF 代理超时两层根因，PR [#1212](https://github.com/bigbigraydeng-maker/magic-engine/pull/1212) + [#1226](https://github.com/bigbigraydeng-maker/magic-engine/pull/1226)）
+
+**发生了什么**：CTS 顾问给一份 27 天的「China Panorama」出行程单，后台报 `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`。查生产库发现更严重的一面：`tailor_made_itineraries` 里 `CTS-2026-0024`（终端客户 Shirley Gordon & Steven Birchall）**已经存进去了一份只有 2 天的草稿**——不是生成失败没存，是把写了一半的行程当成功结果静默落库了。状态还是 `draft` 没发出去，未造成对外事故。
+
+**两层根因（症状相同、成因无关，必须分别修）**：
+1. **输出截断**：`extractItinerary()` 的 `max_tokens` 写死 8192，是按 20 天团的量级定的（代码原注释就写着 20 天团「常跑 60-120s」，说明本来就贴着上限）。27 天撑爆上限后，Anthropic 仍会把**被截断前已生成的那部分** `tool_use.input` 当合法结果返回——所以拿到的是「前 2 天」而不是报错。
+2. **CF 代理超时**：`app.magicengine.com.au` 走 Cloudflare 代理（`dig` 出来是 CF anycast IP），对被代理请求约 100 秒掐断。27 天团实测生成要 100-180 秒（本机拿真实文件跑通：转录 5876 字符 → 抽取 115.7 秒 → 27 天全出），同步等一个 HTTP 响应必然被掐，浏览器收到 CF 自己的 HTML 错误页，`res.json()` 报的就是那句 `Unexpected token '<'`。**PR #1212 只修了第一层，部署后甲方复测仍然失败，才挖出第二层。**
+
+**修复**：
+- #1212：`max_tokens` 8192 → 16000，并加硬闸 `stop_reason === 'max_tokens'` 直接抛错——这份文件是要发给终端客户的，宁可报错重来也绝不把半截行程当完整的存下去。同一道闸补给 `pdfToText()`（PDF 转录端截断是独立的坑，截断后喂给抽取链的原料本身就是残的，且当时没走 `bypassGateway`）。
+- #1226：`import`/`extract` 从「同步等 AI 写完」改成「建任务立刻回 202 + 前端轮询」，复用仓库已有的 `public_scan_jobs` 套路，不新造一套。新表 `tailor_made_jobs`（`FOR ALL TO service_role`，落库后用**匿名身份写入探针**实测被 `42501` 拒绝，确认没重蹈 2026-08-03 那次 118 条策略泄露）。配套新增 `tailor-made-jobs-sweeper` cron（照抄 `blog-stuck-generating-sweeper`，兜底 Render 重启留下的僵尸任务）。
+
+**客户交付**：`CTS-2026-0024` 已手工补回完整 27 天并渲染出 PDF 交付甲方（顾问联系方式 / 出行人数 / 6 段国内航班号原文未提供，按「不许编」规则留空待人工补）。
+
+**质量闸**：子牙（架构）+ 魏征（挑刺）对两个 PR 各审一轮，Codex 对 #1226 审两轮共 12 条意见——修 10 条、延后 2 条（已开 [#1234](https://github.com/bigbigraydeng-maker/magic-engine/issues/1234) / [#1235](https://github.com/bigbigraydeng-maker/magic-engine/issues/1235) 跟踪，未只留在 PR 评论里）。其中两条关键：`createOrReuseJob` 前的 `getItinerary()` 落在 try/catch 外，一次 DB 抖动就会原样复现本次要修的 HTML 错误页故障；`markCompleted()` 失败日志原样 `JSON.stringify(result)` 会把终端客户姓名、顾问电话邮箱、订位号、价格写进 Render 日志，改为脱敏摘要。新增 13 个用例，每个关键断言都做过「故意改坏源码确认测试真的会红」的验证。生产上线后用 cron 路由带密钥实测 `{"swept":0}`，确认新代码与新表在生产真的连通。
+
+**已知延后**：`persistIfUnchanged()` 的乐观锁仍是「先读后写」两条查询（[#1234](https://github.com/bigbigraydeng-maker/magic-engine/issues/1234)）；轮询遇到瞬时 5xx 直接终止不重试（[#1235](https://github.com/bigbigraydeng-maker/magic-engine/issues/1235)）。`tailor-made-jobs-sweeper` 未接 healthchecks.io（无权限新建 check）。
+
+**Reuse Statement**：复用 `public_scan_jobs` 的建任务→后台跑→轮询套路、`blog-stuck-generating-sweeper` 的 sweeper 模板、`render.yaml` 的 `fromGroup: me-shared-cron-secret` 密钥模板、既有 `requireDashboardClientAccess` / `getItinerary` / `saveItinerary`。新增的 `tailor_made_jobs` 表与 `src/lib/tailor-made/jobs.ts` 是**平台共享**：按 `client_id` 参数化，无 CTS 语义硬编码，任何用 tailor-made 的客户都走同一套。无行业/客户专属逻辑写入 shared runtime。
+
+---
+
+### 2026-08-23（AI Visibility Tracker OpenAI 引擎模型退役静默失效修复，PR [#1167](https://github.com/bigbigraydeng-maker/magic-engine/pull/1167)）
+
+**发生了什么**：闽商潜在客户批量诊断任务中意外发现，`src/lib/ai-tracker/runners/openai.ts` 写死的 `gpt-4o-search-preview`（AI Visibility Tracker 每周一 cron `ai-tracker-weekly` 的 OpenAI 侧模型）被 OpenAI 于 2026-07-23 整族退役，现场 canary 实测全系列变体（含带日期快照与滚动别名）一律 404。查生产 Supabase：openai 引擎最后一次成功记录停在 2026-08-17（上周一），2026-08-17 之后到发现时为止零记录——说明本周一（08-24 01:00 UTC）的 cron 还没跑过，是抢在下一次触发前修复的，**未真正命中生产**。cron 路由是 fire-and-forget（202 立即返回）+ orchestrator 对单次 runner 失败有 try/catch 兜底，healthchecks.io 只在 curl 拿到 202 时 ping 成功，不会因为下游任务失败报警——是本条铁律要求专门核实、单独排查的一类静默失效。
+
+**受影响客户**：核实后是 `client_status='active'` 且有启用 tracker 问句的 5 个：CTS Tours NZ / Roman HU / Oztop / Magic Lab / Magic Lab Class。（有 14 个客户有 `ai_visibility_queries.enabled=true` 记录，但另外 9 个是 `prospect` 或 `archived` 状态，cron 不会拉起，不受影响。）
+
+**修复**：`SEARCH_MODEL` 换成 `gpt-5-search-api`——现场 canary 验证（直连 OpenAI + 经生产实际的 Cloudflare AI Gateway 路径）确认可用，且返回的 `annotations[].url_citation` 结构与既有 `extractCitations()` 解析逻辑完全兼容，零解析代码改动。定价常量按 developers.openai.com 官方定价页同步更新（input $2.5/M → $1.25/M，output 维持 $10/M）。**未采信** WebFetch 摘要一度提到的候选替代模型 `gpt-5.6-terra`——现场 canary 实测该模型不支持 `web_search_options`（返回 400），确认是误导信息。
+
+**排查范围**：`runners/claude.ts`（Anthropic 侧，P7.1.13 限流下默认关闭）、`parser.ts`/`industry-ai-visibility/collector.ts`/`market-intel/summarize.ts` 用的 `gpt-4o-mini`、`geo-baseline/transport-openai.ts`（Roman GEO baseline v1，已冻结，`modelVersion` 来自 PM 冻结的外部 manifest，代码零硬编码）——canary/代码核查后确认均不受影响，未一并改动。
+
+**质量闸**：`npm run type-check`（改动文件零新增错误）· `npm run build` 通过 · `npx vitest run` 47 文件 786 用例全绿 · 子牙（架构）+ 魏征（挑刺，独立重跑 canary 与 Supabase 核实）两轮复审，均 APPROVE；魏征复审发现并修正了 PR 描述里"14 个客户受影响"的错误统计（应为 5 个 active）。PM `go merge` 后合并。
+
+**Reuse Statement**：复用既有 `getOpenAIClient()`（Cloudflare AI Gateway 工厂）、既有 `extractCitations()` 解析逻辑、既有 runner 契约（`RunnerInput`/`RunnerOutput`）——响应结构兼容，零新增能力，只换了模型名常量与单价常量。无客户/行业专属逻辑写入 shared runtime。
+
+---
+
+### 2026-08-20（Magic Insight 上线 —— PM 每日全球 AI / 数字营销资讯雷达，PR [#1112](https://github.com/bigbigraydeng-maker/magic-engine/pull/1112)）
+
+**做了什么**：新增 `market-intel-daily` cron，每天从 12 个已验证的英文 RSS 信源（TechCrunch AI、VentureBeat AI、Search Engine Land/Journal、Marketing Dive、AdExchanger、Digiday、Social Media Today、HubSpot、PPC.org、OpenAI News 等）抓取 6 个类目（AI 创业 / 营销 / Meta 广告 / Google 广告 / TikTok 广告 / 大模型 Token 定价）的条目，AI 摘要成中文并做**事实核对**（摘要里的专有名词/数字必须能在原文摘录里找到，核对不过不进邮件、留表供人工翻查），跨信源去重，按类目健康度监控，每天发一封邮件到 `hello@`。四张表 `market_intel_*`（sources/items/digests/daily_notes）全部 `service_role`-only RLS，已 apply 到生产并独立验证。
+
+**范围演变（记录在案，供以后查证）**：2026-08-19 曾有一次通过 GitHub PR 评论触发 `claude[bot]` 的范围削减尝试（去掉建表和 AI 摘要，改成极简版）。PM 2026-08-20 明确拍板保留完整版，用 `git merge -s ours`（非 force-push）正式覆盖那次削减，保留完整提交历史。
+
+**未完成**：`render.yaml` 里 `market-intel-daily` 还没接 healthchecks.io 监控 ID，需要有 healthchecks.io 权限的人手动申请填入。
+
+**设计文档**：[docs/specs/2026-08-20-market-intel-digest-design.md](../specs/2026-08-20-market-intel-digest-design.md)（子牙+魏征设计审 v2，风险分级 B）。
+
+**Reuse Statement**：复用了本仓库既有的 cron 框架（`startCronRun`/`CronRunHandle`）、邮件发送封装（`meMailFrom`/`ME_MAIL_TO_ADDRESS`）、OpenAI handler-内初始化模式、`render.yaml` 的 `fromGroup` cron secret 模板。四张新表全部是 ME 自身内容资产（不挂 `client_id`），属于**平台共享**范畴——不是任何客户的私有数据，也不含行业/客户判断写进 shared runtime。没有可下沉的行业/客户维度（这是内部工具，不面向客户交付）。
+
+---
+
 ### 2026-08-17（WP05 GEO Module v1 上线 —— Roman AI 可见度首个诊断可读出）
 
 **发生了什么**：把 Roman 一个月前测出来的 GEO 基线（AI 答案样本），第一次真的读成「有支柱、有严重度、有处方」的诊断。之前只有原始答案 + 引用覆盖率，看不出「AI 是不是把 Roman 作为**人**在答案里提出来」。
@@ -2185,4 +2718,3 @@ P33.9（PR #301/#302 — Goal filter 状态 chips 数字跟随）/ P33.10（未�
 
 
 ---
-

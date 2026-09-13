@@ -25,6 +25,10 @@ import {
   KERNEL_NO_SUPABASE_ADMIN_DIRS,
   KERNEL_FORBIDDEN_MODULE_IMPORTS,
   ACTION_BRIDGE_FORBIDDEN_IMPORTS,
+  ACTION_SUBMISSION_FORBIDDEN_IMPORTS,
+  KERNEL_RUNNER_ALLOWED_CALLER_DIRS,
+  KERNEL_RUNNER_SOURCE_MODULES,
+  KERNEL_RUNNER_SYMBOLS,
   MIGRATION_VERSION_COLLISIONS_GRANDFATHERED,
 } from '../boundaries'
 import { outwardBlockReason } from '../outward-authorization'
@@ -200,8 +204,8 @@ function stripComments(src: string, fileName = 'scan.ts'): string {
     jsxTextSpans.some((span) => pos >= span.pos && pos < span.end)
 
   const chars = src.split('')
-  // 用 forEach 而不是 `for…of ranges.values()`：仓库 tsconfig 没设 target，
-  // 直接迭代 Map 的迭代器会撞 TS2802（要 downlevelIteration）。
+  // 用 forEach 而不是 `for…of ranges.values()`：直接迭代 Map 的迭代器需要
+  // tsconfig 的 target 够高（否则撞 TS2802），forEach 不挑 target，更稳。
   ranges.forEach((r) => {
     if (startsInsideJsxText(r.pos)) return
     for (let i = r.pos; i < r.end && i < chars.length; i++) {
@@ -1633,6 +1637,202 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       expect(stripComments(jsx, KERNEL_JSX)).not.toContain('@/lib/growth')
     })
   })
+
+  /**
+   * 🔴 `src/lib/action-submission/**` —— PageOptimizationRequest → Kernel 的
+   *    平台级 submission adapter。它的物理边界跟 bridge 类似（不许 provider
+   *    write / capability / 域模块 / 直连 supabase），但**允许** import
+   *    Kernel 与 bridge —— 这正是它的工作。
+   */
+  it('🔴 action-submission 目录里没有一处 import 禁止列表里的模块', () => {
+    const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/action-submission/'))
+      .filter((f) => !isTest(f))
+      .flatMap((f) => violationReasons(f, readCode(f), ACTION_SUBMISSION_FORBIDDEN_IMPORTS))
+
+    expect(
+      violations,
+      'action-submission 是 submission boundary，不是 pipeline / executor。\n' +
+        'capability / provider-write / 域模块 / legacy 执行路径 / page-optimization 的\n' +
+        '子路径运行时实现都是被禁的 —— 数据访问一律走 KernelDeps 注入。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
+
+  /**
+   * 🔴 **Kernel progression 符号只有一条对外调用面**。
+   *
+   *    `runAction` / `submitActionRun` / `approveAndRun` / `rejectPendingRun` /
+   *    `resumeDeadLetterRun` / `recoverDeniedRun` 是 Kernel 对外仅有的几个
+   *    推 run 状态机的入口。允许在生产代码里 import 它们的目录只有三处：
+   *    Kernel 自己 + `src/lib/action-submission/**` + `src/lib/kernel-approval/**`。
+   *
+   * 🔴 **同时盯两条源模块路径**：
+   *    · `@/lib/kernel/runner`（定义地）
+   *    · `@/lib/kernel`        （barrel re-export，见 kernel/index.ts）
+   *
+   *    只盯 runner 会漏 barrel bypass：`import { runAction } from '@/lib/kernel'`
+   *    完全绕过一条"只 ban 了 runner 路径"的规则（Codex #1101 PATCH #3）。
+   *
+   * 🔴 **符号级判据，不是模块级** —— `@/lib/kernel` 还导出类型、`createKernel`、
+   *    `ACTION_REGISTRY` 之类的合法东西。整条 barrel 一刀切 ban 掉会误伤
+   *    大量合法 import。只在**具名导入 progression 符号**时才算违规。
+   *    type-only imports 不算（拿签名类型不能真调 progression）。
+   */
+  const RUNNER_MODULES = new Set<string>(KERNEL_RUNNER_SOURCE_MODULES)
+  const RUNNER_SYMBOLS = new Set<string>(KERNEL_RUNNER_SYMBOLS)
+
+  /**
+   * 逐个 ImportDeclaration / ExportDeclaration 检查：
+   *   · moduleSpecifier 是 RUNNER_MODULES 之一（折算完点段、baseUrl、相对路径之后）
+   *   · 且具名导入 / 具名再导出的名字 hit RUNNER_SYMBOLS（走 propertyName 拿原名）
+   *   · 且不是 type-only（clause / specifier 两级都要看）
+   * 命中即返回一条诊断行；没命中返回 []。
+   */
+  function runnerSymbolViolations(sourcePath: string, code: string): string[] {
+    const sf = parseSource(code, sourcePath)
+    const violations: string[] = []
+
+    const inspectImport = (node: ts.ImportDeclaration): void => {
+      if (!ts.isStringLiteralLike(node.moduleSpecifier)) return
+      const canonical = canonicalSpecifier(sourcePath, node.moduleSpecifier.text)
+      if (!RUNNER_MODULES.has(canonical)) return
+      const clause = node.importClause
+      if (!clause) return
+      // `import type { runAction } from '...'` —— 整条都是 type-only，不算
+      if (clause.isTypeOnly) return
+      const bindings = clause.namedBindings
+      if (!bindings || !ts.isNamedImports(bindings)) return
+      for (const el of bindings.elements) {
+        if (el.isTypeOnly) continue // 单条 `type` 修饰的也不算
+        const originalName = el.propertyName?.text ?? el.name.text
+        if (RUNNER_SYMBOLS.has(originalName)) {
+          violations.push(`${sourcePath} → import { ${originalName} } from '${canonical}'`)
+        }
+      }
+    }
+
+    const inspectExport = (node: ts.ExportDeclaration): void => {
+      if (!node.moduleSpecifier || !ts.isStringLiteralLike(node.moduleSpecifier)) return
+      const canonical = canonicalSpecifier(sourcePath, node.moduleSpecifier.text)
+      if (!RUNNER_MODULES.has(canonical)) return
+      // 🔴 `export type { runAction } from '...'` 一样不算 —— 只是把类型透传出去
+      if (node.isTypeOnly) return
+      const clause = node.exportClause
+      if (!clause || !ts.isNamedExports(clause)) return
+      for (const el of clause.elements) {
+        if (el.isTypeOnly) continue
+        const originalName = el.propertyName?.text ?? el.name.text
+        if (RUNNER_SYMBOLS.has(originalName)) {
+          violations.push(`${sourcePath} → export { ${originalName} } from '${canonical}'`)
+        }
+      }
+    }
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) inspectImport(node)
+      else if (ts.isExportDeclaration(node)) inspectExport(node)
+      node.forEachChild(visit)
+    }
+    visit(sf)
+    return violations
+  }
+
+  it('🔴 Kernel progression 符号（runAction/submitActionRun/…）只能被 Kernel / action-submission / kernel-approval import', () => {
+    const allowedDirs = KERNEL_RUNNER_ALLOWED_CALLER_DIRS
+    const violations = ALL_FILES.filter((f) => !isTest(f))
+      .filter((f) => !allowedDirs.some((d) => f.startsWith(d)))
+      .flatMap((f) => runnerSymbolViolations(f, readCode(f)))
+
+    expect(
+      violations,
+      'Kernel progression 符号是执行内核的对外入口（对两条源路径同时生效：\n' +
+        '@/lib/kernel/runner 与 @/lib/kernel barrel）。\n' +
+        '业务要让系统做一件事，只有一条路：调 action-submission 里的 caller，\n' +
+        '让它去构造 SubmitActionInput、走 bridge、进 Kernel。\n' +
+        '新增一条 caller 需要拆一次架构评审（改 boundaries.ts 是一次要过 review 的 diff）。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
+
+  /**
+   * 🔴 **闸的可咬性**（Codex #1101 PATCH #3 mutation requirement）：
+   *
+   *    造几段合成源码，扔到"允许目录之外"的路径下扫，证明闸真的会拒。这一组是
+   *    对上一条 real-file 检查的**反面证明** —— 真实文件永远绿，绿得跟"判据整个失效"
+   *    一模一样，必须有合成用例证明它能咬人。同时用**合法**样例证明没有一刀切
+   *    误伤（type-only、createKernel、类型 import 都要放行）。
+   */
+  describe('🔴 progression 符号 barrel 闸可咬性（合成源码）', () => {
+    const OUTSIDE_FILE = 'src/lib/some-other-module/example.ts'
+    const OTHER_APP_FILE = 'src/app/api/foo/route.ts'
+
+    const FORBIDDEN_FORMS: Array<[label: string, code: string]> = [
+      ['barrel 具名 import runAction', `import { runAction } from '@/lib/kernel'`],
+      ['barrel 具名 import submitActionRun', `import { submitActionRun } from '@/lib/kernel'`],
+      ['barrel 具名 import approveAndRun', `import { approveAndRun } from '@/lib/kernel'`],
+      ['runner 具名 import runAction', `import { runAction } from '@/lib/kernel/runner'`],
+      ['barrel 混合 import 里夹 runAction', `import { ACTION_REGISTRY, runAction } from '@/lib/kernel'`],
+      ['barrel 具名 import 带别名', `import { runAction as go } from '@/lib/kernel'`],
+      ['再导出 runAction from barrel', `export { runAction } from '@/lib/kernel'`],
+      ['再导出 runAction from runner', `export { runAction } from '@/lib/kernel/runner'`],
+    ]
+
+    it.each(FORBIDDEN_FORMS)('🔴 允许目录之外：%s → 必须被发现', (_label, code) => {
+      const violations = runnerSymbolViolations(OUTSIDE_FILE, code)
+      expect(violations.length, `should have hit for: ${code}`).toBeGreaterThan(0)
+    })
+
+    it('🔴 API 路由目录里的 barrel 具名 import runAction 一样命中（防被路由层直接拉入）', () => {
+      expect(runnerSymbolViolations(OTHER_APP_FILE, `import { runAction } from '@/lib/kernel'`).length).toBeGreaterThan(0)
+    })
+
+    const ALLOWED_FORMS: Array<[label: string, code: string]> = [
+      ['barrel type import 不误伤', `import type { KernelDeps } from '@/lib/kernel'`],
+      ['barrel type-only 具名（合法）', `import { type ActionRunOutcome } from '@/lib/kernel'`],
+      ['barrel createKernel 合法', `import { createKernel } from '@/lib/kernel'`],
+      ['barrel ACTION_REGISTRY 合法', `import { ACTION_REGISTRY } from '@/lib/kernel'`],
+      ['runner type-only import', `import type { SubmitActionInput } from '@/lib/kernel/runner'`],
+      ['export type 再导出不算', `export type { KernelDeps } from '@/lib/kernel'`],
+      ['无关模块无关名字', `import { something } from '@/lib/other'`],
+    ]
+
+    it.each(ALLOWED_FORMS)('✅ 允许目录之外：%s → 不误报', (_label, code) => {
+      expect(runnerSymbolViolations(OUTSIDE_FILE, code)).toEqual([])
+    })
+  })
+
+  /**
+   * 🔴 caller 里**不许 hardcode** ActionKey 字面量。
+   *
+   *    ActionKey 只能从 `mapCandidateIdentity(...)` 的返回值拿。写死一个字面量 =
+   *    跳过 bridge = 又开了第二条 submit path。Spec §6 明列。
+   *
+   *    这里穷举本 spec 冻结前后可能出现的 page 相关 key（`page.apply_optimization_request`
+   *    在 main 上不存在，但在 #1097 branch 里存在），并留一条通用的 `page.*` 前缀检查。
+   */
+  it('🔴 action-submission 里不许出现 hardcode 的 ActionKey 字面量（page.* 系列）', () => {
+    const HARDCODED_ACTION_KEY_PATTERNS = [
+      /['"`]page\.apply_optimization_request['"`]/,
+      /['"`]page\.[a-z_]+['"`]/,
+    ]
+    const violations: string[] = []
+    for (const file of ALL_FILES) {
+      if (!file.startsWith('src/lib/action-submission/')) continue
+      if (isTest(file)) continue
+      const code = readCode(file)
+      for (const pattern of HARDCODED_ACTION_KEY_PATTERNS) {
+        const match = code.match(pattern)
+        if (match) violations.push(`${file} contains ${match[0]}`)
+      }
+    }
+
+    expect(
+      violations,
+      'ActionKey 只能从 mapCandidateIdentity 的返回值拿 —— hardcode 一个 page.* key\n' +
+        '等于跳过 bridge。Spec §6：禁止 submitActionRun({actionKey: "page.apply_optimization_request", ...})。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('L2 边界：授权上下文不许在别处被造出来', () => {

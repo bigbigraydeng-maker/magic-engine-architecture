@@ -64,7 +64,7 @@ jobs:
       contains(github.event.review.user.login, 'chatgpt-codex-connector') &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == 'main' &&
-      startsWith(github.event.pull_request.head.ref, 'claude/me2-') &&
+      startsWith(github.event.pull_request.head.ref, 'claude/') &&
       github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     # 10 minutes: "Decide next stage" can spend up to ~4 of these polling the

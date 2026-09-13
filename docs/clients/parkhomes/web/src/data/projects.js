@@ -10,9 +10,10 @@ export const projects = [
     pill: 'pill-sell',
     eyebrow: 'Rosehill · Auckland',
     tagline: 'Tranquil Surroundings. Contemporary Living.',
-    cardLine: '107 homes along a river corridor, Park Estate Road, Rosehill.',
-    listLine: '107 homes along a river corridor, Park Estate Road, Rosehill. Two to five bedrooms.',
+    cardLine: '104 homes along a river corridor, Park Estate Road, Rosehill.',
+    listLine: '104 homes along a river corridor, Park Estate Road, Rosehill. Two to five bedrooms.',
     price: 'From $650k',
+    metaDescription: '104 new homes from $650k in a masterplanned riverside community, Park Estate Road, Rosehill. Two to five bedrooms — now selling.',
     heading: 'A masterplanned community on Park Estate Road',
     // Official copy — from parkhomes.nz/projects
     intro: [
@@ -21,33 +22,49 @@ export const projects = [
       'Built with disciplined project coordination and rigorous quality supervision, Riverside reflects our capability to deliver large-scale communities with both vision and precision — shaping not just homes, but an enduring neighbourhood.',
     ],
     facts: [
-      ['Homes', '107'],
+      ['Homes', '104'],
       ['Bedrooms', '2 – 5'],
       ['Homes from', '$650k'],
       ['Completion', '2026 – 28'],
     ],
     footerAddress: 'Riverside · 115 Park Estate Road, Rosehill, Auckland',
     group: 'available',
-    hero: '/img/riverside/rv-masterplan.jpg',
-    card: '/img/riverside/rv-aerial-build.jpg',
-    imageNote: 'Masterplan and site photography supplied by the developer. Masterplan indicative only.',
+    // 2026-08-21: replacement aerials supplied by the client, cropped to the
+    // completed section of this multi-stage site and colour-corrected (no
+    // structures removed/altered) — the wider originals also show other
+    // stages still under construction, which is why the crop is tight.
+    hero: '/img/riverside/rv-aerial-finished-1.webp',
+    card: '/img/riverside/rv-aerial-finished-1.webp',
+    imageNote: 'Site photography supplied by the developer, cropped to the completed section of this multi-stage development.',
     images: [
-      { src: '/img/riverside/rv-masterplan.jpg',      alt: 'Riverside — masterplan of the community', wide: true },
-      { src: '/img/riverside/rv-aerial-build.jpg',    alt: 'Riverside — homes under construction, aerial view' },
-      { src: '/img/riverside/rv-aerial-motorway.jpg', alt: 'Riverside — the site in its wider setting' },
-      { src: '/img/riverside/rv-earthworks.jpg',      alt: 'Riverside — earthworks and civil construction' },
+      { src: '/img/riverside/rv-aerial-finished-1.webp', alt: 'Riverside — completed homes, aerial view', wide: true },
+      { src: '/img/riverside/rv-aerial-finished-2.webp', alt: 'Riverside — completed homes, aerial view' },
+      { src: '/img/riverside/rv-aerial-finished-3.webp', alt: 'Riverside — completed homes, aerial view' },
+    ],
+    // Riverside is a masterplanned community — individual lots list under their
+    // own internal street names (Aratuhia Lane, Longview Oak Lane), not "Park
+    // Estate Road" itself, and suburb tagging is inconsistent between listings
+    // (some "Rosehill", some "Papakura") so a keyword search misses results.
+    // PM-confirmed live listing 2026-08-21, one of many lots in this development.
+    listingsSearchUrl: 'https://www.raywhite.co.nz/auckland/papakura/papakura/MSB31949',
+    listingsLabel: 'View a current listing on Ray White →',
+    relatedArticles: [
+      { title: 'Drury-Opāheke Growth and What It Means for Rosehill Property Buyers', href: '/journal/drury-growth-rosehill-papakura-property/' },
+      { title: 'Papakura rental yields: why investors are looking south of Auckland', href: '/journal/papakura-rental-yield-investment-guide/' },
+      { title: "Rosehill and Papakura, Auckland: a buyer's data guide", href: '/journal/rosehill-papakura-suburb-data-guide/' },
     ],
   },
   {
     slug: 'howick',
     name: 'Howick',
-    status: 'Under Construction',
-    pill: 'pill-build',
+    status: 'Now Selling',
+    pill: 'pill-sell',
     eyebrow: 'Howick · East Auckland',
     tagline: 'Modern Comfort in a Well-Established Community',
     cardLine: 'Five homes on Libby Lane, Howick.',
-    listLine: 'Five homes on Libby Lane, Howick. Three to four bedrooms, 130–149m².',
+    listLine: 'Five homes on Libby Lane, Howick. Three to four bedrooms, 125.5–150m².',
     price: 'From $900k',
+    metaDescription: 'Five architecturally considered homes in Howick, East Auckland. Three to four bedrooms, 125.5–150m², from $900k — now selling.',
     heading: 'Modern comfort in a well-established community',
     // Official copy — from parkhomes.nz/projects
     intro: [
@@ -55,22 +72,47 @@ export const projects = [
       'Spacious interiors, carefully selected materials, and thoughtful floorplans ensure each home delivers comfort, functionality, and lasting appeal.',
       'Built with precision and supported by a strong construction network, this boutique release reflects Park Homes’ commitment to excellence.',
     ],
+    // Facts cross-checked 2026-08-19 against the live TradeMe + Ray White listings
+    // (Roman Hu, Ray White Mission Bay) — those are treated as the source of truth
+    // over the earlier "Bulk Listings Extra Info Sheet", which had Lot 2 down as
+    // 3-bath; the live listing says 2-bath. Size range matches both portals'
+    // listing copy verbatim: "Approximately 125.5sqm-150sqm of floor area".
     facts: [
       ['Homes', '5'],
       ['Bedrooms', '3 – 4'],
-      ['Size', '130–149 m²'],
+      ['Size', '125.5–150 m²'],
       ['From', '$900k'],
     ],
     footerAddress: 'Howick · 3 Libby Lane, Howick, Auckland',
     group: 'available',
-    hero: '/img/howick/hw-render-dusk.jpg',
-    card: '/img/howick/hw-aerial-complete.jpg',
-    imageNote: 'Renders and site photography supplied by the developer.',
+    hero: '/img/howick/hw-street-front.webp',
+    card: '/img/howick/hw-street-front.webp',
+    imageNote: 'Site photography supplied by the developer.',
     images: [
-      { src: '/img/howick/hw-render-dusk.jpg',     alt: 'Howick — contemporary home at dusk', wide: true },
-      { src: '/img/howick/hw-aerial-complete.jpg', alt: 'Howick — completed homes, aerial view' },
-      { src: '/img/howick/hw-slope.jpg',           alt: 'Howick — homes in their landscaped setting' },
-      { src: '/img/howick/hw-context-aerial.jpg',  alt: 'Howick — the established East Auckland neighbourhood' },
+      { src: '/img/howick/hw-street-front.webp',      alt: 'Howick — completed homes, street view', wide: true },
+      { src: '/img/howick/hw-street-side.webp',       alt: 'Howick — completed homes, side view' },
+      { src: '/img/howick/hw-aerial-finished-1.webp', alt: 'Howick — completed homes, aerial view' },
+      { src: '/img/howick/hw-aerial-finished-2.webp', alt: 'Howick — completed homes, aerial view' },
+      { src: '/img/howick/hw-context-aerial.webp',    alt: 'Howick — the established East Auckland neighbourhood' },
+    ],
+    // Individual floor plans, supplied by Roman Hu (Ray White Mission Bay) via the
+    // client. Specs cross-checked against the live TradeMe + Ray White listings
+    // 2026-08-19 — Lots 1–4 are currently listed for sale; Lot 5 is not (its specs
+    // come from the Bulk Listings sheet only, so it's kept unlisted-but-shown here).
+    floorPlans: [
+      { src: '/img/howick/floorplans/hw-fp-lot1.webp', lot: 'Lot 1', beds: 3, baths: 3, floorArea: '132 m²', landArea: '179 m²', listingUrl: 'https://www.raywhite.co.nz/auckland/manukau-city/howick/MSB31981' },
+      { src: '/img/howick/floorplans/hw-fp-lot2.webp', lot: 'Lot 2', beds: 4, baths: 2, floorArea: '150 m²', landArea: '145 m²', listingUrl: 'https://www.raywhite.co.nz/auckland/manukau-city/howick/MSB31982' },
+      { src: '/img/howick/floorplans/hw-fp-lot3.webp', lot: 'Lot 3', beds: 3, baths: 2, floorArea: '125.5 m²', landArea: '130 m²', listingUrl: 'https://www.raywhite.co.nz/auckland/manukau-city/howick/MSB31983' },
+      { src: '/img/howick/floorplans/hw-fp-lot4.webp', lot: 'Lot 4', beds: 3, baths: 2, floorArea: '125.7 m²', landArea: '134 m²', listingUrl: 'https://www.raywhite.co.nz/auckland/manukau-city/howick/MSB31980' },
+      { src: '/img/howick/floorplans/hw-fp-lot5.webp', lot: 'Lot 5', beds: 4, baths: 2, floorArea: '142.7 m²', landArea: '386 m²', listingUrl: null },
+    ],
+    // Aggregate search — deliberately not one specific lot, since which lots are
+    // still available changes over time; this always reflects what's actually live.
+    listingsSearchUrl: 'https://www.raywhite.co.nz/listing?keywords=Libby%20Lane',
+    relatedArticles: [
+      { title: "Howick's population growth: what it means for the property market", href: '/journal/howick-population-growth-property-market/' },
+      { title: 'Why Howick commands some of Auckland’s highest rents', href: '/journal/howick-rental-market-new-build-buyers/' },
+      { title: "East Auckland's infrastructure and growth outlook: what it means for Howick buyers", href: '/journal/howick-infrastructure-growth-outlook/' },
     ],
   },
   {
@@ -83,6 +125,7 @@ export const projects = [
     cardLine: 'Four large five-bedroom homes near Castor Bay.',
     listLine: 'Four large five-bedroom homes near Castor Bay. 260–280m².',
     price: '$2m+',
+    metaDescription: 'Four boutique five-bedroom homes moments from Castor Bay beach, North Shore. 260–280m², from $2m+. Register your interest today.',
     heading: 'Coastal living. Elevated design.',
     // Official copy — from parkhomes.nz/projects
     intro: [
@@ -99,18 +142,18 @@ export const projects = [
     footerAddress: 'Castor Bay · 76a Beamor Rd',
     group: 'coming',
     // Client-supplied renders (2026-07-23)
-    hero: '/img/castor-bay/cb-hero.jpg',
-    card: '/img/castor-bay/cb-home-dusk.jpg',
+    hero: '/img/castor-bay/cb-hero.webp',
+    card: '/img/castor-bay/cb-home-dusk.webp',
     images: [
-      { src: '/img/castor-bay/cb-hero.jpg',           alt: 'Castor Bay — the development at dusk', wide: true },
-      { src: '/img/castor-bay/cb-street-day.jpg',     alt: 'Castor Bay — street view by day' },
-      { src: '/img/castor-bay/cb-elevation-dusk.jpg', alt: 'Castor Bay — elevation at dusk' },
-      { src: '/img/castor-bay/cb-front-tall.jpg',     alt: 'Castor Bay — front elevation' },
-      { src: '/img/castor-bay/cb-home-dusk.jpg',      alt: 'Castor Bay — individual home at dusk' },
-      { src: '/img/castor-bay/cb-block-dusk.jpg',     alt: 'Castor Bay — homes at dusk' },
-      { src: '/img/castor-bay/cb-slope.jpg',          alt: 'Castor Bay — hillside outlook' },
-      { src: '/img/castor-bay/cb-garage-dusk.jpg',    alt: 'Castor Bay — entry and garaging at dusk' },
-      { src: '/img/castor-bay/cb-garage-day.jpg',     alt: 'Castor Bay — entry and garaging by day' },
+      { src: '/img/castor-bay/cb-hero.webp',           alt: 'Castor Bay — the development at dusk', wide: true },
+      { src: '/img/castor-bay/cb-street-day.webp',     alt: 'Castor Bay — street view by day' },
+      { src: '/img/castor-bay/cb-elevation-dusk.webp', alt: 'Castor Bay — elevation at dusk' },
+      { src: '/img/castor-bay/cb-front-tall.webp',     alt: 'Castor Bay — front elevation' },
+      { src: '/img/castor-bay/cb-home-dusk.webp',      alt: 'Castor Bay — individual home at dusk' },
+      { src: '/img/castor-bay/cb-block-dusk.webp',     alt: 'Castor Bay — homes at dusk' },
+      { src: '/img/castor-bay/cb-slope.webp',          alt: 'Castor Bay — hillside outlook' },
+      { src: '/img/castor-bay/cb-garage-dusk.webp',    alt: 'Castor Bay — entry and garaging at dusk' },
+      { src: '/img/castor-bay/cb-garage-day.webp',     alt: 'Castor Bay — entry and garaging by day' },
     ],
   },
   {
@@ -123,6 +166,7 @@ export const projects = [
     cardLine: 'Four four-to-five-bedroom homes, Forrest Hill Road.',
     listLine: 'Four four-to-five-bedroom homes, Forrest Hill Road. Around 200m². RC approved.',
     price: '$1.8m+',
+    metaDescription: 'Four four-to-five-bedroom family homes on Forrest Hill Road, North Shore — resource consent approved, around 200m², from $1.8m+.',
     heading: 'Smart family living in a prime school zone',
     // Official copy — from parkhomes.nz/projects
     intro: [
@@ -136,20 +180,29 @@ export const projects = [
       ['Size', '~200 m²'],
       ['From', '$1.8m+'],
     ],
-    footerAddress: 'Forrest Hill · 129 Forest Hill Rd',
+    footerAddress: 'Forrest Hill · 129 Forrest Hill Rd',
     group: 'coming',
-    images: [],
+    // Client-supplied renders (2026-09-12, via email).
+    hero: '/img/forrest-hill/fh-render-1.webp',
+    card: '/img/forrest-hill/fh-render-1.webp',
+    images: [
+      { src: '/img/forrest-hill/fh-render-1.webp', alt: 'Forrest Hill — artist’s impression', wide: true },
+      { src: '/img/forrest-hill/fh-render-2.webp', alt: 'Forrest Hill — artist’s impression' },
+      { src: '/img/forrest-hill/fh-render-3.webp', alt: 'Forrest Hill — artist’s impression' },
+      { src: '/img/forrest-hill/fh-render-4.webp', alt: 'Forrest Hill — artist’s impression' },
+    ],
   },
   {
     slug: 'greenview',
     name: 'Greenview',
-    status: 'Planning',
+    status: 'Under Construction',
     pill: 'pill-build',
     eyebrow: 'Reynolds Road · Auckland',
     tagline: 'Elevated Living. Beyond Expectations.',
     cardLine: 'Ten three-to-four-bedroom homes, Reynolds Road.',
     listLine: 'Ten three-to-four-bedroom homes, Reynolds Road. Consents approved.',
     price: 'From $750k',
+    metaDescription: 'Ten three-to-four-bedroom homes on Reynolds Road with consents approved, around 140m², from $750k. An elevated, green outlook.',
     heading: 'Elevated living. Beyond expectations.',
     // Copy adapted from parkhomes.nz/projects.
     // RESOLVED (PM ruling, 2026-07-23): Jason's intake form is the authoritative source.
@@ -169,7 +222,17 @@ export const projects = [
     ],
     footerAddress: 'Greenview · 10–12 Reynolds Rd, Pokihui',
     group: 'coming',
-    images: [],
+    // Client-supplied renders (2026-08-31). A third supplied photo (active
+    // earthworks) is excluded from public display per the no-construction-
+    // imagery policy applied sitewide to Riverside/Howick — moved out of
+    // web/public (see ../../renders-raw/gv-earthworks-unused.webp) so it is
+    // not copied into the deployed site.
+    hero: '/img/greenview/gv-render-1.webp',
+    card: '/img/greenview/gv-render-1.webp',
+    images: [
+      { src: '/img/greenview/gv-render-1.webp', alt: 'Greenview — artist’s impression', wide: true },
+      { src: '/img/greenview/gv-render-2.webp', alt: 'Greenview — artist’s impression' },
+    ],
   },
 ];
 

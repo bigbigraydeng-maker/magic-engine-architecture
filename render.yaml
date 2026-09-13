@@ -112,10 +112,11 @@ services:
   # whose UI was closed mid-run would otherwise sit running forever.
   # healthchecks.io: zhangqian-sweeper (071910fe-b9b7-435d-8b72-f141818eb03d)
   # 2026-08-03 降频 */15 → */30：24h 内 96 次运行全部零产出。纯超时兜底，从不干活。
-  # 只降到 30 分钟而非每小时：超时阈值是 6 分钟，每小时跑会让真卡住的任务在界面上
-  # 「运行中」挂最多 66 分钟，FDE 会误判系统坏了；30 分钟档最坏 36 分钟。
+  # 只降到 30 分钟而非每小时：超时阈值是 12 分钟（2026-08-25 从 6 分钟上调，见
+  # src/lib/zhangqian/agent.ts 的 call budget 段），每小时跑会让真卡住的任务在
+  # 界面上「运行中」挂最多 72 分钟，FDE 会误判系统坏了；30 分钟档最坏 42 分钟。
   # ⚠️ 2026-08-16 [OPS] 降频 */30 → 每小时第 35 分 —— 上面那句「不降到每小时」被 PM
-  #    在省钱盘点里显式推翻。代价照旧成立：真卡住的发现任务在界面上最坏挂 66 分钟。
+  #    在省钱盘点里显式推翻。代价照旧成立：真卡住的发现任务在界面上最坏挂 72 分钟。
   #    工厂 / 发现线开工后若 FDE 反馈「看着像坏了」，第一步就是把这条改回去。
   #    回滚：schedule 改回 "*/30 * * * *"。
   - type: cron
@@ -194,6 +195,27 @@ services:
     envVars:
       - key: CRON_SECRET
         sync: false
+
+  # Marks tailor_made_jobs stuck at status='queued'/'running' (>10 min) as failed.
+  # Same pattern as blog-stuck-generating-sweeper above: import/extract 建完任务行
+  # 立刻回 202，AI 生成走 fire-and-forget；Render 部署重启会把半路的任务永远
+  # 晾在 queued/running。getJob()/createOrReuseJob() 已经有惰性自愈（被轮询或
+  # 被同一份行程再次建任务时会自动纠正），这个 cron 只兜底"从此没人再碰"的情况。
+  # 见 CTS 2027 China Panorama 报障后续修复（tailor_made_jobs 表新增）。
+  # 密钥用 fromGroup 自动挂，不要改回 `sync: false`——那条路径不会真的给新服务
+  # 灌值，line ~980 那条 cron 的注释已经记过一次这个坑（连续 401 且没人发现）。
+  # ⚠️ 没有配 healthchecks.io ping —— 没有权限新建 check，PM 有空的话在
+  #    healthchecks.io 建一个再把 hc-ping 行加回来（参照上面 blog-stuck-generating 的写法）。
+  - type: cron
+    name: tailor-made-jobs-sweeper
+    env: node
+    schedule: "*/30 * * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 60 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/tailor-made-jobs-sweeper
+    envVars:
+      - fromGroup: me-shared-cron-secret
 
   # Weekly AI Visibility Tracker — every Monday at 1am UTC (~1pm NZST)
   # Processes all clients with enabled queries; writes runs + weekly snapshot.
@@ -597,6 +619,40 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # Memory extractor — IMPACT 的 Tune 段（Phase 23.C）
+  #
+  # 把 Check 段算出来的 flywheel_outcomes 变成客户私有的学习：
+  #   confirmed → client_proven_patterns（这么做有效）
+  #   reversed  → client_failed_experiments（这么做反而变差）
+  #   同类动作连续跑赢 3 次 → client_learned_preferences
+  #   并回填 client_decision_history.outcome_verdict
+  #
+  # 🔴 这条路由 2026 年就写好了，但**从来没有登记过调度** —— registry.ts 和本文件
+  #    里都没有，cron_run_logs 里一条运行记录都没有。后果：Check 段一直在产出
+  #    结论（2026-08~09 两个月 285 条），Tune 段却停在 2026-07-15 的 21 条，
+  #    53 天里没有任何一条真实结果改变过下一次判断。
+  #    按 ME_PRODUCT_DEFINITION §4 的定义，Tune 没有改变后续决策就不算学习闭环 ——
+  #    也就是说 IMPACT 最后一段整段没通电，而且"没通电"和"一切正常"在监控里长得一模一样。
+  #
+  # 排班位置不是随手挑的，这条链有先后：
+  #   attribution (0 */6) 先算出 outcome → 本任务 (30 6) 抽成学习 →
+  #   agent-learning-rollup (0 7 周一) 再汇总
+  # 06:30 UTC 落在 attribution 06:00 那一轮之后半小时（它 maxDuration 才 300s），
+  # 又在周一 07:00 的汇总之前，两头都不抢。
+  #
+  # --max-time 比路由自己的 maxDuration(300s) 宽：curl 先断开的话 Render 记成失败，
+  # 但路由还在跑、库还在写 —— 运维照着"失败"重跑一次就是重复处理。
+  - type: cron
+    name: memory-extractor
+    env: node
+    schedule: "30 6 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 360 -X POST -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/memory-extractor
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
   # SEO Patrol — Phase 22.E.S2b
   #   Daily SEO opportunity engine: reads keyword_snapshots + GSC snapshots,
   #   runs the rule engine, persists fresh findings, and routes the top 3 onto
@@ -807,24 +863,23 @@ services:
       - key: CRON_SECRET
         sync: false
 
-  # 素材池自动补货 — 治「所有 AI 画面从同一张种子图长出来」。
-  # 没有这条 cron,stock-pipeline 就是零调用方的死代码:素材池永远停在手工灌的那几张,
-  # sourceImagePool 恒空 → worker 每段都退回同一张 seed/cts_source.jpg。
-  # 🔴 花钱路径:抓取按张计费(≈$0.002/张)。护栏在 lib 层且天然收敛 ——
-  #    只给配了 factory_config 的客户抓 · 池子够 24 张就跳过 · 每客户最多 3 词×12 张 ·
-  #    搜索词必须能溯源到 master_brief(拼不出就不抓)。单次全量最坏 $0.2 量级。
-  # 每周一 19:00 UTC ≈ 周二 07:00 NZST,赶在当天 08:00 排产之前把池子补好。
-  - type: cron
-    name: factory-stock-refill
-    env: node
-    schedule: "0 19 * * 1"
-    buildCommand: ""
-    startCommand: |
-      curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/factory-stock-refill
-    envVars:
-      - key: CRON_SECRET
-        sync: false
+  # 🔴 已暂停(2026-09-08,PM 拍板「停抓图」)。原意是给出片补底图,但把抓来的图变成
+  #    可用底图的那一步(transformStockImages / stock-transform)全仓零调用方 = 死代码,
+  #    抓来的原图被 evaluate 的「只收 AI 改过的图」硬闸挡在成片外,谁也不消费。结果这条
+  #    cron 每周花 Apify 的钱抓一堆没人用的 Pinterest 图。停掉止损。路由侧也加了空转兜底。
+  #    恢复时三件一起做:本块取消注释 + registry.ts 那行加回来 + 先把 stock-transform 接进
+  #    调用链(否则恢复了还是白抓)。
+  # - type: cron
+  #   name: factory-stock-refill
+  #   env: node
+  #   schedule: "0 19 * * 1"
+  #   buildCommand: ""
+  #   startCommand: |
+  #     curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" \
+  #       https://app.magicengine.com.au/api/cron/factory-stock-refill
+  #   envVars:
+  #     - key: CRON_SECRET
+  #       sync: false
 
   # 卡死回收:publishing 超 10 分钟(进程被杀/超时)→ 退回 approved 等下轮重领。
   # 没有它,一次崩溃就会让那条工单永远卡在 publishing,没人能再领。
@@ -843,18 +898,48 @@ services:
       - key: CRON_SECRET
         sync: false
 
-  # 客户私信 → 需求卡。PR #652/#653 把这两条接口合进来了,但没有人调用它们,
+  # 客户私信 → CRM。PR #652/#653 把接口合进来了,但没有人调用它们,
   # 「客户消息」页会永远是空的 —— 这里补上调用方。
   #
-  # 一个服务串两步,不是两个:brief 必须在 sync 之后跑(没入库的对话没得总结),
-  # 用 && 串起来顺序天然保证,也省一个 Render cron 服务。
-  # sync 失败时 brief 不会跑 —— 这是想要的:宁可这一轮不出卡,也不要基于半截
-  # 数据写卡给销售看。
+  # 🔴 **写需求卡那一步 2026-09-07 挪走了,别再往这里加第二条 curl。**
+  #    原来这里是 `curl 私信同步 && curl 写需求卡`。意图是对的 ——「同步没跑成就别
+  #    拿半截数据写卡给销售看」—— 但 `&&` 守的是 curl 的退出码,而退出码回答的是
+  #    「网关有没有在超时前把响应给我」,不是「同步有没有跑完」。
+  #    同步的服务端耗时 2026-08-17 起从约 25 秒跳到约 140 秒,网关约 125 秒掐断返 524,
+  #    curl -f 退出码 22 → && 短路 → **写卡那条从 2026-08-23 起一次都没执行过**,
+  #    销售的客户需求卡停更 14 天,而监控上「私信同步每小时正常」。
+  #
+  #    现在:同步跑到最后一行发一张 `me/messenger.sync.completed` 条子,
+  #    Inngest 上的 `cloud-messenger-brief-after-sync` 收到就写卡(还分段跑,每段约 40 秒,
+  #    不再踩网关那条线)。判据从「curl 的退出码」换成「服务端自己的回执」。
+  #    整段来龙去脉见 src/lib/messenger/sync-completed-event.ts。
+  #
+  #    ⚠️ Render 不是 Vercel,Inngest 没有自动同步:改了那个函数之后必须重新 Sync 一次
+  #       `curl -sS -X PUT https://app.magicengine.com.au/api/inngest`(返 modified:true 才算数),
+  #       否则它**安静地不跑**。这条链路已登记进 CRON_REGISTRY,真没跑起来健康检查会喊。
+  #
+  #    `/api/cron/messenger-brief-hourly` 路由保留,用于单独手动补触发。
   #
   # 只同步 clients.facebook_page_id 有值的客户(设置页里选主页才会有值),
   # 所以新增客户不需要动这里。
-  # 跑在每小时第 10 分钟,避开整点那一堆日更 cron。
-  # max-time 跟接口的 maxDuration 对齐(sync 600s / brief 800s)再留一点余量。
+  # max-time 跟接口的 maxDuration 对齐(600s)再留一点余量。
+  #
+  # ⏸️ **降频到每 2 小时的改动已从本 PR 抽出，暂不落地**（issue #1581，H14 原计划）：
+  #    方案是"`/api/webhooks/meta/messenger` 上线后，实时收信改由那条 webhook 负责，
+  #    这条任务降级成兜底"，但截至提交这版代码，Meta 生产企业验证仍未通过
+  #    （issue #1299 仍是 OPEN），webhook 订阅还打不开。这条 cron 现在仍是**唯一在收
+  #    真实消息的路径**——这时候降频 = 私信进系统的延迟从 ≤1h 变成 ≤2h，是纯粹的倒退，
+  #    没有任何东西在补它腾出来的窗口。CTS/NAL 广告私信留资流程正在依赖这条延迟
+  #    （2026-09-13 CTS 广告顾问窗口反馈）。**保持每小时不变，等 #1299 关闭、webhook
+  #    真正收到生产流量、并用真实数据验证过之后，再单独一个 PR 改这条 schedule。**
+  #    `src/lib/messenger/sync.ts` 的 `storeConversation` 防覆写改动（"只在本轮数据比
+  #    已存的新时才覆盖 participant_name/last_message_at/last_message_from"）不受这条
+  #    影响，正常保留——那是数据正确性修复，跟频率无关，任何频率下都成立。
+  #
+  # ⚠️ 这条 curl **本来就会超时**(网关约 125 秒掐断返 524,而接口跑约 140 秒),
+  #    Render 的运行日志里会看到 `curl: (22) ... error: 524` / `Exited with status 22`。
+  #    服务端每一轮都跑完了 —— 判据看 cron_run_logs 里 messenger-sync-hourly 那一行,
+  #    不看这条 curl 的退出码。别再往这个退出码上挂任何下游步骤。
   - type: cron
     name: messenger-hourly
     env: node
@@ -862,9 +947,7 @@ services:
     buildCommand: ""
     startCommand: |
       curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/messenger-sync-hourly \
-      && curl -fsS --max-time 820 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/messenger-brief-hourly
+        https://app.magicengine.com.au/api/cron/messenger-sync-hourly
     envVars:
       - key: CRON_SECRET
         sync: false
@@ -922,34 +1005,16 @@ services:
     envVars:
       - fromGroup: me-shared-cron-secret
 
-  # 做片拼片 worker — 常驻容器(node+python-PIL+ffmpeg)轮询 content_factory_render_jobs，
-  # 领排队任务 → 分镜 → 画面(gpt-image+Muapi i2v) → 配音(MiniMax) → ffmpeg 拼竖屏成片 → 标待审。
-  # 独立服务的原因：单条 i2v/拼接跑 15-30 分钟，塞不进 web 请求。
-  # ⚠️ 部署后需在 Render 填 sync:false 密钥；首跑验证中文字体(NotoSansCJK ttc)PIL 能读。
-  - type: worker
-    name: content-factory-render-worker
-    env: docker
-    dockerfilePath: ./scripts/render-worker/Dockerfile
-    # standard(1 CPU / 2GB)——starter 的半颗 CPU 跑 1080x1920 视频编码要 40-60 分钟/条，
-    # 512MB 还被 160MB 录像撑爆过一次。PM 2026-08-02 拍板升 standard(+US$18/月)。
-    plan: standard
-    envVars:
-      - key: NEXT_PUBLIC_SUPABASE_URL
-        sync: false
-      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: MUAPI_API_KEY
-        sync: false
-      - key: CF_AIG_TOKEN
-        sync: false
-      - key: FACTORY_CJK_FONT
-        value: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+  # 🔴 2026-09-02 退役：content-factory-render-worker(旧 Render 云端拼片管线)。
+  #    content_factory_render_jobs 表最后一条记录 2026-08-19，两周零产出，讲课式确认
+  #    当前无客户在用(PM 口径)。CTS/Oztop 的广告成片(Winner Intake)确实已转到本机
+  #    scripts/factory-worker(content_work_orders 队列)；但这条 render.yaml 服务背后
+  #    连的是"确认选题"这个通用入口，服务普通内容(非讲课式/非LinkedIn)，这类内容
+  #    目前**没有**自动接班的管线——工单不是从这个入口建的，退役后这类内容出片需要
+  #    人工另外处理，不是"自动切到新线了"，见 [postId]/route.ts 里的对应说明。
+  #    旧代码(render-assemble.ts / render-pipeline.ts / lecture-render.ts /
+  #    render-queue.ts / scripts/render-worker/)本次先留仓库不删(删除类 Bash 操作被
+  #    session 权限拦下)，只摘掉这个 Render 服务和调用它的入口，表数据不动。
 
   # 邮件反应 → CRM：谁收到了、谁打开了、谁点了行程链接。
   #
@@ -970,6 +1035,34 @@ services:
     startCommand: |
       curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
         https://app.magicengine.com.au/api/cron/mailchimp-activity-sync
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
+  # 付款邮件 → Mailchimp `paid_customer` 标签（付了钱的人自动退出群发名单）。
+  #
+  # 在这之前这件事完全是手工的：CTS 那 19 个 paid_customer 标签是 2026-08-30
+  # 有人翻 info@ 邮箱手打的，之后再没人打过。代价当天就付了 —— 9/1 那次 192 人
+  # 的群发混进 2 个已付款客户，其中一个是 Baker 亲口回过
+  # 「your payment has been received in full」的 Nikki Smith。
+  #
+  # 只自动做「我们自己确认收款」那一档；客人自己说付了的一律不自动打，
+  # 攒进 summary.needsReview 由今日待办下发给人点一下（判据见 lib/mailchimp/paid-signal，
+  # 那里有一条红线：这个邮箱里催款信和收款信长得几乎一样，判错会把正在谈的客人停掉）。
+  #
+  # 排在 activity-sync（4:40）之后 —— 那条把邮件反应搬进 CRM，这条改标签，
+  # 两条都碰 Mailchimp，错开避免同一分钟撞 API 限流。
+  #
+  # 补历史：手动 POST 带 ?days=N（如 ?days=365），跟每天对账同一套代码。
+  #
+  # ⚠️ 密钥用 fromGroup 自动挂，**不要**改回 `sync: false`（同上一条的坑）。
+  - type: cron
+    name: mailchimp-paid-tagging-daily
+    env: node
+    schedule: "10 5 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/mailchimp-paid-tagging
     envVars:
       - fromGroup: me-shared-cron-secret
 
@@ -994,3 +1087,115 @@ services:
     envVars:
       - key: CRON_SECRET
         sync: false
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ME product progress → LinkedIn — Monday + Thursday, ~9am NZ time
+  #
+  # No-ops unless LINKEDIN_PROGRESS_POST_ENABLED=true — this repo's web
+  # service isn't Blueprint-managed (real prod is `crazycontent`, created by
+  # hand in the Render dashboard), so this flag can't be declared here.
+  # Absent = undefined !== 'true' = disabled by default, no dashboard action
+  # needed to ship dark. PM sets LINKEDIN_PROGRESS_POST_ENABLED=true directly
+  # on crazycontent's Environment tab when ready to turn it on.
+  #
+  # Schedule note: NZ is UTC+12/+13 (DST), so "Monday/Thursday 9am NZ" falls on
+  # the PREVIOUS UTC calendar day (Sunday/Wednesday). 20:30 UTC lands at
+  # roughly 8:30am NZDT–9:30am NZST year-round — good enough for a personal
+  # LinkedIn post, not worth DST-exact scheduling for this.
+  - type: cron
+    name: linkedin-progress-post-mon
+    env: node
+    schedule: "30 20 * * 0"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 60 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/linkedin-progress-post-mon
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
+  - type: cron
+    name: linkedin-progress-post-thu
+    env: node
+    schedule: "30 20 * * 3"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 60 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/linkedin-progress-post-thu
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
+  # Magic Insight（内部代号 market-intel）—— PM 每日全球 AI / 数字营销资讯雷达。
+  #
+  # 设计见 docs/specs/2026-08-20-market-intel-digest-design.md（v2，已过子牙 +
+  # 魏征设计审）。18:00 UTC ≈ 06:00 NZST / 07:00 NZDT，两季都落在清晨；PM 明确
+  # 不设硬性时间要求，可按体验微调。密钥直接走 fromGroup，不留"记得手动 link"
+  # 这一步——daily-cron-digest 就是靠人记住这件事，51 天没人发现地哑了。
+  #
+  # ⚠️ 尚未申请 healthchecks.io 监控 ID，先不接 ping；有账号权限的人申请后
+  #    在 startCommand 末尾按现有条目的格式加一行 `&& curl -fsS "https://hc-ping.com/<ID>"`。
+  - type: cron
+    name: market-intel-daily
+    env: node
+    schedule: "0 18 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 180 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/market-intel-daily
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
+  # 清一次 cron_run_logs 的旧运行记录。
+  #
+  # 🔴 这活儿以前是表上的 AFTER INSERT 触发器干的 —— 每天 400~600 次插入就跑
+  #    400~600 次全表 DELETE，并发插入还会死锁，而死锁会让**插入本身失败**。
+  #    运行记录写不进去恰好是这套监控最不能出的事，所以搬成每天一次的独立任务
+  #    （触发器在 supabase/migrations/20260907000001 里拆掉了）。
+  #
+  # 保留规则一行没改，还是生产上那两条：7 天以上的空记录 + 180 天以上的全部。
+  # 16:50 UTC ≈ NZ 凌晨 04:50，避开整点那批任务的插入高峰。
+  # 密钥走 fromGroup，不留「记得手动 link」这一步。
+  - type: cron
+    name: cron-run-logs-cleanup
+    env: node
+    schedule: "50 16 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 180 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/cron-run-logs-cleanup
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
+  # 客人来信没人回 —— 每天早上给销售发一封汇总信（测试期发到 ME 自己的信箱）。
+  #
+  # 判据 src/lib/crm/email-reply-due.ts（超时 24 小时，PM 2026-09-03 拍板），
+  # 文案 src/lib/crm/email-reply-digest.ts（主题和正文都带「【测试功能】」）。
+  #
+  # 时区换算：NZ 冬令时 NZST = UTC+12，所以 **UTC 20:00 = 次日 NZ 08:00**。
+  # 夏令时 NZDT = UTC+13（9 月底～4 月初）时同一条排班落在 NZ 09:00 ——
+  # 「上班后第一件事」这个位置两季都成立，不为夏令时另开一条。
+  #
+  # 密钥直接走 fromGroup，不留「记得手动 link」这一步 —— daily-cron-digest 就是
+  # 靠人记住这件事，51 天没人发现地哑了。
+  #
+  # 🔴 2026-09-03 PM 拍板**暂停调度**（上线当天，一封都还没发出去过）。
+  # 原因：拿生产库核对名单发现，现有排除规则只挡「自己人域名」和「同行域名」，
+  # 挡不住陌生公司群发的推销。CTS 当天 32 条候选里噪音占七成，而排序按「等最久」，
+  # 等最久的恰好是没人理的营销邮件 —— 前 10 条里 8 条是垃圾，真正欠回复的客人
+  # （Julie Cawte 的发票、Torran Lepper 的日本行程）反而被挤出名单。
+  #
+  # 判据和文案本身没问题，差的是一层噪音过滤。加好、并用生产数据验证准确率之后，
+  # 把下面整段取消注释、同时把 EMAIL_REPLY_DIGEST_ENABLED 设成 true（两道闸都要开）。
+  #
+  # - type: cron
+  #   name: email-reply-digest
+  #   env: node
+  #   schedule: "0 20 * * *"
+  #   buildCommand: ""
+  #   # --max-time 要比路由自己的 maxDuration(300s) 宽：curl 先断开的话 Render 把这次
+  #   # 记成失败，可路由还在跑、信照样发出去 —— 运维照着「失败」重跑一次就是重复发信。
+  #   # 重跑本身另有幂等闸挡着（见路由里的 RESEND_GUARD_HOURS），这里只是别去主动制造它。
+  #   startCommand: |
+  #     curl -fsS --max-time 360 -H "Authorization: Bearer $CRON_SECRET" \
+  #       https://app.magicengine.com.au/api/cron/email-reply-digest
+  #   envVars:
+  #     - fromGroup: me-shared-cron-secret

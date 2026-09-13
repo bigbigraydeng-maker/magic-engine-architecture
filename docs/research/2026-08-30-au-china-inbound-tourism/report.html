@@ -1,0 +1,821 @@
+<title>澳洲赴华旅游情报简报</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Public+Sans:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  --ground: #F4F6FA;
+  --surface: #FFFFFF;
+  --surface-2: #EDF0F6;
+  --line: #D8DEEA;
+  --line-soft: #E7EBF3;
+  --ink: #141B2B;
+  --ink-2: #3C4761;
+  --ink-3: #6C778F;
+  --accent: #2B4C8C;
+  --accent-soft: #E4EAF6;
+  --vermilion: #A93B2C;
+  --vermilion-soft: #F8E7E3;
+  --good: #2C6E52;
+  --good-soft: #E1EFE8;
+  --warn: #8A6410;
+  --warn-soft: #F6EEDA;
+  --shadow: 0 1px 2px rgba(20, 27, 43, .05), 0 8px 24px -12px rgba(20, 27, 43, .18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0E1219;
+    --surface: #161B25;
+    --surface-2: #1D2431;
+    --line: #2C3543;
+    --line-soft: #232B38;
+    --ink: #E9EDF5;
+    --ink-2: #B9C2D2;
+    --ink-3: #8B95A9;
+    --accent: #85A6E4;
+    --accent-soft: #1E2739;
+    --vermilion: #E0806E;
+    --vermilion-soft: #2C2020;
+    --good: #6FBF95;
+    --good-soft: #17251E;
+    --warn: #D6AC57;
+    --warn-soft: #262015;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .7);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #0E1219;
+  --surface: #161B25;
+  --surface-2: #1D2431;
+  --line: #2C3543;
+  --line-soft: #232B38;
+  --ink: #E9EDF5;
+  --ink-2: #B9C2D2;
+  --ink-3: #8B95A9;
+  --accent: #85A6E4;
+  --accent-soft: #1E2739;
+  --vermilion: #E0806E;
+  --vermilion-soft: #2C2020;
+  --good: #6FBF95;
+  --good-soft: #17251E;
+  --warn: #D6AC57;
+  --warn-soft: #262015;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .7);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "Public Sans", ui-sans-serif, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  line-height: 1.72;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px 96px;
+}
+
+/* ---------- masthead ---------- */
+.masthead {
+  border-bottom: 2px solid var(--ink);
+  padding: 56px 0 22px;
+  margin-bottom: 40px;
+}
+.kicker {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--vermilion);
+  margin: 0 0 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+.kicker .sep { color: var(--line); }
+.kicker .plain { color: var(--ink-3); }
+
+h1 {
+  font-family: "Newsreader", Georgia, "Songti SC", serif;
+  font-weight: 600;
+  font-size: clamp(38px, 6.2vw, 62px);
+  line-height: 1.04;
+  letter-spacing: -.02em;
+  margin: 0 0 18px;
+  text-wrap: balance;
+}
+.standfirst {
+  font-family: "Newsreader", Georgia, serif;
+  font-size: clamp(17px, 2.2vw, 21px);
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 66ch;
+  margin: 0 0 26px;
+}
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.tag {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  letter-spacing: .05em;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--ink-3);
+  background: var(--surface);
+}
+.tag.live { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); background: var(--good-soft); }
+.tag.gap { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); background: var(--warn-soft); }
+
+/* ---------- sections ---------- */
+section { margin-bottom: 68px; scroll-margin-top: 24px; }
+
+.sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+  margin-bottom: 28px;
+}
+.sec-eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+h2 {
+  font-family: "Newsreader", Georgia, "Songti SC", serif;
+  font-weight: 600;
+  font-size: clamp(24px, 3.4vw, 32px);
+  line-height: 1.2;
+  letter-spacing: -.015em;
+  margin: 0;
+  text-wrap: balance;
+}
+h3 {
+  font-family: "Public Sans", sans-serif;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -.005em;
+  margin: 34px 0 12px;
+  color: var(--ink);
+}
+h3:first-child { margin-top: 0; }
+
+p { margin: 0 0 16px; max-width: 72ch; }
+p.lead { font-size: 17px; color: var(--ink-2); }
+a { color: var(--accent); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+a:focus-visible, .tocnav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+.src {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--ink-3);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--ink-3);
+  white-space: nowrap;
+  margin-left: 4px;
+}
+.src:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- takeaways ---------- */
+.takes { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+.take { background: var(--surface); padding: 20px 22px; display: grid; grid-template-columns: 34px 1fr; gap: 16px; align-items: start; }
+.take-n {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vermilion);
+  padding-top: 2px;
+}
+.take-b { margin: 0; }
+.take-b strong { color: var(--ink); }
+.take-b span { color: var(--ink-2); }
+
+/* ---------- stat band ---------- */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 28px;
+}
+.stat { background: var(--surface); padding: 20px 20px 18px; }
+.stat-v {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 27px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -.02em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  display: block;
+  margin-bottom: 6px;
+}
+.stat-v.up { color: var(--good); }
+.stat-v.hot { color: var(--vermilion); }
+.stat-l { font-size: 13px; line-height: 1.45; color: var(--ink-2); display: block; }
+.stat-s { font-size: 11.5px; color: var(--ink-3); display: block; margin-top: 6px; font-family: "IBM Plex Mono", monospace; }
+
+/* ---------- tables ---------- */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 3px; background: var(--surface); margin-bottom: 12px; }
+table { border-collapse: collapse; width: 100%; min-width: 660px; font-size: 14px; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; line-height: 1.5; }
+thead th {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 500;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: none; }
+td.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td strong { font-weight: 700; }
+.caption { font-size: 12.5px; color: var(--ink-3); margin: 0 0 24px; max-width: 72ch; }
+
+/* ---------- pills ---------- */
+.pill {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: .04em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  white-space: nowrap;
+  display: inline-block;
+}
+.pill.y { background: var(--good-soft); color: var(--good); }
+.pill.n { background: var(--surface-2); color: var(--ink-3); }
+.pill.r { background: var(--vermilion-soft); color: var(--vermilion); }
+.pill.w { background: var(--warn-soft); color: var(--warn); }
+
+/* ---------- ad density bars ---------- */
+.bars { display: grid; gap: 10px; margin-bottom: 10px; }
+.bar-row { display: grid; grid-template-columns: minmax(120px, 210px) 1fr auto; gap: 14px; align-items: center; }
+.bar-l { font-size: 13.5px; color: var(--ink-2); }
+.bar-track { height: 9px; background: var(--surface-2); border-radius: 1px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); border-radius: 1px; }
+.bar-fill.v { background: var(--vermilion); }
+.bar-fill.z { background: var(--line); }
+.bar-n { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
+
+/* ---------- callouts ---------- */
+.note {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 16px 20px;
+  border-radius: 0 3px 3px 0;
+  margin: 0 0 24px;
+}
+.note.red { border-left-color: var(--vermilion); background: var(--vermilion-soft); }
+.note.amber { border-left-color: var(--warn); background: var(--warn-soft); }
+.note p:last-child { margin-bottom: 0; }
+.note-t {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+  color: var(--accent);
+}
+.note.red .note-t { color: var(--vermilion); }
+.note.amber .note-t { color: var(--warn); }
+
+/* ---------- cards ---------- */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 3px; padding: 20px 22px; box-shadow: var(--shadow); }
+.card h4 {
+  font-family: "Newsreader", Georgia, serif;
+  font-weight: 600;
+  font-size: 20px;
+  margin: 0 0 4px;
+  letter-spacing: -.01em;
+}
+.card .sub { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 14px; }
+.card p { font-size: 14px; margin-bottom: 12px; }
+.card p:last-child { margin-bottom: 0; }
+.card ul { margin: 0 0 12px; padding-left: 18px; font-size: 14px; }
+.card li { margin-bottom: 6px; }
+
+ul.body { padding-left: 20px; margin: 0 0 18px; max-width: 72ch; }
+ul.body li { margin-bottom: 9px; }
+
+/* ---------- playbook list ---------- */
+.plays { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+.play { background: var(--surface); padding: 18px 22px; display: grid; grid-template-columns: 1fr; gap: 6px; }
+.play-h { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
+.play-t { font-weight: 700; font-size: 15.5px; }
+.play-b { font-size: 14px; color: var(--ink-2); margin: 0; max-width: 74ch; }
+
+/* ---------- toc ---------- */
+.tocnav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: color-mix(in srgb, var(--ground) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 40px;
+  padding: 9px 0;
+}
+.tocnav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; overflow-x: auto; }
+.tocnav a {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  letter-spacing: .04em;
+  text-decoration: none;
+  color: var(--ink-3);
+  padding: 5px 10px;
+  border-radius: 2px;
+  white-space: nowrap;
+  display: block;
+}
+.tocnav a:hover { color: var(--accent); background: var(--accent-soft); }
+
+footer {
+  border-top: 2px solid var(--ink);
+  padding-top: 22px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+footer p { max-width: 78ch; margin-bottom: 10px; }
+footer .fine { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; }
+
+@media (max-width: 640px) {
+  .wrap { padding: 0 18px 64px; }
+  .masthead { padding-top: 36px; }
+  .take { grid-template-columns: 26px 1fr; gap: 12px; padding: 17px 16px; }
+  .bar-row { grid-template-columns: 1fr auto; }
+  .bar-track { display: none; }
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="kicker">
+    <span>Magic Engine · 旅游版</span>
+    <span class="sep">/</span>
+    <span class="plain">市场情报</span>
+    <span class="sep">/</span>
+    <span class="plain">2026-08-30 生成</span>
+  </p>
+  <h1>澳洲赴华旅游<br>情报简报</h1>
+  <p class="standfirst">澳洲人去中国的市场今年超过了疫情前水平，还在加速。这份简报盘清楚：谁在这个市场上赚钱、他们的广告在说什么、免签政策被怎么用、以及三个还没人认真做的细分——定制游、医疗看病团、工厂考察团。</p>
+  <div class="meta-row">
+    <span class="tag live">Meta 广告库实查</span>
+    <span class="tag live">Google 广告透明中心实查</span>
+    <span class="tag live">ABS 官方出境数据</span>
+    <span class="tag live">关键词搜索量实测（08-30 补齐）</span>
+  </div>
+</header>
+
+<nav class="tocnav" aria-label="目录">
+  <ul>
+    <li><a href="#takeaways">五条结论</a></li>
+    <li><a href="#market">市场盘子</a></li>
+    <li><a href="#players">谁在赚钱</a></li>
+    <li><a href="#ads">广告战场</a></li>
+    <li><a href="#search">搜索与 SEO</a></li>
+    <li><a href="#niche">三个细分</a></li>
+    <li><a href="#playbook">该怎么做</a></li>
+    <li><a href="#sources">来源与缺口</a></li>
+  </ul>
+</nav>
+
+<section id="takeaways">
+  <div class="sec-head">
+    <span class="sec-eyebrow">摘要</span>
+    <h2>五条结论</h2>
+  </div>
+  <div class="takes">
+    <div class="take">
+      <span class="take-n">01</span>
+      <p class="take-b"><strong>市场已经超过疫情前，而且在加速。</strong> <span>2025-26 财年澳洲人赴华约 74 万人次，比 2018-19 财年高出约 21%；2026 年 4 月单月同比 +34%。反方向（中国客来澳）只恢复到疫情前的 79%——两个方向严重不对称，钱在「出去」这一边。</span></p>
+    </div>
+    <div class="take">
+      <span class="take-n">02</span>
+      <p class="take-b"><strong>免签是当前唯一的全行业催化剂，且有到期日。</strong> <span>澳洲护照 30 天免签已延到 2026 年 12 月 31 日，2027 年是否延续官方没表态。所有头部玩家都围着它建落地页，但明年这个钩子可能失效——现在建的应该是能沉淀下来的内容资产，不是一次性促销页。</span></p>
+    </div>
+    <div class="take">
+      <span class="take-n">03</span>
+      <p class="take-b"><strong>广告战场分成互不相交的两个语言层。</strong> <span>英文层由 Wendy Wu、TripADeal、Luxury Escapes 用澳元大额投放占据；中文层全是中国本地地接社和个人导游号在投，走 WhatsApp 私信、锚价「人均 2000 元人民币」。<strong>澳洲本土华人旅行社在两层里几乎都不见踪影</strong>——这是最大的一块空地。</span></p>
+    </div>
+    <div class="take">
+      <span class="take-n">04</span>
+      <p class="take-b"><strong>三个细分里，只有一个真有需求。</strong> <span>补齐搜索量后结论变了：广交会一个词月搜 <strong>6,600</strong>，撑起整个商务细分；而<strong>医疗团合计只有 70</strong>（medical tourism china 30、health checkup china 0）、<strong>定制游整簇只有 250</strong>。广告数量曾让人以为医疗是蓝海，搜索量说明<strong>澳洲这块的需求侧几乎不存在</strong>。</span></p>
+    </div>
+    <div class="take">
+      <span class="take-n">05</span>
+      <p class="take-b"><strong>中国地接社靠纯 SEO 直接抢澳洲客，一分广告费不花。</strong> <span>China Highlights、China Discovery 在澳洲 Google 的广告投放是零，全靠「from Australia + 免签 + 城市名」的内容页拿询盘。澳洲本土社如果不建同样的内容资产，等于把询盘白送给对方。</span></p>
+    </div>
+  </div>
+</section>
+
+<section id="market">
+  <div class="sec-head">
+    <span class="sec-eyebrow">市场盘子</span>
+    <h2>需求真实、可验证、在涨</h2>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <span class="stat-v">74 万</span>
+      <span class="stat-l">2025-26 财年澳洲居民赴华人次</span>
+      <span class="stat-s">超 2018-19 约 +21%</span>
+    </div>
+    <div class="stat">
+      <span class="stat-v up">+16.5%</span>
+      <span class="stat-l">截至 2026 年 3 月的滚动 12 个月同比</span>
+      <span class="stat-s">716,140 人次</span>
+    </div>
+    <div class="stat">
+      <span class="stat-v up">+34%</span>
+      <span class="stat-l">2026 年 4 月单月同比</span>
+      <span class="stat-s">90,930 人次</span>
+    </div>
+    <div class="stat">
+      <span class="stat-v hot">2026-12-31</span>
+      <span class="stat-l">30 天免签当前到期日</span>
+      <span class="stat-s">之后未有官方表态</span>
+    </div>
+    <div class="stat">
+      <span class="stat-v up">+44%</span>
+      <span class="stat-l">Skyscanner 澳→中搜索量半年同比</span>
+      <span class="stat-s">同期日本 +41%</span>
+    </div>
+    <div class="stat">
+      <span class="stat-v">79%</span>
+      <span class="stat-l">反方向：中国客赴澳恢复度</span>
+      <span class="stat-s">澳洲前十客源国里最慢</span>
+    </div>
+  </div>
+  <p class="caption">数据来源：澳洲统计局出入境数据<a class="src" href="https://www.abs.gov.au/statistics/industry/tourism-and-transport/overseas-arrivals-and-departures-australia/latest-release" target="_blank" rel="noopener">ABS</a>、中国驻澳使馆免签通知<a class="src" href="https://au.china-embassy.gov.cn/eng/tzgg/202511/t20251105_11747334.htm" target="_blank" rel="noopener">使馆</a>、Travel Weekly 引 Skyscanner<a class="src" href="https://travelweekly.com.au/china-tipped-to-be-australias-next-big-travel-trend/" target="_blank" rel="noopener">TW</a>。ABS 数据不区分华人/非华人，探亲流（VFR）在所有主要目的地里都是第二大出行目的。</p>
+
+  <h3>三个把需求推起来的结构性因素</h3>
+  <ul class="body">
+    <li><strong>免签把决策门槛砍掉了一大截。</strong> 2024 年 7 月起实施、同年 11 月底延长到单次 30 天、2025 年 11 月官宣延到 2026 年底。入境次数和年度总天数都不设上限，只限单次不超过 30 天。<a class="src" href="https://au.china-embassy.gov.cn/eng/tzgg/202511/t20251105_11747334.htm" target="_blank" rel="noopener">使馆通知</a></li>
+    <li><strong>运力全是中方航司在补。</strong> 南航广州—悉尼 2026 年 3 月起每天 3 班全年运营，阿德莱德和珀斯从季节性改全年；深圳航空 2025 年 12 月开通深圳—墨尔本；东航 2026 年 6 月开通上海—阿德莱德；国航加密墨尔本—北京。而 Qantas 2024 年 7 月停飞悉尼—上海后至今没有复飞公告。<a class="src" href="https://karryon.com.au/industry-news/airline/china-southern-year-round-adl-per/" target="_blank" rel="noopener">Karryon</a> 对做团的人来说这是好事：座位便宜且充足。</li>
+    <li><strong>社交平台在造势。</strong> 全球「China Travel」热潮已经跑了一年多，二线城市（重庆、成都）靠短视频出圈。澳洲这边 Skyscanner 搜索量半年 +44%，Trip.com 免签宣布后澳→中机票搜索一度同比 +154%。<a class="src" href="https://www.prnewswire.com/apac/news-releases/tripcom-reports-increase-in-searches-and-bookings-from-australia-to-china-following-visa-free-announcement-302177484.html" target="_blank" rel="noopener">Trip.com</a></li>
+  </ul>
+
+  <div class="note amber">
+    <p class="note-t">还没被解决的三个顾虑</p>
+    <p>澳洲外交部对中国的旅行警示仍是第 2 级「高度谨慎」（2026-07-15 更新）<a class="src" href="https://www.smartraveller.gov.au/destinations/asia/china" target="_blank" rel="noopener">Smartraveller</a>；支付虽已可绑外卡但超 200 元交易收 3% 跨境费；WhatsApp、Google Maps、Instagram 在境内不能直接用。<strong>这三条正是内容营销最好的选题</strong>——澳洲客最常搜的就是这些，而现在回答它们的大多是中国地接社的英文页。</p>
+  </div>
+</section>
+
+<section id="players">
+  <div class="sec-head">
+    <span class="sec-eyebrow">竞争地图</span>
+    <h2>市场分四层，中间地带最空</h2>
+  </div>
+
+  <p class="lead">按价格和获客方式，这个市场清楚地分成四层。同层内互相抢客，跨层几乎不碰面。</p>
+
+  <div class="cards">
+    <div class="card">
+      <h4>全包专门店</h4>
+      <p class="sub">A$5,000 – 13,800 · 含国际机票</p>
+      <p><strong>Wendy Wu Tours</strong> 一家独大，自称澳洲第一中国专家，50+ 条线路，跟团／定制／独行／河轮全线。2026 年中国订单同比翻倍（同期全市场 +16.5%）。<a class="src" href="https://travelweekly.com.au/wendy-wu-tours-launches-new-brochure-due-to-increased-china-demand/" target="_blank" rel="noopener">TW</a></p>
+      <p>其余：<strong>MW Tours</strong>（华人背景，escorted + 定制）、<strong>Helen Wong's Tours</strong>（未停业，已转型 B2B 批发）。</p>
+    </div>
+    <div class="card">
+      <h4>闪购低价打包</h4>
+      <p class="sub">A$1,199 – 4,799 · 多数含机票</p>
+      <p><strong>TripADeal</strong>（Qantas 持股背景，最高 51% off，可用 Qantas 积分）、<strong>Webjet Exclusives</strong>（打包 Qantas 机票）、<strong>Inspiring Vacations</strong>（Flights Included 标签制）。</p>
+      <p><strong>Luxury Escapes</strong> 走「五星小团 + 锚定价」，Captivating China 标 A$2,999 起、原价 $5,999。</p>
+    </div>
+    <div class="card">
+      <h4>澳洲华人社</h4>
+      <p class="sub">价格多不公开 · 询盘制</p>
+      <p><strong>CBT Holidays</strong>（悉尼老牌，2 人成团、研学团是差异点）、<strong>China Travel Service (AU)</strong>（1985 年成立，签证+机票+团的组合服务探亲客）、<strong>Asia Vacation Group</strong>（墨尔本低价，但公开投诉多）。</p>
+      <p><strong>共同问题：几乎没人用免签做营销，也几乎不投广告。</strong></p>
+    </div>
+    <div class="card">
+      <h4>中国地接社跨境直销</h4>
+      <p class="sub">不标价 · 表单／私信获客</p>
+      <p><strong>China Highlights</strong>（1998 年起，主打「4 对 1」定制服务）、<strong>China Discovery</strong>（成都，做了专门的澳新签证政策落地页）、<strong>Easy Tour China</strong>（做到城市级：悉尼/墨尔本/布里斯班/珀斯分别建页）。</p>
+      <p>全部零广告投放，纯内容获客。</p>
+    </div>
+  </div>
+
+  <h3>头部玩家对照</h3>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>公司</th><th>定位</th><th>价格带 (AUD)</th><th>定制游</th><th>免签营销</th><th>澳洲 Google 广告量</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Wendy Wu Tours</strong></td><td>中国游第一专门店</td><td class="num">5,080–13,780 含机票</td><td><span class="pill y">有</span></td><td><span class="pill y">专属落地页</span></td><td class="num">约 500 条</td></tr>
+        <tr><td><strong>Luxury Escapes</strong></td><td>奢华闪购平台</td><td class="num">2,999 起 含机票</td><td><span class="pill n">无</span></td><td><span class="pill n">未见</span></td><td class="num">约 9,000 条</td></tr>
+        <tr><td><strong>Inspiring Vacations</strong></td><td>线上跟团套餐</td><td class="num">未公开（另收 $12/天小费）</td><td><span class="pill n">无</span></td><td><span class="pill y">站内说明</span></td><td class="num">约 3,000 条</td></tr>
+        <tr><td><strong>TripADeal</strong></td><td>闪购打包（Qantas 系）</td><td class="num">1,199–4,799 含机票</td><td><span class="pill n">无</span></td><td><span class="pill y">行程页说明</span></td><td class="num">约 800 条</td></tr>
+        <tr><td><strong>Intrepid Travel</strong></td><td>全球小团冒险</td><td class="num">1,395–8,145 不含机票</td><td><span class="pill y">有</span></td><td><span class="pill r">页面仍写要办签证</span></td><td class="num">未取得</td></tr>
+        <tr><td><strong>On The Go Tours</strong></td><td>英系中端跟团</td><td class="num">695 起</td><td><span class="pill w">仅私家团</span></td><td><span class="pill n">未查到</span></td><td class="num">未取得</td></tr>
+        <tr><td><strong>MW Tours</strong></td><td>华人背景 escorted</td><td class="num">未公开</td><td><span class="pill y">有</span></td><td><span class="pill y">专文＋总监背书</span></td><td class="num">0</td></tr>
+        <tr><td><strong>CBT Holidays</strong></td><td>悉尼华人老牌</td><td class="num">未公开</td><td><span class="pill w">私家团</span></td><td><span class="pill n">未提，仍卖签证服务</span></td><td class="num">未取得</td></tr>
+        <tr><td><strong>China Highlights</strong></td><td>中国地接社直销</td><td class="num">不标价</td><td><span class="pill y">核心产品</span></td><td><span class="pill y">首页横幅</span></td><td class="num">0</td></tr>
+        <tr><td><strong>China Discovery</strong></td><td>成都定制社直销</td><td class="num">不标价</td><td><span class="pill y">核心产品</span></td><td><span class="pill y">澳新专属页</span></td><td class="num">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">Google 广告量为 Google 广告透明中心「Ads in Australia」域名口径的累计广告条数（非当前在投、非花费），只反映投放规模量级。价格来自各家官网公开标价。「未取得」= 本轮未查到，不等于没有。</p>
+
+  <div class="note red">
+    <p class="note-t">格局变化</p>
+    <p><strong>Nexus Holidays（含 Vista Holidays）已进入清算停业</strong>，清算人披露倒闭前连年亏损——它曾是中国低价「金三角团」的主力批发商。<a class="src" href="https://travelweekly.com.au/liquidators-reveal-aussie-wholesaler-suffered-consecutive-full-year-losses-prior-to-collapse/" target="_blank" rel="noopener">TW</a> 这条线的批发位置现在是空的。<strong>Helen Wong's Tours 没有停业</strong>，而是转型成 B2B 批发。除此之外本轮没查到澳→中细分市场的并购或新重量级玩家进入。</p>
+  </div>
+</section>
+
+<section id="ads">
+  <div class="sec-head">
+    <span class="sec-eyebrow">广告战场</span>
+    <h2>两个语言层，中间没人</h2>
+  </div>
+
+  <h3>各细分在澳洲的广告密度</h3>
+  <div class="bars">
+    <div class="bar-row">
+      <span class="bar-l">广交会 / 采购相关</span>
+      <div class="bar-track"><div class="bar-fill" style="width:100%"></div></div>
+      <span class="bar-n">≈2,931</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-l">中国旅游团（英文）</span>
+      <div class="bar-track"><div class="bar-fill" style="width:20.5%"></div></div>
+      <span class="bar-n">≈600</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-l">中国旅游团（中文）</span>
+      <div class="bar-track"><div class="bar-fill" style="width:4.5%"></div></div>
+      <span class="bar-n">≈133</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-l">中国医疗旅游（英文）</span>
+      <div class="bar-track"><div class="bar-fill v" style="width:4.9%"></div></div>
+      <span class="bar-n">≈144</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-l">中国定制游 tailor made</span>
+      <div class="bar-track"><div class="bar-fill v" style="width:1.5%"></div></div>
+      <span class="bar-n">≈45</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-l">中文「中国体检」</span>
+      <div class="bar-track"><div class="bar-fill z" style="width:0.5%"></div></div>
+      <span class="bar-n">1</span>
+    </div>
+  </div>
+  <p class="caption">Meta 广告库 2026-08-29 实查，投放国家筛选 = 澳大利亚，估算总数口径。注意「广交会」那 2,931 条里绝大多数是中国工厂在打自己的展位和展厅，不是组团服务——真正的澳洲组团方只有个位数。中文体检那 1 条还是一家马来西亚签证中介，跟这个市场无关。</p>
+
+  <h3>英文层：Wendy Wu 的广告在说什么</h3>
+  <p>Wendy Wu Tours Australia 一家就有 60 条澳元在投广告，文案主题高度收敛，基本是四句话反复排列组合：</p>
+  <ul class="body">
+    <li><strong>「Fully Inclusive」/「Everything Included. Just Go.」</strong>——最高频的一句，全包是它的核心卖点，直指澳洲客对语言、支付、网络的三重顾虑。</li>
+    <li><strong>「Trusted by Travellers for Two Decades」/「Australia's Leading Touring Specialist」</strong>——信任叙事，用时间和本地身份对冲「中国太陌生」。</li>
+    <li><strong>「Our BIGGEST Early Bird Sale EVER」/「Save up to $4,000」</strong>——大额折扣，锚在总价上而不是百分比。</li>
+    <li><strong>线下免费说明会</strong>——Camden、Doncaster、Carseldine、Wantirna South 分别建广告，加一场线上场。<strong>这是全澳洲唯一一家在系统性做线下获客的中国游玩家</strong>，说明它的核心客群年龄偏大、需要面对面建立信任。</li>
+  </ul>
+  <p>值得注意的是同一批广告里还夹着印度、东南亚、埃及的产品——中国是它最强的线，但不是唯一的线。</p>
+
+  <h3>中文层：全是中国那边的人在投</h3>
+  <p>用中文词在澳洲筛，出来的 133 条广告没有一条来自澳洲注册的旅行社。全部是中国境内的地接社和个人导游号，模式极度统一：</p>
+  <ul class="body">
+    <li><strong>价格锚点直给：</strong>「江南水乡 4–6 天精品纯玩团，人均不到 2000 人民币」「云南轻奢小团 8 天 7 晚，人均 2000 元左右，吃住行全包」。</li>
+    <li><strong>转化路径是 WhatsApp 私信</strong>，不是网站表单——广告文案里直接贴 wa.me 链接。</li>
+    <li><strong>信任话术是「本地人 / 不找中介」：</strong>「给你一个不找中介、直接找我这个杭州本地导游的理由」「找对本地人，能帮你避掉 90% 的坑」「八年专业导游」。</li>
+    <li><strong>还有一批打英文的中国地接社</strong>（Panda Guide、Real Local China Tours、China Customized Tours 等），用「No-Shopping Private Tour」「Plan Your Way」这类词直接抢澳洲英文客，也走 WhatsApp。</li>
+  </ul>
+
+  <div class="note">
+    <p class="note-t">这意味着什么</p>
+    <p>澳洲的华人客群（探亲流是第二大出行目的）现在被两边夹击：英文广告不针对他们，中文广告全来自中国那边、没有澳洲售后和保障。<strong>一家澳洲注册、能开发票、有本地投诉渠道的华人社，在中文层几乎没有对手。</strong>门槛是内容和投放能力，不是牌照。</p>
+  </div>
+</section>
+
+<section id="search">
+  <div class="sec-head">
+    <span class="sec-eyebrow">搜索与 SEO</span>
+    <h2>已经被验证的三种落地页打法</h2>
+  </div>
+
+  <div class="note">
+    <p class="note-t">数据已补齐 · 2026-08-30 更新</p>
+    <p>本节初版没有关键词量级数据（当时 Semrush 配额为零、DataForSEO 凭证不在运行环境）。<strong>现已用 DataForSEO 实测补齐澳洲市场 45 个关键词</strong>，下方表格为真实月均搜索量与单次点击价。<strong>补齐后有两条原判断被推翻，已在文中显式标注。</strong></p>
+  </div>
+
+  <h3>打法一：免签专属落地页</h3>
+  <p>Wendy Wu 建了 <code>/china-visa-free-travel/</code> 独立页，挂 12 条符合 30 天窗口的团 + 直接下单入口；China Discovery 建了「澳新公民签证政策」专页详解条款；Easy Tour China 做到城市一级——「China Visa-Free Tours from Australia 2026: Sydney, Melbourne, Brisbane, Perth」。这套打法的共同点是：<strong>用政策词吸流量，用产品页承接转化</strong>，而不是写一篇博客就完事。</p>
+
+  <h3>打法二：「from Australia + 城市名」的地域页</h3>
+  <p>中国地接社把这招用到极致，因为他们没有本地品牌认知，只能靠地域词建立相关性。澳洲本土社反而普遍没做——这是个反常现象：<strong>本地社天然有地域优势，却把地域关键词让给了境外竞争者。</strong></p>
+
+  <h3>打法三：解决顾虑的实用内容</h3>
+  <p>支付怎么办、上网怎么办、语言不通怎么办、Smartraveller 黄色警示要不要紧——这四个问题澳洲客一定会搜。目前排在前面的答案大多来自中国地接社和内容站，本地社在这块基本缺席。这类内容还有个额外好处：它同时是 AI 问答（ChatGPT、Perplexity）会引用的素材，而团购促销页不是。</p>
+
+  <h3>关键词簇：真实量级（澳洲市场，月均）</h3>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>意图簇</th><th>簇合计</th><th>最大的词</th><th>点击价</th><th>竞争</th><th>判断</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>产品词</strong></td><td class="num">14,680</td><td>china tours 3,600 · tours to china 3,600 · china tour packages 2,400</td><td class="num">$2.76–4.55</td><td>HIGH</td><td><span class="pill n">红海</span></td></tr>
+        <tr><td><strong>品牌词</strong></td><td class="num">8,960</td><td><strong>wendy wu tours 4,400</strong> · tripadeal china 2,900 · wendy wu china tours 1,000</td><td class="num">$0.51–2.45</td><td>MEDIUM</td><td><span class="pill r">一家占 60%</span></td></tr>
+        <tr><td><strong>细分</strong></td><td class="num">6,690</td><td><strong>canton fair 6,600</strong> · 医疗类合计仅 70</td><td class="num">$2.97</td><td>LOW</td><td><span class="pill w">全靠广交会撑</span></td></tr>
+        <tr><td><strong>政策词</strong></td><td class="num">6,200</td><td><strong>do australians need a visa for china 2,400</strong> · china visa australia 1,900</td><td class="num">$0.38–5.06</td><td><strong>LOW</strong></td><td><span class="pill y">高意图且没人买</span></td></tr>
+        <tr><td><strong>目的地词</strong></td><td class="num">6,100</td><td><strong>harbin ice festival 3,600</strong> · great wall of china tour 1,000 · yangtze river cruise 880</td><td class="num">$1.39–3.05</td><td>LOW–HIGH</td><td><span class="pill y">冰雪节被低估</span></td></tr>
+        <tr><td><strong>顾虑词</strong></td><td class="num">3,620</td><td>best time to visit china 2,900 · is china safe to travel 390</td><td class="num">$0.11–0.79</td><td><strong>LOW</strong></td><td><span class="pill y">最便宜的流量</span></td></tr>
+        <tr><td><strong>地域词</strong></td><td class="num">3,290</td><td>flights to china from sydney 1,600 · china tours from australia 880</td><td class="num">$0.74–3.04</td><td>HIGH</td><td><span class="pill w">有人在买</span></td></tr>
+        <tr><td><strong>定制词</strong></td><td class="num">250</td><td>private china tour 140 · custom china tour 10</td><td class="num"><strong>$10.29–20.63</strong></td><td>HIGH</td><td><span class="pill r">量小价极高</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">DataForSEO Google Ads 接口实查，澳洲地理定位，2026-08-30。CPC 为该词的建议出价区间，「竞争」为 Google 的竞争密度分级。搜索量为月均，10 是低量分桶下限。</p>
+
+  <div class="note red">
+    <p class="note-t">量级数据推翻了本报告初版的两条判断</p>
+    <p><strong>一、医疗看病团在澳洲几乎没有搜索需求。</strong> `medical tourism china` 只有 <strong>30</strong>、`health checkup china` 是 <strong>0</strong>、`dental implants china` 40。初版基于「英文 144 条广告」推断这是有需求的蓝海——<strong>现在看，那些广告不是靠搜索获客的，澳洲这个市场的需求侧比初版判断的小得多</strong>。做这块不能指望搜索带客，只能靠社群和口碑。</p>
+    <p style="margin-top:12px"><strong>二、定制游是空地，但也是个小池子。</strong> 整个簇月搜索量只有 <strong>250</strong>。初版说「需求真实存在，只是订单被境外接走」——需求确实存在，但<strong>总量远小于产品词</strong>。真正的价值信号是价格：`custom china tour` 单次点击 <strong>$20.63</strong>、`private china tour` $10.29，是全表最贵。<strong>结论要改成：不要买这些词的广告（池子太小撑不起投放），要用内容去接——量小、价高、决策长的需求，最适合长文和顾问式转化。</strong></p>
+  </div>
+
+  <div class="note">
+    <p class="note-t">补齐数据后新增的三个发现</p>
+    <p><strong>① 「do australians need a visa for china」月搜 2,400，竞争度 LOW。</strong> 这是政策簇里最大的词，也是最典型的高意图前置问题——问这句话的人正在认真考虑去中国。目前几乎没人买这个词，而 Wendy Wu 的免签落地页优化的是 `china visa free australia`（880）。<strong>更大的那个入口空着。</strong></p>
+    <p style="margin-top:12px"><strong>② 哈尔滨冰雪节 3,600，比长城（1,000）高 2.6 倍。</strong> 这是全表最反直觉的一条。CBT Holidays 有 Ice &amp; Snow 线但没做任何内容承接，Wendy Wu 的广告里也没有冰雪主题。<strong>一个明确的季节性需求，供给侧几乎没人认真回应。</strong></p>
+    <p style="margin-top:12px"><strong>③ 品牌词 8,960 里 Wendy Wu 一家占 5,400（60%）。</strong> 加上 TripADeal 的 2,900，两家吃掉品牌搜索的 93%。<strong>这说明新玩家靠通用产品词正面突围基本无望</strong>——只能走政策词、顾虑词、目的地长尾这些品牌认知不起作用的入口。</p>
+  </div>
+</section>
+
+<section id="niche">
+  <div class="sec-head">
+    <span class="sec-eyebrow">三个细分</span>
+    <h2>定制游、医疗团、工厂团</h2>
+  </div>
+
+  <h3>定制游 Tailor-made：小池子，但每滴水都很贵</h3>
+  <p>澳洲客在澳洲的广告里只能看到 45 条定制游相关投放，其中大半还是中国地接社在打广州、张家界的私家团。而中国地接社把定制当成核心产品（China Highlights 的「4 对 1 团队」、China Discovery 的实名顾问＋定制表单）。</p>
+  <p><strong>但搜索量给这个判断加了个重要限制：整个定制簇月搜索量只有 250。</strong>这不是一个能靠投放撑起来的池子。真正的信号在价格——`custom china tour` 单次点击 <strong>$20.63</strong>、`private china tour` $10.29，是全部关键词里最贵的两个。</p>
+  <p>所以打法要对应调整：<strong>不要买这些词，要用内容接住它们。</strong>量小、单价高、决策周期长的需求，最适合长文＋顾问式转化，而不是广告落地页。澳洲本地社真正的优势也不是行程设计，而是<strong>本地信任 + 本地售后 + 本地开票</strong>——这三样恰好是内容能讲清楚、广告讲不清楚的东西。</p>
+
+  <h3>医疗看病团：需求侧比想象的小得多，且红线最多</h3>
+  <div class="note red">
+    <p class="note-t">先看这个数字</p>
+    <p>澳洲市场月搜索量：<strong>medical tourism china = 30 · health checkup china = 0 · dental implants china = 40</strong>。整个细分合计 70。
+    对比 canton fair 一个词 6,600。<strong>这块在澳洲不是「蓝海」，是「几乎没有搜索需求」</strong>——下面列出的玩家全部靠内容站和社群获客，不靠搜索带量。要做这块，别指望 SEO 或广告能带来客人。</p>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <h4>已有的玩家很少</h4>
+      <p class="sub">澳新本土只有两家</p>
+      <p><strong>Three Bears Travel</strong>（用 .com.au 域名打澳洲，实际在新西兰）做体检、牙科、骨科、生育咨询的行程协调，卖点是「比澳新便宜 30–70%、无等候名单」。<strong>MedBridgeNZ</strong>（奥克兰）做医疗 concierge，对接中国三甲医院，博客覆盖博鳌乐城、种植牙、试管、回国体检，中英双语，多篇文章在英文搜索里排前列。</p>
+      <p>其余十几个（China Medical Tour、OriEast、MyChinaMed 等）都是「长文指南 + 询盘表单」的内容站，多数是中国背景的新站。</p>
+    </div>
+    <div class="card">
+      <h4>中国接待端在拉客，但没在拉澳洲</h4>
+      <p class="sub">海南乐城 / 和睦家</p>
+      <p>海南博鳌乐城 2024 年接待医疗游客 41.37 万人次（+36.8%），国际团人均消费 1.2 万元，推了 8 款面向海外的产品——但邀请的是马来西亚、印尼、越南、俄罗斯、港澳的机构，<strong>没查到针对澳洲的专门动作</strong>。和睦家有国际医疗服务中心、与 80% 以上国际保险直付，同样没有澳洲专项。</p>
+      <p>乐城最硬的卖点是：它是中国唯一可以合法使用「FDA/EMA 已批但国内未上市」药械的特区。</p>
+    </div>
+  </div>
+
+  <div class="note red">
+    <p class="note-t">做这块之前必须先看的四条红线</p>
+    <p><strong>一、</strong> 澳洲外交部 Smartraveller 对医疗旅游的官方立场是明确警告：并发症可能回澳后才出现、修复费远超原价、多数海外机构不担责、<strong>普通旅游险几乎不保医疗旅游、Medicare 海外不覆盖、政府不会代付</strong>。<a class="src" href="https://www.smartraveller.gov.au/travel-essentials/travel-health/medical-tourism" target="_blank" rel="noopener">Smartraveller</a><br>
+    <strong>二、</strong> 干细胞和实验性肿瘤疗法被澳洲学界和消费者组织 CHOICE 定性为灰色市场（约 200 名澳洲人曾赴海外做干细胞，单次最高 $60,000）。碰这块等于把品牌押上去。<br>
+    <strong>三、</strong> 试管婴儿在中国<strong>要求结婚证</strong>，禁止单身、同性、代孕和性别筛选——对澳洲客是硬门槛，不能含糊带过。<br>
+    <strong>四、</strong> 种植牙需 3–6 个月愈合，意味着二次赴华或本地随访，术后责任链一旦断裂就是纠纷。</p>
+    <p style="margin-top:12px"><strong>能做的是什么：</strong>体检、口腔、中医康养这类<strong>低风险、可预期、结果可核验</strong>的项目，且只做行程与翻译协调，绝不承诺疗效、绝不介入医疗判断。营销文案里出现任何治愈率、有效率、专家背书，都是把自己放在合规风险上。</p>
+  </div>
+
+  <h3>工厂参观团／商务考察团：竞争最热闹，但组团方极少</h3>
+  <p>广交会相关广告在澳洲有近 2,900 条，看起来是红海——但拆开看，绝大多数是<strong>中国工厂自己在打广告招揽已经要去广交会的买家</strong>（「来广交会吗？顺路来佛山看我们展厅」这类），而不是组团服务。真正在澳洲组团的只有两家老牌小生意：</p>
+  <ul class="body">
+    <li><strong>Australian Importing Company</strong>——做广交会带团 15 年以上，自称澳洲唯一被广交会集团认可的团，A$3,970+GST（1–2 人），主打「费用可抵税」。</li>
+    <li><strong>China Direct Sourcing</strong>（布里斯班）——三条线：批发采购之旅、整柜首单买家的商务之旅、广交会考察，行前替客户在中国全市场招标筛供应商。走教育内容 + 邮件 + 网络研讨会获客。</li>
+  </ul>
+  <p>商会侧：AustCham 各分会会安排会员参访，澳中商业委员会走的是大企业 CEO 圆桌路线，都不做中小企业的看厂团。<strong>中文侧（澳洲华人老板）完全没有成型产品在做内容营销</strong>，尽管这个客群语言无障碍、决策快、复购强。</p>
+
+  <div class="note">
+    <p class="note-t">这个细分的特殊价值</p>
+    <p>考察团的客单价和毛利高于观光团，客户是企业主（复购和转介率高），而且<strong>季节性绑定广交会（春秋两季）</strong>，营销节奏可预测。对旅行社来说它最难的不是行程，是「懂不懂这个行业」——所以本地社真正该找的是行业协会或 sourcing agent 做联合供给，而不是自己去谈工厂。</p>
+  </div>
+</section>
+
+<section id="playbook">
+  <div class="sec-head">
+    <span class="sec-eyebrow">行动建议</span>
+    <h2>该怎么做</h2>
+  </div>
+
+  <p class="lead">按客户类型分成两套。两套都建立在同一个判断上：<strong>免签明年可能失效，现在该建的是能留下来的资产。</strong></p>
+
+  <h3>如果你是澳洲本地旅行社</h3>
+  <div class="plays">
+    <div class="play">
+      <div class="play-h"><span class="play-t">占住地域词</span><span class="pill y">本季度</span></div>
+      <p class="play-b">建「从悉尼／墨尔本／布里斯班／珀斯出发的中国行程」页面，每个出发城市一页，写清直飞航线、飞行时长、出发时间。这是境外地接社正在抢、而你天然占优的一块，现在拿回来成本最低。</p>
+    </div>
+    <div class="play">
+      <div class="play-h"><span class="play-t">回答四个顾虑</span><span class="pill y">本季度</span></div>
+      <p class="play-b">支付怎么办、上网怎么办、语言不通怎么办、旅行警示黄色要不要紧。每个问题一篇实操长文，写到能被直接引用的程度。这类内容免签到期也不会过期，而且是 AI 问答会引用的素材类型——促销页不是。</p>
+    </div>
+    <div class="play">
+      <div class="play-h"><span class="play-t">中文层拿下华人客</span><span class="pill r">最大空地</span></div>
+      <p class="play-b">澳洲注册、能开发票、有本地投诉渠道——中国地接社给不了这三样。用中文投放和内容承接探亲客与带父母出行的家庭客，目前在这条赛道上没有澳洲对手。</p>
+    </div>
+    <div class="play">
+      <div class="play-h"><span class="play-t">把定制游做成主推</span><span class="pill w">中期</span></div>
+      <p class="play-b">45 条广告的赛道，客单价高、决策慢，恰好是本地信任最值钱的地方。不必自建地接能力，先跟中国定制社做后台，把前端的信任和售后握在自己手里。</p>
+    </div>
+    <div class="play">
+      <div class="play-h"><span class="play-t">别在通用产品词上跟闪购平台拼钱</span><span class="pill n">避开</span></div>
+      <p class="play-b">Luxury Escapes 在澳洲 Google 累计约 9,000 条广告、Inspiring Vacations 约 3,000 条。在「china tours」这类词上正面出价，是拿小预算去补别人的规模优势。</p>
+    </div>
+  </div>
+
+  <h3>如果你是中国的旅行社／地接社</h3>
+  <div class="plays">
+    <div class="play">
+      <div class="play-h"><span class="play-t">你的英文 SEO 打法已经跑通了，问题在转化</span><span class="pill w">优化</span></div>
+      <p class="play-b">China Highlights 和 China Discovery 证明了零广告靠内容拿澳洲询盘可行。但普遍的短板是：不标价、只有表单、澳洲客看不到任何本地保障。加一个透明价格区间和明确的取消政策，转化率提升空间大于再多写十篇文章。</p>
+    </div>
+    <div class="play">
+      <div class="play-h"><span class="play-t">WhatsApp 私信这条路对英文客是减分的</span><span class="pill r">要改</span></div>
+      <p class="play-b">中文客群接受私信成交，澳洲英文客不接受——他们期待网站、评价、条款和可追溯的付款方式。同一套素材在两个语言层需要两套转化路径。</p>
+    </div>
+    <div class="play">
+      <div class="play-h"><span class="play-t">和澳洲本地社做后台，比直接抢客更快</span><span class="pill y">高杠杆</span></div>
+      <p class="play-b">Nexus Holidays 清算后，中国线批发位置是空的。本地社缺地接能力、你缺本地信任，这个组合的摩擦最小。</p>
+    </div>
+    <div class="play">
+      <div class="play-h"><span class="play-t">医疗和考察两个细分现在没人认真做澳洲</span><span class="pill w">看能力再进</span></div>
+      <p class="play-b">乐城和和睦家都还没针对澳洲发力，广交会组团方只有两家。但这两块都需要行业能力而不只是接待能力，别当成普通团线扩展。</p>
+    </div>
+  </div>
+
+  <div class="note red">
+    <p class="note-t">所有人都要盯的一个日期</p>
+    <p><strong>2026 年 12 月 31 日</strong>——免签当前到期日，之后是否延续官方没有表态。把它当成一个必须监控的事件：延了，是下一轮营销窗口；不延，所有押在免签钩子上的落地页一夜之间失效。这也是为什么上面每一条建议都指向「顾虑内容」和「地域内容」这类不依赖政策的资产。</p>
+  </div>
+</section>
+
+<section id="sources">
+  <div class="sec-head">
+    <span class="sec-eyebrow">方法</span>
+    <h2>来源与数据缺口</h2>
+  </div>
+
+  <h3>这份简报的数据来自哪里</h3>
+  <ul class="body">
+    <li><strong>广告面：</strong>Meta 广告库实查（2026-08-29，投放国家 = 澳大利亚），共 6 组关键词检索、2 个主体页面全量拉取。</li>
+    <li><strong>Google 投放量：</strong>Google 广告透明中心「Ads in Australia」域名口径实查（2026-08-29/30），5 个域名有数、3 个域名确认为零。</li>
+    <li><strong>市场数字：</strong>澳洲统计局出入境统计（最新为 2026-08-14 发布的 6 月数据）、中国驻澳使馆免签公告、Travel Weekly AU / Karryon / Canberra Times / ABC 行业报道。</li>
+    <li><strong>玩家与产品：</strong>各公司官网实际抓取（价格、产品线、落地页结构均来自公开页面）。</li>
+  </ul>
+
+  <h3>本轮没拿到的东西</h3>
+  <ul class="body">
+    <li><strong>关键词绝对搜索量与 CPC —— 已于 2026-08-30 补齐。</strong> 初版因 Semrush 配额为零、DataForSEO 凭证不在运行环境而缺失，现已用 DataForSEO 实测 45 个澳洲关键词补上。<strong>补齐后推翻了两条原判断（医疗团需求、定制游规模），已在正文显式标注。</strong>这是「先说没查成、后来查成了就回写并公开改动」的完整闭环。</li>
+    <li><strong>部分玩家的 Google 投放量</strong>（Intrepid、On The Go、CBT 等），浏览器工具中途受限，未完成。</li>
+    <li><strong>2027 年免签是否延续</strong>——官方无任何表态，任何声称知道的说法都不可信。</li>
+    <li><strong>Qantas 是否复飞中国大陆</strong>——无公告。</li>
+    <li><strong>澳→中细分市场的并购与退出</strong>——除 Nexus Holidays 清算外未查到其他案例。</li>
+    <li><strong>澳洲华人社的组团回国体检产品</strong>——中英文均未查到成型产品，需求信号来自媒体报道而非商业供给，属于「有需求、无供给」而不是「已验证市场」。</li>
+  </ul>
+
+  <div class="note">
+    <p class="note-t">怎么读这份简报</p>
+    <p>带链接的数字都可以点开原始来源自己核。标「未取得」的地方是真的没查到，不是省略——这份简报的价值取决于它把不知道的事情说清楚的程度，跟它说了多少已知的事情一样重要。</p>
+  </div>
+</section>
+
+<footer>
+  <p><strong>澳洲赴华旅游情报简报</strong> · Magic Engine 旅游版市场情报 · 2026-08-30 生成</p>
+  <p class="fine">面向做中国入境游的澳洲与中国旅行社。所有市场数据附可核验来源，未取得的数据显式标注。本简报不构成投资、医疗或法律建议；医疗旅游相关内容请以澳洲外交部 Smartraveller 与执业医疗意见为准。</p>
+</footer>
+
+</div>

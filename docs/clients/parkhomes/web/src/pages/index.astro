@@ -3,13 +3,34 @@ import Base from '../layouts/Base.astro';
 import AgentLine from '../components/AgentLine.astro';
 import ProjectCard from '../components/ProjectCard.astro';
 import Areas from '../components/Areas.astro';
+import Faq from '../components/Faq.astro';
+import { agent } from '../data/agent.js';
 import { projects, featured } from '../data/projects.js';
 const cards = featured.map((s) => projects.find((p) => p.slug === s));
 const pipeline = projects.filter((p) => !featured.includes(p.slug));
----
-<Base title="Park Homes — Boutique residential developments across Auckland">
 
-  <section class="hero" style="background:linear-gradient(180deg,rgba(20,20,20,.42),rgba(20,20,20,.86)),url('/img/int-living.jpg') center/cover">
+const faqs = [
+  {
+    q: 'Who builds Park Homes developments?',
+    a: 'Park Homes is the trading name of The Park Homes Ltd, founded by Jason Wong. Jason has worked in New Zealand residential property since 2003; The Park Homes Ltd was incorporated in 2021. All work is delivered under a Licensed Building Practitioner (LBP).',
+  },
+  {
+    q: 'Where does Park Homes build?',
+    a: 'Across Auckland — current developments span the North Shore, East Auckland and South Auckland, with new sites planned for West Auckland.',
+  },
+  {
+    q: 'What stage are the current developments at?',
+    a: `Five developments in progress: ${projects.map((p) => `${p.name} (${p.status})`).join(', ')}. Each project page lists its own homes, sizes and consent status.`,
+  },
+  {
+    q: 'How do I register interest or ask a question?',
+    a: `Enquiries and sales across every development are handled by our appointed agent, ${agent.name} of ${agent.company} — ${agent.phone} or ${agent.email}.`,
+  },
+];
+---
+<Base title="Park Homes — Boutique residential developments across Auckland" desc="Boutique residential developer building new-home developments across Auckland — Rosehill, Howick, Castor Bay & more. Homes from $650k. Now selling.">
+
+  <section class="hero" style="background:linear-gradient(180deg,rgba(20,20,20,.42),rgba(20,20,20,.86)),url('/img/int-living.webp') center/cover">
     <span class="tag">Example image · indicative only</span>
     <div class="wrap">
       <p class="eyebrow">Residential Property Developer · Auckland</p>
@@ -25,7 +46,7 @@ const pipeline = projects.filter((p) => !featured.includes(p.slug));
   <!-- BRAND -->
   <section>
     <div class="wrap founder">
-      <div class="shot" style="background-image:url('/img/int-kitchen.jpg')"></div>
+      <div class="shot" style="background-image:url('/img/int-kitchen.webp')"></div>
       <div>
         <p class="eyebrow" style="margin-bottom:18px">The Park Homes way</p>
         <p class="pquote">Personal, approachable homes — and landmarks a neighbourhood is proud of.</p>
@@ -124,6 +145,8 @@ const pipeline = projects.filter((p) => !featured.includes(p.slug));
       </div>
     </div>
   </section>
+
+  <Faq items={faqs} heading="Frequently asked questions" />
 
   <!-- CTA -->
   <section class="dark cta">

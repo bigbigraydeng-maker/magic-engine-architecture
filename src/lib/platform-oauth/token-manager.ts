@@ -320,7 +320,10 @@ export async function getValidToken(
  * 按 (客户, 平台) 取令牌永远只会拿到最新连的那一个 —— 较早连的那个邮箱
  * 一封信都读不到，而且不会报错。
  */
-export async function getValidTokenForConnection(connectionId: string): Promise<string> {
+export async function getValidTokenForConnection(
+  connectionId: string,
+  opts?: { forceRefresh?: boolean },
+): Promise<string> {
   const { data, error } = await supabaseAdmin
     .from('platform_oauth_connections')
     .select('*')
@@ -333,7 +336,7 @@ export async function getValidTokenForConnection(connectionId: string): Promise<
   }
 
   const row = data as PlatformOAuthConnectionRow
-  if (!isTokenExpired(row.token_expiry)) {
+  if (!opts?.forceRefresh && !isTokenExpired(row.token_expiry)) {
     return decryptToken(row.access_token_enc)
   }
 

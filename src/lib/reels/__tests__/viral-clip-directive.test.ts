@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
 
-import { getViralClipDirective } from '../viral-style-advisor'
+import { buildViralVisualPlan, getViralClipDirective } from '../viral-style-advisor'
 import { supabaseAdmin } from '@/lib/supabase'
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
@@ -113,5 +113,44 @@ describe('getViralClipDirective', () => {
 
     expect(d).toContain('ugc testimonial')
     expect(d).toContain('handheld')
+  })
+})
+
+describe('Viral V2 visual plan receipt', () => {
+  it('ranks campaign-compatible visual grammar above a higher-view dance reference', () => {
+    const plan = buildViralVisualPlan([
+      {
+        id: 'dance-262m',
+        video_title: 'Air hostess dance',
+        view_count: 262_000_000,
+        opening_hook: { type: 'dance reveal' },
+        key_techniques: ['static-camera-shot', 'synchronized-choreography'],
+      },
+      {
+        id: 'cinematic-12m',
+        video_title: 'China destination reveal',
+        view_count: 12_000_000,
+        opening_hook: { type: 'visual surprise' },
+        key_techniques: ['cinematic close-up', 'dynamic reveal', 'fast cuts', 'text overlay'],
+      },
+    ], 'Travel', 'brand', {
+      campaignAngle: 'See China beyond the postcard',
+      maxContinuousI2vSeconds: 2.6,
+      overlayRoles: ['hook', 'middle'],
+    })
+
+    expect(plan).not.toBeNull()
+    expect(plan!.reference_ids[0]).toBe('cinematic-12m')
+    expect(plan!.reference_ids).not.toContain('dance-262m')
+    expect(plan!.shot_grammar).toContain('dynamic reveal')
+    expect(plan!.edit_rhythm).toContain('<= 2.6s')
+    expect(plan!.overlay_pattern).toContain('hook + middle')
+    expect(plan!.prohibited_patterns.join(' ')).toContain('copied reference wording')
+  })
+
+  it('fails closed when references have no auditable visual grammar', () => {
+    expect(buildViralVisualPlan([
+      { id: 'audio-only', key_techniques: ['voiceover narration', 'trending song'] },
+    ], 'Travel', 'brand', { maxContinuousI2vSeconds: 2.6 })).toBeNull()
   })
 })

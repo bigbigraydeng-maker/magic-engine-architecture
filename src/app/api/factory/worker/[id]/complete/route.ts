@@ -144,6 +144,7 @@ export async function POST(
   }
 
   // ②–④ 多表写编排(红线复扫 + B轨白名单 + clip 幂等入库 + 台账 + 工单转 in_review)抽到 lib(A3)
+  // blocker 1:透传 recipe_receipt（recipe 单必填,legacy 单可缺）;body 无该字段 = undefined
   const result = await completeWorkOrder(supabaseAdmin, {
     wo,
     workerId,
@@ -153,6 +154,7 @@ export async function POST(
     caption,
     actualCost,
     newClips,
+    recipeReceipt: body.recipe_receipt,
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
   return NextResponse.json({

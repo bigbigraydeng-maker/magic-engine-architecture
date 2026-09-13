@@ -24,6 +24,7 @@ import { encryptToken } from '@/lib/platform-oauth/vocabulary'
 import { listGa4Properties } from '@/lib/ga4/admin'
 import { setGa4Property } from '@/lib/ga4/property'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
+import { persistGbpFromTokens, scopeIncludesGbp } from '@/lib/gbp/oauth-persist'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -182,7 +183,77 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       { onConflict: 'client_id,anchor' },
     )
 
-  // GA4 — resolve which properties (if any) this Google account can see.
+  // GA4 — persist the OAuth grant before trying to discover properties.
+  //
+  // OAuth active is deliberately NOT the same thing as GA4 connected. This
+  // row only says the Google grant is available; setGa4Property() remains the
+  // only path that can mark client_connectors.ga4 as connected after a live
+  // Data API read succeeds. Property discovery is an optional convenience and
+  // must never decide whether the refresh token survives this callback.
+  const { data: priorGa4Credential, error: priorGa4Err } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('refresh_token_enc')
+    .eq('client_id', clientId)
+    .eq('provider', 'google_ga4')
+    .eq('account_id', clientId)
+    .maybeSingle<{ refresh_token_enc: string }>()
+
+  if (priorGa4Err) {
+    console.error('[google/callback] GA4 credential read failed:', priorGa4Err.message)
+    return NextResponse.redirect(destination(flow, clientId, 'error'))
+  }
+
+  const previousRefreshToken = priorGa4Credential?.refresh_token_enc
+  const refreshTokenEnc = tokens.refresh_token
+    ? encryptToken(tokens.refresh_token)
+    : previousRefreshToken
+
+  if (!refreshTokenEnc) {
+    console.error('[google/callback] GA4 credential missing refresh token')
+    return NextResponse.redirect(destination(flow, clientId, 'error'))
+  }
+
+  // The current product supports one GA4 grant per client. Use the client ID
+  // as a stable slot. The replacement must be durable before historical
+  // email/property keyed rows are retired, so a failed reauthorization never
+  // destroys the previously working grant.
+  const expiresAt = new Date(Date.now() + tokens.expires_in * 1000)
+  const { error: ga4CredentialErr } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .upsert(
+      {
+        client_id:         clientId,
+        provider:          'google_ga4',
+        access_token_enc:  encryptToken(tokens.access_token),
+        refresh_token_enc: refreshTokenEnc,
+        token_expiry:      expiresAt.toISOString(),
+        account_id:        clientId,
+        display_name:      googleEmail ?? 'Google Analytics 4',
+        scopes:            tokens.scope.split(' '),
+        status:            'active',
+        updated_at:        new Date().toISOString(),
+      },
+      { onConflict: 'client_id,provider,account_id' },
+    )
+
+  if (ga4CredentialErr) {
+    console.error('[google/callback] GA4 credential write failed:', ga4CredentialErr.message)
+    return NextResponse.redirect(destination(flow, clientId, 'error'))
+  }
+
+  const { error: retireGa4Err } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .update({ status: 'revoked', updated_at: new Date().toISOString() })
+    .eq('client_id', clientId)
+    .eq('provider', 'google_ga4')
+    .neq('account_id', clientId)
+
+  if (retireGa4Err) {
+    console.error('[google/callback] GA4 credential retirement failed:', retireGa4Err.message)
+    return NextResponse.redirect(destination(flow, clientId, 'error'))
+  }
+
+  // Resolve which properties (if any) this Google account can see.
   // Zero properties is a normal "customer doesn't have GA4 yet" state, not
   // an error — only a genuine API failure gets logged loudly (spec §2.6:
   // "真的没有" vs "接口报错" must not be conflated).
@@ -216,55 +287,62 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // does nothing here and leaves it to the settings page's property picker
   // (GET/PATCH /api/clients/[id]/ga4-properties), which re-verifies live on
   // every save regardless of what this callback did or didn't do.
-  if (tokens.refresh_token) {
+  {
     const ga4Result = await listGa4Properties(tokens.access_token)
     if (!ga4Result.ok) {
-      console.error('[google/callback] GA4 property list failed — leaving GA4 unconnected for this round')
+      console.error('[google/callback] GA4 property list failed — OAuth saved; leaving GA4 unconnected for this round')
     } else if (ga4Result.properties.length > 0) {
       const chosen    = ga4Result.properties[0]
-      const expiresAt = new Date(Date.now() + tokens.expires_in * 1000)
-      const { error: ga4Err } = await supabaseAdmin
-        .from('platform_oauth_connections')
-        .upsert(
-          {
-            client_id:         clientId,
-            provider:          'google_ga4',
-            access_token_enc:  encryptToken(tokens.access_token),
-            refresh_token_enc: encryptToken(tokens.refresh_token),
-            token_expiry:      expiresAt.toISOString(),
-            account_id:        chosen.property,
-            display_name:      chosen.displayName,
-            scopes:            tokens.scope.split(' '),
-            status:            'active',
-            updated_at:        new Date().toISOString(),
-          },
-          { onConflict: 'client_id,provider,account_id' },
-        )
-      if (ga4Err) {
-        console.warn('[google/callback] GA4 connection write failed:', ga4Err.message)
-      } else if (ga4Result.properties.length === 1) {
-        const { data: existingConnector } = await supabaseAdmin
+      if (ga4Result.properties.length === 1) {
+        const { data: existingConnector, error: existingConnectorErr } = await supabaseAdmin
           .from('client_connectors')
           .select('id')
           .eq('client_id', clientId)
           .eq('anchor', 'ga4')
           .maybeSingle<{ id: string }>()
 
-        if (!existingConnector) {
+        if (existingConnectorErr) {
+          console.error('[google/callback] GA4 connector read failed; skipping auto-select:', existingConnectorErr.message)
+        } else if (!existingConnector) {
           // Nothing to clobber — verify-then-write through the one shared
           // path. If verification fails, setGa4Property() itself records
           // status='error' with the reason; either way this callback never
           // writes 'connected' directly.
           await setGa4Property(clientId, chosen.property)
         }
-        // existingConnector already present (connected OR error) → leave
-        // it exactly as-is; re-auth must never silently override it.
+        // existingConnector already present (connected OR error) → leave it
+        // exactly as-is; re-auth must never silently override it.
       }
       // properties.length > 1 → ambiguous, no auto-pick; user chooses via
       // the settings page picker, which lists all of them live from Google.
     }
     // properties.length === 0 → customer genuinely has no GA4 account yet,
     // not an error — nothing to write, matches the wizard's skip-and-move-on path.
+  }
+
+  // ── GBP: 若这次授权包含 business.manage，一并把商家页连接落库 ────────────
+  // 铁律 3 落地（2026-09-07）：从前 GBP 和 GSC/GA4 是两条独立 OAuth，每客户要
+  // 点两次；PM 每天早上待办里都躺着三条「要你点一次的连接」，实际上大半是同
+  // 一个 Google 账号只是要跳第二遍。合到一次点后，一次 consent 覆盖商家页 +
+  // GSC + GA4 + Indexing，daily-todo 的 setup 卡片就真的能"以后不再出现"了。
+  //
+  // 非致命：GSC / GA4 已经写好，即使 GBP 这一支失败（用户不在 Test users /
+  // Business API 没启用 / 账号名下没商家页），也不该把整条授权推回错误页 ——
+  // daily-todo 的 GBP 待办明天照旧会浮出来，用户再单独走一次 gbp/start 就行。
+  if (tokens.refresh_token && scopeIncludesGbp(tokens.scope)) {
+    const gbpResult = await persistGbpFromTokens({
+      clientId,
+      accessToken:  tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresInSec: tokens.expires_in,
+      scope:        tokens.scope,
+    }).catch((err) => {
+      console.error('[google/callback] GBP persist threw:', err instanceof Error ? err.message : err)
+      return { ok: false as const }
+    })
+    if (!gbpResult.ok) {
+      console.warn('[google/callback] GBP not persisted this round — daily-todo will re-surface it')
+    }
   }
 
   // Redirect back to where the flow started

@@ -87,7 +87,7 @@ const CITY_DISPLAY_NAME: Record<string, string> = {
 export interface SerpOptions {
   /** Optional city slug — when set, DataForSEO uses location_name = "{City},{Country}" instead of country-level location_code. */
   city?: string | null
-  /** Override language. Default 'en'. Use 'zh-CN' for Chinese questions. */
+  /** Override language. Default 'en'. Use ISO 639-1 codes such as 'zh'. */
   language?: string
 }
 
@@ -143,6 +143,8 @@ export async function getSerpPage(
 
   const json = await res.json() as {
     tasks?: Array<{
+      status_code?: number
+      status_message?: string
       result?: Array<{
         items?: Array<{
           type?:                  string
@@ -166,7 +168,14 @@ export async function getSerpPage(
     }>
   }
 
-  const items = json.tasks?.[0]?.result?.[0]?.items ?? []
+  const task = json.tasks?.[0]
+  if (task?.status_code !== 20000) {
+    throw new Error(
+      `DataForSEO SERP task ${task?.status_code ?? 'missing'}: ${task?.status_message ?? 'unknown'}`,
+    )
+  }
+
+  const items = task.result?.[0]?.items ?? []
 
   // Filter out non-commercial domains (govt, edu, org, ac) — these inflate
   // the "competitive landscape" with entities that are not business rivals.

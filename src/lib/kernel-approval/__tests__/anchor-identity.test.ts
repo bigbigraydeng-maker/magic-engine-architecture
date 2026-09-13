@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import { CLIENT_A, CLIENT_B } from '@/lib/kernel/__tests__/fixtures'
 import { ApprovalError } from '../errors'
-import { DECISION_COLUMNS } from '../queries'
+import { DECISION_COLUMNS, RUN_COLUMNS } from '../queries'
 import { buildApprovalDetail, decideApproval, listPendingApprovals, loadRunForApproval } from '../service'
 import { authorizeRun } from '@/lib/kernel/authorize'
 import { ACTOR, KEY, pendingFixture } from './_fixtures'
@@ -515,7 +515,7 @@ describe('🔴 读路径身份判据：key / version / 幂等键各自独立可�
     expect(detail.decision.id).toBe(expectedDecisionId)
   })
 
-  it('🔴 `DECISION_COLUMNS` 真的选了这三个身份字段（少一列 = 判据静静地永远为真）', () => {
+  it('🔴 run 与 decision 的查询投影都包含完整身份字段（少一列 = 合法待办被跳过）', () => {
     // 🔴 判据比得再全，`select()` 里没列出来就是拿 `undefined` 去比 ——
     //    `undefined !== run.action_key` 恒真，于是每一条都被判成「错挂」；
     //    反过来某些写法会恒假。两种都是静默失效。
@@ -524,6 +524,10 @@ describe('🔴 读路径身份判据：key / version / 幂等键各自独立可�
     //    （它把整行返回），所以「读回来有没有这个字段」在假件上根本问不出来 ——
     //    拿它当判据会是一条永远绿的空转测试（实测变异探针 MISSED）。
     for (const field of ['action_key', 'action_version', 'idempotency_key']) {
+      expect(
+        RUN_COLUMNS,
+        `RUN_COLUMNS 少选了 ${field} —— 合法 run 会被误判为身份不一致`,
+      ).toContain(field)
       expect(
         DECISION_COLUMNS,
         `DECISION_COLUMNS 少选了 ${field} —— 身份判据会拿 undefined 去比`,

@@ -15,7 +15,10 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "db:check-policies": "node scripts/check-policy-to-clause.mjs",
+    "db:check-policies:all": "node scripts/check-policy-to-clause.mjs --all",
+    "db:verify": "bash scripts/db-replay-and-verify.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
@@ -27,6 +30,7 @@
     "compromise": "^14.15.0",
     "docx": "^9.6.1",
     "html-to-image": "^1.11.13",
+    "inngest": "^3.54.0",
     "ipaddr.js": "^2.5.0",
     "jsonrepair": "^3.14.0",
     "jszip": "^3.10.1",
@@ -38,11 +42,13 @@
     "react-dom": "^18",
     "recharts": "^2.15.0",
     "resend": "^6.12.4",
+    "rss-parser": "^3.13.0",
     "stripe": "^22.2.0",
     "tailwindcss": "^3.4.1",
     "tesseract.js": "^5.1.1",
     "undici": "^6.21.1",
     "ws": "^8.20.0",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

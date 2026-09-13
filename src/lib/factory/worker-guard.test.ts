@@ -9,6 +9,7 @@ import {
   trackFolder,
   validateClipPath,
   validateRenderPath,
+  workerClaimClientIds,
   workerClientWhitelist,
   workerIdFromBody,
 } from './worker-guard'
@@ -60,6 +61,29 @@ describe('workerClientWhitelist', () => {
   it('全是非法值 → null,不放行空白名单', () => {
     process.env.FACTORY_WORKER_CLIENT_IDS = 'not-a-uuid, also-bad'
     expect(workerClientWhitelist()).toBeNull()
+  })
+})
+
+describe('workerClaimClientIds(单客户 claim 隔离)', () => {
+  const OTHER = '10000000-0000-0000-0000-000000000001'
+  const whitelist = [CLIENT, OTHER]
+
+  it('目标客户在服务端白名单内 → 只传该客户给原子 claim RPC', () => {
+    expect(workerClaimClientIds({ client_id: CLIENT }, whitelist)).toEqual([CLIENT])
+  })
+
+  it('未指定目标客户 → 保留现有全白名单行为', () => {
+    expect(workerClaimClientIds({}, whitelist)).toEqual(whitelist)
+  })
+
+  it('越权、空值或非字符串目标 → fail-closed', () => {
+    expect(workerClaimClientIds({ client_id: WO }, whitelist)).toBeNull()
+    expect(workerClaimClientIds({ client_id: '  ' }, whitelist)).toBeNull()
+    expect(workerClaimClientIds({ client_id: 42 }, whitelist)).toBeNull()
+  })
+
+  it('大小写和外围空白可规范化为服务端白名单中的 UUID', () => {
+    expect(workerClaimClientIds({ client_id: `  ${CLIENT.toUpperCase()}  ` }, whitelist)).toEqual([CLIENT])
   })
 })
 
@@ -159,11 +183,16 @@ describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
 
   it('🔴 render.yaml 的 worker 服务没有声明这个变量(声明了说明职责变了)', () => {
     const yaml = readFileSync(path.join(ROOT, 'render.yaml'), 'utf8')
-    const workers = Array.from(
-      yaml.matchAll(/-\s+type:\s+worker\s*\n\s+name:\s*(\S+)([\s\S]*?)(?=\n\s*-\s+type:|$)/g),
+    // 先按「任意类型的服务」解析,确认正则真的读到了东西,再从里面挑 worker。
+    // 2026-09-02 起 render.yaml 里已经没有 worker 服务(content-factory-render-worker 退役,
+    // commit 47d34113),所以防空跑不能再拿「worker 数 > 0」当判据 —— 那会把退役误报成正则坏了。
+    // 哪天再加回 worker 服务,这条会自动把它管上。
+    const services = Array.from(
+      yaml.matchAll(/-\s+type:\s+(\w+)\s*\n\s+name:\s*(\S+)([\s\S]*?)(?=\n\s*-\s+type:|$)/g),
     )
-    expect(workers.length, 'render.yaml 里一个 worker 服务都没解析到,正则可能写歪了').toBeGreaterThan(0)
-    const declaring = workers.filter((m) => m[2].includes(ENV_NAME)).map((m) => m[1])
+    expect(services.length, 'render.yaml 里一个服务都没解析到,正则可能写歪了').toBeGreaterThan(0)
+    const workers = services.filter((m) => m[1] === 'worker')
+    const declaring = workers.filter((m) => m[3].includes(ENV_NAME)).map((m) => m[2])
     expect(declaring).toEqual([])
   })
 

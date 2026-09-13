@@ -21,6 +21,74 @@
 
 ---
 
+## Creatomate Connector 落地后续
+
+> 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2）。2026-09-13 端到端真实验证已跑通（PR #1570/#1594/#1604，见 memory `project-cts-video-factory-decision-ledger` 完整记录），下面只留还没做完的。
+
+- [x] `CREATOMATE_API_KEY` 已配进生产（PM 2026-09-12 确认）
+- [x] webhook payload 真实字段结构已通过多次真实渲染验证，正常工作
+- [x] 至少一个试点客户（CTS）已在 `factory_config.render.creatomate` 配好 template_id + scene_field_map，多次真实渲染成功
+- [x] 镜头槽位入场/推拉动画已确认真实存在（模板源码里每个 Still-N 都有 scale 动画，2026-09-13 直接读取模板源码确认，不再是假设）
+- [ ] 找 Creatomate 客服或后台账单确认超出 2,000 credits/月后的真实计费行为（硬顶拒绝还是继续扣钱）（spec §6.2）
+- [ ] `pickRealPhoto`/`loadRankableClientAssets` 补一道质量分门槛（`client-asset-pool.ts` 的 `MIN_QUALITY=5` 口径目前真实照片路径没用上）
+- [ ] `PreparedScene.visualSource` 接入人工分镜自检表 UI，让 FDE 逐镜看时能分清"这镜是真图"
+- [ ] `pickRealPhoto` 内部调用 `rankAssetsByPrompt` 的 `gpt-4o-mini` 排序成本（分钱级）没有计入 `content_factory_render_jobs.cost_usd`
+- [x] CTS 真实素材库缺 Hutong（Still-5 专属）、西安城墙（Still-6 专属，不是兵马俑）的真实照片——2026-09-13 发现公司自己的 Dropbox 素材库（`CTS/footage/photos/`）里其实早就有 2 张胡同 + 1 张西安城墙真实照片，只是从未录入 `client_assets`，不需要去 Unsplash 找。已上传+PM 过目确认+标记 `client_verified`。**注意**：这两个landmark 目前仍不在 `factory_config.render.creatomate.scene_field_map`（该客户脚本目前只生成 4 个镜头，对应 Still-3/4/7/8），要真的让这两张照片出现在成片里，还需要把内容生成扩到 6 个镜头并给 Still-5/Still-6 各加一条 `scene_field_map` 条目——这是下一步待决定的事，不是"现在已经在用"
+- [x] 那个已确认"退役但没真的关掉、还在偷偷抢渲染任务"的老 Render 服务（`content-factory-render-worker`）——PM 2026-09-13 拍板彻底删除，已在 Render 后台执行删除，服务已不存在
+- [ ] PM 拍板"AI 配音统一用 ElevenLabs"，账号免费版无法通过 API 调用任何声音——PM 2026-09-13 拍板暂不升级付费，先维持现状；CTS 出片全程仍未真正测过配音这一步
+- [ ] "多开发不同模板"：PM 不想招人代画，已验证 Creatomate 模板编辑页的 Code 视图（`{}` 图标）能直接读出完整模板 JSON 源码，理论上也能反向粘贴编辑保存，但只验证了"读"，没验证"改并保存"这一步
+- [x] 背景音乐——2026-09-13 发现模板其实自带一个通用的 `Music` 音频图层（此前的模板结构记录漏记了这个，只记了画面/文字元素），PM 上传了 3 首新曲目到 Dropbox（`MagicLab_Studio/Music/`），已全部转存到正式素材库，PM 选定 `Horizon's Call` 作为默认背景音乐，通过已有的 `static_overrides` 机制接入（不需要改代码），已用真实渲染验证音轨确实有声音且不是哑的
+- [x] 片尾信息（团名/路线/天数价格/出发日期）此前 100% 是模板作者写死的示例内容，从不随视频变化——新增 `CreatomateTemplateContract.requiredPostFields` + `content_posts.generation_context_snapshot.endcard`（PR #1613），每条视频可以有自己真实的片尾内容，缺字段直接拦渲染不许静默套用旧内容。已用两条真实渲染验证（"Best of China"/"China Awaits"两条视频片尾信息各自正确、互不相同）
+- [x] 🔴 早前记录"MUAPI_API_KEY 缺失是低频 P3"是错的判断——2026-09-13 当天晚些时候真正用全新脚本出片（不复用旧 scenes）才发现真正根因：`loadRankableClientAssets`（自动选真实照片）的数据库查询有 bug，把 47 张已核实真实照片里的 46 张误判成"视频"过滤掉了，池子实际只剩 1 张，几乎每次都会命中"配不到真实照片→AI 现画兜底"这条路，而不是低频边缘情况。已修复（PR #1615）：改成跟同文件另一处已经写对的逻辑一致的判断。修复后验证：真实照片池从 1 张恢复到 50 张，两条全新脚本各自正确匹配到长城/故宫/兵马俑/上海真实照片。`MUAPI_API_KEY` 本身仍未配置，但命中率修复后应显著下降，不再是当天最紧迫的事
+- [x] 上一条遗留的 `MUAPI_API_KEY` 缺失当天晚些时候真的命中了三次（全新脚本每次都触发一个镜头配不到真实照片、回退现画、卡在 Muapi 图生视频缺密钥）——2026-09-13 PM 直接在 Render 后台补上，已用真实渲染验证 Muapi 回退路径恢复正常
+- [x] 片尾信息此前虽然有 `requiredPostFields` 机制（PR #1613），但全仓库没有任何代码真的往 `content_posts.generation_context_snapshot.endcard` 写值——此前两次"验证通过"全靠人工手写数据库代填，等于每条视频出片前都要一次人工介入，撞了 CLAUDE.md「FDE/PM 要填的字段必须连 Settings UI 一起做完，不能进 Supabase 后台直填」这条红线。新增 `CreatomateTemplateContract.offers`（按团/出发城市变体分的真实事实字典）+ `postFieldSources`（元素名→事实字段映射）+ 自动写入机制（PR #1632，子牙+魏征两轮设计复审 + 实施后复审共抓出 3 处真问题都已修）：这几个字段现在是纯函数确定性映射（不走 LLM，杜绝幻觉/改写风险），且"没指定用哪个团 + 客户配了 ≥2 个团"时 fail-closed 抛错，不会猜一份不相关的事实套上去。已用真实渲染验证：`endcard` 自动写对（团名/路线/价格/出发日期全部正确且互不相同），零人工数据库写入
+- [x] 上两条遗留全部补完（PR #1642）：①`client-config.ts::mergeFactoryConfig` 的 Settings UI 写入路径此前确实没有回写 `static_overrides`/`required_post_fields`/`offers`/`post_field_sources`——已修，四个字段现在按"没带就沿用已存值、带 null 就清空、带合法值就覆盖"的语义正确合并。②新增结构化"资料包"管理界面（设置页 → 内容 tab → 视频工厂配置）：FDE/PM 自己就能增删团/档位及其真实字段，不用再找工程改代码；内容工厂看板"确认做"这一步新增归属下拉框（`content_posts.generation_context_snapshot.offer_key`），客户配了 ≥2 个资料包时必须先选。实施后复审（对抗性）额外抓出并修复两个真洞：offer_key 写入前不校验是否存在于客户配置里（会让选错/选到已删档位的视频混进渲染队列，等 Inngest 任务异步失败才发现——已改成确认那一刻同步 400 拦下）、资料包表单里档位名重复会静默互相覆盖（已改成阻塞报错）。CTS 真实的 7 个在售团（Golden China / 圣诞团奥克兰+基督城 / Best of China / 丝路 / 双城记 / 上海周边）已从 `config/clients/cts/offerings.yaml`（见下面"内容/私信"分组的说明）导入配置好，用真实产品数据在生产环境跑通完整闭环验证（UI 选团 → 自动核对 → 自动填对片尾信息 → 渲染成功）。
+- [ ] 上面这次发现：CTS 现在有**两套**"这个客户在卖哪些团"的真实事实存储——视频工厂这边（`factory_config.render.creatomate.offers`）和私信回复 Agent 那边（`config/clients/cts/offerings.yaml`，#1577）各存一份，语义高度重叠，以后团有变动要改两个地方，容易漏改。建议后续把其中一份定为唯一真相源，另一份改成读它、不再各自维护。
+- [ ] 真实照片排序（`rankAssetsByPrompt`）疑似没有匹配度门槛，会把明显文不对题的照片当"匹配成功"返回（如故宫文案配上长城照片、兵马俑文案配上梯田照片，`reason` 字段自己写的解释都文不对题）——2026-09-13 诊断发现，已建独立任务调查范围和优先级，不在这批改动里处理
+- [ ] NAL（New Asian Logistics，物流客户）首次接入视频工厂——PM 拍板"先用现有真实素材做1图1视频"，2026-09-13 已完成（真实素材取自 NAL 自己的 Facebook 主页，走 ffmpeg 本地合成，未走 Creatomate，NAL 没有专属模板）。素材偏薄（只有1张车队照+1条员工讲解视频），正式量产前建议向客户要更多真实素材
+
+## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
+
+> 背景：`me_sale_outcomes`/`me_conversion_writebacks` 表结构（Issue #1397）2026-09-05 已定稿，
+> 本次会话（2026-09-13）apply 到生产库并跑完 5 项自验。这条待办是给它接第一个真实数据源：
+> CTS 人工维护的 Google Sheet（FB 即时表单留资 + 员工跟进记录）。设计经子牙+魏征两轮独立
+> 复审后实施，详见 PR #1597 描述。
+
+- [ ] PM 确认 `source_kind='crm_sheet_sync'` 命名（或改用别的名字）——迁移
+      `supabase/migrations/20260913000001_conversion_source_kind_crm_sheet_sync.sql` 已写好未 apply
+- [ ] PM/FDE 把 Google Sheet 分享给 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` 里的 `client_email`（查看者权限即可），
+      并把分享设置从"任何人可查看"改成限定名单（顺手修的安全问题，跟本任务本身无关）
+- [ ] 确认 GCP 项目里 Sheets API 已启用
+- [ ] 上面三条做完后，用 `POST /api/admin/conversions/cts-crm-sync` 真实跑一次，核对 `/dashboard/conversions`
+      审核页面上的记录是否看得懂、数字是否对得上（这一步之前代码从未接触过真实 Google Sheets API 响应）
+- [ ] 实测发现：`阶段Stage` 列 1599 行只填了 1 行，`阶段更新日` 列 100% 空白——"已成交"检测目前几乎找不到信号，
+      是表格填写现状不是代码问题；等 PM/FDE 开始真正使用这两列，成交同步会自动生效，不需要改代码
+- [ ] 若未来这条同步的记录量明显起量（不再是当前的 0-1 条成交/次），"查不到价格/缺日期"的搁置项要不要
+      升级成正式的 `pm-todo` manual item（而不是只在同步响应里一次性返回），需要重新评估
+
+## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
+
+- [ ] Latest-result follow-up: show newest signal per page/direction including ignore; collapse earlier records without implying they are resolved. Read-only presentation, risk C, based on main bd6d3c4e47ae4d02feccabc9dcb88aabb744c1c6 fetched 2026-09-09.
+
+- [ ] Readable UI follow-up: result-first views, collapsed configuration/evidence, Chinese future interpretations; locally verified, pending review/production release. Hiring/People/Partnership/Reviews/Technology collection remains a separate extension.
+
+- [x] Implementation merged (#1500); production migration and CTS-only pilot explicitly approved and enabled. Existing Industry Baselines UI → Inngest → Apify → immutable snapshot/evidence → actual cost settlement verified on Wendy Wu homepage. Compatibility fixes #1506/#1507 deployed. [Implementation / rollout receipt](./specs/2026-09-09-web-intelligence-v01.md).
+- [ ] Verify an actual later website change through LLM classification/recommendation; do not manufacture live evidence. One UI draft-refresh follow-up remains deferred; queued-run target recheck and content-limit failure settlement are implemented and regression-tested. Hiring/People/Partnership/Reviews/Technology remain future extensions. No automatic action.
+
+## ME Web Intelligence 多管道外部情报 [ME-WI.0.2]
+
+> **新需求登记（2026-09-11）**：WI 是面向高级客户的外部市场情报与竞争预警能力，不能收窄成竞品官网抓取。范围新增主流新闻媒体、行业新闻、行业杂志、招聘信息，并逐步接入 SERP、公开广告库、AI 可见度和口碑。完整需求与分期见 [多管道外部情报需求 v1](./specs/2026-09-11-me-wi-multichannel-intelligence-v1.md)。
+
+- [ ] **ME-WI.0.2-A**：统一 source / observation / evidence / event 契约、来源等级、新鲜度、去重、运行状态与结果呈现。
+- [ ] **ME-WI.0.2-B**：主流新闻、行业新闻、行业杂志/行业网站采集与事件抽取；旅游行业首批纳入 Travel Today 等垂直来源。
+- [x] **ME-WI.0.2-B0**：完成首批 Apify Actor 适配和 Travel Today、TRAVELinc、Tourism New Zealand 来源登记；待生产 migration、真实小样本和调度验收。
+- [ ] **ME-WI.0.2-C**：首期接入新西兰 SEEK、Indeed 公开招聘信息，识别组织与战略领先信号，并明确不等同于已发生业务事实。
+- [ ] **ME-WI.0.2-D**：SERP、公开广告库、AI 可见度、口碑接入统一事件模型，复用既有 provider，不恢复已退役 `ai-tracker`。
+- [ ] **ME-WI.0.2-D1**：通过 Apify `themineworks/similarweb-scraper` 接入竞品网站流量方向信号；仅保存域名级公开估算、变化率、来源结构和主要国家，标记低置信度，不将其解释为真实访问量、销售影响或 NZ 精确市场流量。已完成小样本验证、统一 observation/snapshot、经营 Agent 页面展示、历史趋势和默认关闭的月度调度；下一步做小样本线上验收，再决定是否打开 `WEB_INTELLIGENCE_TRAFFIC_ENABLED`。
+- [ ] **ME-WI.0.2-E**：跨来源事件聚合、高级客户预警与周度情报摘要。
+- [x] **ME-WI.0.2-F0**：登记 Facebook Group 受控情报源契约；仅支持客户授权导出或 Meta 审批后的接入，不实现绕过权限的社交抓取。
+- [ ] 每条管道必须完成“采集 → 证据 → 时效 → 变化分析 → 结果呈现”，保持只读、建议型、人工复核；不自动执行外部经营动作。
+
 ## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）
 
 > **新窗口开工前必读**：[WP00 契约冻结 v1.0](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)。
@@ -83,18 +151,70 @@
 - [x] ~~**U11**~~ ✅ **已完成** —— `docs/STATE.md` 与本文件的 ME2 条目已补齐（本 PR）
 - [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
 - [ ] **Product Map PR3**（WP「ME2 Product Map v1」的最后一段）—— **PR1**（组件登记册＋成熟度引擎,PR [#976](https://github.com/bigbigraydeng-maker/magic-engine/pull/976)）与 **PR2**（GitHub 只读动态同步,PR [#979](https://github.com/bigbigraydeng-maker/magic-engine/pull/979)）均已于 2026-08-15 合并**并完成生产 provisioning**（migration 已 apply · ME 仓 webhook 已建并有真实投递 · GITHUB_TOKEN/cron 密钥已配 · 首轮全量同步实测 12 PR / 14 issue / 28 条待分类）。剩 **PR3**:`/dashboard/me2/product-map` PO 控制台四视图（业务总览 / 组件清单 / 依赖 / 待拍板队列）——必须渲染 partial 轮、`manual_claim` 未核验标记、factsSource 三态,不许把不完整快照显示成完整。开工需 PO 授权。
+  🔄 **2026-08-19 新增「老板摘要」视图,PR [#1076](https://github.com/bigbigraydeng-maker/magic-engine/pull/1076) 待复审,未合并**:PM 反馈现有视图对非技术管理层太细,新增一个并列标签把组件按业务线收成一行卡片(状态灯 + 在跑分数 + 下一步)。默认打开的仍是"等你拍板"(板桥 S1 原则未推翻)。经子牙+魏征两轮设计复审,两轮都真挑出问题并已按复审改(状态灯改成"有在跑就算绿灯"、needsYourCall 改成直接核对 decisionsNow、加小样本标注)——具体见 PR 描述。
       ⚠️ 已知遗留:同步的 `unresolved_threads` 恒 null(GraphQL 那一步静默失败),故每轮标 partial —— 独立修复任务在案,不阻塞 PR3
 
 **独立并行、不并入本链**：[#886](https://github.com/bigbigraydeng-maker/magic-engine/issues/886) Operating Brief（参考闭环稳定前不开工）· [#887](https://github.com/bigbigraydeng-maker/magic-engine/issues/887) 广告安全泳道（**不许夹带进任何 ME2 的 WP**）
 
 **运维泳道（也不并入本链，等 PM 拍板）**：
 - [ ] [#911](https://github.com/bigbigraydeng-maker/magic-engine/issues/911) / PR [#912](https://github.com/bigbigraydeng-maker/magic-engine/pull/912) OPS03 事件驱动 Issue 中继试点 —— ⚠️ 它写死的唯一标的 #910 **已关闭**，试点要么改标的要么归档
-- [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 前置未成立：唯一能给出「复审干净」信号的 `handle-review` 流水线**现在是坏的**（[#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939)：`.github/workflows/ops-codex-to-claude-fix.yml` 没传 `allowed_bots`，Codex 机器人一提意见就必挂，#935 / #936 均实测复现）。
+- [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 前置已就绪，**卡点在 PR 自己身上**：原引用的 [#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939) 已于 2026-08-16 关闭修复，不再是阻塞点。曾经存在的另一个真实缺口——`tools/ops-review-loop/src/fix-scope.mjs` 的 `GUARDED_BRANCH_PREFIXES` 把「Codex 复审→Claude 自动修复」循环的生效分支焊死在 `claude/me2-` 前缀，团队实际工作分支（`claude/<issue号>-<slug>`）从不匹配——已由 PR [#1175](https://github.com/bigbigraydeng-maker/magic-engine/pull/1175) 于 2026-08-24 11:45 UTC 合并修复，`GUARDED_BRANCH_PREFIXES` 现已扩到 `claude/`，覆盖日常工作分支（2026-08-24 在 PR [#1174](https://github.com/bigbigraydeng-maker/magic-engine/pull/1174) 上实测过循环本身能跑通：Codex 打 P2 标签 → 自动触发修复 → Claude 推送修复 commit）。急停开关 `OPS_AUTO_MERGE_ENABLED` 也已经是 `true`（2026-08-12 设置）。**现在真正卡住的是 #931 这个 PR 自己**：其分支 `claude/me2-ops-auto-merge` 自 2026-08-12 起未再更新，与当前 `main`（已并入 #941/#942/#943/#947/#1175 等后续改动）产生冲突（`mergeStateStatus: CONFLICTING`），需要先 merge origin/main 解决冲突（禁止 rebase，见 CLAUDE.md §6），才能重新走复审流程。
       ✅ **兜底闸门这一条不是问题**：2026-08-12 实查，`main` 上有 **active 的 ruleset「Protect main」** —— 禁删、禁 force push、只许 merge commit、**所有复审线程必须解决**、`ai-orchestrator-tests` 必须过。（旧说法「GitHub Free 私有仓库开不了分支保护」已作废，ruleset 已对私有仓库开放。）
 
 ---
 
-## 近期待办（跨 Phase 汇总）
+## 官网「免费体检」漏斗断流（2026-09-02 发现）
+
+**症状**：`magicengine.com.au/discover` 的免费体检——两步漏斗（`/api/scout` 存 lead → `/api/report` 补 email 发报告）——自上线起从未真正存过一条 lead，也从未真正发出过一封报告邮件。生产 Supabase `discovery_leads` 表核实为 0 行。
+
+**已确认根因（2026-09-02 直接调用 `/api/scout` 验证 `leadId` 前缀 = `demo-...`）**：`website/`（Cloudflare Pages 独立静态站，独立于本仓 Render 部署，独立 Cloudflare 账号）的生产环境**没有配置 `SUPABASE_URL` / `SUPABASE_SERVICE_KEY`**，导致 `website/functions/api/scout.js` 的 `storeLead()` 从未真正连接过 Supabase，一律返回假 `demo-` id；`website/functions/api/report.js` 据此拒绝发送报告邮件（"P0-A fix" 防御生效，符合设计但暴露了上游问题）。
+
+**已一并修复但非本次症状根因**（子牙+魏征 2 审通过，2026-09-02 已 apply）：`discovery_leads.email` 列建表起就是 `NOT NULL`，但 `scout.js` 插入时从不传 email（设计上是两步收集）——只要 Cloudflare 侧接上 Supabase，这条 NOT NULL 约束会立刻撞库产生新的 `fallback-` 失败。migration `20260902000001_discovery_leads_email_nullable.sql` 已放开该约束。
+
+- [ ] 🔴 **需 PM 在 Cloudflare 后台（独立账号，本仓无法访问）给 magicengine.com.au 的 Pages 项目补 `SUPABASE_URL`=`https://glbdnayojixmexgofbsd.supabase.co`、`SUPABASE_SERVICE_KEY`=（从 Render `magic-engine` 服务的 `SUPABASE_SERVICE_ROLE_KEY` 复制同一个值）→ Settings → Environment variables → Production，保存后触发一次重新部署
+- [ ] 补上后必须端到端验证：重新跑一次 `/discover` 全流程，确认 `leadId` 是真实 UUID、Supabase `discovery_leads` 真的新增一行、**且真的收到报告邮件**（不能只看页面显示"发送成功"——`report.js` 的 `sendEmail()` 在 `RESEND_API_KEY` 未配置时会静默跳过发送但仍返回 `{ok:true}`，需顺手确认这个 key 也配了）
+- [ ] 次要（魏征复审发现，非阻塞）：`discovery_leads` 表建表起没有任何 migration 显式 `enable row level security`/加 policy，虽然 service-role 调用不受 RLS 影响、暂无实际泄露，但应补一条独立 RLS migration 让它符合"新表必须 service-role 模板"的红线并消除账本漂移
+- [ ] 次要：`website/_headers` 对 `/api/*` 声明 `Access-Control-Allow-Origin: https://magicengine.com.au`，而各 Function 自己又各设 `Access-Control-Allow-Origin: *`——未验证 Cloudflare Pages 对两者如何合并，换一个 origin（如 `www` 子域名/`*.pages.dev` 预览域）访问不排除请求直接被 CORS 拦掉
+
+---
+
+## 每日待办 href 落地页 action-gap（2026-09-07 审计发现，PR #1467 未合并）
+
+**背景**：审计了 `src/lib/pm-todo/**` 下发给 PM 的所有 `href`，逐条实测「点开链接是不是真能办成那件事」。4 个「链接完全打不开 / 静默丢失」的问题已经修复并合并（`crawl_stale` 404、`blog_draft_waiting` 与两条 `conversion_*` 相对路径被链接闸丢弃）——见 [history/CHANGELOG.md](./history/CHANGELOG.md) 对应条目。
+
+Codex 复审又挖出 6 个「落地页存在，但操作的东西跟待办要修的不是一回事」的问题，按 [ENGINEERING_QUALITY_GATES.md §11](./ENGINEERING_QUALITY_GATES.md#11-资源优先级判断pm-2026-09-07-拍板) 三维打分排了优先级（PM 2026-09-07 拍板顺序）：
+
+- [ ] 🔴 **[P0] `price_claim_unbacked` 落地页读写错了表**（`src/lib/pm-todo/manual-items.ts` `pushPriceGateItems`）：这条待办检查的是 `visual_assets` 表按 `post_id` 关联的配图，但 href 指向的 `/dashboard/clients/{id}/assets` 素材库页读写的是 `client_assets` 表——两张不同的表，PM 点进去根本找不到要改来源的那张图。要么把 href 改到能操作 `visual_assets` 的地方，要么把这条检查也接到 `client_assets`。客户投诉风险直接（配错图客户按图下单对不上）。
+- [ ] 🔴 **[P0] `factory_worker_idle` 落地页无法远程启动 worker**（`src/lib/pm-todo/manual-items.ts` `pushFactoryWorkerItems` + `/dashboard/factory`）：待办的 how 要求「在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`」，但 `/dashboard/factory` 页面只能看 worker 心跳状态，没有任何远程启动/连接控制。要么加一个能远程触发 worker 的入口，要么把 worker 迁到不依赖单台 Mac 开机的执行环境（长期更优，但改动更大，先讨论方案）。
+- [ ] **[P2] `kernel_needs_human` 三处分支生成空 href**（`src/lib/kernel/handoff.ts` 91/103/112 行）：这几类交接待办的 `href: ''`，PM 点开邮件根本没有入口可点，只能靠 how 里的文字描述摸索。是「管道不许断头」这条铁律的安全网本身在这几个分支失效。要给这几类交接补上真实入口（哪怕是执行看板的一个筛选视图）。
+- [ ] **[P2] `leads_metric_untrusted` 落地页没有修复入口**（`src/lib/pm-todo/manual-items.ts` `pushLeadsSanityItems` + `/goal/{goalId}`）：待办要求 PM 去客户网站统计后台收窄「产生线索」触发条件，但目标页是纯展示、没有任何外部统计后台的链接。要么加一条到客户 GA4/GTM 后台的直达链接（如果连接器里存了 property id），要么在 how 里明确「这一步要联系客户或自己去 GA4 后台改」而不是暗示落地页能做。
+- [ ] **[P2] `meta_stuck` 落地页跟需要做的事不对应**（`src/lib/pm-todo/manual-items.ts` 515-520 行 + `/dashboard/clients/{id}/settings`）：待办要求登录**客户自己的** WordPress 后台启用 Magic Engine 插件，但 `/settings` 页是我们自己的连接器配置（API 密钥、SEO 字段探测），不是客户 WP 后台，也没给客户后台的直达链接。要在 CmsPanel 里补上客户 WP 后台的地址（如果连接时存了站点 URL）。
+- [ ] **[P2] `goal_baseline_mismatch` 目标起点数字改不了**（`/goal/{goalId}` 页 + `src/app/api/goals/[goalId]/route.ts` 只有 GET/DELETE）：待办要求把错误的起点改成重算值，但目标详情页只读展示 `baseline_value`，也没有对应的 PATCH/PUT 接口。要新增一个编辑 baseline 的入口（前端表单 + 后端接口），同时要考虑这个字段被改动后要不要留痕（谁在什么时候把起点从 A 改成了 B）。
+
+### ME 产品动态自动发 LinkedIn（2026-08-20 建成，默认关闭）
+
+代码已完成并测试通过：`src/lib/linkedin-progress/`（取材/敏感词硬过滤/文案生成/发布编排）+
+`src/app/api/cron/linkedin-progress-post-{mon,thu}/`（每周一/四各一条 cron）+
+`src/lib/pm-todo/manual-items.ts` 的 `pushLinkedinProgressItems`（待审/账号未连/发布失败三种卡点接进日常待办）。
+只从 `docs/history/CHANGELOG.md` 已上线条目取材，完全自动发布，命中客户敏感信息才转人审。
+前两轮 Codex 复审挑出的问题（敏感词表查询失败要 fail closed / 发布账号严格绑定 / 人工复审路径也要接上真正发布 /
+并发确认要原子认领 / 发布成功但状态没同步要能对账 / 窗口边界防同日条目丢失）均已修完并测试通过。
+第三轮挑出的 1 条回归（原子认领误伤视频内容重新确认）已修；另 4 条（下方 ⚠️ 清单）功能默认关闭时不触发，
+按 PM 决策登记成"开启前必关"的后续任务，不阻塞本次合并。
+
+- [ ] **上线前 PM 必做的一次性动作**：① 去 Publer 后台用自己的 LinkedIn 账号做一次性授权连接
+      ② 打开 ME 后台「Magic Lab Class」客户的 connectors 设置页，把出现的 LinkedIn 账号 ID 填进 Publer 绑定
+      ③ 在 Render 的 `crazycontent` 服务（不是 render.yaml 里那个不对外服务的 `magic-engine`）Environment 页手动加
+      `LINKEDIN_PROGRESS_POST_ENABLED=true`（未配置=默认禁用，这三步没做完之前功能保持休眠，不会误发）
+- [ ] 上线后先跑一次人工验证：确认 Publer 的 schedule 接口对 `provider='linkedin'` 真的认（目前只有代码推断，没有已连账号可实测），
+      建议先手工发 1-2 条真实验证一次发布路径，再考虑打开 cron 开关
+
+**⚠️ 打开开关（第③步 `LINKEDIN_PROGRESS_POST_ENABLED=true`）之前必须先关掉的 4 条（Codex 第三轮复审，功能默认关闭时不会触发，所以不阻塞合并，但是"开启前"的硬门槛）：**
+
+- [ ] **[P1] 匿名客户业务数字漏过滤**（`src/lib/linkedin-progress/run.ts` 敏感过滤）：CHANGELOG 若只用匿名方式写客户指标（如「2099 条消息 / 658 个会话」），`findSensitiveMatches` 只认客户名/域名/代号/术语，完全不认运营数字，这类稿会绕过"不点名也不得披露客户数字"的要求自动发。要加代码级数字/联系方式检测，或含此类数据一律转人审。
+- [ ] **[P1] 人工确认路径没处理"发布成功但数据库没同步"**（`content-factory/[postId]/route.ts` LinkedIn 分支）：cron 的 `run.ts` 已消费 `dbSyncError` 并写 `published_but_db_sync_failed` 对账标记，但看板手工 confirm 这条分支还没有——Publer 已发但回写失败时，界面会误报失败稿，可能被当失败重发。要把 run.ts 那套对账逻辑同样接到这条分支。
+- [ ] **[P1] 发布失败后 approved 状态卡死、无重试入口**（同上文件 LinkedIn 分支）：Publer 调度超时/报错时，帖子已被原子认领改成 approved，这里只返 500 不回滚；无视频的 approved 帖子归"备料"段，确认按钮只在"选题"段显示，PM 修好连接后无法再确认，稿件永久卡住。要在确认外部未接受时回滚为 draft，或给 approved 提供幂等重试入口。
+- [ ] **[P2] 待办查询失败被当成"零条记录"**（`src/lib/pm-todo/manual-items.ts` `pushLinkedinProgressItems`）：那次 `content_posts` 查询若失败，Supabase 返回 `{data:null,error}` 不抛异常，这里只取 `data` 再 `?? []`，账号未连/敏感稿/已发未同步等卡点会全部静默从今日待办消失。要检查并抛 `error`。
 
 ### 广告引擎中心 — 已上线部分的收尾（2026-08-05）
 
@@ -212,12 +332,14 @@
   ```
   Meta 的 `geo_locations` **包含项按并集生效** —— `NZ ∪ 北岸10km = 整个 NZ`。**也就是说 ME 自己起草的广告，天生就是"把北岸的房投给整个新西兰"**，正是 `launch-readback` 那条 `geo_mismatch` 引用的 2026-08-04 事故。而且回读会读到同一个错包络，**闸门自己跟自己比，永远一致、永远放行**（所以 `AD-GEO-1` 必须排在这条之后做）。
   修：**有城市就不要再发覆盖它的国家级包含项**（或把国家降为 `excluded_geo_locations` 之外的边界用法），再按 Meta 实际生效范围做批准前比较
+  🔄 **2026-08-19 已修，PR [#1075](https://github.com/bigbigraydeng-maker/magic-engine/pull/1075) 待复审，未合并**：`targetingFor` 改成有 `geoCityKeys` 就只发 `cities`，不再同时带 `countries`；新增 3 条单测覆盖三种分支。⚠️ **尚未处理跟 `AD-SPEC-1` 的交互**——`AD-SPEC-1` 指出住房类广告下 Meta 会限制定向能力、对地理半径设下限，「只发城市 + 10km」这个修法在房源广告上可能根本不成立，两条需要一起复核（本次没做，PR 描述里未提及这个交互，复审时要留意）。
 - [ ] **AD-GEO-1 `geo_mismatch` 闸门只到国家级，抓不到它自己写明的那次事故**（第二十五轮发现）：
   - `draft-listing/route.ts:302` 传的 `expectedGeo` 是 **`c.country`**（国家级）；
   - `launch-readback.ts:281-290` 只判断 `expectedGeo` 与 `geoNames` 是否互为子串，**从不比较草案里的 `geoCityKeys`**（`targetingFor` 里那个 10km 半径）。
 
   于是「北岸 10km 被放宽成整个新西兰」这种改动**照样通过** —— 而这条规则的 `learnedFrom` 写的正是「2026-08-04 Roman『IG 专投测试』把奥克兰北岸 $1.25M 的房投给了整个新西兰」。**规则抓不到它自己引用的那次事故。**
   修：把**可信的完整 targeting 包络**（国家 + `geoCityKeys` + 半径）持久化进 `DraftRecord`，激活前**按同一粒度**比较；国家级匹配只能当兜底，不能当唯一判据
+  ⚠️ **2026-08-19 排查发现这条暂时排不进去**：`approveDraft()` 现在完全不重新回读/重跑闸门（那是 `AD-GATE-1`，更大的一块未授权工作），所以就算把 `expectedGeo` 存进 `DraftRecord`，approve 阶段也没有消费方，白做。而且 `draft/route.ts:71` 现在已经在传 `expectedGeo: client.country`——这本身就是段落里点名反对的"只重载 clients.country"写法，但由于 `AD-GATE-1` 没做，这行代码目前是死代码，暂时没有实际危害。**真正卡住的是一个产品判断**：`expectedGeo` 的权威来源应该是"这条广告要投的具体城市/郊区"，不是 client 级别的国家字段，需要先定这个再动 `AD-GATE-1` + `AD-GEO-1`，本次不做
 - [ ] **AD-SEC-1 实体归属校验缺失 —— 五个入口，其中三个已上线在跑【本次审计发现的最严重一条】**：混账户下（CTS/Oztop 同账户）任何"只校验 URL 里的客户、实体 id 却取自请求体"的写路径，都能被 A 客户的调用方拿去动 B 客户的东西。这就是 strategy doc §2.4 狄仁杰记的 **R5 写越权**，那份文档还指出「ROADMAP §Phase 18 安全边界声称已校验账户 ownership，**与实现不符**」—— 至今仍不符。
   - 🔴 **`meta-ads/execute/route.ts:71+`（已上线、正在用的止损按钮）**：`campaign_id` 直接取自请求体，只做 `requirePaidClientAccess(clientId)`，**从不把 campaign 归属与该客户的 `meta_ad_account_id` 对账**，随后就用共享 system-user token 暂停广告 / 改预算。有 CTS 看板权限的人提交一个 Oztop campaign id 即可动别家的在投广告。**这条比 boost 那条严重 —— 它已经在生产里跑**
   - 🔴 **`ad-health/stop-loss/route.ts:94-115`（已上线、第五个入口，第四十九轮补入）**：跟 `execute` 同一个模子 —— `requirePaidClientAccess(clientId)` 只校验 URL 里的客户，`campaign_id` **直接取自请求体**，随后 `executeStopLoss(campaignId, action, …)` 就去暂停 campaign 或改它的 ad set / campaign 预算。**混账户下 A 客户点"止损"能停掉 B 客户的在投广告。**
@@ -233,7 +355,13 @@
   ✅ **第四十九轮已把全仓 Meta 写路径重扫一遍**（`pauseAd` / `updateCampaignBudget` / `executeStopLoss` / `boostPagePost` / `publishDraftPaused` / `activatePublished` + `src/app/api` 下所有 ads 相关 route），**没有第六个**。另核实 `meta-ads/draft/route.ts:58-64` 那句「不信请求体」的注释**只兑现了一半** —— `pageId: client.facebook_page_id ?? body.pageId ?? ''`，客户没配主页时**仍然回退到请求体**，所以 `AD-SEC-2` 依旧成立。
 
   修：统一加 **实体 → client 归属守卫**（campaign / page / post / form / creative 都要），或推进账户拆分（§2.1 子牙意见：**根治靠账户治理，不是写白名单**）
+
+  🔄 **2026-08-19 五个入口已全部补上归属校验，两条 PR 待复审，均未合并**：
+  - `meta-ads/execute` + `ad-health/stop-loss`：PR [#1075](https://github.com/bigbigraydeng-maker/magic-engine/pull/1075)，新增 `src/lib/meta/campaign-ownership.ts`（核对 campaign 的 `account_id` 是否等于客户登记的 `meta_ad_account_id`）
+  - `boost-post` + `meta-ads/draft`（AD-SEC-2）+ `winner-reel-sync/engine.ts`：PR [#1080](https://github.com/bigbigraydeng-maker/magic-engine/pull/1080)
+  - ⚠️ **局限没解决，两条 PR 里都写明了**：CTS/Oztop 共用同一个 Meta 广告账户时 `account_id`/`fb_page_id` 天然可能相同，这批守卫挡的是"campaign_id/配置行完全不在这个客户账户里"这一类，挡不住"同账户内配错到共享该账户的另一个客户"——根治仍然需要账户拆分或补一张权威归属表，是产品/运维决策，没有在这轮里做掉。`winner-reel-sync` 的 `target_adset_id` 本身也没核对（不在 `clients` 表任何字段里）。
 - [ ] **AD-SEC-2 通用 `meta-ads/draft` 不校验素材归属**：`...(body as AdDraft)` 整体展开，`leadFormId`/`imageHash`/`videoId` 原样来自请求体，客户没配主页时 `pageId` 还回退 `body.pageId`；闸门只查买家可见内容不查资产归属。对比 `draft-listing` 已有 `client_assets` 租户守卫。修：补 page/form/creative 归属校验
+  🔄 **2026-08-19 pageId 回退口子已堵上（PR [#1080](https://github.com/bigbigraydeng-maker/magic-engine/pull/1080)，待复审未合并）**：客户没配主页时改成 424 拒绝，不再回退 `body.pageId`。⚠️ **`leadFormId`/`imageHash`/`videoId` 的素材归属校验本身没做**——那部分需要理解 `client_assets` 表的归属规则，本轮判断范围会超出可控大小，特意没有一起动，仍是未完成项。
 - [ ] **AD-FACT-1 事实来源从不校验，却盖"官网可溯"章**：`assertFacts` 只查 `sourceUrl` 非空，从不抓页面核对价格/地址/战绩，而 `traceClaims` 把原样传入的字段标成"官网可溯"。**第一条付费广告就会带着未核实内容投出去**，不是量大了才危险。⚠️ **修法不能是"按 `sourceUrl` 抓页核对"**（第二十四轮更正，Codex P1，核实成立）：**事实和 `sourceUrl` 是同一个调用方给的** —— 他完全可以指向一个自己控制、写着假价格假战绩的页面，抓下来照样"对得上"，然后拿到"官网可溯"的章。**拿请求体里的 URL 当信任根，等于没校验。** 而且直抓任意调用方给的 URL 还会引入 SSRF。
 
   正确修法两条一起：
@@ -389,6 +517,9 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **TD.4** 缺少 Supabase Row Level Security 规则
 - [ ] **TD.5** 视觉生成队列在客户端 localStorage（需迁移到服务端）
 - [ ] **TD.6** 第三方真实名在部分 UI 文案中暴露（需扫描 + 替换为封装名）
+- [ ] **TD.12** `SeoContentAdapter.pullMetrics` 入库失败只 `console.error` 不抛 —— 回执会报「写了 4 行」而库里 0 行。2026-09-07 每周 SEO 快照上线时发现，属适配器旧账，未在那条链路的 PR 范围内修（[#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440) 复审记录）
+- [ ] **TD.13** `getDomainMetrics` 两层 `Promise.allSettled` 把 provider 故障写成 0 值 —— DataForSEO 故障那一周，全体客户的 SEO 指标会被记成 0 并写进 `flywheel_metrics`，Check / Tune 读到的是假数据。同 [#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440)，链路开跑后它从「潜在」变成「每周可能发生」
+- [ ] **TD.14** 「谁买了 SEO」这个商业事实被编码成「填没填网址」这个技术字段 —— `flywheel-seo-weekly` / `keyword-snapshots-weekly` 等 5 条链路共用 `client_status='active' AND domain IS NOT NULL` 判据，随手给不买 SEO 的客户填个占位网址就会把他拉进每周付费扫描（PITFALLS 已记）。服务范围应由 client-level 配置决定，不由字段有没有值决定
 - [ ] **TD.10** Git 本地分支堆积（20+ 个 `claude/*` 和 `feat/*` 废弃分支）
 - [ ] **TD.11** `agitated-mahavira-be6d17` 等 worktree 物理目录占用磁盘空间
 - [ ] **TD.7** 收集器模块（6 个）缺少错误重试机制
@@ -413,6 +544,29 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 ## Phase 12 — 飞轮数据闭环 ⭐⭐⭐（活跃，2026-05-17 启动）
 
 - [ ] **P8.S.8** — `batchKeywordOverview`（`phrase_these`）→ `keywords_data/google_ads/search_volume/live` + `bulk_keyword_difficulty`（两次 task 合并）
+
+## Social IMPACT — Check → Tune 闭环（Issue [#1413](https://github.com/bigbigraydeng-maker/magic-engine/issues/1413)，CTS Customer Zero）🔄 Gate A + Gate B 步骤 1-3 已上线，Gate B/4 待授权
+
+Gate A（激活 Check，让 Daily Plan Post 的 Facebook 发布真的能被自动测量回来）与 Gate B 步骤 1-3
+（evaluator 纯函数 [#1451](https://github.com/bigbigraydeng-maker/magic-engine/pull/1451) + cohort loader
+[#1452](https://github.com/bigbigraydeng-maker/magic-engine/pull/1452) + Daily Plan 页面显示效果建议
+[#1453](https://github.com/bigbigraydeng-maker/magic-engine/pull/1453)）已合入 main，详见
+[CHANGELOG 2026-09-08](./history/CHANGELOG.md)。CTS 因为只有一条未撤回的 Daily Plan Post，样本量凑不齐
+Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说话」占位——这是规则的正确表现，不是 bug。
+
+- [ ] **Gate B/4（A 级 · 需 PM 单独授权）** —— 保存下一份 Daily Plan 时，记录本次采纳/拒绝了哪条 Tune 建议
+      + source action ids，形成 lineage。这一步会动 Kernel 保存路径，是整条 Gate B 里唯一真正「写」的一环，
+      按 Issue #1413 冻结的 Scope 走：人工审批保留，无自动发布 / 排期 / provider write / 广告花费。
+- [ ] **evaluator cohort 全 0 时的 caveat 缺口**（魏征复审 #2，PR #1453 review）—— cohort 全部 `ok/partial`
+      但 likes=0（新账号 / 权限不足未落 unmeasurable 的边界情形）时，target 只要 > 0 就判 REPEAT +
+      `deltaPct: Infinity`，语义上可能鼓励重复"没人看的内容形态"。至少加一条 `cohort_all_zero` caveat。
+- [ ] **阈值比较未走 roundTo 的浮点边界**（魏征复审 #3）—— `social-post-evaluator.ts` 的
+      `>= repeatDeltaPct` / `<= stopDeltaPct` 判断走原始 `deltaPct`，不像展示层那样先 `roundTo(1)`。
+      实数输入（如 13.7 / 10.53）可能在边界附近漂移到另一侧决策，现有测试只锁了整数边界。
+- [ ] **`normalizeStatus` 三处复制**（魏征复审 #6）—— `social-post-cohort.ts` 与
+      `campaign-tune-suggestions.ts` 各自定义了同样的 `normalizeStatus` / `parseNumberMap` /
+      `parseStringMap`。未来 receipt status 定义变更（例如加 `'timeout'`）三处都要改，属「假件与 SQL 同步」
+      同类事故模式，建议下沉到 `src/lib/flywheel/tune/` 下的共享 helper。
 
 ## Phase 24 — Execution Loop Closure（执行闭环修复）📋 已登记，2026-06-06 启动
 
@@ -609,6 +763,7 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **开放项**:信号契约与 34.A 对齐冻结(M1 前置)· asset_gap 信号归属 · MTC 计费触点(v1 占位不扣)· Airtable 观测层↔ME 真值同步(M2 起)
 - [ ] **P21.J.SEC 接口安全完整审计**:狄仁杰三审报"26 个 `/api/clients/[id]/*` 无鉴权",逐个核实后发现多数(ads 执行/cms 发布)其实已有锁、是误报,真裸奔仅 5 个已补。**需一次系统性复核**:grep 全部 access 守卫关键词 + 逐个确认,把"真裸奔"与"已有锁被误报"彻底分开,补齐真缺的。今天只是止血
 - [ ] **P21.J.SEC-2 `/api/publer/create-post` 至今无鉴权**:任何人拿一个 `post_id` 就能把该客户的成片发到他的社媒账号。**不能像 schedule/draft 那样直接加登录鉴权** —— 这条同时被 Zapier/Airtable webhook 调用(仅 body 带 `post_id`,没有会话),加了就当场打断线上自动化。正解是 Bearer Token,而 token 要同时配到 Zapier 那边 = 需要 PM 动手一次。此项 2025 年就登记过(`docs/archive/AUTOMATION_SPEC.md` D-2),躺在 archive 里没人看,2026-08-05 补进主线。同批的 `/api/publer/schedule` 与 `/api/publer/draft/[assetId]` 只有后台一个调用方,已直接补上鉴权
+  🔄 **2026-08-19 代码已写完,PR [#1081](https://github.com/bigbigraydeng-maker/magic-engine/pull/1081) 待复审,未合并**:读 `PUBLER_CREATE_POST_TOKEN` 环境变量做 Bearer 比对。**合并前需要 PM 配合两步,顺序不能反**:①先在 Render 生产环境变量加 `PUBLER_CREATE_POST_TOKEN` ②再去 Zapier 那个触发 create-post 的 webhook 步骤配上同一个密钥,两边都配完才能合并 PR——反过来的话线上自动发布会先被打断。
 - [ ] **P21.J.UP 上传链接两取舍**:①无单条吊销(作废靠换 `UPLOAD_LINK_SECRET`,所有链接一起失效)②无速率限制(有真链接者可刷存储/烧 Vision 额度)。规模化前需补 per-client 限流 + 单链接吊销
 - [ ] **本地 worker 没在认领**:今天 00:18 有 CTS 新工单卡在 `queued` 没人做 = 那台 Mac 的 worker 没跑/没连。工厂要真转,先确认 worker 进程在跑(仓库无 launchd/pm2 配置,`ps`/`pm2 list` 上机看)且已在 07-24 后重启(否则风格下发用旧逻辑)
 - [ ] **`FACTORY_PUBLISH_LIVE` 未设 = 静默发草稿**:未配时片子 `status=published`+三落库全绿,FB 主页却只是没人看见的 DRAFT。验完草稿格式后 PM 显式在 Render 设 `=true` 才真发
@@ -617,8 +772,41 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **1 条 `rendered` 旧单**(CTS 07-12,有 caption)永久卡住:交付直连修复只对新单生效,这条旧单需手动迁 `in_review` 或归档(PM 判断)
 - [ ] **P21.K.7 ad 级数据脊柱**(登记 2026-07-25,PM 拍板):日度 cron 补拉 **ad 级**(每条广告每天一行,复用 `ad_daily_insights` 的 `level='ad'`),让「某天新增了哪条广告 / 哪条在拖后腿」可被系统自查,不依赖 Meta MCP(Oztop 账户未开通)也不用人翻广告后台。**背书案例**:Oztop Lead Form Cold Broad 的 CPL 7/17 起翻倍,campaign 级只能定位到「填表率腰斩 + 出现出站点击」。含 `parent_id` 列(ad→campaign 归属,**migration 待 PM `go apply`**)+ 首拉 30 天回补 + 分页完整性守卫。顺带铺好 34.B Creative Lifecycle 要的作品层日度基础设施
 - [ ] **P21.K.8 objective 感知 + 视频疲劳正向检测**(登记 2026-07-26,PM 拍板 `排`):把 P21.K 止血从「不误判视频广告」升级到「真正体检视频广告好不好」。需 ① `ad_daily_insights` 加 `objective` 列 + 采集时拉 campaign 节点 objective(**migration 待 PM `go apply`**)② 脊柱补拉视频完播指标(ThruPlay 完播成本 / CPM / video_p100)③ 按 objective 切换判定指标:视频/播放量目标用完播成本或 CPM,表单/流量目标保留 ctr+cost_per_result,拿不到 objective 或样本太少判 `insufficient_history`。价值:CTS 这类主打视频的客户,看完成本涨→主动提醒换素材。半天到一天。附:止血注释已在 `baseline.ts` 登记本项为 follow-up
+- [ ] **P21.K.9 每日分析 cron 的候选客户名单仍只看主账户**(2026-09-13 子牙+魏征复审
+      PR [#1595](https://github.com/bigbigraydeng-maker/magic-engine/pull/1595) 发现,同批
+      发现的另一半已修):`readback-sweep.ts` 的每日安全巡检已改成同时看
+      `clients.meta_ad_account_id` 和 `client_meta_ad_accounts`(见
+      `getActiveClientsWithMetaAccounts`),但 `google-data-pullback-daily/route.ts`
+      的每日分析/健康摘要 cron 没跟着改——如果某客户的主账户被清空、只剩登记在
+      新表里的次账户,这条 cron 会把这个客户整个漏掉,`ad_daily_insights`/健康检查
+      /每日摘要全部停摆(安全巡检不受影响,已经修好)。触发条件:今天 CTS 主账户
+      还在,不会发生;一旦有人清空某客户主账户就会撞上。修法应该是这条 cron 的候选
+      客户查询也换成 `getActiveClientsWithMetaAccounts`,并把主账户专属逻辑
+      (30 天快照、token 解析里用到的域名/客户名)在"无主账户但有次账户"时优雅退化。
+      未修原因:改动涉及这条 900 行 cron 的主循环结构,复审当天为控制风险没有仓促改
 - [ ] **多视角对抗复盘工作流**(1-2 天,可后置):battle-plan §8 方法论固化成可复用 Workflow/agent(N 视角互相证伪前提 → 作战计划 → 喂鲁班),异常触发非每日跑
 - [ ] **开放项**:三张新表 migration 逐次 PM `go apply`(`ad_daily_insights` / `ad_strategy_configs`+`_triggers` / `ad_health_narratives`)· P5 泛化首批客户(Oztop?)· 姊妹 spec Creative Lifecycle 同一 GHA 笔误待独立小 PR 修
+
+## Creatomate L3 Connector · 最小可交付版 📋 2026-09-09 立项，PM 已订购
+
+> 背景：本窗口延续 [CHANGELOG 2026-09-04](./history/CHANGELOG.md) 的 4 个已合 PR（#1351 配方对账 · #1360 imageToClip · #1367 分镜自检 · #1373 shot-guards），把 Creatomate 从 PM 手动开浏览器点导出的模式，接成 `src/lib/creatomate/` L3 Connector。走**最小版**（PM 2026-09-09 拍板），不做 quota 闸和后台 UI，跑起来后再加。
+
+**PM 决定**（2026-09-09）：走最小版；已订 Creatomate Essential $54/月 + Muapi 起充；Spec 阶段和落地实施**另开新窗口做**（不在本窗口继续，避免混入归档窗口）。
+
+- [ ] **Spec 起草**（1-2 天，C 级）：`src/lib/creatomate/` 客户端接口签名 · 模板 JSON 落库 · Inngest 工作流编排 · 错误恢复 · 幂等 · Reuse Statement（明确哪些复用 `imageToClip` / `shot-guards` / `factory` 既有能力）
+- [ ] **三审并行**（半天）：子牙（架构）+ 鲁班（执行）+ 魏征（挑刺）· Spec 未过审前不动生产代码
+- [ ] **L3 Connector 开发**（2 天，B 级）：`src/lib/creatomate/client.ts` 提交 · 轮询 · 转存 Supabase
+- [ ] **模板 JSON 落库 + 参数化**（半天）：CTS 圣诞 / Golden China / 通用模板
+- [ ] **Inngest 工作流串联**（2 天）：`video-render` 编排 `imageToClip` + `shot-guards.classifyRenderMode` + `creatomate.render` + Supabase 存
+- [ ] **端到端联调 + PR 复审**（1 天）：用 CTS Golden China 场景跑一次
+
+**砍掉的两块**（跑起来后再加）：
+- ~~分档 AI 视频配额闸~~ — 已进 [`docs/registry/platform-candidates.md`](./registry/platform-candidates.md)，10-04 复查（PR #1396）
+- ~~后台自助 UI~~ — 管理员触发即可，等真实客户需求验证后再加
+
+**总时间预估**：4-5 工作日（不含 PM 审 Spec 和等 CI 时间）
+
+**关联**：memory `[[project-creatomate-connector-b-min]]`（本项完整状态）· `[[reference-creatomate-silent-failures]]`（Spec 必写死的 5 个坑）· `[[project-social-video-i2v-muapi]]`（i2v 使用禁忌）
 
 ## Phase 18.E — Audience Asset Engine / 中介私域买家库 🔄 建池器已落地（2026-07-29 登记）
 
@@ -660,6 +848,7 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **22.E.S16 每周 Blog 恢复**（P1）— CTS/Oztop 每家每周 1 篇，自动选题（AI 可见度弱项 × R4 机会词），直调 `generateBlogPost` lib（禁内部 HTTP 自调用），产出进待办等 PM 点头发布
 - [ ] **22.E.S17 CTS 自动执行手**（P1）— 照 `seo_meta_log` 队列模式，CTS Next.js 仓 meta 安全窄道 + applied 回执；blog 发布通道（自动 PR + 人 merge）单独估算
 - [ ] **22.E.S18 每周一 SEO 周报邮件**（P1）— 排名变化/自动改动/待点头 + 社媒栏 + 社媒广告栏；每栏带数据新鲜度检查，**断流标注不装新鲜**
+- [ ] **[P2] 22.E.S16 每周 Blog 链路没接自动化管理系统（Inngest）**（`src/lib/blog/weekly-blog.ts` + `src/lib/cms/blog-publisher.ts`，2026-09-09 CTS 会话审计发现）：这条链路（选题→写文章→查一遍→变成等 PM 确认的修改请求→PM 在客户仓合并）符合 CLAUDE.md 铁律 3「Inngest 工作流硬约束」明确点名的场景（内容生成→人审→发布→…→Outcome 回写），但现在完全没接，只有一行 `flywheel_actions` 日志。三个具体缺口：①每一步（选题/生成/查过关）没有机器能读的记录点，只有开始时那一行；②PM 在客户仓库点确认合并之后，magic engine 这边不知道点没点、什么时候点的；③文章上线后有没有效果（排名/AI 引用变化）完全没有回头看的机制，等于写完就扔了。ME 别的地方已经在用这套自动化系统（网站情报、每周 SEO 报告），这条写文章的链路建的时候没接进去，是遗留缺口不是从零造。**按 CLAUDE.md §11 资源优先级三维打分**：频率=中（每周固定跑一次，出问题不容易被发现）／IMPACT 闭环关键度=高（现在完全没有"发布后有没有效果"这一环，这块内容产出没法证明有没有用，Check/Tune 两段对这条链路完全空着）／收入关联度=中（不会马上导致客户投诉，但长期看没法拿数据证明这块工作值不值钱）。三项零"低"、仅一项"高"（未达两项以上）→ 按穷尽表落 **P2**。改动会碰多个文件、影响已上线功能，按铁律 4 属于「大任务」，动手前后各要子牙（架构）+ 魏征（挑刺）过一遍，不是随手接一下就行。
 
 ## Phase 27 — Visual Reference Library（视觉参考库）📋 已登记，待开发
 
@@ -707,3 +896,55 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] CRM adapter（接外部 CRM，现只内置权威）
 - [ ] 全自动外呼 campaign（批量）+ suppression 逻辑
 - [ ] 生产级知识库（OpenAI 向量库语义检索，替代关键词版）
+
+---
+
+## Platform Partner Outreach（ME 自己的上游渠道伙伴 BD，非客户能力）📋 2026-09-02 登记
+
+> 背景：PM 提供 spec，要找 AU/NZ 已获 Meta/Google/TikTok 官方 partner 资质的公司，建立 ME 自己的上游渠道合作（不是找客户）。经 me-platform-tier-gate 判定为 L4 内部运营工具，不占用平台能力线；复用了 `src/lib/prospecting/`（Phase 35）的状态机/打分/AI草稿/人工审批架构模式，但因业务语义不同（客户漏斗 vs 上游伙伴漏斗）新建独立表，不与 `outbound_prospects` 混用。子牙 + 魏征双审已过，四条缺口（RLS checklist、认证状态防幻觉硬约束、独立合规页脚、domain 去重约束）已在代码里落实。
+
+- [x] Migration `supabase/migrations/20260902010000_platform_partner_outreach.sql`（RLS 从一开始就写对 `TO service_role`）
+- [x] `src/lib/partner-outreach/`（types.ts / score.ts / outreach.ts，24 条测试全绿，不 import `src/lib/email/sender.ts` —— 这一轮零发送路径）
+- [x] 研究 25 家 AU/NZ 候选（Meta 8 / Google 10 / TikTok 7，去重 1 家跨平台重复），全部诚实标注 verified/unverified，无编造
+- [x] Wave 1 选出 10 家、生成完整邮件草稿（人工撰写个性化句，未接 AI 调用路径，因为本次会话没有确认 `ANTHROPIC_API_KEY` 可用性）
+- [x] migration 已跑到生产 Supabase（`glbdnayojixmexgofbsd` / CrazyContent，2026-09-02 PM 手动执行）；匿名 key 探针验证 RLS 正确锁定 service_role(对照 `outbound_prospects` 已知修复表，响应 signature 一致)
+- [x] 24 条候选（10 drafted + 14 discovered）已写入生产表，同样探针复验 RLS 未松动
+- [ ] **待办 1**：实际发送 —— 严格等 PM 逐家或批量明确说"发"，不自动发送
+- [ ] **待办 2**：`generatePersonalizationLines()`（AI 调用路径）尚未在生产环境验证可用，目前 wave-1 草稿的两句个性化文案是人工按同一套规则手写的，不是 AI 生成的——下一批候选建议先确认 API key 可用再接上自动生成
+- [ ] **待办 3**：回复分类 + follow-up 调度 + admin 审批 UI（spec §16-17）尚未实现，这一轮范围只到"草稿就绪待审"
+- [ ] **待办 4**：Meta 官方 Partner Directory 需要登录态才能核验，公开调研工具查不到——8 家 Meta 候选全部卡在 unverified；如果 PM 有 Meta Business 账号登录态,可以人工核一遍这批公司
+
+---
+
+## 平台治理层 · me-platform-tier-gate 后续跟进 📋 2026-08-27 登记
+
+> 背景：2026-08-27 因 HBay KOL 事故设立 [`me-platform-tier-gate`](../.claude/skills/me-platform-tier-gate/SKILL.md) skill，约束 agent 在提议新增 ME 能力线时的思考边界。经魏征（对抗挑刺）+ 子牙（架构）两轮复审，v1 落仓时已修必改项 owner 责任链（问题 1）与候选清单载体（问题 2，见 [`docs/registry/platform-candidates.md`](./registry/platform-candidates.md)）。以下 4 条子牙终审时提出、v1 未修、进本 ROADMAP 分批跟进。
+
+- [ ] **P.G.1** 补 harness 层挂载 hook —— 子牙终审问题 3。当前挂载靠 agent 自觉读 CLAUDE.md，跟事故根因（agent 没自认为在做平台决策）同构。方案：`.claude/settings.local.json` 加 Stop hook，扫本轮产出文本命中 `能力线|智能层|分析层|新增支柱|XX Intelligence|加一条(能力|支柱|柱)` 且未见 `Platform Tier Classification` 章节时输出提醒（先不阻断）。硬约束只有 harness 层能给。
+- [ ] **P.G.2** 改名 skill 避免与 `src/lib/kernel-approval/tier-gate.test.ts` 语义碰撞 —— 子牙终审问题 4。同仓库 "tier-gate" 缩写会永久混淆平台层级与 kernel 权限档位两套概念。建议改成 `me-capability-layer-gate` 或 `me-platform-layer-gate`。改点：SKILL.md 目录名、CLAUDE.md 第 8 行、`docs/registry/platform-candidates.md` 里对 skill 的引用。
+- [ ] **P.G.3** 澄清 skill 在五道 Build Gate 中的位置为 Gate 0 / Pre-Gate —— 子牙终审问题 5。SKILL.md 现在"红线 6"与"与既有治理机制的关系"表两处对 skill 从属关系的表述矛盾（一说是 Gate 4 前置子步骤，一说强化 Gate 2）。改成"Gate 0 / Pre-Gate，不替代任何后续 Gate，分歧走 owner 仲裁"。
+- [ ] **P.G.4** 抽 `docs/registry/pillars.md` 作为 6 支柱唯一名单来源 —— 子牙终审问题 6。当前 SKILL.md、CLAUDE.md 两处硬编码"SEO / 社媒 / 广告 / 口碑 / AI 可见度 / 竞品"，跟 skill 自己声明的"支柱数量是 PM 拍板项"直接冲突。建仓后 skill、CLAUDE.md、其他引用点全部改成引用 registry 文件。同类还有五道 Build Gate 顺序 / 客户名单，可一并统一到 `docs/registry/` 下。
+- [ ] **P.G.5** 平台候选复查治理界面 —— Codex 复审 P2 遗留意见。当前 `platform_candidate_review_due` 待办的 href 指向 GitHub `blob` 只读页面，PM/FDE 收到待办后要同时改 `docs/registry/platform-candidates.md` 表 + `src/lib/pm-todo/platform-candidate-reviews.ts` 数组，非技术收件人做不了。要么建一个真正的治理界面（可以直接更新证据 + 推下次复查日），要么把 `platform-candidate-reviews.ts` 里的日期改为从 markdown 表自动派生。当前 workaround：接到待办后回一句 "把 X 候选复查日推到 YYYY-MM-DD"，由 agent 帮改两处并提 PR。
+
+---
+
+## ME 会员制度五档 · 免费 / $39 / $199 / $499 / 定制 📋 2026-08-31 PM 拍板，四张合同票均为 SPEC DRAFT
+
+> 分档尺子是**「谁在干活」**（PM 原话，从旧三档沿用）：免费=系统搭好你自己用 · $39=系统把你摆出去 · $199=AI 替你干活 · $499=AI 替你花钱干活 · 定制=真人接管。
+> **旧的 NZ$500 起步版 / NZ$2,500 高级企业版固定报价已于 2026-08-31 全部作废**（PR [#1279](https://github.com/bigbigraydeng-maker/magic-engine/pull/1279) 把 `docs/registry/pricing-playbook-enterprise-fde.md` 标为 RETIRED）。**定制 / Enterprise 档 case by case 逐单报价，代码与对外材料一律不挂数字。** 已签客户不受影响。
+> 落地顺序是「先给客户一个网站和一个邮箱」，依赖 [#1269](https://github.com/bigbigraydeng-maker/magic-engine/issues/1269)（OpenSRS 域名 + 邮箱，Phase 0 未动）。
+
+**四张票全部是 SPEC DRAFT —— 没有 `BUILD CONTROL — GO BUILD` 之前任何窗口不许动手。**
+
+- [ ] **[#1273](https://github.com/bigbigraydeng-maker/magic-engine/issues/1273)** [风险 B] AI 单页站生成器 —— 免费档与 $39 档的第一块砖。
+      🔴 **技术路线已冻结：AI 只出结构化 JSON，绝不出 HTML。** 版面由模板决定。AI 吐 HTML 则每次结构不同 → 没法断言 noindex / 角标 / 无编造事实 → 扫街跑几百个会坏掉几十个而无从定位。多样性靠「模板 × 配色 × 首屏版式」的**可枚举组合**，不靠 AI 即兴。
+      🔴 **别重造**：`src/lib/tailor-made/` 已经是同形状流水线（AI 抽结构化数据 → 归一化 → 注入 HTML 模板 → 出成品，生产在跑行程单与画册），换的是对象不是形状。配套复用 `diagnostic/report-generator.ts` · `images/unsplash.ts` · `factory/stock-pipeline.ts` · `brief/jina.ts`。
+      ⚠️ **最大短板是配图**：没有商家真实照片只能用图库，同一条街几家同业配到同一张图会直接毁掉扫街杀伤力，必须按行业 + 氛围选并去重。
+      平台候选「AI 单页站生成器」已登记 `docs/registry/platform-candidates.md`（PR #1278 已合并）。
+- [ ] **[#1274](https://github.com/bigbigraydeng-maker/magic-engine/issues/1274)** [风险 A] 免费档 —— 认领、隔离与永不删除的生命周期。免费站边界：永久能用能发链接，但 **noindex 不收录 + 带 ME 角标 + 无邮箱 + 无自有域名** —— 这四条正是 $39 档的卖点。
+- [ ] **[#1275](https://github.com/bigbigraydeng-maker/magic-engine/issues/1275)** [风险 A] $39 订阅与四项解锁 —— **用 Stripe Billing，禁止自建订阅状态机**（承接 [#1122](https://github.com/bigbigraydeng-maker/magic-engine/issues/1122) 的 Build Control 决议）。$39 含自有域名 + **公司邮箱 1 个，第 2 个起 $9/月/箱**。`src/types/magic-engine.ts:7` 的 `ClientPlan` 需对齐五档，且 `custom` 档不许在代码里挂任何价格数字。
+- [ ] **[#1276](https://github.com/bigbigraydeng-maker/magic-engine/issues/1276)** [风险 A] 扫街预建站管道 —— 先把网站做好再去谈。口径：**不公开 · 一商家一链接 · 只用公开事实 · 不用商家照片和 logo**。
+
+**🔴 唯一卡住的数字**：CTS + Oztop 过去 30 天真实外部 API 消耗（美元）仍未到手（v0.4 就要求过）。**在它到位之前 $199 / $499 的具体额度不许写进代码**；任一档毛利 < 40% 就得调额度或加价。免费档与 $39 档不受此约束，可以先跑。
+
+**⚠️ 对外仍挂着已作废的旧价**：公开收费页 `magic-engine-pricing.pages.dev` 还显示 NZ$500 / NZ$2,500 三档。源码不在当前主力 Mac 上（线上是 37KB 自包含 HTML，可 curl 抓下来当基线重建）。改页面前先解决 Cloudflare 账号权限：该项目在 `hello@magicengine.cloud` 名下，本机 wrangler 登录身份看不到它。

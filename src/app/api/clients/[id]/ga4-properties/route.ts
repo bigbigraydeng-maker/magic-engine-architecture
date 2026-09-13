@@ -30,7 +30,7 @@ import { requireOnboardingClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { listGa4Properties } from '@/lib/ga4/admin'
 import { resolveAccessToken } from '@/lib/ga4/client'
-import { toGa4ResourceName } from '@/lib/ga4/property-id'
+import { normalizeGa4PropertyId, toGa4ResourceName } from '@/lib/ga4/property-id'
 import { setGa4Property } from '@/lib/ga4/property'
 
 export async function GET(
@@ -43,28 +43,47 @@ export async function GET(
     return NextResponse.json({ error: access.error }, { status: access.status })
   }
 
-  const { data: connector } = await supabaseAdmin
+  const { data: connector, error: connectorError } = await supabaseAdmin
     .from('client_connectors')
-    .select('config')
+    .select('status, config')
     .eq('client_id', clientId)
     .eq('anchor', 'ga4')
-    .maybeSingle<{ config: Record<string, unknown> | null }>()
+    .maybeSingle<{ status: string; config: Record<string, unknown> | null }>()
+
+  if (connectorError) {
+    return NextResponse.json({ error: 'GA4 connector state unavailable' }, { status: 503 })
+  }
 
   const currentPropertyId = connector?.config?.property_id
-  const current = typeof currentPropertyId === 'string' ? toGa4ResourceName(currentPropertyId) : null
+  const normalizedCurrent = typeof currentPropertyId === 'string'
+    ? normalizeGa4PropertyId(currentPropertyId)
+    : { ok: false as const }
+  const current = normalizedCurrent.ok ? toGa4ResourceName(normalizedCurrent.propertyId) : null
 
   const accessToken = await resolveAccessToken(clientId)
   if (!accessToken) {
-    return NextResponse.json({ connected: false, current, options: [] })
+    return NextResponse.json({
+      connected: false,
+      connector_status: connector?.status ?? null,
+      current,
+      options: [],
+    })
   }
 
   const result = await listGa4Properties(accessToken)
   if (!result.ok) {
-    return NextResponse.json({ connected: true, current, options: [], error: 'google_unavailable' })
+    return NextResponse.json({
+      connected: true,
+      connector_status: connector?.status ?? null,
+      current,
+      options: [],
+      error: 'google_unavailable',
+    })
   }
 
   return NextResponse.json({
     connected: true,
+    connector_status: connector?.status ?? null,
     current,
     options: result.properties.map((p) => ({
       property: p.property,
@@ -100,8 +119,13 @@ export async function PATCH(
     const message =
       result.reason === 'not_connected'
         ? '这个客户还没连上 Google 网站数据。'
+        : result.reason === 'storage_error'
+          ? 'Property 已完成验证，但连接状态暂时保存不了，请稍后重试。'
         : 'Property 编号格式不对，应该是纯数字或 properties/数字。'
-    return NextResponse.json({ error: message, reason: result.reason }, { status: 400 })
+    return NextResponse.json(
+      { error: message, reason: result.reason },
+      { status: result.reason === 'storage_error' ? 503 : 400 },
+    )
   }
 
   try {
@@ -113,10 +137,10 @@ export async function PATCH(
   if (result.status === 'error') {
     const message =
       result.reason === 'permission_denied'
-        ? '保存了这个 Property，但验证没通过：这个 Google 账号对它没有权限，或者授权已经失效。'
+        ? '没有切换 Property：这个 Google 账号对它没有权限，或者授权已经失效。'
         : result.reason === 'not_found'
-          ? '保存了这个 Property，但验证没通过：编号对不上任何 GA4 资源，确认一下编号。'
-          : '保存了这个 Property，但暂时联系不上 Google Analytics，稍后会自动重新验证。'
+          ? '没有切换 Property：编号对不上任何 GA4 资源，确认一下编号。'
+          : '没有切换 Property：暂时联系不上 Google Analytics，请稍后重试。'
     return NextResponse.json({
       success: true,
       property: toGa4ResourceName(result.propertyId),

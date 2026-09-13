@@ -2,11 +2,32 @@
 import Base from '../layouts/Base.astro';
 import AgentLine from '../components/AgentLine.astro';
 import ProjectCard from '../components/ProjectCard.astro';
+import Faq from '../components/Faq.astro';
+import { agent } from '../data/agent.js';
 import { projects, collection } from '../data/projects.js';
 const available = projects.filter((p) => p.group === 'available');
 const coming = projects.filter((p) => p.group === 'coming');
+
+const faqs = [
+  {
+    q: 'What do "Now Selling", "Under Construction", "Register Interest" and "Planning" mean?',
+    a: '"Now Selling" homes are available to purchase now. "Under Construction" developments are being built and sold ahead of completion. "Register Interest" and "Planning" developments haven’t launched for sale yet — registering gets you contacted first when they do.',
+  },
+  {
+    q: 'Can I buy off the plan?',
+    a: 'Yes — several Park Homes developments are sold before construction is complete, under a standard sale and purchase agreement. Read our guide to buying off the plans in New Zealand in the Journal for how the process works.',
+  },
+  {
+    q: 'Is the build quality checked?',
+    a: 'Yes — every development is delivered under a Licensed Building Practitioner (LBP), with disciplined quality checks at each stage from consent through to handover.',
+  },
+  {
+    q: 'Who do I contact about a specific development?',
+    a: `All enquiries across every development go through our appointed agent, ${agent.name} of ${agent.company} — ${agent.phone} or ${agent.email}.`,
+  },
+];
 ---
-<Base title="Projects — Park Homes" active="projects">
+<Base title="Projects — Park Homes" active="projects" desc="Explore every Park Homes development across Auckland — Riverside, Howick, Castor Bay, Forrest Hill and Greenview. Now selling through to planning stage.">
 
   <section class="deep dark" style="padding-bottom:clamp(40px,6vw,64px)">
     <div class="wrap">
@@ -45,6 +66,8 @@ const coming = projects.filter((p) => p.group === 'coming');
       </div>
     </div>
   </section>
+
+  <Faq items={faqs} heading="Questions about our developments" />
 
   <section class="dark cta">
     <div class="wrap">

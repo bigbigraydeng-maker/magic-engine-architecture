@@ -82,11 +82,16 @@ function PhaseSection({ phase }: { phase: PrescriptionPhase }) {
 export default async function PortalPrescriptionPage({ params }: Props) {
   const { clientId } = params
 
+  // Customer-visible: ONLY approved prescriptions. `draft` means "not yet
+  // approved for customer execution" — surfacing it in the portal would
+  // publish unpublished content, an authorization/privacy boundary break.
+  // When no approved record exists (draft-only or nothing), fall through
+  // to the honest not-ready state below; never fall back to a draft.
   const { data: prescription } = await supabaseAdmin
     .from('prescriptions')
     .select('id, status, content, generated_at, approved_at')
     .eq('client_id', clientId)
-    .in('status', ['approved', 'draft'])
+    .eq('status', 'approved')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle<Pick<Prescription, 'id' | 'status' | 'content' | 'generated_at' | 'approved_at'>>()

@@ -28,7 +28,7 @@ import { verifyGa4PropertyAccess, type Ga4VerifyFailureReason } from './client'
 export type SetGa4PropertyResult =
   | { ok: true; status: 'connected'; propertyId: string }
   | { ok: true; status: 'error'; propertyId: string; reason: Ga4VerifyFailureReason; detail: string }
-  | { ok: false; reason: 'invalid' | 'not_connected' }
+  | { ok: false; reason: 'invalid' | 'not_connected' | 'storage_error' }
 
 export async function setGa4Property(
   clientId: string,
@@ -69,7 +69,7 @@ export async function setGa4Property(
       )
     if (upsertErr) {
       console.error('[ga4/property] failed to write client_connectors:', upsertErr.message)
-      return { ok: false, reason: 'not_connected' }
+      return { ok: false, reason: 'storage_error' }
     }
     return { ok: true, status: 'connected', propertyId }
   }
@@ -87,12 +87,17 @@ export async function setGa4Property(
   // 两种情况下才落库为 error；如果失败的是一个"不同于当前已连接"的
   // property_id，就不动 DB，只把失败原因带回给调用方展示，保留原来那个
   // still-working 的连接。
-  const { data: existing } = await supabaseAdmin
+  const { data: existing, error: existingErr } = await supabaseAdmin
     .from('client_connectors')
     .select('status, config')
     .eq('client_id', clientId)
     .eq('anchor', 'ga4')
     .maybeSingle<{ status: string; config: { property_id?: string } | null }>()
+
+  if (existingErr) {
+    console.error('[ga4/property] failed to read existing client_connector:', existingErr.message)
+    return { ok: false, reason: 'storage_error' }
+  }
 
   const existingPropertyId = existing?.config?.property_id
   const wouldClobberWorkingConnector =
@@ -127,6 +132,7 @@ export async function setGa4Property(
     )
   if (upsertErr) {
     console.error('[ga4/property] failed to write client_connectors (error state):', upsertErr.message)
+    return { ok: false, reason: 'storage_error' }
   }
   return { ok: true, status: 'error', propertyId, reason: verified.reason, detail: verified.detail }
 }

@@ -1,0 +1,31 @@
+---
+// FAQ block + FAQPage schema.org markup (Schedule A.4.3 — up to 3 pages).
+// Content passed in must be grounded in verified client facts only (intake
+// data / projects.js) — this component just renders + emits schema, it does
+// not originate any claims.
+const { items = [], heading = 'Frequently asked questions' } = Astro.props;
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: items.map((i) => ({
+    '@type': 'Question',
+    name: i.q,
+    acceptedAnswer: { '@type': 'Answer', text: i.a },
+  })),
+};
+---
+<script type="application/ld+json" set:html={JSON.stringify(faqSchema)} />
+<section class="tint">
+  <div class="wrap reading">
+    <p class="eyebrow sec-eyebrow">FAQ</p>
+    <h2 class="sec-h" style="font-size:clamp(26px,3.6vw,40px);margin-bottom:26px">{heading}</h2>
+    <div>
+      {items.map((i) => (
+        <details style="border-bottom:1px solid var(--line-d);padding:16px 0">
+          <summary style="cursor:pointer;font-weight:700;font-size:16px">{i.q}</summary>
+          <p style="margin-top:10px;color:var(--mute);font-size:15px;line-height:1.6">{i.a}</p>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>

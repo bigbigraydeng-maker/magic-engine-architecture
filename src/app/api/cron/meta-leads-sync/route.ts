@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { syncClientMetaLeads, type MetaLeadsSyncClient } from '@/lib/meta/leads-sync'
 import { startCronRun } from '@/lib/cron/run-logger'
+import { summariseSyncProblems } from '@/lib/meta/leads-sync-alert'
 
 // 一个客户可能有多个表单，每个表单还要翻页；给足时间。
 export const maxDuration = 600
@@ -56,6 +57,7 @@ async function run(): Promise<NextResponse> {
         newContacts: 0,
         skippedNoIdentity: 0,
         failed: 0,
+        mailchimp: {},
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -63,13 +65,35 @@ async function run(): Promise<NextResponse> {
 
   const newContacts = results.reduce((n, r) => n + r.newContacts, 0)
   const leadsIngested = results.reduce((n, r) => n + r.leadsIngested, 0)
+  // 语义固定：**取不到线索的客户数**。Mailchimp 出口把人丢了不算在内 —— 那些人
+  // 已经进了 CRM，把整个客户标成 failed 是过度告警。出口的问题走 error_message
+  // 单独成句（`summariseSyncProblems`），日报里两类病分得开。
   const failed = results.filter((r) => r.error).length
+
+  // Mailchimp 出口的全局分布。摊平成一层是为了在 summary 顶层一眼看见
+  // 「这一轮有多少条压根没进邮件名单、卡在哪个 reason 上」—— 逐客户的明细
+  // 仍在 results 里。此前这层结果被整个丢掉，出口连着几周 100% skip 也无人知晓。
+  const mailchimp: Record<string, number> = {}
+  for (const r of results) {
+    for (const [k, n] of Object.entries(r.mailchimp ?? {})) mailchimp[k] = (mailchimp[k] ?? 0) + n
+  }
 
   await cronRun.finish({
     processed: results.length,
     completed: results.length - failed,
     failed,
-    summary: { newContacts, leadsIngested, results },
+    summary: { newContacts, leadsIngested, mailchimp, results },
+    // 有客户取不到数就必须把原话带进 error_message —— 日报邮件的「错误原因」列
+    // 读的就是这个字段。2026-08-21~08-30 这里一直是 null,于是日报每天照发
+    // 「meta-leads-sync 4 failed —」,一屏破折号没有一个字说明是什么事,
+    // 9 天没人看得懂,4 个客户的线索管道全程断供(CTS 一家漏 45 条、NZ$736)。
+    // 真正的报错当时就躺在 summary 里,只是没人把它搬到人看得见的地方。
+    //
+    // 「线索进来了但没进邮件名单」也从这里出。日报只捞 `failed_count > 0 ||
+    // status = 'failed'` 的跑,而 finish() 见到 error 才会把 status 标成
+    // failed —— 只有出口坏掉(failed_count = 0)时,这一句就是这次跑能不能被
+    // 日报看见的唯一开关。
+    error: summariseSyncProblems(results),
   })
 
   return NextResponse.json({
@@ -77,6 +101,7 @@ async function run(): Promise<NextResponse> {
     clients: results.length,
     newContacts,
     leadsIngested,
+    mailchimp,
     results,
   })
 }

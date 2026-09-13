@@ -56,6 +56,9 @@ interface BoardData {
   stages: Record<Stage, Card[]>
   counts: Record<Stage, number>
   courses?: Course[]
+  /** 客户配置了哪些「资料包」（团/档位），供确认做片时选归属。0-1 个不用选
+   *  （见 post-fields.ts::resolveOfferFacts 的兜底规则），≥2 个必须选一个。 */
+  offerKeys?: string[]
 }
 
 // 单讲在流程里的人话状态(比看板段更细)
@@ -111,13 +114,15 @@ export default function ContentFactoryBoardPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [videoLink, setVideoLink] = useState('')
+  const [offerKey, setOfferKey] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // 换卡片/关抽屉一律把链接输入框清空 —— 在 A 里粘了链接不提交就关掉，
-  // 再打开 B 时输入框还留着 A 的链接，点确定就把错的片挂到 B 上了。
+  // 换卡片/关抽屉一律把链接输入框和归属选择清空 —— 在 A 里选了归属不提交就关掉，
+  // 再打开 B 时选择还留着 A 的，点确认就把错的归属存到 B 上了（跟 videoLink 同一个教训）。
   const setSelected = useCallback((c: Card | null) => {
     setSelectedRaw(c)
     setVideoLink('')
+    setOfferKey('')
   }, [])
 
   const load = useCallback(async () => {
@@ -143,17 +148,32 @@ export default function ContentFactoryBoardPage() {
       const r = await fetch(`/api/clients/${clientId}/content-factory/${selected.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify(
+          action === 'confirm' && offerKey ? { action, offer_key: offerKey } : { action },
+        ),
       })
-      const data = (await r.json().catch(() => ({}))) as { error?: string; render?: { error?: string } }
+      const data = (await r.json().catch(() => ({}))) as {
+        error?: string
+        render?: { error?: string }
+        publish?: { publerJobId: string }
+      }
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
       setSelected(null)
       setError(null)
       // 给运营一句能安心的反馈（做片要 15-30 分钟，别让人以为丢了）
       if (action === 'confirm') {
-        setNotice(data.render?.error
-          ? `已确认，但建做片任务失败：${data.render.error}（可再点一次确认重试）`
-          : '已确认 · 正在做片，约 15-30 分钟后会出现在「出片」列')
+        if (data.publish) {
+          // LinkedIn 进度贴没有做片环节，"确认"这一步已经是真的发布了——
+          // 不能走下面视频那套"正在做片"的话术，那是假消息。
+          setNotice('已确认 · 已经发布，不需要做片')
+        } else {
+          // data.render.error 现在是常态(旧拼片管线已退役)，不是偶发失败——不能再提示
+          // "再点一次确认重试"：这张卡片的状态已经改成 approved，进了「备料」列，选题段的
+          // 确认按钮不会再出现，重试没有入口。真正能做的是去「备料」列手动传成片/粘视频链接。
+          setNotice(data.render?.error
+            ? '已确认 · 已进「备料」列，旧自动做片管线已退役，请在「备料」列打开这张卡片手动传成片或粘视频链接'
+            : '已确认 · 正在做片，约 15-30 分钟后会出现在「出片」列')
+        }
       } else if (action === 'schedule') {
         setNotice('已通过 · 已进「发布」列')
       }
@@ -426,23 +446,44 @@ export default function ContentFactoryBoardPage() {
               {(selected.platforms ?? []).map((p) => <span key={p}>{PLATFORM_LABEL[p] ?? p}</span>)}
             </div>
 
-            {/* 选题段：确认 / 打回 */}
+            {/* 选题段：确认 / 打回。配了 ≥2 份资料包（团/档位）时必须先选这条视频
+                对应哪一份，不然出片会因为系统不敢乱猜而被拦下（见 post-fields.ts
+                ::resolveOfferFacts）——只配 0-1 份时不用选，不显示这个下拉框。 */}
             {selected.stage === '选题' && (
-              <div className="flex gap-2 sticky bottom-0 bg-white pt-3 border-t border-me-stone">
-                <button
-                  disabled={acting}
-                  onClick={() => act('confirm')}
-                  className="flex-1 text-sm font-semibold text-white bg-status-track rounded-xl py-2.5 disabled:opacity-50"
-                >
-                  {acting ? '处理中…' : '确认做 → 进备料'}
-                </button>
-                <button
-                  disabled={acting}
-                  onClick={() => act('reject')}
-                  className="text-sm text-status-rej border border-me-stone rounded-xl px-4 disabled:opacity-50"
-                >
-                  打回
-                </button>
+              <div className="sticky bottom-0 bg-white pt-3 border-t border-me-stone">
+                {(board?.offerKeys?.length ?? 0) >= 2 && (
+                  <div className="mb-2">
+                    <label className="text-[11px] font-semibold text-me-taupe mb-1 block">
+                      这条视频对应哪份资料（团/档位）
+                    </label>
+                    <select
+                      value={offerKey}
+                      onChange={(e) => setOfferKey(e.target.value)}
+                      className="w-full text-sm border border-me-stone rounded-xl px-3 py-2"
+                    >
+                      <option value="">先选一个…</option>
+                      {board?.offerKeys?.map((k) => (
+                        <option key={k} value={k}>{k}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    disabled={acting || ((board?.offerKeys?.length ?? 0) >= 2 && !offerKey)}
+                    onClick={() => act('confirm')}
+                    className="flex-1 text-sm font-semibold text-white bg-status-track rounded-xl py-2.5 disabled:opacity-50"
+                  >
+                    {acting ? '处理中…' : '确认做 → 进备料'}
+                  </button>
+                  <button
+                    disabled={acting}
+                    onClick={() => act('reject')}
+                    className="text-sm text-status-rej border border-me-stone rounded-xl px-4 disabled:opacity-50"
+                  >
+                    打回
+                  </button>
+                </div>
               </div>
             )}
 

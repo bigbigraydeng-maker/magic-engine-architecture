@@ -1,8 +1,14 @@
 /**
  * AI Visibility Tracker — OpenAI (Content Engine) runner.
  *
- * Sends one question to GPT-4o with web search enabled (gpt-4o-search-preview),
+ * Sends one question to a search-enabled model (gpt-5-search-api),
  * localized to the client's target market (AU/NZ).
+ *
+ * gpt-4o-search-preview / gpt-4o-mini-search-preview were retired by OpenAI
+ * on 2026-07-23; verified live on 2026-08-24 that the entire search-preview
+ * family now 404s, and that gpt-5-search-api is a working drop-in
+ * replacement (same chat.completions + web_search_options shape, same
+ * annotations[].url_citation response shape).
  *
  * Reference: ROADMAP.md P7.1.5, ARCHITECTURE.md §12.4
  */
@@ -11,10 +17,10 @@ import OpenAI from 'openai'
 import { getOpenAIClient } from '@/lib/ai/openai-client'
 import { marketToLocation, type RunnerInput, type RunnerOutput } from './types'
 
-// gpt-4o-search-preview pricing per million tokens (mirrors gpt-4o)
-const PRICE_INPUT_PER_M = 2.5
+// gpt-5-search-api pricing per million tokens (developers.openai.com/api/docs/pricing, 2026-08-24)
+const PRICE_INPUT_PER_M = 1.25
 const PRICE_OUTPUT_PER_M = 10.0
-const SEARCH_MODEL = 'gpt-4o-search-preview'
+const SEARCH_MODEL = 'gpt-5-search-api'
 
 export async function runOpenAI(input: RunnerInput): Promise<RunnerOutput> {
   const start = Date.now()
@@ -39,8 +45,8 @@ export async function runOpenAI(input: RunnerInput): Promise<RunnerOutput> {
 
   try {
     const client = getOpenAIClient()
-    // The web_search_options field is supported by gpt-4o-search-preview
-    // models but isn't in the public type definition for chat.completions.
+    // The web_search_options field is supported by gpt-5-search-api
+    // but isn't in the public type definition for chat.completions.
     // Cast to unknown to bypass — the runtime API accepts it.
     const params = {
       model: SEARCH_MODEL,
@@ -90,7 +96,7 @@ function errorOutput(start: number, errorMessage: string): RunnerOutput {
 }
 
 /**
- * gpt-4o-search-preview returns citations as `annotations` of type
+ * gpt-5-search-api returns citations as `annotations` of type
  * `url_citation` on the assistant message. SDK 6.x doesn't type these
  * annotations, so we narrow defensively.
  */
