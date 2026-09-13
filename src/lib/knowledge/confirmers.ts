@@ -43,5 +43,8 @@ export async function getRegisteredConfirmerEmails(
   // 沙盘对着真实 client_knowledge_confirmers 表跑过同样的 select，列名
   // confirmer_email 跟 ConfirmerRow 逐一核对一致。
   const rows = (data ?? []) as unknown as ConfirmerRow[]
-  return new Set(rows.map((r) => r.confirmer_email.toLowerCase()))
+  // 🔴 魏征复审（2026-09-14）：跟 read.ts 的比较标准对齐——必须 trim 再
+  // lower-case，否则登记时留了尾随空格的邮箱会跟 read.ts 里 trim 过的确认人
+  // 邮箱对不上，登记形同没登记。
+  return new Set(rows.map((r) => r.confirmer_email.trim().toLowerCase()))
 }

@@ -318,6 +318,48 @@ describe('getClientKnowledge — dual-sign gate (customer_reply only)', () => {
     expect(result.entries).toEqual([])
   })
 
+  it('双签变异测试②b（魏征/狄仁杰联合复审 2026-09-14）: trailing whitespace must not let the approver stand in as confirmer', async () => {
+    const sb = makeSb(
+      [
+        fact({
+          id: 'f1',
+          fact_key: 'k.price',
+          visibility: 'customer_ok',
+          sensitivity: 'price',
+          approved_by_email: 'ray@magicengine.cloud',
+          client_confirmed_by_email: 'ray@magicengine.cloud ', // same person, trailing space
+          client_confirmed_at: '2026-02-01T00:00:00.000Z',
+          confirmFingerprint: true,
+        }),
+      ],
+      [ENTITLEMENT_GRANT],
+      [{ ...REGISTERED_CONFIRMER, confirmer_email: 'ray@magicengine.cloud ' }],
+    )
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => NOW })
+    expect(result.entries).toEqual([])
+  })
+
+  it('双签变异测试②c（魏征/狄仁杰联合复审 2026-09-14）: a legitimate confirmation is not spuriously rejected merely because the stored email has incidental whitespace', async () => {
+    const sb = makeSb(
+      [
+        fact({
+          id: 'f1',
+          fact_key: 'k.price',
+          visibility: 'customer_ok',
+          sensitivity: 'price',
+          approved_by_email: 'fde@magicengine.cloud',
+          client_confirmed_by_email: ' owner@ctstours.co.nz ', // legitimate confirmer, incidental whitespace
+          client_confirmed_at: '2026-02-01T00:00:00.000Z',
+          confirmFingerprint: true,
+        }),
+      ],
+      [ENTITLEMENT_GRANT],
+      [{ ...REGISTERED_CONFIRMER, confirmer_email: 'owner@ctstours.co.nz' }],
+    )
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => NOW })
+    expect(result.entries.map((e) => e.id)).toEqual(['f1'])
+  })
+
   describe('双签变异测试③: a global admin cannot stand in for the customer', () => {
     const saved = process.env.ADMIN_EMAILS
     beforeEach(() => {

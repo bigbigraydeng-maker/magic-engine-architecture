@@ -91,11 +91,15 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_facts (
   -- 🔴 双签变异测试②：同一个邮箱不能既是批准人又是确认人。写入层面直接拒绝，
   --    比读取时再判定更彻底——库里永远不会出现这种脏数据，也不依赖每一个
   --    读取路径都记得重新检查一遍。
+  -- 🔴 狄仁杰攻击验证（2026-09-14）实测：不 trim 的话，一个带尾随空格的
+  -- confirmed_by_email（如 'ray@x.com '）能绕开 lower() 比较，跟 approver
+  -- 判定成"不同人"直接插入成功。跟 read.ts / confirmers.ts 的比较标准对齐，
+  -- 两边都先 trim 再 lower。
   CONSTRAINT approver_confirmer_differ
     CHECK (
       client_confirmed_by_email IS NULL
       OR approved_by_email IS NULL
-      OR lower(client_confirmed_by_email) <> lower(approved_by_email)
+      OR lower(trim(client_confirmed_by_email)) <> lower(trim(approved_by_email))
     )
 );
 

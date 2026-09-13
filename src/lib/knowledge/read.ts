@@ -135,27 +135,33 @@ function visibilityAllowedFor(purpose: GetClientKnowledgeOptions['purpose'], vis
 function isCustomerReplyEligible(row: FactRow, registeredConfirmerEmails: ReadonlySet<string>): boolean {
   if (!SENSITIVE_CATEGORIES.has(row.sensitivity)) return true // 'general' — no dual-sign required
 
-  if (!row.client_confirmed_at || !row.client_confirmed_by_email) return false
+  // 🔴 魏征复审（2026-09-14）实测发现：这里原来只做 falsy 检查，一个仅含空格
+  // 的确认人邮箱是 truthy，会漏过这一关。跟 whitelist.ts `isGlobalAdminEmail`
+  // 的 `.toLowerCase().trim()` 标准对齐——三处比较（这里、approver_confirmer
+  // 比较、registeredConfirmerEmails 查找）都必须先 trim 再比较，否则一个带
+  // 尾随空格的邮箱能同时躲过全部三道检查（狄仁杰攻击验证实测：DB CHECK 层确
+  // 实放行了带空格的邮箱写入，唯一没被打穿是因为 client_knowledge_confirmers
+  // 本身被 RLS 锁死，外部攻击者摸不到——但这道闸不该靠"攻击者刚好摸不到别的
+  // 洞"才成立，读取入口自己必须先堵死这条口子）。
+  const confirmedByEmail = row.client_confirmed_by_email?.trim()
+  if (!row.client_confirmed_at || !confirmedByEmail) return false
 
   // Defence in depth: the DB CHECK `approver_confirmer_differ` should already
   // block this at write time, but a reader must not assume every write path
   // honoured it.
-  if (
-    row.approved_by_email &&
-    row.approved_by_email.toLowerCase() === row.client_confirmed_by_email.toLowerCase()
-  ) {
+  if (row.approved_by_email && row.approved_by_email.trim().toLowerCase() === confirmedByEmail.toLowerCase()) {
     return false
   }
 
   // A global admin cannot stand in for the customer's own confirmation —
   // exact ADMIN_EMAILS match only, never the looser ADMIN_EMAIL_DOMAIN check
   // (see whitelist.ts `isGlobalAdminEmail`).
-  if (isGlobalAdminEmail(row.client_confirmed_by_email)) return false
+  if (isGlobalAdminEmail(confirmedByEmail)) return false
 
   // The confirmer must be a currently-registered confirmer for this exact
   // client — otherwise a write path that stores an unregistered email would
   // pass every other check above with nothing left to catch it.
-  if (!registeredConfirmerEmails.has(row.client_confirmed_by_email.toLowerCase())) return false
+  if (!registeredConfirmerEmails.has(confirmedByEmail.toLowerCase())) return false
 
   const currentFingerprint = computeContentFingerprint({
     statement: row.statement,
