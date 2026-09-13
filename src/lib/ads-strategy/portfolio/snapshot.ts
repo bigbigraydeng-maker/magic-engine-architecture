@@ -57,6 +57,8 @@ export interface EntitySnapshotRow {
   targeting_summary: Record<string, unknown> | null
   learning_stage: string | null
   ad_studies: AdStudyRef[]
+  creative_video_ids: string[]
+  creative_page_id: string | null
   account_status: number | null
   disable_reason: number | null
   timezone_name: string | null
@@ -111,6 +113,8 @@ function blank(ctx: Ctx, level: SnapshotLevel, entityId: string): RowWithoutHash
     targeting_summary: null,
     learning_stage: null,
     ad_studies: [],
+    creative_video_ids: [],
+    creative_page_id: null,
     account_status: null,
     disable_reason: null,
     timezone_name: null,
@@ -207,6 +211,9 @@ export function normalizeAdset(ctx: Ctx, s: GraphAdsetSettings): RowWithoutHash 
 }
 
 export function normalizeAd(ctx: Ctx, a: GraphAdSettings): RowWithoutHash {
+  // creative.video_id 才是投放用的视频（视频受众规则 object_id 对的是它）；
+  // object_story_spec.video_data.video_id 是原始上传稿，2026-09-14 实拉两者不同，不拿它匹配。
+  const videoId = a.creative?.video_id
   return {
     ...blank(ctx, 'ad', a.id),
     entity_name: a.name ?? null,
@@ -214,6 +221,8 @@ export function normalizeAd(ctx: Ctx, a: GraphAdSettings): RowWithoutHash {
     adset_id: a.adset_id ?? null,
     status: a.status ?? null,
     effective_status: a.effective_status ?? null,
+    creative_video_ids: videoId ? [videoId] : [],
+    creative_page_id: a.creative?.object_story_spec?.page_id ?? a.creative?.effective_object_story_id?.split('_')[0] ?? null,
     source_updated_time: a.updated_time ?? null,
   }
 }
