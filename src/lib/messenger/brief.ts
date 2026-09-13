@@ -1,6 +1,8 @@
 /**
  * Customer brief generation — turns a stored Messenger thread into the card a
- * CTS salesperson reads (see brief-schema.ts).
+ * client's salesperson reads (see brief-schema.ts). Every client's threads go
+ * through this same code, so nothing client-specific (name, industry facts,
+ * contact details) may be hardcoded here — it comes from the `clients` row.
  *
  * Trigger rules live here rather than in the cron route so they can be tested
  * without HTTP. A brief is (re)written only when ALL of these hold:
@@ -15,11 +17,13 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
+import { hasIndustryFeature } from '@/lib/clients/industry-features'
 import {
   MessengerBriefSchema,
   MESSENGER_BRIEF_JSON_SCHEMA,
   BRIEF_SCHEMA_VERSION,
   type MessengerBrief,
+  type TripDetails,
   type BriefContext,
 } from './brief-schema'
 
@@ -70,51 +74,137 @@ function modelName(): string {
   return process.env.MESSENGER_BRIEF_MODEL ?? 'gpt-4o-mini'
 }
 
-const SYSTEM_PROMPT = `You turn a Facebook Messenger thread between CTS Tours New Zealand and a prospective customer into a briefing card for a CTS salesperson.
+/** Trip fields, all empty — the safe default for any non-travel business. */
+const EMPTY_TRIP: TripDetails = {
+  tour_interest: null,
+  travel_window: null,
+  party_size: null,
+  departure_city: null,
+  first_time_to_china: null,
+  budget_signal: null,
+}
+
+const GENERIC_COMPANY_NAME = '这家企业'
+
+/**
+ * What the prompt needs to know about the client. Nothing here may be a
+ * client-specific fact hardcoded in this file — it must come from the
+ * `clients` row, so the same prompt is correct for every client.
+ */
+interface ClientProfile {
+  name: string
+  /** Whether "trip" fields make sense to ask for at all (reuses the same
+   * industry signal that gates the tailor-made-itinerary feature). */
+  isTourism: boolean
+}
+
+async function loadClientProfile(clientId: string): Promise<ClientProfile> {
+  const { data } = await supabaseAdmin
+    .from('clients')
+    .select('name, industry')
+    .eq('id', clientId)
+    .maybeSingle()
+
+  return {
+    name: (data?.name as string | null)?.trim() || GENERIC_COMPANY_NAME,
+    isTourism: hasIndustryFeature((data?.industry as string | null) ?? null, 'tailor_made'),
+  }
+}
+
+/**
+ * Built per client — no business name, history, policy, or contact detail is
+ * ever hardcoded here. Every one of those used to be a CTS-only fact baked
+ * into a prompt every client's threads went through (see PR description for
+ * the real NAL threads this broke). Anything client-specific must come from
+ * the thread itself, or later from a client knowledge base — not from here.
+ */
+export function buildSystemPrompt(profile: ClientProfile): string {
+  const { name, isTourism } = profile
+
+  const tripSection = isTourism
+    ? `TRIP DETAILS — this business sells travel/tours, so "trip" is worth filling in from what the CUSTOMER said:
+- tour_interest may be filled from a tour the customer named or picked in a form, not from one we merely pitched. Keep the name in ENGLISH exactly as sold, even inside Chinese fields — staff match it against the website.
+- travel_window / party_size / departure_city / first_time_to_china / budget_signal: only from what the CUSTOMER stated. A date offered, a price quoted, or a destination ${name} suggested is OUR information, not theirs — leave the field null.`
+    : `TRIP DETAILS — ${name} is not a travel agency. Every field under "trip" must be null, even if a place name comes up in passing. Do not invent a travel interest for a customer who never expressed one.`
+
+  return `You turn a Facebook Messenger thread between ${name} and a prospective customer into a briefing card for a ${name} salesperson.
 
 LANGUAGE — this is the most common mistake, get it right:
-- summary, customer_needs, objections, promises_made, next_action, risk_flags: write in SIMPLIFIED CHINESE. CTS staff read these in a Chinese interface.
-- draft_reply: write in ENGLISH. It is sent to a New Zealand customer.
+- summary, customer_needs, objections, promises_made, next_action, risk_flags: write in SIMPLIFIED CHINESE. Staff read these in a Chinese interface.
+- draft_reply: write in ENGLISH. It is sent to the customer.
 - When quoting the customer inside a Chinese field, keep their original English in brackets.
 
-ATTRIBUTION — the mistake that makes a card useless. Every field under "trip" and "contact" describes what the CUSTOMER told us. Anything the CTS side said — a departure date we offered, a price we quoted, a tour we suggested — is OUR information, not theirs.
-- If CTS quoted "from NZD $3,880pp" and the customer said nothing about money, budget_signal is null. A quote is not a budget.
-- If CTS said a tour "departs 3 November 2026" and the customer never named a month, travel_window is null. A departure date is not their travel window.
-- tour_interest may be filled from a tour the customer named or picked in a form, not from one we merely pitched.
-- contact.phone / contact.email only from details the customer supplied (lead forms put them in the first message). Never CTS's own 0800 number or info@ address.
+ATTRIBUTION — the mistake that makes a card useless. Every field under "trip" and "contact" describes what the CUSTOMER told us. Anything ${name}'s side said — a date offered, a price quoted, a product suggested — is OUR information, not theirs.
+- If ${name} quoted a price and the customer said nothing about money, budget_signal is null. A quote is not a budget.
+- contact.phone / contact.email only from details the customer supplied (lead forms put them in the first message). Never ${name}'s own phone number or email address.
 
-NAMES — tour names stay in ENGLISH exactly as CTS sells them ("Best of China", "A Tale of Two Cities"), even inside Chinese fields. Staff search on them and match them to the website; a translated name is unusable.
+${tripSection}
 
 GROUNDING — only use what is in the thread:
-- Never invent tour names, prices, dates, hotels, inclusions or itinerary detail.
+- Never invent product names, prices, dates, company history, policies, or contact details that ${name}'s side did not literally say in this thread. If you do not know it, leave it out or say a specialist will follow up.
 - If the customer asked something the thread does not answer, say so in next_action and leave draft_reply asking rather than guessing.
-- promises_made must capture EVERY commitment the CTS side made ("we'll send you...", "a specialist will call you within 24 hours"). Staff cannot honour a promise they never saw. An offer the customer has not accepted ("would you like the itinerary?") is NOT a promise.
+- promises_made must capture EVERY commitment ${name}'s side made ("we'll send you...", "someone will call you within 24 hours"). Staff cannot honour a promise they never saw. An offer the customer has not accepted ("would you like more details?") is NOT a promise.
 
-next_action must be a concrete thing a salesperson does today, in the imperative — "打电话给 Kam，确认出行月份". Never "等待客户回复": if the customer has gone quiet, chasing them IS the action, and the elapsed time below tells you how overdue it is.
+NOISE / SPAM — check this before anything else. If the thread is an advertisement, a phishing attempt impersonating Facebook/Meta or anyone else, an automated notice, or otherwise has nothing to do with ${name}'s actual business: set customer_needs to an empty array, intent_level to "unknown", and add a risk_flag saying it looks like spam or phishing, not a real enquiry. Never invent a plausible-sounding need to fill the field.
 
-draft_reply rules (it goes to a real customer as CTS):
-- Warm, plain New Zealand English. Two or three sentences. No hype words.
-- Prices are always "from" prices per person in NZD, never a confirmed quote.
-- CTS has operated in New Zealand for 25 years. 1928 belongs to the China Travel Service group in China. Never write "since 1928", "in Auckland since 1928" or "New Zealand's oldest".
-- New Zealand passport holders can enter China visa-free for up to 30 days until 31 December 2026. Do not state any other figure.
-- If the thread is about refunds, cancellations, changes, payment, insurance, medical or accessibility needs, or a complaint: do not attempt to resolve it. Draft a short reply saying a CTS travel specialist will come back to them, and offer 0800 287 888 / info@ctstours.co.nz.`
+next_action must be a concrete thing a salesperson does today, in the imperative — e.g. "打电话给 Kam，确认需求". Never "等待客户回复": if the customer has gone quiet, chasing them IS the action, and the elapsed time below tells you how overdue it is.
+
+draft_reply rules (it goes to a real customer as ${name}):
+- Warm, plain English. Two or three sentences. No hype words.
+- Never state a price, date, company-history fact, policy, or contact detail unless it is already in the thread.
+- If the thread is about refunds, cancellations, changes, payment, insurance, medical or accessibility needs, or a complaint: do not attempt to resolve it. Draft a short reply saying a specialist will follow up, without inventing a phone number or email that is not already in the thread.`
+}
+
+/**
+ * Deterministic backstop for the one concrete failure mode we have real
+ * evidence of: a Facebook-impersonating ad/phishing message read as a
+ * genuine enquiry (see PR description — a "verify your account" ad became
+ * "想了解更多关于中国的旅游信息" for a logistics client). The prompt above
+ * already asks the model to do this; this does not depend on the model
+ * getting it right.
+ */
+const NOISE_PATTERNS: RegExp[] = [
+  /verify\s+your\s+(account|identity|page|business)/i,
+  /account\s+(has been|will be|is)\s+(suspended|restricted|disabled|limited|deactivated)/i,
+  /confirm\s+your\s+(account|information|identity)/i,
+  /(claim|redeem)\s+your\s+(prize|reward|gift)/i,
+  /you(?:’|')ve\s+(won|been selected)/i,
+  /copyright\s+(infringement|violation)/i,
+  /page\s+will\s+be\s+(deleted|removed|suspended|restricted)/i,
+  /violat(?:e|es|ed|ion)\s+(our\s+)?community\s+standards/i,
+]
+
+/** Exported so the pattern list itself has a direct test, not just the thread-level effect. */
+export function isLikelyNoiseMessage(text: string): boolean {
+  return NOISE_PATTERNS.some((re) => re.test(text))
+}
+
+/** Only true when every inbound message looks like noise — one phishing line
+ * mixed into a real conversation must not wipe a genuine need. */
+function threadLooksLikeNoise(messages: StoredMessage[]): boolean {
+  const inbound = messages.filter((m) => m.direction === 'inbound' && m.body.trim().length > 0)
+  if (inbound.length === 0) return false
+  return inbound.every((m) => isLikelyNoiseMessage(m.body))
+}
+
+const NOISE_RISK_FLAG = '疑似垃圾/推广/钓鱼消息，非真实客户需求，已忽略模型给出的需求猜测'
 
 /**
  * State the model cannot read off the transcript: who is waiting on whom, and
  * for how long. Without this next_action degrades to "wait for the customer".
  */
-function renderContext(context?: BriefContext): string {
+function renderContext(name: string, context?: BriefContext): string {
   if (!context) return ''
   const who = context.awaitingReply
-    ? `The CUSTOMER spoke last and has been waiting ${context.hoursSinceLastMessage} hours for a reply from CTS.`
-    : `CTS spoke last. The customer has not replied for ${context.hoursSinceLastMessage} hours.`
+    ? `The CUSTOMER spoke last and has been waiting ${context.hoursSinceLastMessage} hours for a reply from ${name}.`
+    : `${name} spoke last. The customer has not replied for ${context.hoursSinceLastMessage} hours.`
   return `Current state: ${who}\n\n`
 }
 
-function renderThread(messages: StoredMessage[]): string {
+function renderThread(name: string, messages: StoredMessage[]): string {
   return messages
     .map((m) => {
-      const who = m.direction === 'inbound' ? (m.senderName ?? 'Customer') : 'CTS'
+      const who = m.direction === 'inbound' ? (m.senderName ?? 'Customer') : name
       return `[${m.sentAt}] ${who}: ${m.body}`
     })
     .join('\n')
@@ -123,21 +213,31 @@ function renderThread(messages: StoredMessage[]): string {
 /**
  * Ask the model for a brief. Falls back to a deterministic brief when no API key
  * is configured so dev/test never depends on a network call.
+ *
+ * `clientId` is what stops every client's threads being read as CTS's — it
+ * picks the real business name and whether "trip" fields apply at all.
  */
 export async function generateBrief(
   messages: StoredMessage[],
+  clientId: string,
   context?: BriefContext,
 ): Promise<MessengerBrief> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) return fallbackBrief(messages)
+
+  const profile = await loadClientProfile(clientId)
+  const isNoise = threadLooksLikeNoise(messages)
 
   const { default: OpenAI } = await import('openai')
   const client = new OpenAI({ apiKey })
   const res = await client.responses.create({
     model: modelName(),
     input: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: `${renderContext(context)}Thread:\n${renderThread(messages)}` },
+      { role: 'system', content: buildSystemPrompt(profile) },
+      {
+        role: 'user',
+        content: `${renderContext(profile.name, context)}Thread:\n${renderThread(profile.name, messages)}`,
+      },
     ],
     text: {
       format: { type: 'json_schema', name: 'messenger_brief', schema: MESSENGER_BRIEF_JSON_SCHEMA },
@@ -151,10 +251,22 @@ export async function generateBrief(
     follow_up_due_at: normaliseFollowUpDueAt(brief.follow_up_due_at),
     summary: stripMarkdown(brief.summary),
     next_action: brief.next_action ? stripMarkdown(brief.next_action) : null,
-    customer_needs: brief.customer_needs.map(stripMarkdown),
+    // A noise thread's "needs" are the model's best guess at a need that was
+    // never expressed — belt-and-braces on top of the NOISE / SPAM prompt rule.
+    customer_needs: isNoise ? [] : brief.customer_needs.map(stripMarkdown),
     objections: brief.objections.map(stripMarkdown),
     promises_made: brief.promises_made.map(stripMarkdown),
     draft_reply: stripMarkdown(brief.draft_reply),
+    intent_level: isNoise ? 'unknown' : brief.intent_level,
+    risk_flags: isNoise
+      ? brief.risk_flags.includes(NOISE_RISK_FLAG)
+        ? brief.risk_flags
+        : [...brief.risk_flags, NOISE_RISK_FLAG]
+      : brief.risk_flags,
+    // Non-travel clients never get trip fields, no matter what the model
+    // returned — this is the fix for the NAL thread that came back with a
+    // fabricated "了解更多关于中国的旅游信息" travel interest.
+    trip: profile.isTourism && !isNoise ? brief.trip : EMPTY_TRIP,
   }
 }
 
@@ -208,14 +320,7 @@ export function fallbackBrief(messages: StoredMessage[]): MessengerBrief {
     next_action: '请直接查看下方完整对话记录。',
     follow_up_due_at: null,
     risk_flags: ['AI 摘要未生成，请以原始对话为准'],
-    trip: {
-      tour_interest: null,
-      travel_window: null,
-      party_size: null,
-      departure_city: null,
-      first_time_to_china: null,
-      budget_signal: null,
-    },
+    trip: EMPTY_TRIP,
     contact: { phone: null, email: null },
     draft_reply: '',
   })
