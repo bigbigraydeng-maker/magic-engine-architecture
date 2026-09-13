@@ -83,12 +83,24 @@ type InsightLevel = 'campaign' | 'adset' | 'ad'
  * so it re-requests the deep window daily. That is one extra page walk and an
  * idempotent re-upsert — cheap next to a silent hole nobody can see.
  */
-async function needsBackfill(clientId: string, level: InsightLevel): Promise<boolean> {
-  const { data, error } = await supabaseAdmin
+async function needsBackfill(
+  clientId: string,
+  level: InsightLevel,
+  scope: { adAccountId?: string; withVideo?: boolean } = {},
+): Promise<boolean> {
+  // 2026-09-14 魏征复审 B2：
+  //   - 按账户判深度（adAccountId）。只按客户判时，多账户客户第二个账户的行先写入，会让主账户
+  //     误以为历史够深而跳过 30 天回填（生产前例：CTS 官方账户广告级最早只到 09-08）。
+  //   - 写视频列时（withVideo），只把「已经带原始 actions 的行」算作历史：否则 migration 之前写入的
+  //     老行、或来源不明的手写行（P0-6 Oztop 08-16 那行）会让回填被跳过，视频列永远补不上。
+  let query = supabaseAdmin
     .from('ad_daily_insights')
     .select('insight_date')
     .eq('client_id', clientId)
     .eq('level', level)
+  if (scope.adAccountId) query = query.eq('ad_account_id', scope.adAccountId)
+  if (scope.withVideo) query = query.not('actions', 'is', null)
+  const { data, error } = await query
     .order('insight_date', { ascending: true })
     .limit(1)
 
@@ -256,7 +268,7 @@ export async function syncCampaignDailyInsights(
   opts: SyncOptions = {},
 ): Promise<SyncDailyInsightsResult> {
   try {
-    const backfill = await needsBackfill(clientId, 'campaign')
+    const backfill = await needsBackfill(clientId, 'campaign', { adAccountId, withVideo: opts.withVideo })
     const { since, until, lookback } = requestWindow(backfill)
 
     const { rows, complete } = await getCampaignDailyInsights(adAccountId, accessToken, since, until)
@@ -334,7 +346,7 @@ export async function syncAdDailyInsights(
   opts: SyncOptions = {},
 ): Promise<SyncDailyInsightsResult> {
   try {
-    const backfill = await needsBackfill(clientId, 'ad')
+    const backfill = await needsBackfill(clientId, 'ad', { adAccountId, withVideo: opts.withVideo })
     const { since, until, lookback } = requestWindow(backfill)
 
     const { rows, complete } = await getAdDailyInsights(adAccountId, accessToken, since, until)
@@ -382,8 +394,10 @@ export async function syncAdDailyInsights(
  * `parent_id` 存所属广告系列。漏斗角色与 ABO 预算都挂在广告组上，D4/D5 要按广告组算花费。
  *
  * ⚠️ 生产里有 1 行来源不明的 Oztop adset 行（2026-08-16，CTR 存的是百分数而非小数，
- *    来源是旧电脑上一个手写 SQL 的定时任务，见 PR #1656 系列 P0-6 结论）。首次回填 30 天
- *    会按同一幂等键把它覆盖成 Meta 口径的正确值——这是预期行为，不是误删。
+ *    来源是旧电脑上一个手写 SQL 的定时任务，P0-6 结论）。视频列 migration apply 后
+ *    （withVideo），深度判断只认带 actions 的行，那行不算历史，回填窗口覆盖到 08-16 时会按同一
+ *    幂等键被 Meta 口径的正确值覆盖；若回填窗口已经够不到 08-16，它会保留原样——不影响计算
+ *    （所有读侧都按 level 过滤，诊断不读 Oztop 这段历史）。
  */
 export async function syncAdsetDailyInsights(
   clientId: string,
@@ -392,7 +406,7 @@ export async function syncAdsetDailyInsights(
   opts: SyncOptions = {},
 ): Promise<SyncDailyInsightsResult> {
   try {
-    const backfill = await needsBackfill(clientId, 'adset')
+    const backfill = await needsBackfill(clientId, 'adset', { adAccountId, withVideo: opts.withVideo })
     const { since, until, lookback } = requestWindow(backfill)
 
     const { rows, complete } = await getAdsetDailyInsights(adAccountId, accessToken, since, until)

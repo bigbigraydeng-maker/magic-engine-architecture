@@ -57,7 +57,7 @@ import { adsMetricKeysWrittenBy } from '@/lib/flywheel/metric-registry'
 import { MetaAdsAdapter } from '@/lib/flywheel/adapters/MetaAdsAdapter'
 import { startCronRun } from '@/lib/cron/run-logger'
 import { domainToEnvKey } from '@/lib/meta/token-manager'
-import { getClientAdAccountIds } from '@/lib/meta/client-ad-accounts'
+import { findSharedAdAccounts, getClientAdAccountIds } from '@/lib/meta/client-ad-accounts'
 import { hasVideoColumns, syncAdDailyInsights, syncAdsetDailyInsights, syncCampaignDailyInsights } from '@/lib/ads-strategy/daily-insights'
 import { evaluateClientAdHealth } from '@/lib/ads-strategy/evaluate'
 import { sendAdHealthDigest } from '@/lib/ads-strategy/digest'
@@ -301,6 +301,12 @@ export async function GET(req: NextRequest) {
           // Non-fatal per account: one account's failure must not skip the rest.
           const allAccountIds = await getClientAdAccountIds(client.client_id)
           const secondaryAccountIds = allAccountIds.filter(id => id !== client.meta_ad_account_id)
+          // ads IMPACT §14 M9：新增的广告组级同步对共用账户（同账户登记给多个客户）跳过，
+          // 不把同一批广告组写进两家名下。系列级/广告级的老同步维持原状（既有问题，诊断读侧另做隔离）。
+          // 查询出错 fail closed：全部当共用，跳过广告组级。
+          const { shared: sharedAccountIds } = await findSharedAdAccounts(client.client_id, allAccountIds)
+          const isShared = (id: string) => sharedAccountIds.has(id.startsWith('act_') ? id.slice(4) : id)
+          const skippedShared = { success: true, rows_written: 0, error: 'skipped: shared ad account (M9)' }
           if (secondaryAccountIds.length > 0) {
             result.ad_daily_secondary = []
             for (const secondaryAccountId of secondaryAccountIds) {
@@ -319,12 +325,9 @@ export async function GET(req: NextRequest) {
                 metaToken,
                 { withVideo },
               )
-              secondaryResult.adset_level = await syncAdsetDailyInsights(
-                client.client_id,
-                secondaryAccountId,
-                metaToken,
-                { withVideo },
-              )
+              secondaryResult.adset_level = isShared(secondaryAccountId)
+                ? skippedShared
+                : await syncAdsetDailyInsights(client.client_id, secondaryAccountId, metaToken, { withVideo })
               result.ad_daily_secondary.push(secondaryResult)
             }
           }
@@ -371,12 +374,9 @@ export async function GET(req: NextRequest) {
 
           // ads IMPACT 阶段 1 §2.2：广告组级日数据（漏斗角色、ABO 预算都挂在广告组上）。
           // 同 ad_level 一样是 best-effort：不进 `failed`，失败进 errors。
-          result.adset_level = await syncAdsetDailyInsights(
-            client.client_id,
-            client.meta_ad_account_id,
-            metaToken,
-            { withVideo },
-          )
+          result.adset_level = isShared(client.meta_ad_account_id)
+            ? skippedShared
+            : await syncAdsetDailyInsights(client.client_id, client.meta_ad_account_id, metaToken, { withVideo })
         }
       }
     }

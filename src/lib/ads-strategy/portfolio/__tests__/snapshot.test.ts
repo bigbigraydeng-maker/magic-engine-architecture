@@ -113,10 +113,35 @@ describe('selectRowsToWrite — 只在设置变化时记一行，另每天一次
   const dayKey = (iso: string) => iso.slice(0, 10)
   const drafts = nalAdsets.map(s => normalizeAdset(NAL_CTX, s))
 
-  it('第一次抓：全部记为 changed', () => {
+  it('第一次抓：全部记为 first_seen（不算设置变化，K12 72 小时计数要排除）', () => {
     const rows = selectRowsToWrite(drafts, [], { capturedAt: '2026-09-14T00:30:00Z', dayKey })
     expect(rows).toHaveLength(nalAdsets.length)
-    expect(new Set(rows.map(r => r.capture_reason))).toEqual(new Set(['changed']))
+    expect(new Set(rows.map(r => r.capture_reason))).toEqual(new Set(['first_seen']))
+  })
+
+  it('哈希对嵌套对象 key 顺序不敏感（Meta 返回顺序变化不算设置变化）', () => {
+    const d = drafts.find(x => x.targeting_relaxation !== null)!
+    const flipped = { ...d, targeting_relaxation: Object.fromEntries(Object.entries(d.targeting_relaxation!).reverse()) }
+    expect(settingsHash(flipped)).toBe(settingsHash(d))
+  })
+
+  it('受众人数只在跨过 1000 下限时算变化（类似受众人数天天浮动不记噪音）', () => {
+    const aud = normalizeAudience(NAL_CTX, (nal.audiences as GraphCustomAudience[])[0])
+    expect(settingsHash({ ...aud, audience_count_lower: 32600 })).toBe(settingsHash({ ...aud, audience_count_lower: 41000 }))
+    expect(settingsHash({ ...aud, audience_count_lower: 1000 })).not.toBe(settingsHash({ ...aud, audience_count_lower: 1200 }))
+  })
+
+  it('预算 "0" 或缺失 = 这一层没挂预算（null），不当成有预算', () => {
+    const c = normalizeCampaign(CTS_CTX, { id: 'x', daily_budget: '0' })
+    expect(c.daily_budget_minor).toBeNull()
+    expect(c.budget_level).toBe('abo')
+  })
+
+  it('受众 id 排序后再存（Meta 返回顺序不同不算变化）', () => {
+    const s = byId(ctsAdsets, '52551118124873')
+    const t = s.targeting as { custom_audiences: Array<{ id: string }> }
+    const twoAud = { ...s, targeting: { ...t, custom_audiences: [{ id: '9' }, { id: '1' }] } } as GraphAdsetSettings
+    expect(normalizeAdset(CTS_CTX, twoAud).included_audience_ids).toEqual(['1', '9'])
   })
 
   it('同一天再抓、设置没变：一行都不写', () => {

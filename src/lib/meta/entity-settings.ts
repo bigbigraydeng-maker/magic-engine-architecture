@@ -4,8 +4,7 @@
  * 🔴 本文件**只有 GET**。阶段 1 全程不新增任何对 Meta 的写入；写入口在
  *    `client.ts` / `adsets.ts` / `ad-publisher.ts` / `audience-ladder.ts`，阶段 2 才经内核。
  *
- * 字段形状以 2026-09-14 对三个真实账户（NAL act_953025114498626、CTS 官方账户
- * act_2202695063810470、Oztop act_1735240120460765）只读实拉为准，见
+ * 字段形状以 2026-09-14 对真实账户只读实拉为准，见
  * `src/lib/ads-strategy/portfolio/__tests__/fixtures/`。
  *
  * 读失败不抛异常，返回 `complete:false` + `error`——「没有实体」和「Meta 拒绝了我们」
@@ -15,6 +14,8 @@
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0'
 const PAGE_LIMIT = '200'
 const MAX_PAGES = 25
+/** 单个请求上限。一个请求卡住不能拖住整轮快照（3 小时一轮，路由 maxDuration 600s）。 */
+const REQUEST_TIMEOUT_MS = 20_000
 
 export interface GraphReadError {
   status: number
@@ -29,8 +30,13 @@ export interface GraphReadResult<T> {
   error: GraphReadError | null
 }
 
+/**
+ * 读哪些投放状态。不读 ARCHIVED / DELETED：归档实体量大且不投放；它们从结果里消失时，
+ * 快照会记一行 'disappeared'（前提是那一层读全了）。PENDING_BILLING_INFO 必须读——D1 投放卡住要看它。
+ */
 const ALL_STATUSES = [
   'ACTIVE', 'PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED', 'IN_PROCESS', 'WITH_ISSUES', 'PENDING_REVIEW', 'DISAPPROVED',
+  'PENDING_BILLING_INFO', 'PREAPPROVED',
 ]
 
 export interface GraphAdStudy {
@@ -131,7 +137,7 @@ interface GraphEnvelope {
 async function fetchJson(target: string): Promise<{ ok: true; body: unknown } | { ok: false; error: GraphReadError }> {
   let res: Response
   try {
-    res = await fetch(target)
+    res = await fetch(target, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
   } catch (err) {
     return { ok: false, error: { status: 0, code: null, message: err instanceof Error ? err.message : 'fetch failed' } }
   }
