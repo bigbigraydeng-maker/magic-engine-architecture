@@ -179,6 +179,8 @@ describe('ad-outcome-config — PATCH 能存什么', () => {
     ['最低数 0', { ...VALID, min_primary_per_unit: 0 }],
     ['最低数小数', { ...VALID, min_primary_per_unit: 2.5 }],
     ['最低数缺失', { leading_result: 'lead', primary_result: 'lead', target_cost_per_primary: null }],
+    ['目标成本天文数字（悄悄关掉 D3）', { ...VALID, target_cost_per_primary: 1e308 }],
+    ['最低数天文数字（悄悄关掉 D5）', { ...VALID, min_primary_per_unit: 1_000_000 }],
   ])('%s → 400，不写库', async (_name, body) => {
     const { upsert } = fakeTable()
     const res = await PATCH(patchRequest(body), params())

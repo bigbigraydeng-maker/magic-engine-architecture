@@ -48,7 +48,10 @@ interface OutcomePatch {
   min_primary_per_unit: number
 }
 
-type ParseResult = { ok: true; value: OutcomePatch } | { ok: false; error: string }
+const MAX_TARGET_COST = 100_000
+const MAX_MIN_PRIMARY = 1_000
+
+type ParseResult ={ ok: true; value: OutcomePatch } | { ok: false; error: string }
 
 /** 四个字段必须一起送（设置界面总是整组保存），避免半截写入和旧值拼出矛盾的阶梯。
  * 不 export：Next.js 路由文件只允许导出 HTTP 方法与路由配置。 */
@@ -61,11 +64,12 @@ function parseOutcomePatch(body: Record<string, unknown>): ParseResult {
   if (leading !== null && primary !== null && OUTCOME_STEPS.indexOf(primary) < OUTCOME_STEPS.indexOf(leading)) {
     return { ok: false, error: '「主结果」不能比「领先结果」更靠前（例如领先结果选了留资，主结果就不能选互动）。' }
   }
-  if (target !== null && (typeof target !== 'number' || !Number.isFinite(target) || target <= 0)) {
-    return { ok: false, error: '「目标单次主结果成本」要么留空，要么填大于 0 的数字。' }
+  // 上限（魏征复审）：填个天文数字等于悄悄关掉「花钱没结果」「钱和结果错配」两条诊断。
+  if (target !== null && (typeof target !== 'number' || !Number.isFinite(target) || target <= 0 || target > MAX_TARGET_COST)) {
+    return { ok: false, error: `「目标单次主结果成本」要么留空，要么填 0 到 ${MAX_TARGET_COST} 之间的数字。` }
   }
-  if (typeof min !== 'number' || !Number.isInteger(min) || min < 1) {
-    return { ok: false, error: '「主结果最低数」要填 1 或以上的整数。' }
+  if (typeof min !== 'number' || !Number.isInteger(min) || min < 1 || min > MAX_MIN_PRIMARY) {
+    return { ok: false, error: `「主结果最低数」要填 1 到 ${MAX_MIN_PRIMARY} 之间的整数。` }
   }
   return {
     ok: true,

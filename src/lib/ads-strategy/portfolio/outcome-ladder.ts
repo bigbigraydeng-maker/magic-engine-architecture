@@ -7,7 +7,11 @@
  *
  * 🔴 主结果必须能归到具体广告单位（M2）。归不到 → 该单位主结果 = UNKNOWN（value=null），
  *    **不算自然流量、不回填**，禁止基于它出 D5 与任何预算处方。
- * 🔴 #1299（Meta 企业验证）通过、私信 Webhook 真正收到来源之前，私信类主结果一律 UNKNOWN。
+ * 🔴 口径（2026-09-14 子牙复审澄清）：Meta 按广告单位直报的计数（私信开聊、聊到第 3 句、表单留资）
+ *    本身就归在广告单位上，可以用；要等 #1299（Meta 企业验证）通过、私信 Webhook 真正收到来源才能归属的，
+ *    是「合格询盘 / 成交」这类要把私信或 CRM 结果连回广告的级别——在那之前一律 UNKNOWN。
+ * 🔴 网站转化优化（OFFSITE_CONVERSIONS）的单位，如果当天没有标准留资动作，只有自定义像素事件，
+ *    留资数是 UNKNOWN 而不是 0（魏征复审：NAL 3PL 组有一天只有 fb_pixel_custom=1）。
  * 🔴 开场白识别等临时归属标「启发式」（M3），只可人工统计实验，禁止进 D5 与预算处方。
  *
  * 纯函数、平台共享：行业默认阶梯（物流/旅游/地产/电商各选哪两级）是剧本数据，不在这里。
@@ -94,7 +98,7 @@ export interface OutcomeCount {
 export function countOutcome(
   step: OutcomeStep,
   row: InsightForOutcome,
-  opts: { messagingReferralAvailable: boolean } = { messagingReferralAvailable: false },
+  opts: { messagingReferralAvailable: boolean; optimizationGoal?: string | null } = { messagingReferralAvailable: false },
 ): OutcomeCount {
   if (step === 'reach') {
     return { step, value: row.reach, attribution: row.reach === null ? 'none' : 'platform_reported' }
@@ -120,6 +124,9 @@ export function countOutcome(
       const n = Number(hit.value)
       return { step, value: Number.isFinite(n) ? n : null, attribution: 'platform_reported' }
     }
+  }
+  if (step === 'lead' && opts.optimizationGoal === 'OFFSITE_CONVERSIONS' && row.actions.some(a => a.action_type.startsWith('offsite_conversion.'))) {
+    return { step, value: null, attribution: 'none', note: '网站转化优化，当天只有自定义像素事件、没有标准留资动作，映射不上' }
   }
   return { step, value: 0, attribution: 'platform_reported' }
 }

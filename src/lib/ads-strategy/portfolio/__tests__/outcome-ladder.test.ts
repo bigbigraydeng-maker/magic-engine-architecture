@@ -49,6 +49,19 @@ describe('countOutcome', () => {
     expect(countOutcome('lead', { reach: 10, video_thruplays: null, actions: null }).value).toBeNull()
   })
 
+  it('🔴 网站转化优化的组，当天只有自定义像素事件、没有标准留资 → 留资是 UNKNOWN，不是 0（NAL 3PL 组真实一天）', () => {
+    const day = (nalAdsetDaily as Raw[]).find(x =>
+      (x.actions ?? []).some(a => a.action_type === 'offsite_conversion.fb_pixel_custom') &&
+      !(x.actions ?? []).some(a => a.action_type === 'lead'))
+    expect(day).toBeDefined()
+    const r = row(day!.adset_id, day!.date_start)
+    const c = countOutcome('lead', r, { messagingReferralAvailable: false, optimizationGoal: 'OFFSITE_CONVERSIONS' })
+    expect(c.value).toBeNull()
+    expect(isAttributableForBudget(c)).toBe(false)
+    // 同一行如果是表单留资优化，没有 lead 就是真实的 0
+    expect(countOutcome('lead', r, { messagingReferralAvailable: false, optimizationGoal: 'LEAD_GENERATION' }).value).toBe(0)
+  })
+
   it('🔴 M3 启发式归属不能进 D5 / 预算处方', () => {
     expect(isAttributableForBudget({ step: 'qualified_enquiry', value: 4, attribution: 'heuristic' })).toBe(false)
     expect(isAttributableForBudget({ step: 'qualified_enquiry', value: 4, attribution: 'webhook_referral' })).toBe(true)

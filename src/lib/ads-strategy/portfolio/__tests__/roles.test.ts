@@ -126,6 +126,52 @@ describe('设计 §10 三个专门用例', () => {
   })
 })
 
+describe('复审补测：每道闸单独变红（2026-09-14 子牙/魏征）', () => {
+  const retarget = () => NAL.input('52597304727125')
+
+  it('Advantage+=1 但名单外扩展=0（只开 Advantage+）→ mixed', () => {
+    const b = retarget()
+    expect(classifyAdsetRole({ ...b, adset: { ...b.adset, advantage_audience: 1 } }).role).toBe('mixed')
+  })
+
+  it('Meta 没返回 targeting_automation（advantage_audience 读不到）→ 不当作已关闭 → mixed', () => {
+    const b = retarget()
+    expect(classifyAdsetRole({ ...b, adset: { ...b.adset, advantage_audience: null } }).role).toBe('mixed')
+  })
+
+  it('包含了本账户快照里查不到子类型的受众 → mixed · 低，且不计入再营销受众', () => {
+    const b = retarget()
+    const v = classifyAdsetRole({ ...b, adset: { ...b.adset, included_audience_ids: ['not-in-snapshot'] } })
+    expect(v).toMatchObject({ role: 'mixed', confidence: 'low', retargetingAudienceIds: [] })
+  })
+
+  it('Advantage+ 购物系列（smart_promotion_type=AUTOMATED_SHOPPING_ADS）→ mixed', () => {
+    const b = NAL.input('52589967398925')
+    const campaign = { ...b.campaign!, smart_promotion_type: 'AUTOMATED_SHOPPING_ADS' }
+    expect(classifyAdsetRole({ ...b, campaign }).role).toBe('mixed')
+  })
+
+  it('特殊广告类别原样读系列自己的字段；系列快照缺失 → null（未知，不是确认没有）', () => {
+    const b = NAL.input('52589967398925')
+    const housing = { ...b.campaign!, special_ad_categories: ['HOUSING'] }
+    expect(classifyAdsetRole({ ...b, campaign: housing }).specialAdCategories).toEqual(['HOUSING'])
+    expect(classifyAdsetRole({ ...b, campaign: null }).specialAdCategories).toBeNull()
+  })
+
+  it('名字像再营销但设置是冷流量 → 可信度降为「中」', () => {
+    const b = NAL.input('52596939123725')
+    const v = classifyAdsetRole({ ...b, adset: { ...b.adset, entity_name: '再营销 · ThruPlay' } })
+    expect(v).toMatchObject({ role: 'awareness', confidence: 'medium' })
+  })
+
+  it('同时包含再营销类受众和类似人群 → mixed · 低（§3.1 双命中，只有破冰+再营销例外）', () => {
+    const b = CTS.input('52551117304473')
+    const lookalike = '52549838527273' // CTS 真实类似人群受众
+    const v = classifyAdsetRole({ ...b, adset: { ...b.adset, included_audience_ids: [...b.adset.included_audience_ids, lookalike] } })
+    expect(v).toMatchObject({ role: 'mixed', confidence: 'low' })
+  })
+})
+
 describe('rollupCampaignRole — CBO 系列作为预算单位', () => {
   it('组内角色一致 → 该角色；不一致 → mixed', () => {
     const a = classifyAdsetRole(NAL.input('52589967398925'))
