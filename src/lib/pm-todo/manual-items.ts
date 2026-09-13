@@ -26,6 +26,7 @@ import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
 import { pushEmailReplyItems, type EmailReplyItemKind } from './email-reply-items'
+import { pushBindingRequestItems, type BindingRequestItemKind } from './binding-request-items'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
 import { LINKEDIN_PROGRESS_CLIENT_ID, LINKEDIN_PROGRESS_SOURCE } from '@/lib/linkedin-progress/constants'
@@ -98,6 +99,8 @@ export type ManualItemKind =
   | 'linkedin_progress_needs_setup'
   | 'linkedin_progress_failed'
   | EmailReplyItemKind
+  /** 客户在自助向导里交了广告账户号，只有内部员工能核实后接上（AD-SEC-3）*/
+  | BindingRequestItemKind
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -460,6 +463,11 @@ export async function loadManualItems(
   // 客人来信超过一天没人回 + 公司邮箱同步哑了（后者会让前者假装成零条），见 email-reply-items.ts
   await pushEmailReplyItems(supabase, items, ids, now, nameOf).catch((e) =>
     console.warn('[manual-items] 客人来信没回待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 客户交了广告账户号等核实 —— 客户以为交上去了，不下发就没人知道（AD-SEC-3）
+  await pushBindingRequestItems(supabase, items, ids, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 广告账户号待核实读取失败（不阻塞其他待办）:', e),
   )
 
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts

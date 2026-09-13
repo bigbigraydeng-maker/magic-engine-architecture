@@ -317,7 +317,18 @@ function ConnectStep({ clientId, connectors, help, onHelp, onSaved }: { clientId
       const r = await fetch(`/api/clients/${clientId}/meta-ad-account`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_account_id }),
       })
-      if (!r.ok) { const j = await r.json().catch(() => ({})); setMetaMsg(j.error ?? 'Could not save — check the number and try again.'); return }
+      const j = await r.json().catch(() => ({}))
+      // AD-SEC-3: owners can't bind an ad account themselves any more — the number
+      // is recorded for the team to verify. Also tick "sort it on the visit" (set,
+      // never toggle: toggling would un-tick it for an owner who already ticked it).
+      if (r.status === 403 && j.reason === 'fde_verification_required') {
+        if (!help.meta) onHelp('meta')
+        setMetaMsg(j.request_recorded
+          ? "Thanks — we've noted this number. Our team will check it and connect it for you."
+          : "Thanks — we couldn't note the number just now, so we'll sort it out with you on the visit.")
+        return
+      }
+      if (!r.ok) { setMetaMsg(j.error ?? 'Could not save — check the number and try again.'); return }
       setMetaMsg('Saved ✓'); await onSaved()
     } finally { setSavingMeta(false) }
   }
