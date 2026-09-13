@@ -31,11 +31,15 @@
  *        c. the confirmer is not a global admin impersonating the customer
  *           (`isGlobalAdminEmail` — an env-driven judgement the database
  *           cannot make, so it can only be enforced here, not as a CHECK),
- *        d. the stored `client_confirmed_fingerprint` still matches
+ *        d. the confirmer's email is a currently-registered confirmer for
+ *           THIS client (`client_knowledge_confirmers`, §9.14 E.2 step 2 —
+ *           only a global admin can register one) — otherwise any email a
+ *           write path happened to store would count, with no gate at all,
+ *        e. the stored `client_confirmed_fingerprint` still matches
  *           `computeContentFingerprint()` of the row's current content —
  *           if the fact was edited after confirmation, the old confirmation
  *           no longer counts.
- *      `sensitivity = 'general'` skips (a)-(d) entirely — `approved` is
+ *      `sensitivity = 'general'` skips (a)-(e) entirely — `approved` is
  *      enough.
  *
  * 🔴 **Never return an empty array on a read failure.** An empty result is
@@ -47,6 +51,7 @@
  */
 
 import { isGlobalAdminEmail } from '@/lib/auth/whitelist'
+import { getRegisteredConfirmerEmails } from './confirmers'
 import type { KnowledgeSupabaseClient } from './db-client'
 import { computeContentFingerprint } from './fingerprint'
 import { getKnowledgeEntitlement } from './entitlement'
@@ -119,10 +124,15 @@ function visibilityAllowedFor(purpose: GetClientKnowledgeOptions['purpose'], vis
 
 /**
  * The dual-sign check — `customer_reply` only. See file header §5 for the
- * four sub-conditions; each is its own `if` so a mutation test can delete
+ * five sub-conditions; each is its own `if` so a mutation test can delete
  * exactly one and watch exactly one behaviour go red.
+ *
+ * `registeredConfirmerEmails` must be the CURRENT registry for this row's
+ * client (already lower-cased) — see §9.14 E.2 step 2. Passed in rather than
+ * queried per-row so a multi-row read does one registry lookup per client,
+ * not one per fact.
  */
-function isCustomerReplyEligible(row: FactRow): boolean {
+function isCustomerReplyEligible(row: FactRow, registeredConfirmerEmails: ReadonlySet<string>): boolean {
   if (!SENSITIVE_CATEGORIES.has(row.sensitivity)) return true // 'general' — no dual-sign required
 
   if (!row.client_confirmed_at || !row.client_confirmed_by_email) return false
@@ -141,6 +151,11 @@ function isCustomerReplyEligible(row: FactRow): boolean {
   // exact ADMIN_EMAILS match only, never the looser ADMIN_EMAIL_DOMAIN check
   // (see whitelist.ts `isGlobalAdminEmail`).
   if (isGlobalAdminEmail(row.client_confirmed_by_email)) return false
+
+  // The confirmer must be a currently-registered confirmer for this exact
+  // client — otherwise a write path that stores an unregistered email would
+  // pass every other check above with nothing left to catch it.
+  if (!registeredConfirmerEmails.has(row.client_confirmed_by_email.toLowerCase())) return false
 
   const currentFingerprint = computeContentFingerprint({
     statement: row.statement,
@@ -225,6 +240,11 @@ export async function getClientKnowledge(
   const rows = (data ?? []) as unknown as FactRow[]
   const nowDate = now()
 
+  // One registry lookup per call, not per row — only needed at all for
+  // customer_reply (the only purpose the dual-sign gate applies to).
+  const registeredConfirmerEmails =
+    options.purpose === 'customer_reply' ? await getRegisteredConfirmerEmails(clientId, sb) : new Set<string>()
+
   const forbiddenFactKeys = new Set<string>()
   const entries: KnowledgeEntry[] = []
 
@@ -242,7 +262,7 @@ export async function getClientKnowledge(
 
     if (!isWithinValidityWindow(row, nowDate)) continue
     if (!visibilityAllowedFor(options.purpose, row.visibility)) continue
-    if (options.purpose === 'customer_reply' && !isCustomerReplyEligible(row)) continue
+    if (options.purpose === 'customer_reply' && !isCustomerReplyEligible(row, registeredConfirmerEmails)) continue
     if (options.scope && !scopeMatches(row.scope, options.scope)) continue
 
     entries.push(toKnowledgeEntry(row))

@@ -81,10 +81,23 @@ function fact(f: FactFixture): Row {
   }
 }
 
-function makeSb(facts: Row[], grants: Row[] = [ENTITLEMENT_GRANT]) {
+const REGISTERED_CONFIRMER: Row = {
+  client_id: CLIENT_A,
+  confirmer_email: 'owner@ctstours.co.nz',
+  registered_by_email: 'ray@magicengine.cloud',
+  registered_at: '2026-01-01T00:00:00.000Z',
+  revoked_at: null,
+}
+
+function makeSb(
+  facts: Row[],
+  grants: Row[] = [ENTITLEMENT_GRANT],
+  confirmers: Row[] = [REGISTERED_CONFIRMER],
+) {
   return createFakeSupabase({
     client_automation_policies: grants,
     client_knowledge_facts: facts,
+    client_knowledge_confirmers: confirmers,
   })
 }
 
@@ -331,6 +344,48 @@ describe('getClientKnowledge — dual-sign gate (customer_reply only)', () => {
       const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => NOW })
       expect(result.entries).toEqual([])
     })
+  })
+
+  it('§9.14 E.2 步 2: excludes a sensitive fact whose confirmer email was never registered for this client', async () => {
+    const sb = makeSb(
+      [
+        fact({
+          id: 'f1',
+          fact_key: 'k.price',
+          visibility: 'customer_ok',
+          sensitivity: 'price',
+          approved_by_email: 'fde@magicengine.cloud',
+          client_confirmed_by_email: 'random-stranger@example.com', // never registered
+          client_confirmed_at: '2026-02-01T00:00:00.000Z',
+          confirmFingerprint: true,
+        }),
+      ],
+      [ENTITLEMENT_GRANT],
+      [], // no confirmers registered at all for this client
+    )
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => NOW })
+    expect(result.entries).toEqual([])
+  })
+
+  it('§9.14 E.2 步 2: excludes a sensitive fact whose confirmer registration has been revoked', async () => {
+    const sb = makeSb(
+      [
+        fact({
+          id: 'f1',
+          fact_key: 'k.price',
+          visibility: 'customer_ok',
+          sensitivity: 'price',
+          approved_by_email: 'fde@magicengine.cloud',
+          client_confirmed_by_email: 'owner@ctstours.co.nz',
+          client_confirmed_at: '2026-02-01T00:00:00.000Z',
+          confirmFingerprint: true,
+        }),
+      ],
+      [ENTITLEMENT_GRANT],
+      [{ ...REGISTERED_CONFIRMER, revoked_at: '2026-01-15T00:00:00.000Z' }],
+    )
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => NOW })
+    expect(result.entries).toEqual([])
   })
 
   it('excludes a sensitive fact whose content changed after the customer confirmed it (stale fingerprint)', async () => {

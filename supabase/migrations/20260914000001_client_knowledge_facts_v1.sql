@@ -132,6 +132,46 @@ CREATE TRIGGER client_knowledge_facts_touch_updated_at_trigger
   BEFORE UPDATE ON public.client_knowledge_facts
   FOR EACH ROW EXECUTE FUNCTION public.client_knowledge_facts_touch_updated_at();
 
+-- 🔴 事故预防（跨窗口复审发现·2026-09-14）：uq_client_knowledge_facts_key_scope
+-- 是无条件唯一索引（不分 status），意味着重新萃取同一条事实必须 UPDATE 同一行，
+-- 不能开新行。如果萃取工作流（#1645）对一条已经 approved+已客户确认的行改了
+-- statement/structured_value 却忘了把 status 拨回 candidate、清掉批准/确认字段，
+-- 库里会显示"已批准+已确认"但内容已经变了——比丢数据更危险，因为它看起来完全
+-- 正常。这道闸不依赖萃取工作流自己记得清字段：只要内容真的变了，无条件重置。
+CREATE OR REPLACE FUNCTION public.client_knowledge_facts_reset_signoff_on_content_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF (
+    NEW.statement IS DISTINCT FROM OLD.statement OR
+    NEW.structured_value IS DISTINCT FROM OLD.structured_value OR
+    NEW.scope IS DISTINCT FROM OLD.scope OR
+    NEW.valid_from IS DISTINCT FROM OLD.valid_from OR
+    NEW.valid_until IS DISTINCT FROM OLD.valid_until OR
+    NEW.visibility IS DISTINCT FROM OLD.visibility OR
+    NEW.sensitivity IS DISTINCT FROM OLD.sensitivity
+  ) AND (
+    OLD.approved_by_email IS NOT NULL OR OLD.client_confirmed_at IS NOT NULL OR OLD.status = 'approved'
+  ) THEN
+    NEW.status := 'candidate';
+    NEW.approved_by_email := NULL;
+    NEW.approved_at := NULL;
+    NEW.client_confirmed_by_email := NULL;
+    NEW.client_confirmed_at := NULL;
+    NEW.client_confirmed_fingerprint := NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS client_knowledge_facts_reset_signoff_trigger
+  ON public.client_knowledge_facts;
+CREATE TRIGGER client_knowledge_facts_reset_signoff_trigger
+  BEFORE UPDATE ON public.client_knowledge_facts
+  FOR EACH ROW EXECUTE FUNCTION public.client_knowledge_facts_reset_signoff_on_content_change();
+
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- 2. client_knowledge_mining_runs —— 萃取回执
@@ -150,6 +190,14 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_mining_runs (
   conflict_groups_found    integer NOT NULL DEFAULT 0,
   llm_cost_usd             numeric,
 
+  -- 🔴 花费硬顶（design doc §9.8/§9.14-B："每次调模型前按最坏情况预估判上限，
+  -- 不是调完再算"；"缺任一上限 = 拒绝运行"）。这三列存的是**这一轮开跑前
+  -- 配置好的上限**，不是事后实际值（llm_cost_usd 才是事后实际花费）——三者
+  -- 都必填且必须为正数，"忘了配上限"和"明确无限"永远不能长得一样。
+  max_messages_cap         integer NOT NULL,
+  max_model_calls_cap      integer NOT NULL,
+  max_spend_usd_cap        numeric NOT NULL,
+
   status                   text NOT NULL DEFAULT 'queued'
                             CHECK (status IN ('queued','running','succeeded','failed')),
   error                    text,
@@ -166,6 +214,10 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_mining_runs (
   ),
   CONSTRAINT mining_run_cost_is_real_amount CHECK (
     llm_cost_usd IS NULL OR (llm_cost_usd >= 0 AND llm_cost_usd <> 'NaN'::numeric)
+  ),
+  CONSTRAINT mining_run_caps_are_positive CHECK (
+    max_messages_cap > 0 AND max_model_calls_cap > 0
+    AND max_spend_usd_cap > 0 AND max_spend_usd_cap <> 'NaN'::numeric
   ),
   -- failed 必须留下 error；其余状态不许挂着一条 error 误导排查。
   CONSTRAINT mining_run_error_matches_status CHECK (
@@ -262,7 +314,48 @@ CREATE TRIGGER client_knowledge_events_append_only_trigger
 
 
 -- ────────────────────────────────────────────────────────────────────────────
--- 4. getKnowledgeEntitlement() 复用 client_automation_policies（执行内核已有的
+-- 4. client_knowledge_confirmers —— 客户侧确认人登记（design doc §9.14 E.2 第2步）
+--
+-- "新增'客户确认人登记'：只有全局管理员能登记，留审计；确认人必须在草稿批准
+-- 前登记；登记人 ≠ 批草稿的人"。没有这张表，read.ts 的双签校验只能查"确认人
+-- ≠批准人""确认人非全局管理员"——任何其他邮箱都能填进 client_confirmed_by_
+-- email 并通过。这张表把"这个邮箱真的是这个客户登记过的确认人"补成第三道闸。
+--
+-- 谁是全局管理员由应用层 isGlobalAdminEmail()（env 驱动）判断，这里不建 CHECK
+-- ——数据库判不出谁是全局管理员，跟 approver_confirmer_differ 之外那道全局管理
+-- 员检查一样，只能在读取入口/写入入口的代码里做。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.client_knowledge_confirmers (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id             uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  confirmer_email       text NOT NULL,
+  registered_by_email   text NOT NULL,
+  registered_at         timestamptz NOT NULL DEFAULT now(),
+  revoked_at            timestamptz,
+  revoked_by_email      text,
+
+  CONSTRAINT client_knowledge_confirmers_revocation_pairing
+    CHECK ((revoked_at IS NULL) = (revoked_by_email IS NULL))
+);
+
+-- 同一个邮箱对同一客户只能有一条"当前有效"（未撤销）的登记——撤销后允许
+-- 重新登记，所以是局部唯一索引，不是表级 UNIQUE 约束。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_client_knowledge_confirmers_active
+  ON public.client_knowledge_confirmers (client_id, lower(confirmer_email))
+  WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_client_knowledge_confirmers_client
+  ON public.client_knowledge_confirmers (client_id) WHERE revoked_at IS NULL;
+
+ALTER TABLE public.client_knowledge_confirmers ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+  CREATE POLICY "service_role_full" ON public.client_knowledge_confirmers
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 5. getKnowledgeEntitlement() 复用 client_automation_policies（执行内核已有的
 --    按客户/按动作/带版本和生效期的授权模型），不新造会员系统。
 --
 -- 复用方式：action_key = 'client_knowledge.read'，mode='auto_approve' 表示

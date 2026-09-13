@@ -25,6 +25,7 @@ export interface KnowledgeTableHandle {
 export interface KnowledgeFilterBuilder {
   eq(column: string, value: unknown): KnowledgeFilterBuilder
   lte(column: string, value: string): KnowledgeFilterBuilder
+  is(column: string, value: null): KnowledgeFilterBuilder
   or(expr: string): KnowledgeFilterBuilder
   order(column: string, opts?: { ascending?: boolean }): KnowledgeFilterBuilder
   limit(n: number): KnowledgeFilterBuilder

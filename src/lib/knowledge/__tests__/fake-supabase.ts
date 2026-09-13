@@ -57,6 +57,11 @@ class FakeQueryBuilder implements KnowledgeFilterBuilder {
     return this
   }
 
+  is(column: string, value: null): this {
+    this.filters.push((row) => (row[column] ?? null) === value)
+    return this
+  }
+
   lte(column: string, value: string): this {
     this.filters.push((row) => {
       const v = row[column]
