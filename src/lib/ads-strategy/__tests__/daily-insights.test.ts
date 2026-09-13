@@ -14,6 +14,7 @@ const fetchAdsets = vi.fn()
 const fetchWindow = vi.fn()
 const upsert      = vi.fn()
 const historyProbe = vi.fn()
+const notFilters: unknown[][] = []
 
 /**
  * The fetchers return a page walk, not a bare array. Tests hand back a plain
@@ -36,13 +37,17 @@ vi.mock('@/lib/supabase', () => ({
     from: () => ({
       // needsBackfill(): select('insight_date').eq('client_id', id)
       //   .eq('level', level).order(...).limit(1) → { data: [{insight_date}] }
-      select: () => ({
-        eq: (...clientEq: unknown[]) => ({
-          eq: (...levelEq: unknown[]) => ({
-            order: () => ({ limit: () => historyProbe(...clientEq, ...levelEq) }),
-          }),
-        }),
-      }),
+      // 2026-09-14 起还可能多一个 .eq('ad_account_id', …) 与 .not('actions','is',null)；
+      // 所有 eq 参数按顺序摊平传给 historyProbe（第 4 个仍是 level），not 记在 notFilters。
+      select: () => {
+        const eqs: unknown[] = []
+        const chain = {
+          eq: (...args: unknown[]) => { eqs.push(...args); return chain },
+          not: (...args: unknown[]) => { notFilters.push(args); return chain },
+          order: () => ({ limit: () => historyProbe(...eqs) }),
+        }
+        return chain
+      },
       upsert: (...a: unknown[]) => upsert(...a),
     }),
   },
@@ -466,5 +471,29 @@ describe('syncAdsetDailyInsights', () => {
     const adRowWritten = (upsert.mock.calls[1][0] as Array<Record<string, unknown>>)[0]
     expect(campaignRow).toMatchObject({ video_thruplays: 723 })
     expect(adRowWritten).not.toHaveProperty('video_thruplays')
+  })
+})
+
+describe('needsBackfill 按账户判深度（2026-09-14 魏征复审 B2）', () => {
+  it('深度探测带上本次同步的账户，并在写视频列时只认带 actions 的行', async () => {
+    notFilters.length = 0
+    historyProbe.mockResolvedValue(DEEP_HISTORY)
+    fetchAdsets.mockResolvedValue([])
+
+    await syncAdsetDailyInsights('client-1', 'act_2202695063810470', 'tok', { withVideo: true })
+
+    expect(historyProbe.mock.calls[0]).toEqual(['client_id', 'client-1', 'level', 'adset', 'ad_account_id', 'act_2202695063810470'])
+    expect(notFilters).toEqual([['actions', 'is', null]])
+  })
+
+  it('没开视频列时不加 actions 过滤（老行照常算历史）', async () => {
+    notFilters.length = 0
+    historyProbe.mockResolvedValue(DEEP_HISTORY)
+    fetchDaily.mockResolvedValue([])
+
+    await syncCampaignDailyInsights('client-1', 'act_1', 'tok')
+
+    expect(historyProbe.mock.calls[0]).toEqual(['client_id', 'client-1', 'level', 'campaign', 'ad_account_id', 'act_1'])
+    expect(notFilters).toEqual([])
   })
 })

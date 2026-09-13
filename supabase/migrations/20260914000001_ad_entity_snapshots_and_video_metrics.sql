@@ -80,8 +80,13 @@ CREATE TABLE IF NOT EXISTS public.ad_entity_snapshots (
   shared_account         boolean     NOT NULL DEFAULT false,
   -- 设置字段的规范化哈希；与上一行相同就不写（只有 daily 例外）
   settings_hash          text        NOT NULL,
+  -- first_seen   近 30 天第一次看到这个实体（不算「设置变化」，K12 72 小时计数要排除）
+  -- changed      设置哈希与上一行不同
+  -- daily        设置没变，今天（账户时区）还没记过
+  -- disappeared  上一行还在，但这一层**读全了**却没返回它（归档/删除/状态出了读取范围）
+  -- kernel_pre / kernel_post  阶段 2 内核运行前后强制抓
   capture_reason         text        NOT NULL
-    CHECK (capture_reason IN ('changed', 'daily', 'kernel_pre', 'kernel_post')),
+    CHECK (capture_reason IN ('first_seen', 'changed', 'daily', 'disappeared', 'kernel_pre', 'kernel_post')),
   source_updated_time    timestamptz,
   captured_at            timestamptz NOT NULL DEFAULT now(),
   created_at             timestamptz NOT NULL DEFAULT now()
@@ -102,6 +107,38 @@ DO $$ BEGIN
     FOR ALL TO service_role USING (true) WITH CHECK (true);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- ── 一点五、ad_snapshot_captures：每一轮、每个账户、每个层级「抓过了没有、抓全了没有」────
+-- 快照只在设置变化时记行，两行之间隔几天是正常的。只看快照表分不出「真没变」和「那几个小时
+-- 根本没抓到 / 抓了没抓全」（2026-09-14 子牙复审 B1）。Check 段判「两次快照间有空档 →
+-- not_comparable」（§14 M1）靠的是这张表，不是运行日志。
+CREATE TABLE IF NOT EXISTS public.ad_snapshot_captures (
+  id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id      uuid        NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  ad_account_id  text        NOT NULL,
+  level          text        NOT NULL
+    CHECK (level IN ('account', 'campaign', 'adset', 'ad', 'audience')),
+  captured_at    timestamptz NOT NULL,
+  -- 这一层这一轮是否读全（读全了才允许据此判「消失」、据此判「期间没变」）
+  complete       boolean     NOT NULL,
+  -- 共用账户按设计只读账户级，其它层级记 skipped_shared（不是失败，也不能当「没变」）
+  skipped_shared boolean     NOT NULL DEFAULT false,
+  rows_written   integer     NOT NULL DEFAULT 0,
+  error          text,
+  capture_reason text        NOT NULL DEFAULT 'scheduled'
+    CHECK (capture_reason IN ('scheduled', 'kernel_pre', 'kernel_post')),
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ad_snapshot_captures_account_time
+  ON public.ad_snapshot_captures (client_id, ad_account_id, level, captured_at DESC);
+
+ALTER TABLE public.ad_snapshot_captures ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+  -- 🔴 必须写 TO service_role。
+  CREATE POLICY "service_role_full" ON public.ad_snapshot_captures
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- ── 二、ad_daily_insights 加列（§2.2）──────────────────────────────────────────
 -- 视频完播：D4「攒了人没收割」、角色指标都要。原始 actions 整包：结果阶梯由客户配置决定，
 -- 不用每换一种结果就改表。广告组级沿用既有 level='adset'（不改表）。小时数据不入库。
@@ -115,3 +152,5 @@ ALTER TABLE public.ad_daily_insights
   ADD COLUMN IF NOT EXISTS video_p100              integer,
   ADD COLUMN IF NOT EXISTS video_avg_watch_seconds numeric,
   ADD COLUMN IF NOT EXISTS actions                 jsonb;
+
+NOTIFY pgrst, 'reload schema';

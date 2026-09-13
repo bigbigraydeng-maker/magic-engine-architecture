@@ -19,7 +19,7 @@ import type {
 } from '@/lib/meta/entity-settings'
 
 export type SnapshotLevel = 'account' | 'campaign' | 'adset' | 'ad' | 'audience'
-export type CaptureReason = 'changed' | 'daily' | 'kernel_pre' | 'kernel_post'
+export type CaptureReason = 'first_seen' | 'changed' | 'daily' | 'disappeared' | 'kernel_pre' | 'kernel_post'
 
 export interface AdStudyRef {
   id: string
@@ -268,38 +268,71 @@ export function normalizeAudience(ctx: Ctx, a: GraphCustomAudience): RowWithoutH
 }
 
 /**
- * 设置哈希：只覆盖「设置」字段。名字、source_updated_time 不进哈希（改名不是设置变化）；
- * 受众人数下限进哈希（D4 判「≤1000 下限」要知道它什么时候跨过去）。
+ * 设置哈希：只覆盖「设置」字段。
+ *   - 名字、source_updated_time 不进哈希（改名不是设置变化）
+ *   - 受众人数只按「是否超过 Meta 显示下限 1000」进哈希：D4 要知道它什么时候跨过下限，
+ *     但类似受众人数天天浮动，原值进哈希会每 3 小时记一行噪音（2026-09-14 子牙/魏征复审）
+ *   - 嵌套对象（定向地区、扩展开关、实验列表）按 key 深度排序后再序列化，Meta 返回的 key
+ *     顺序变化不算设置变化
  */
-const HASH_EXCLUDED = new Set<keyof RowWithoutHash>(['entity_name', 'source_updated_time'])
+const HASH_EXCLUDED = new Set<keyof RowWithoutHash>(['entity_name', 'source_updated_time', 'audience_count_lower'])
+export const AUDIENCE_DISPLAY_FLOOR = 1000
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>).sort().map(k => [k, canonical((value as Record<string, unknown>)[k])])
+  }
+  return value
+}
 
 export function settingsHash(row: RowWithoutHash): string {
   const keys = (Object.keys(row) as Array<keyof RowWithoutHash>).filter(k => !HASH_EXCLUDED.has(k)).sort()
-  const canonical = keys.map(k => [k, row[k]])
-  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 32)
+  const body = keys.map(k => [k, canonical(row[k])])
+  body.push(['audience_above_floor', row.audience_count_lower === null ? null : row.audience_count_lower > AUDIENCE_DISPLAY_FLOOR])
+  return createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 32)
 }
+
+/** 标记「消失」行的哈希。消失后再出现会因哈希不同记 changed。 */
+export const DISAPPEARED_HASH = 'disappeared'
 
 export interface LatestSnapshotRef {
   level: SnapshotLevel
   entity_id: string
   settings_hash: string
+  capture_reason: CaptureReason
   captured_at: string
+}
+
+/** 「这一层读全了却没返回它」的实体行：只带身份，设置字段全空，effective_status 标 NOT_RETURNED。 */
+export function disappearedDraft(ctx: Ctx, level: SnapshotLevel, entityId: string): RowWithoutHash {
+  return { ...blank(ctx, level, entityId), effective_status: 'NOT_RETURNED' }
 }
 
 /**
  * 决定这一轮要写哪些行。
  *
- * - 与该实体最新一行哈希不同（或从没记过）→ 'changed'
+ * - 近 30 天从没记过该实体 → 'first_seen'（不算设置变化）
+ * - 与最新一行哈希不同 → 'changed'
  * - 哈希相同，但 `dayKey(captured_at)` 今天还没有行 → 'daily'（「另每天一次」）
- * - 其余 → 不写
+ * - 最新一行不是 disappeared，但该层 `completeLevels` 里读全了却没返回它 → 'disappeared'
+ *   （读不全的层绝不判消失——否则一次读失败会把整层记成「没了」）
  *
- * `reason` 传 kernel_pre / kernel_post 时一律写（阶段 2 内核运行前后各抓一次，§14 M1）。
+ * `reason` 传 kernel_pre / kernel_post 时当前实体一律写（阶段 2 内核运行前后各抓一次，§14 M1）。
  * `dayKey` 由调用方给（按账户时区切天），纯函数里不猜时区。
  */
 export function selectRowsToWrite(
   current: RowWithoutHash[],
   latest: LatestSnapshotRef[],
-  opts: { capturedAt: string; dayKey: (iso: string) => string; reason?: 'scheduled' | 'kernel_pre' | 'kernel_post' },
+  opts: {
+    capturedAt: string
+    dayKey: (iso: string) => string
+    reason?: 'scheduled' | 'kernel_pre' | 'kernel_post'
+    /** 本轮读全了的层级。不传 = 不判消失。 */
+    completeLevels?: ReadonlySet<SnapshotLevel>
+    /** 生成消失行用的上下文（client / account） */
+    ctx?: Ctx
+  },
 ): EntitySnapshotRow[] {
   const latestByKey = new Map<string, LatestSnapshotRef>()
   for (const l of latest) {
@@ -308,19 +341,34 @@ export function selectRowsToWrite(
     if (!prev || l.captured_at > prev.captured_at) latestByKey.set(key, l)
   }
   const today = opts.dayKey(opts.capturedAt)
+  const kernel = opts.reason === 'kernel_pre' || opts.reason === 'kernel_post' ? opts.reason : null
   const out: EntitySnapshotRow[] = []
+  const seen = new Set<string>()
   for (const row of current) {
+    const key = `${row.level}:${row.entity_id}`
+    seen.add(key)
     const hash = settingsHash(row)
     const base = { ...row, settings_hash: hash, captured_at: opts.capturedAt }
-    if (opts.reason === 'kernel_pre' || opts.reason === 'kernel_post') {
-      out.push({ ...base, capture_reason: opts.reason })
+    if (kernel) {
+      out.push({ ...base, capture_reason: kernel })
       continue
     }
-    const prev = latestByKey.get(`${row.level}:${row.entity_id}`)
-    if (!prev || prev.settings_hash !== hash) {
-      out.push({ ...base, capture_reason: 'changed' })
-    } else if (opts.dayKey(prev.captured_at) !== today) {
-      out.push({ ...base, capture_reason: 'daily' })
+    const prev = latestByKey.get(key)
+    if (!prev) out.push({ ...base, capture_reason: 'first_seen' })
+    else if (prev.settings_hash !== hash) out.push({ ...base, capture_reason: 'changed' })
+    else if (opts.dayKey(prev.captured_at) !== today) out.push({ ...base, capture_reason: 'daily' })
+  }
+
+  if (opts.completeLevels && opts.ctx) {
+    for (const [key, prev] of Array.from(latestByKey.entries())) {
+      if (seen.has(key) || prev.capture_reason === 'disappeared') continue
+      if (!opts.completeLevels.has(prev.level)) continue
+      out.push({
+        ...disappearedDraft(opts.ctx, prev.level, prev.entity_id),
+        settings_hash: DISAPPEARED_HASH,
+        capture_reason: 'disappeared',
+        captured_at: opts.capturedAt,
+      })
     }
   }
   return out

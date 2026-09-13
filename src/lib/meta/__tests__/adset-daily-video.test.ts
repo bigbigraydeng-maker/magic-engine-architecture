@@ -53,4 +53,15 @@ describe('getAdsetDailyInsights', () => {
     expect(noVideo).toBeDefined()
     expect(noVideo?.video_p95).toBeNull()
   })
+
+  it('没有 video_view 动作的行 → 3 秒播放是 null，不记 0', async () => {
+    // 取真实一行，只去掉 video_view 这一个动作（其它 actions 原样保留）
+    type RawRow = { actions?: Array<{ action_type: string }> }
+    const real = (nalAdsetDaily as RawRow[]).find(x => (x.actions ?? []).some(a => a.action_type === 'video_view'))!
+    const stripped = { ...real, actions: (real.actions ?? []).filter(a => a.action_type !== 'video_view') }
+    stubGraph([real, stripped])
+    const { rows } = await getAdsetDailyInsights('act_953025114498626', 't', '2026-08-17', '2026-09-13')
+    expect(rows[0].video_3s_views).toBeGreaterThan(0)
+    expect(rows[1].video_3s_views).toBeNull()
+  })
 })
