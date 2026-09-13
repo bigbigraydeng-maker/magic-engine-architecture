@@ -370,19 +370,22 @@ describe('loadOfferings — caching', () => {
     ).rejects.toThrow()
   })
 
-  it('throws (fails closed) when neither clientId nor filePath is given, instead of defaulting to some client', async () => {
-    await expect(loadOfferings({ clock })).rejects.toThrow(/requires clientId/)
+  it('throws (fails closed) when neither configSlug nor filePath is given, instead of defaulting to some client', async () => {
+    await expect(loadOfferings({ clock })).rejects.toThrow(/requires configSlug/)
   })
 })
 
 describe('offeringsPathFor', () => {
-  it('builds config/clients/<clientId>/offerings.yaml under the repo root', () => {
+  it('builds config/clients/<configSlug>/offerings.yaml under the repo root', () => {
     const p = offeringsPathFor('cts')
     expect(p.endsWith(path.join('config', 'clients', 'cts', 'offerings.yaml'))).toBe(true)
   })
 
-  it('resolves the real CTS DB client_id (UUID) to the cts config slug', () => {
+  it('does NOT know about DB client_id UUIDs — it only ever builds a path from the literal slug it is given (Codex review, PR #1626, 2nd pass: no client-identity mapping belongs in this shared loader)', () => {
     const p = offeringsPathFor('c0000000-0000-0000-0000-000000000000')
-    expect(p.endsWith(path.join('config', 'clients', 'cts', 'offerings.yaml'))).toBe(true)
+    // Resolving the real CTS DB client_id to the "cts" slug is the caller's
+    // job, not this function's — so passing the raw UUID here must NOT
+    // magically resolve to the cts directory.
+    expect(p.endsWith(path.join('config', 'clients', 'c0000000-0000-0000-0000-000000000000', 'offerings.yaml'))).toBe(true)
   })
 })

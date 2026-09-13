@@ -1,7 +1,7 @@
 /**
  * Offerings fact layer loader (Issue #1577).
  *
- * `config/clients/<clientId>/offerings.yaml` is the PM/FDE-maintained, hand-edited
+ * `config/clients/<configSlug>/offerings.yaml` is the PM/FDE-maintained, hand-edited
  * source of truth for what a client is actually selling right now. This loader is
  * the ONLY supported way to read it: parse YAML, validate with Zod, cache in memory
  * for 5 minutes so the reply agent and the Verifier don't re-hit the filesystem on
@@ -14,12 +14,18 @@
  * Verifier policy (Issue D) both read through here instead of trusting the website
  * or the model's own training knowledge.
  *
- * Platform note: this loader is client-agnostic (`clientId` — a DB `client_id`,
- * mapped to a config directory slug — picks the YAML file) — only
- * `config/clients/<slug>/offerings.yaml` itself is client-specific data.
- * `clientId` has no default: this is a shared, multi-client entry point, so a
- * caller that omits it must fail loudly instead of silently reading another
- * client's facts.
+ * Platform note: this loader is client-agnostic AND client-identity-agnostic —
+ * it takes a `configSlug` (the literal `config/clients/<slug>` directory name)
+ * and knows nothing about DB `client_id` UUIDs. Codex review (PR #1626,
+ * 2nd pass) correctly flagged an earlier version that hardcoded a single
+ * CTS UUID → slug mapping table *inside this shared loader*: that put one
+ * client's identity in `src/lib` and would have required editing shared
+ * runtime code for every future client (me-platform-tier-gate 红线 2). That
+ * mapping now belongs to whoever calls this loader for a specific client
+ * (for CTS today, a one-line constant in the CTS-specific caller/policy file
+ * — not here). `configSlug` has no default: this is a shared, multi-client
+ * entry point, so a caller that omits it must fail loudly instead of silently
+ * reading another client's facts.
  */
 
 import { promises as fs } from 'fs'
@@ -184,32 +190,31 @@ interface CacheEntry {
 let cache: CacheEntry | null = null
 
 /**
- * `conversations.client_id` is a DB UUID (e.g. CTS is
- * `c0000000-0000-0000-0000-000000000000`), but `config/clients/*` directories
- * use human-readable slugs so PM/FDE can find and edit them by hand. This is
- * the one explicit, stable mapping between the two — callers must never
- * assume a DB client_id doubles as a directory slug.
+ * `configSlug` is the literal `config/clients/<configSlug>` directory name —
+ * NOT a DB `client_id` UUID. This loader deliberately carries zero mapping
+ * from DB identity to config directory (Codex review, PR #1626, 2nd pass —
+ * an earlier version hardcoded a single CTS UUID→slug entry here, which put
+ * client identity inside shared `src/lib` runtime and would have required
+ * editing this file for every future client). Resolving a caller's real
+ * `conversations.client_id` to the right `configSlug` is the caller's job —
+ * for CTS today that's a one-line constant living in the CTS-specific
+ * caller/policy file, not a lookup table in this platform-shared loader.
  */
-const CLIENT_ID_TO_CONFIG_SLUG: Record<string, string> = {
-  'c0000000-0000-0000-0000-000000000000': 'cts',
-}
-
-export function offeringsPathFor(clientId: string): string {
-  const slug = CLIENT_ID_TO_CONFIG_SLUG[clientId] ?? clientId
-  return path.join(process.cwd(), 'config', 'clients', slug, 'offerings.yaml')
+export function offeringsPathFor(configSlug: string): string {
+  return path.join(process.cwd(), 'config', 'clients', configSlug, 'offerings.yaml')
 }
 
 export interface LoadOfferingsOptions {
   /**
-   * Required unless `filePath` is given. This is a DB `client_id`
-   * (`conversations.client_id`), resolved to a config slug via
-   * `CLIENT_ID_TO_CONFIG_SLUG`. There is no default — this loader backs a
-   * shared, multi-client Agent/Verifier entry point, so a caller that forgot
-   * to pass a client must fail loudly instead of silently reading (and then
-   * quoting) another client's private tour facts.
+   * Required unless `filePath` is given. The `config/clients/<configSlug>`
+   * directory name — already resolved by the caller, not a raw DB
+   * `client_id`. No default: this loader backs a shared, multi-client
+   * Agent/Verifier entry point, so a caller that forgot to resolve/pass a
+   * client must fail loudly instead of silently reading (and then quoting)
+   * another client's private tour facts.
    */
-  clientId?: string
-  /** Overrides the computed `config/clients/<slug>/offerings.yaml` path — mainly for tests. */
+  configSlug?: string
+  /** Overrides the computed `config/clients/<configSlug>/offerings.yaml` path — mainly for tests. */
   filePath?: string
   /** Skip the in-memory cache and re-read + re-validate the file. */
   forceRefresh?: boolean
@@ -220,7 +225,7 @@ export interface LoadOfferingsOptions {
 /**
  * Load, validate, and cache a client's offerings.yaml.
  *
- * Throws if `clientId`/`filePath` are both missing, the file is missing, or
+ * Throws if `configSlug`/`filePath` are both missing, the file is missing, or
  * it fails Zod validation — callers (Agent tool layer, Verifier policy) must
  * treat a throw as "fact layer unavailable" and fail closed (do not let the
  * model answer tour-availability questions from its own knowledge, and never
@@ -230,13 +235,13 @@ export interface LoadOfferingsOptions {
 export async function loadOfferings(options: LoadOfferingsOptions = {}): Promise<OfferingsFile> {
   let filePath = options.filePath
   if (!filePath) {
-    if (!options.clientId) {
+    if (!options.configSlug) {
       throw new Error(
-        'loadOfferings requires clientId (or filePath) — refusing to guess a client, ' +
+        'loadOfferings requires configSlug (or filePath) — refusing to guess a client, ' +
           'since that could leak one client\'s tour facts into another client\'s reply',
       )
     }
-    filePath = offeringsPathFor(options.clientId)
+    filePath = offeringsPathFor(options.configSlug)
   }
   const clock = options.clock ?? systemClock
   const now = clock.now()
