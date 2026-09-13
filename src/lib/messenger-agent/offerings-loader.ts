@@ -114,6 +114,51 @@ export const OfferingsFileSchema = z
     last_verified_at: dateLikeString,
   })
   .strict()
+  .superRefine((file, ctx) => {
+    // Codex review, PR #1626: nothing stops the same `code` appearing in both
+    // active_tours and retired_tours — e.g. PM/FDE moves a tour into
+    // retired_tours but forgets to delete the matching active_tours entry.
+    // Without this check the Agent and Verifier would see one code marked
+    // simultaneously bookable and retired, and which "wins" would depend on
+    // array-iteration order in whichever consumer reads it first — exactly
+    // the kind of silent contradiction this file exists to prevent.
+    const activeCodes = new Map<string, number>()
+    file.active_tours.forEach((tour, i) => activeCodes.set(tour.code, i))
+
+    file.retired_tours.forEach((tour, i) => {
+      if (activeCodes.has(tour.code)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['retired_tours', i, 'code'],
+          message: `code "${tour.code}" appears in both active_tours (index ${activeCodes.get(tour.code)}) and retired_tours (index ${i}) — a tour cannot be simultaneously bookable and retired`,
+        })
+      }
+    })
+
+    const seenActive = new Set<string>()
+    file.active_tours.forEach((tour, i) => {
+      if (seenActive.has(tour.code)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['active_tours', i, 'code'],
+          message: `duplicate code "${tour.code}" within active_tours`,
+        })
+      }
+      seenActive.add(tour.code)
+    })
+
+    const seenRetired = new Set<string>()
+    file.retired_tours.forEach((tour, i) => {
+      if (seenRetired.has(tour.code)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['retired_tours', i, 'code'],
+          message: `duplicate code "${tour.code}" within retired_tours`,
+        })
+      }
+      seenRetired.add(tour.code)
+    })
+  })
 
 export type ActiveTour = z.infer<typeof ActiveTourSchema>
 export type RetiredTour = z.infer<typeof RetiredTourSchema>

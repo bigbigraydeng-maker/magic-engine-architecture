@@ -249,6 +249,56 @@ describe('OfferingsFileSchema — invalid input is rejected', () => {
       ).toThrow()
     })
   })
+
+  describe('cross-list code contradictions rejected (Codex review, PR #1626)', () => {
+    const activeTour = (code: string) => ({
+      code,
+      name: 'X',
+      price_nzd: 100,
+      departure_dates: ['2026-11-16'],
+      nights: 1,
+      itinerary_url: 'https://example.com/x',
+    })
+    const retiredTour = (code: string) => ({ code, name: 'X', retired_reason: 'gone' })
+
+    it('rejects a code that appears in both active_tours and retired_tours', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          active_tours: [activeTour('dup')],
+          retired_tours: [retiredTour('dup')],
+          last_verified_at: '2026-09-13',
+        }),
+      ).toThrow(/simultaneously bookable and retired/)
+    })
+
+    it('rejects a duplicate code within active_tours itself', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          active_tours: [activeTour('same'), activeTour('same')],
+          last_verified_at: '2026-09-13',
+        }),
+      ).toThrow(/duplicate code/)
+    })
+
+    it('rejects a duplicate code within retired_tours itself', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          retired_tours: [retiredTour('same'), retiredTour('same')],
+          last_verified_at: '2026-09-13',
+        }),
+      ).toThrow(/duplicate code/)
+    })
+
+    it('accepts distinct codes across both lists', () => {
+      expect(() =>
+        OfferingsFileSchema.parse({
+          active_tours: [activeTour('a')],
+          retired_tours: [retiredTour('b')],
+          last_verified_at: '2026-09-13',
+        }),
+      ).not.toThrow()
+    })
+  })
 })
 
 describe('loadOfferings — caching', () => {
