@@ -12,6 +12,18 @@ describe('tour landscape summary', () => {
     expect(tourLandscapePrompt({ client_name: 'Example', client_products: [], competitor_products: [] })).toContain('而不是逐团横向配对')
   })
 
+  it('grounds the summary in dated industry evidence without overgeneralising', () => {
+    const prompt = tourLandscapePrompt({
+      client_name: 'CTS',
+      client_products: [],
+      competitor_products: [],
+      external_signals: [{ source_type: 'industry_media', source_name: 'Travel Today', source_url: 'https://example.com/story', title: 'China travel demand update', excerpt: 'A specific reported change.', observed_at: '2026-09-12T00:00:00.000Z' }],
+    })
+    expect(prompt).toContain('China travel demand update')
+    expect(prompt).toContain('2026-09-12T00:00:00.000Z')
+    expect(prompt).toContain('不得因为一篇文章就声称整个市场发生变化')
+  })
+
   it('bounds injected client memory so it cannot overwhelm the analysis prompt', () => {
     const prompt = tourLandscapePrompt({ client_name: 'Example', client_products: [], competitor_products: [], memory_context: 'x'.repeat(10000) })
     expect(prompt).not.toContain('x'.repeat(5001))
