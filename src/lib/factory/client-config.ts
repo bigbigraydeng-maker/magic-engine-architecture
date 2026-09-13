@@ -155,6 +155,12 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string')
 }
 
+/** 校验 Record<string, Record<string,string>>（offers 的形状），同上原则：脏数据一律拒绝。 */
+function isNestedStringRecord(v: unknown): v is Record<string, Record<string, string>> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+  return Object.values(v as Record<string, unknown>).every((x) => isStringRecord(x))
+}
+
 function projectRender(raw: unknown): FactoryConfigView['render'] {
   const r = (raw ?? null) as Record<string, unknown> | null
   if (!r) return null
@@ -170,6 +176,8 @@ function projectRender(raw: unknown): FactoryConfigView['render'] {
           outputFrameRate: typeof c.output_frame_rate === 'number' ? c.output_frame_rate : undefined,
           staticOverrides: isStringRecord(c.static_overrides) ? c.static_overrides : undefined,
           requiredPostFields: isStringArray(c.required_post_fields) ? c.required_post_fields : undefined,
+          offers: isNestedStringRecord(c.offers) ? c.offers : undefined,
+          postFieldSources: isStringRecord(c.post_field_sources) ? c.post_field_sources : undefined,
         }
       : null
   return { engine, creatomate }
