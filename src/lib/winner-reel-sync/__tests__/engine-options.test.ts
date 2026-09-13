@@ -40,10 +40,20 @@ vi.mock('@/lib/meta/adsets', () => ({
 // 建广告后会去记「投的是哪条片」(lib/ads/creative-link)，它走 @/lib/supabase 而不是
 // 下面那个 createClient 替身。这里把库打成空的：链接一条都认不出来 —— 正好用来证明
 // 「认不出片子绝不能拖累建广告本身」，本文件的 adsAdded 断言仍然成立。
+// 归属校验按多账户登记表 client_meta_ad_accounts 核对账户（也走 @/lib/supabase），
+// 这里登记 act_1，与 CONFIG_ROW 一致。
 vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: {
-    from: () => ({
-      select: () => ({ eq: () => ({ not: async () => ({ data: [], error: null }) }) }),
+    from: (table: string) => ({
+      select: () => ({
+        eq: () => ({
+          not: async () => ({ data: [], error: null }),
+          then: (resolve: (v: unknown) => unknown) =>
+            resolve(table === 'client_meta_ad_accounts'
+              ? { data: [{ ad_account_id: 'act_1' }], error: null }
+              : { data: [], error: null }),
+        }),
+      }),
       upsert: async () => ({ error: null }),
     }),
   },

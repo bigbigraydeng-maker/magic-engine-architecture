@@ -18,6 +18,7 @@ import {
   pauseAd,
 } from '../meta/ads-manager'
 import { getAdSetStatus } from '../meta/adsets'
+import { getRegisteredAccountIds } from '../meta/campaign-ownership'
 import { fetchPagePosts, getPageAccessToken, rankVideoWinners } from '../meta/page-posts'
 import { getMetaTokenForClient } from '../meta/token-manager'
 import { linkAdToCreative } from '../ads/creative-link'
@@ -118,20 +119,24 @@ async function assertConfigOwnedByClient(
   clientId: string,
   accessToken: string,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // 账户按多账户登记表核对（2026-09-14 ADS-IMPACT-P0-1）：CTS 有个人号 + 官方账户两个，
+  // 只认 clients.meta_ad_account_id 会把官方账户上的配置误拦。查询出错 fail closed。
+  const { ids: registeredAccountIds, error: registryError } = await getRegisteredAccountIds(clientId)
+  if (registryError) return { ok: false, reason: registryError }
+
   const { data: client, error } = await supabaseAdmin
     .from('clients')
-    .select('meta_ad_account_id, facebook_page_id')
+    .select('facebook_page_id')
     .eq('id', clientId)
     .maybeSingle()
 
-  if (error) return { ok: false, reason: `查不到客户的账户登记：${error.message}` }
-  const registeredAccountId = (client as { meta_ad_account_id?: string | null } | null)
-    ?.meta_ad_account_id
+  if (error) return { ok: false, reason: `查不到客户的主页登记：${error.message}` }
   const registeredPageId = (client as { facebook_page_id?: string | null } | null)
     ?.facebook_page_id
 
-  if (!registeredAccountId || normalizeAccountId(cfg.adAccountId) !== normalizeAccountId(registeredAccountId)) {
-    return { ok: false, reason: 'winner_reel_sync_config 里的广告账户跟这个客户在 clients 表登记的对不上，已拒绝执行（防止配错到别家客户账户）' }
+  const configAccount = normalizeAccountId(cfg.adAccountId)
+  if (!registeredAccountIds.some(id => normalizeAccountId(id) === configAccount)) {
+    return { ok: false, reason: 'winner_reel_sync_config 里的广告账户不在这个客户登记的任何广告账户里，已拒绝执行（防止配错到别家客户账户）' }
   }
   if (!registeredPageId || cfg.fbPageId !== registeredPageId) {
     return { ok: false, reason: 'winner_reel_sync_config 里的 Facebook 主页跟这个客户在 clients 表登记的对不上，已拒绝执行' }
@@ -141,8 +146,10 @@ async function assertConfigOwnedByClient(
   if (!adSet) {
     return { ok: false, reason: `读不到 winner_reel_sync_config 里配置的广告组（${cfg.targetAdsetId}），无法核对归属，已拒绝执行` }
   }
-  if (!adSet.account_id || normalizeAccountId(adSet.account_id) !== normalizeAccountId(registeredAccountId)) {
-    return { ok: false, reason: 'winner_reel_sync_config 里的 target_adset_id 不属于这个客户登记的广告账户，已拒绝执行（防止配错/串到别家客户的广告组）' }
+  // 广告组必须就在配置的那个账户里，不能只是「属于该客户的某个账户」——否则配置写官方账户、
+  // 广告组却在个人号，后续按配置账户建广告会建错地方。
+  if (!adSet.account_id || normalizeAccountId(adSet.account_id) !== configAccount) {
+    return { ok: false, reason: 'winner_reel_sync_config 里的 target_adset_id 不在配置的广告账户里，已拒绝执行（防止配错/串到别家客户的广告组）' }
   }
   return { ok: true }
 }
