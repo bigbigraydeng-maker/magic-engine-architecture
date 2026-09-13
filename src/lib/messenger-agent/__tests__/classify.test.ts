@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
 
-import { classifyConversation } from '../classify'
+import { classifyConversation, TOURISM_POST_SALE_POLICY } from '../classify'
 import { supabaseAdmin } from '@/lib/supabase'
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
@@ -21,29 +21,35 @@ interface Row {
   sent_at: string
 }
 
-/**
- * 跟 classify.ts 里的 POST_SALE_KEYWORDS 保持一致的测试夹具副本 —— 实现里
- * 那份清单没有导出，这里独立维护一份不是偷懒，而是让测试断言不依赖实现内部
- * 细节，只依赖「实现文档里承诺的判据」。
- */
-const KEYWORDS = ['booking', '我订的', '我已付', 'receipt', '我下单了']
+/** 旅游行业判据里的关键词清单，直接复用 `TOURISM_POST_SALE_POLICY`，不再自己维护一份副本。 */
+const KEYWORDS = TOURISM_POST_SALE_POLICY.postSaleKeywords
 
-function containsAnyKeyword(body: string | null): boolean {
+/** 从实现拼出的 `.or()` 过滤表达式（`body.ilike.%kw1%,body.ilike.%kw2%`）里还原关键词列表。 */
+function keywordsFromOrFilter(filterExpr: string): string[] {
+  return filterExpr
+    .split(',')
+    .map((clause) => clause.match(/^body\.ilike\.%(.*)%$/)?.[1])
+    .filter((kw): kw is string => kw !== undefined)
+}
+
+function containsAnyKeyword(body: string | null, keywords: string[]): boolean {
   if (!body) return false
   const lower = body.toLowerCase()
-  return KEYWORDS.some((kw) => lower.includes(kw))
+  return keywords.some((kw) => lower.includes(kw.toLowerCase()))
 }
 
 /**
  * 拿一组消息行（不要求预先排序）喂给 mock 的 supabase 链式调用，模拟实现
  * 现在会发出的三条独立查询：关键词存在性查询（`.or()` + `limit(1)`，直接
  * `await` 链本身）、首条 / 末条消息时间查询（`.order() + .limit(1).maybeSingle()`）。
+ * 关键词从实际传进 `.or()` 的过滤表达式里还原，而不是写死一份 tourism 关键词 ——
+ * 这样测试才能验证「调用方传什么 policy，查询就按什么 policy 过滤」。
  */
 function stubMessages(rows: Row[]) {
   mockFrom.mockImplementation((table: string) => {
     if (table !== 'conversation_messages') throw new Error(`fake supabase: 表 '${table}' 没建模`)
 
-    let usedOrFilter = false
+    let orFilterKeywords: string[] | null = null
     let ascending = true
 
     const sortedAsc = [...rows].sort(
@@ -53,8 +59,8 @@ function stubMessages(rows: Row[]) {
     const chain: Record<string, unknown> = {
       select: () => chain,
       eq: () => chain,
-      or: () => {
-        usedOrFilter = true
+      or: (filterExpr: string) => {
+        orFilterKeywords = keywordsFromOrFilter(filterExpr)
         return chain
       },
       order: (_col: string, opts?: { ascending?: boolean }) => {
@@ -67,7 +73,9 @@ function stubMessages(rows: Row[]) {
         return { data: edge ?? null, error: null }
       },
       then: (resolve: (v: { data: Row[] | null; error: null }) => unknown) => {
-        const matched = usedOrFilter ? rows.filter((r) => containsAnyKeyword(r.body)).slice(0, 1) : rows
+        const matched = orFilterKeywords
+          ? rows.filter((r) => containsAnyKeyword(r.body, orFilterKeywords as string[])).slice(0, 1)
+          : rows
         return Promise.resolve({ data: matched, error: null }).then(resolve)
       },
     }
@@ -99,13 +107,13 @@ describe('classifyConversation', () => {
     for (const { label, body } of cases) {
       it(label, async () => {
         stubMessages([{ body, sent_at: iso(0) }])
-        await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
+        await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('post_sale')
       })
     }
 
     it('关键词大小写不敏感（BOOKING 全大写也要认）', async () => {
       stubMessages([{ body: 'Question about my BOOKING reference', sent_at: iso(0) }])
-      await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
+      await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('post_sale')
     })
   })
 
@@ -121,7 +129,7 @@ describe('classifyConversation', () => {
     for (const { label, body } of cases) {
       it(label, async () => {
         stubMessages([{ body, sent_at: iso(0) }])
-        await expect(classifyConversation(CONVO)).resolves.toBe('lead_intake')
+        await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('lead_intake')
       })
     }
   })
@@ -134,7 +142,7 @@ describe('classifyConversation', () => {
         { body: '你好，请问有没有团期', sent_at: iso(0) },
         { body: '好的，谢谢', sent_at: iso(THIRTY_DAYS_MS) },
       ])
-      await expect(classifyConversation(CONVO)).resolves.toBe('lead_intake')
+      await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('lead_intake')
     })
 
     it('30 天零 1 秒 → post_sale', async () => {
@@ -142,13 +150,29 @@ describe('classifyConversation', () => {
         { body: '你好，请问有没有团期', sent_at: iso(0) },
         { body: '好的，谢谢', sent_at: iso(THIRTY_DAYS_MS + 1000) },
       ])
-      await expect(classifyConversation(CONVO)).resolves.toBe('post_sale')
+      await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('post_sale')
     })
   })
 
   it('没有消息（比如 conversationId 传错）→ 保守判 lead_intake', async () => {
     stubMessages([])
-    await expect(classifyConversation(CONVO)).resolves.toBe('lead_intake')
+    await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('lead_intake')
+  })
+
+  describe('判据必须由调用方显式传入（Codex 复审 P1）', () => {
+    it('地产客户传自己的 policy 时，"booking" 不再误判成售后', async () => {
+      stubMessages([
+        {
+          body: "I'd like to make a booking for an appraisal/consultation",
+          sent_at: iso(0),
+        },
+      ])
+      const realEstatePolicy = {
+        postSaleKeywords: ['已签约', '已付定金'],
+        postSaleSpanMs: 30 * 24 * 60 * 60 * 1000,
+      }
+      await expect(classifyConversation(CONVO, realEstatePolicy)).resolves.toBe('lead_intake')
+    })
   })
 
   it('查询报错要往上抛，不能吞掉当作"没有消息"', async () => {
@@ -167,6 +191,6 @@ describe('classifyConversation', () => {
       }
       return chain as never
     })
-    await expect(classifyConversation(CONVO)).rejects.toThrow('network down')
+    await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).rejects.toThrow('network down')
   })
 })
