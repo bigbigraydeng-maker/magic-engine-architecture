@@ -220,6 +220,14 @@ const CTS_ENTITLED_KNOWLEDGE_SUPABASE = createFakeSupabase({
     },
   ],
   client_knowledge_confirmers: [],
+  // 🔴 issue #1648（阶段门）合并进来之后补的两张表——同一个理由见
+  // `brief-cts-knowledge.test.ts` 的 `makeSb()` 注释：`customer_reply` 用途
+  // 现在还要过"阶段=2 且 Messenger 开关已开"这道闸，这个 fixture 要显式
+  // 声明这个（跟生产环境一致的）状态，否则四条事实会被静默滤空。
+  client_knowledge_events: [
+    { client_id: CTS_CLIENT_ID, dimension: 'phase', value: '2', actor_email: 'ray@magicengine.cloud', created_at: '2026-01-01T00:00:00.000Z' },
+  ],
+  clients: [{ id: CTS_CLIENT_ID, messenger_agent_enabled_messenger: true }],
 })
 const CTS_ENTITLED_DEPS = { knowledge: { supabase: CTS_ENTITLED_KNOWLEDGE_SUPABASE } }
 

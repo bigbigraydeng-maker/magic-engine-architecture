@@ -131,11 +131,25 @@ const CTS_FACT_ROWS: Row[] = [
   },
 ]
 
+/**
+ * 🔴 issue #1648（阶段门）合并进来之后补的两张表：`getClientKnowledge`
+ * 的 `customer_reply` 用途现在还要过 `isKnowledgeLiveForCustomerReply`
+ * 这道闸（阶段=2 且 Governed Reply Agent 的 Messenger 开关打开），这个
+ * fixture 写在阶段门功能存在之前，缺了这两张表会被 `createFakeSupabase`
+ * 的"未建模表直接抛错"规则打回、`isKnowledgeLiveForCustomerReply` 吞掉那个
+ * 错误变成 false，四条事实全被静默滤空——不是这份 fixture 本身错了，是
+ * CTS 在这个回归测试要证明的场景（真实、已上线）现在必须显式声明成"阶段
+ * 2 + Messenger 开关已开"，跟生产环境实际状态一致。
+ */
 function makeSb() {
   return createFakeSupabase({
     client_automation_policies: [ENTITLEMENT_GRANT],
     client_knowledge_facts: CTS_FACT_ROWS,
     client_knowledge_confirmers: [],
+    client_knowledge_events: [
+      { client_id: CTS_CLIENT_ID, dimension: 'phase', value: '2', actor_email: 'ray@magicengine.cloud', created_at: '2026-01-01T00:00:00.000Z' },
+    ],
+    clients: [{ id: CTS_CLIENT_ID, messenger_agent_enabled_messenger: true }],
   })
 }
 
