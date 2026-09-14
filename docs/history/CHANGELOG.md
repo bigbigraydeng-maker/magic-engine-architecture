@@ -150,6 +150,18 @@ PR #1500 已上线；用户明确批准生产数据库更新后应用 6 张隔�
 
 真实变化的模型建议仍待独立回执。复用边界：共享 adapter / evidence / budget / workflow；CTS ID、网址、市场语境仅配置，无客户语义写入共享运行时代码，无行业/全局学习晋升。详细记录见 [rollout receipt](../specs/2026-09-09-web-intelligence-v01.md)。
 
+### 2026-09-08（Park Homes：网站搭了一条自动上线的通道，以前每次改动都要人手动推）
+
+PR [#1501](https://github.com/bigbigraydeng-maker/magic-engine/pull/1501) 已合并并实测跑通。发现 `parkhomes-site` 这个 Cloudflare Pages 项目从建站起就没接过任何自动部署——每次改动都是靠人手动在本机敲命令推上线，合并代码本身完全不会让网站更新。新增一条自动化：以后代码一合并到 `main` 且改动了 Park Homes 网站目录，会自动打包、自动推上线，不用再手动操作。用来推送的这把钥匙权限锁到最小（只能碰这一个网站的部署，碰不了这个账号下任何别的东西）。已实测：手动触发过一次，确认真的能从零到上线全程自动跑完。
+
+**Reuse Statement**：纯 Park Homes 专属的部署管线搭建（该网站独立托管在 Cloudflare Pages），不涉及平台共享代码，换客户不影响。
+
+### 2026-09-08（Park Homes：修复 Google 收录被拆成两份的问题）
+
+PR [#1496](https://github.com/bigbigraydeng-maker/magic-engine/pull/1496) 已合并并部署生产。排查网站数据时发现 `www.parkhomes.nz` 和 `parkhomes.nz` 两个网址一直没有互相跳转，导致 Google 把同一个网页当成两个不同页面分别计数，搜索数据被拆散。已在 Cloudflare 加了跳转规则把 www 版本统一跳到不带 www 的正式版本；顺手把一个查无来源的历史死链接也改成跳转到项目列表页，不再是 404。生产实测：两条跳转都返回正确的 301，网站首页、各项目页确认没有被误改。
+
+**Reuse Statement**：纯 Park Homes 网站配置修复（该客户独立域名/独立 Cloudflare 账号），不涉及平台共享代码。
+
 ### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
 
 **问题**：`ads-health` 看板给 CTS 显示的每条线索成本比 Meta 官方数字便宜近一倍（看板 $3.9-4.7，Meta 官方 $7.6-11.8）。核对发现 `src/lib/meta/client.ts` 的 `results = leads + messaging_conversations` 违反了同文件 `objective-metrics.ts` 自己写的「NEVER sum across action types」规则：CTS 的 Lead Form 广告开了 Messenger 自动回复，同一个人提交表单会被 Meta 同时计入 `lead` 和 `onsite_conversion.messaging_conversation_started_7d` 两个 action_type，简单相加造成 2× 双算。2026-08-31 实测：CTS Reborn 广告当天 leads=10、messaging=9，是同一批人，不是 19 个人举手。
