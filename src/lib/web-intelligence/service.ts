@@ -4,7 +4,7 @@ import { canonicalDomain, loadCompetitors } from './targets'
 import { loadCompetitionBrief } from './competition-sources'
 import { latestFreshSnapshots, latestSnapshots } from './competition-brief'
 import { buildOperatingBrief, normalizeOperatingProducts, operatingProductFromTour, parseTourRecordLine, resolveCurrentOperatingGoal, type OperatingBrief, type OperatingEvidence, type OperatingGoalCandidate } from './operating-brief'
-import { extractTourLinks, matchTravelScope } from './profiles/travel'
+import { extractTourLinks, matchTravelScope, travelMarketTerms } from './profiles/travel'
 import { loadFirstPartyTourProducts } from './first-party-tours'
 import { projectTrafficDirectionSignals } from './traffic-direction'
 
@@ -85,5 +85,7 @@ export async function readView(clientId: string, canEdit: boolean) {
     evidence: operatingEvidence, now: asOf,
   })
   const trafficRows = (trafficDirection.data ?? []).flatMap(row => typeof row.competitor_domain === 'string' ? [{ domain: row.competitor_domain, source_url: row.source_url, observed_at: row.observed_at, valid_until: row.valid_until, excerpt: row.excerpt }] : [])
-  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, traffic_direction: projectTrafficDirectionSignals(trafficRows, client.data.domain), external_signals: externalSignals.error ? [] : externalSignals.data ?? [], budget: budget.data, brief, operating, client_product_source: { kind: clientProductSource, count: clientProducts.length }, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
+  const relevanceTerms = travelMarketTerms(brief.product_scope.market_ids).map(term => term.toLowerCase())
+  const scopedExternalSignals = externalSignals.error ? [] : (externalSignals.data ?? []).filter(signal => signal.source_type === 'jobs' || relevanceTerms.some(term => `${signal.title}\n${signal.excerpt}`.toLowerCase().includes(term)))
+  return { client: client.data, settings: config, competitors, signals: signals.data, evidence: evidence.data, runs: runs.data, observations: [...observations, ...detailObservations], discovered_tours: discoveredTours, traffic_direction: projectTrafficDirectionSignals(trafficRows, client.data.domain), external_signals: scopedExternalSignals, budget: budget.data, brief, operating, client_product_source: { kind: clientProductSource, count: clientProducts.length }, can_edit: canEdit, can_run: canEdit && allowedClient(clientId) && config?.enabled === true && config?.entitled === true }
 }

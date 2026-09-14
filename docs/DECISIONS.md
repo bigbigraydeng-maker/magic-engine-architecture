@@ -7,6 +7,27 @@
 
 ---
 
+## 2026-09-13 · 客户知识库作为 Governed Lead-Reply Agent 的事实层，替代 offerings.yaml 路线
+
+**决策**：AI 对终端客人说出口的业务事实（价格、时效、承诺、退改政策、在售/停售产品等），统一存放在**逐条治理的客户知识表**里，而不是按客户放 `config/clients/<client>/offerings.yaml` 文件。该知识表是已登记 L1 候选「Governed Lead-Reply Agent」（`docs/registry/platform-candidates.md`）的**事实层子能力**，不另立 L1。原方案"3 个客户后再抽 `client_offerings` 表"作废。
+
+**PM 拍板（2026-09-13）**：
+1. **双签**：ME/FDE 先批草稿；价格/时效/承诺/政策类条目必须**客户本人确认**后才对终端客人生效。确认人由全局管理员单独登记，经发到客户邮箱的一次性链接、点按钮提交确认；确认人不得是任何 ME 身份，不得是登记人或批草稿的人。
+2. **先做功能，套餐准入延后**：原"仅 NZ$499 档以上或 FDE 托管客户开放"暂不实现（五档会员在代码里尚不存在，`clients.plan_tier` 仍是老三档 starter/growth/enterprise）；v1 只做单客户开通开关（默认关）。
+3. **必须和客户一起测试上线**：内部整理 → 客户共测（AI 出草稿不发送，双方抽查）→ 上线。首个试点客户 = New Asian Logistics。
+
+**为什么**：
+- 文件 + PR 路线做不到逐条客户确认、有效期、证据溯源；改一次价格要合一次代码。
+- ME 已有 6 套互不相通的"AI 脑子"（`master_briefs`、`voice_knowledge_documents`、`voice_tenants.settings.brain`、`src/lib/messenger/brief.ts` 提示词、规划中的 offerings.yaml、ME 之外的 ElevenLabs 提示词），其中 `brief.ts` 把 CTS 的事实写死在所有客户共用的代码里，且 `brief-cycle.ts` 调用时不传 clientId——非 CTS 客户拿到的也是 CTS 提示词。
+- NAL 真实私信证明对话不能直接当训练材料：同一价格有 4/2、7/5、6/4 多个版本，一个快捷回复模板把"20 公斤以下"写成"10 公斤以下"已发给 28 位顾客。
+
+**影响**：
+- Governed Lead-Reply Agent 方案的 Layer 1 改读知识库读取入口；数字核实闸核对"已批 + 客户已确认 + 有效期内"的值；自动确认回复不得读知识库事实。随该方案 2026-09-15 三审同步修改。
+- 对话知识萃取永不自动上线；敏感度用确定性规则判定（出现任意数字即非 general），不依赖 AI 标签。
+- 回复草稿在显示和发送前各做一次输出检查，草稿里的数字对不上生效条目即撤回转人工。
+- 上线发送走 Governed Reply 的"草稿 → 人工点发"链路，不经执行内核（内核 v1 拒绝撤不回的对外动作）。
+- 设计与两轮复审记录：本机 plan `client-knowledge-base-capability.md` §9–§9.14。实施按 A 级分 6 个 PR，每个实施后复审。
+
 ## 2026-08-22 · 产品定位与 IMPACT v1.0 冻结：Digital Marketing Growth Intelligence System
 
 **决策**：Magic Engine 的正式产品类别冻结为 **Digital Marketing Growth Intelligence System（数字营销增长智能系统）**。唯一端到端产品闭环冻结为 **IMPACT = Inspect → Measure → Prescribe → Act → Check → Tune**。DAPE 保留为内部工作方法，主要服务 IMPACT 前四段，不能与 IMPACT 互换，也不能用执行完成代替 Check、Outcome 与 Tune。

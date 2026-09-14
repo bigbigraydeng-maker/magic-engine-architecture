@@ -161,7 +161,7 @@ export async function generateDueBriefs(
     try {
       const messages = await loadMessages(candidate.conversationId)
       if (messages.length === 0) continue
-      const brief = await generateBrief(messages, {
+      const brief = await generateBrief(messages, candidate.clientId, {
         awaitingReply: candidate.awaitingReply,
         hoursSinceLastMessage: candidate.lastMessageAt
           ? Math.round((now.getTime() - new Date(candidate.lastMessageAt).getTime()) / 3_600_000)
