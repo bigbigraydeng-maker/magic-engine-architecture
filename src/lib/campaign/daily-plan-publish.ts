@@ -102,9 +102,10 @@ export interface CampaignDailyPublishedPost {
    *  `id` = bare photo id (a scheduled photo); its feed story id is resolved
    *  after it goes public by the story-resolve workflow, not stored here. */
   post_id_source: 'post_id' | 'id'
-  /** Present when no measurement-bound event (published or story-resolve)
-   *  could be emitted because its payload violated the event contract. The
-   *  post is still on Facebook; only measurement is missing. */
+  /** Fixed code, present when the measurement-bound event (published or
+   *  story-resolve) was not handed off: `event_contract_invalid` or
+   *  `event_send_failed`. The post is still on Facebook; only measurement is
+   *  missing, and a failed record was written for the daily to-do list. */
   measurement_skipped_reason?: string
   page_id: string
   /** When *we* handed the post to Facebook. Same value whether Facebook
