@@ -272,11 +272,11 @@ describe('邮件深链 ?focus= 和 ?status= 支持', () => {
     // 三条都渲染出来
     await screen.findByText(/单号 TARGET/)
 
-    // cursor 跳到 target-o（第 2 条，index=1）→ 该行会有 focus 蓝框（2px solid #2563eb）
-    // 找到那条卡片 wrapper 并断言它的 style
-    const targetCard = screen.getByText(/单号 TARGET/).closest('div[style*="cursor"]') as HTMLElement | null
+    // cursor 跳到 target-o（第 2 条，index=1）→ 该行会带上 focus 描边（border-me-ochre）
+    // 找到那条卡片 wrapper 并断言它的 class
+    const targetCard = screen.getByText(/单号 TARGET/).closest('.cursor-pointer') as HTMLElement | null
     expect(targetCard).toBeTruthy()
-    expect(targetCard!.getAttribute('style')).toContain('2px solid')
+    expect(targetCard!.className).toContain('border-me-ochre')
 
     // scrollIntoView 被调过
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
