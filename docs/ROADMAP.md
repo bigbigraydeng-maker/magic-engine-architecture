@@ -223,10 +223,10 @@ Meta webhook 接入等剩余步骤（见本节下方"剩余 issue"）。
 **已知但不阻塞的后续项**：
 - `optout.ts` 的撤销入口/分页/写路径归属校验三项小缺口，详见 issue #1290 评论
 
-- [ ] 剩余 issue（#1638/#1639 Verifier 重做见上、Inngest 编排 4 函数、Messenger/WhatsApp
-      webhook 剩余接入、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个
-      前置依赖已经全部做完**（见下一节，6 步全部合并），这些是 CTS Messenger+WhatsApp v3
-      自己剩下的、不属于客户知识库范围的收尾项
+- [ ] 剩余 issue（#1638/#1639 已合并，不再是剩余项，见上；剩 Inngest 编排 4 函数、
+      Messenger/WhatsApp webhook 剩余接入、门户 UI、dry-run 验证、Delivery day 灰度切换）
+      ——**客户知识库这个前置依赖已经全部做完**（见下一节，6 步全部合并），这些是
+      CTS Messenger+WhatsApp v3 自己剩下的、不属于客户知识库范围的收尾项
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
 
 ## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步已全部完成（2026-09-15）
