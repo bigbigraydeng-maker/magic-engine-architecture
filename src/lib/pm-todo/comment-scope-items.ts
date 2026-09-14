@@ -18,7 +18,8 @@
  *    - 这一轮压根没扫完（拉帖子列表被 Meta 回 500 / 权限列表读不到 / 没令牌）——
  *      之前那轮照样记成「完成」，每 30 分钟失败一次也没人知道；
  *    - 令牌少了「以主页身份回评论、隐藏评论」（pages_manage_engagement）——
- *      生产上所有令牌都没有，自动回复不可能成功，引擎现在直接暂停不发，由这里下发。
+ *      生产上所有令牌都没有，公开回复/隐藏不可能成功。引擎现在不再硬发，
+ *      把这些评论标成「要人工回」，由这里下发。
  *
  * 「帖子不存在」「老式端点已下线」那两类**不下发** —— 人做不了什么，
  * 机器已经把它们记进跳过名单不再重试了。下发等于制造噪音。
@@ -39,7 +40,7 @@ export interface CommentRunResult {
   error?: string
   scan_error?: string
   engagement_scope_missing?: boolean
-  new_comments?: number
+  replies_blocked?: number
   page_id?: string
   posts_scanned?: number
   permission_denied_count?: number
@@ -80,18 +81,22 @@ const ENGAGEMENT_APP_REVIEW_NOTE =
   '还没拿到这项权限，要先走 Meta 的应用审核 —— 这一步找开发，别自己卡着。'
 
 /**
- * 一个客户的一轮结果 → 最多一条待办。
+ * 一个客户的一轮结果 → 待办（最多两条）。
  *
- * 先后顺序：令牌被拒 → 这一轮没扫完 → 缺权限。前一件没解决，后一件查不准：
- * 令牌都用不了谈不上权限；帖子都没扫完，缺权限的数也是残缺的。
- * 两条一起摆出来只会让人不知道先做哪个。
+ * 令牌整个被拒时只报令牌那条：令牌都用不了，谈不上扫描和权限，
+ * 几条一起摆出来只会让人不知道先做哪个。
+ * 否则「没扫完」和「缺权限」是两件不同的事、找不同的人（开发 vs 拿管理员账号授权），
+ * 各报各的；缺的几项权限合成一条，一次授权全勾上。
  */
-export function buildCommentScopeTodo(r: CommentRunResult): CommentScopeTodo | null {
+export function buildCommentScopeTodos(r: CommentRunResult): CommentScopeTodo[] {
   const page = r.page_id ? `（${r.page_id}）` : ''
 
-  if (r.token_invalid) return tokenInvalidTodo(r, page)
-  if (r.ok === false) return scanFailedTodo(r, page)
-  return scopeMissingTodo(r, page)
+  if (r.token_invalid) return [tokenInvalidTodo(r, page)]
+  const todos: CommentScopeTodo[] = []
+  if (r.ok === false) todos.push(scanFailedTodo(r, page))
+  const scope = scopeMissingTodo(r, page)
+  if (scope) todos.push(scope)
+  return todos
 }
 
 function tokenInvalidTodo(r: CommentRunResult, page: string): CommentScopeTodo {
@@ -123,10 +128,11 @@ function scanFailedTodo(r: CommentRunResult, page: string): CommentScopeTodo {
       `这个客户 Facebook 主页${page}的评论自动回复，最近一轮没扫完 —— ` +
       `漏扫的帖子下面客人的新评论，系统看不见，也就不会有人回。原话：${reason}`,
     how:
-      '打开链接（这个客户的设置页）→ 往下找到「评论自动回复」→ 点「检查 Meta 权限」：' +
-      '有打 ✗ 的一项就按页面提示补上；全是 ✓ 说明不是权限问题，把上面的原话发给开发。' +
+      '打开链接（这个客户设置页的「内容」标签）→ 找到「评论自动回复」→ 点「检查 Meta 权限」：' +
+      '「回帖 / 隐藏」那一项打 ✗ 不影响扫描，先不管它；除它之外还有打 ✗ 的，按页面提示补上；' +
+      '其余都是 ✓，说明不是权限问题，把上面的原话发给开发。' +
       '修好后下一轮（最多半小时）这条待办会自己消失。',
-    href: `https://app.magicengine.com.au/dashboard/clients/${r.client_id}/settings`,
+    href: `https://app.magicengine.com.au/dashboard/clients/${r.client_id}/settings?tab=content`,
   }
 }
 
@@ -150,11 +156,14 @@ function scopeMissingTodo(r: CommentRunResult, page: string): CommentScopeTodo |
     scopes.push('pages_read_user_content')
   }
   if (engagementMissing) {
-    const waiting = r.new_comments ?? 0
+    const held = r.replies_blocked ?? 0
     problems.push(
       '评论自动回复已经暂停：我们的令牌少了「以主页身份回评论、隐藏评论」这项权限（pages_manage_engagement），' +
-      'Meta 会拒掉每一条自动回复，所以系统这轮一条都没发。' +
-      (waiting > 0 ? `现在有 ${waiting} 条新评论在等回复，权限补上之前请先在 Business Suite 收件箱里人工回。` : ''),
+      'Meta 会拒掉每一条公开回复和隐藏，所以系统不再硬发。' +
+      (held > 0
+        ? `这一轮有 ${held} 条本该自动回复/隐藏的评论没发出去，已标成「要人工回」` +
+          '（在客户设置页「内容」标签 → 评论自动回复 → 最近自动回复里能看到），权限补上之前请在 Business Suite 收件箱里人工回。'
+        : ''),
     )
     scopes.push('pages_manage_engagement')
   }
@@ -204,8 +213,7 @@ export async function fetchCommentScopeTodos(
   const todos: CommentScopeTodo[] = []
   for (const r of run.summary.results ?? []) {
     if (!r || typeof r.client_id !== 'string') continue
-    const todo = buildCommentScopeTodo(r)
-    if (todo) todos.push(todo)
+    todos.push(...buildCommentScopeTodos(r))
   }
   return todos
 }

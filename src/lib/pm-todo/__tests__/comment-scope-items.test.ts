@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
-  buildCommentScopeTodo,
+  buildCommentScopeTodos,
   fetchCommentScopeTodos,
   type CommentRunResult,
 } from '../comment-scope-items'
@@ -18,7 +18,14 @@ function result(over: Partial<CommentRunResult> = {}): CommentRunResult {
   return { client_id: 'cts', page_id: '1616575215312482', posts_scanned: 149, ...over }
 }
 
-describe('buildCommentScopeTodo', () => {
+/** 大多数场景只出一条；多出来的那条会被下面专门的用例盯住。 */
+function buildCommentScopeTodo(r: CommentRunResult) {
+  const todos = buildCommentScopeTodos(r)
+  expect(todos.length).toBeLessThanOrEqual(1)
+  return todos[0] ?? null
+}
+
+describe('buildCommentScopeTodos', () => {
   it('🔴 缺权限要报，而且要说清后果 —— 「读不到评论」等于客人的提问没人回', () => {
     const t = buildCommentScopeTodo(result({ permission_denied_count: 12 }))
     expect(t).not.toBeNull()
@@ -61,7 +68,7 @@ describe('buildCommentScopeTodo', () => {
     expect(buildCommentScopeTodo(result())).toBeNull()
   })
 
-  it('🔴 这一轮没扫完要报 —— 带上原话，how 指向客户设置页的检查按钮', () => {
+  it('🔴 这一轮没扫完要报 —— 带上原话，how 指向客户设置页「内容」标签的检查按钮', () => {
     const t = buildCommentScopeTodo(
       result({
         ok: false,
@@ -73,7 +80,9 @@ describe('buildCommentScopeTodo', () => {
     expect(t.what).toContain('没扫完')
     expect(t.what).toContain('code=1')
     expect(t.how).toContain('检查 Meta 权限')
-    expect(t.href).toBe('https://app.magicengine.com.au/dashboard/clients/cts/settings')
+    // 回帖权限生产上全缺，探针上它必然是 ✗ —— 不说清楚会把人支去走审核，原话到不了开发
+    expect(t.how).toContain('「回帖 / 隐藏」那一项打 ✗ 不影响扫描')
+    expect(t.href).toBe('https://app.magicengine.com.au/dashboard/clients/cts/settings?tab=content')
   })
 
   it('没令牌这类没有 scan_error 的失败，也用 error 原话报出来', () => {
@@ -82,17 +91,17 @@ describe('buildCommentScopeTodo', () => {
     expect(t.what).toContain('no Meta token configured')
   })
 
-  it('🔴 没扫完时不再报缺读权限 —— 数是残缺的，先把扫描修好', () => {
-    const t = buildCommentScopeTodo(result({ ok: false, error: 'x', permission_denied_count: 5, engagement_scope_missing: true }))!
-    expect(t.kind).toBe('comment_scan_failed')
+  it('🔴 没扫完 + 缺回评论权限 = 两条：一条给开发，一条去授权，谁也不盖住谁', () => {
+    const todos = buildCommentScopeTodos(result({ ok: false, error: 'x', engagement_scope_missing: true }))
+    expect(todos.map((t) => t.kind)).toEqual(['comment_scan_failed', 'comment_engagement_scope_missing'])
   })
 
-  it('🔴 缺回评论权限要报：说清自动回复已暂停、几条在等人回、审核这步找开发', () => {
-    const t = buildCommentScopeTodo(result({ ok: true, engagement_scope_missing: true, new_comments: 4 }))!
+  it('🔴 缺回评论权限要报：说清自动回复已暂停、几条标成人工回、审核这步找开发', () => {
+    const t = buildCommentScopeTodo(result({ ok: true, engagement_scope_missing: true, replies_blocked: 4 }))!
     expect(t.kind).toBe('comment_engagement_scope_missing')
     expect(t.what).toContain('自动回复已经暂停')
     expect(t.what).toContain('pages_manage_engagement')
-    expect(t.what).toContain('4 条新评论在等回复')
+    expect(t.what).toContain('4 条本该自动回复/隐藏的评论没发出去')
     expect(t.how).toContain('勾上 pages_manage_engagement')
     expect(t.how).toContain('应用审核')
     expect(t.href).toBe('https://developers.facebook.com/tools/explorer/')

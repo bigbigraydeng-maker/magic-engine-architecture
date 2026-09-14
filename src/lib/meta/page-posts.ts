@@ -175,7 +175,7 @@ export type PageObjectIdEdge = 'published_posts' | 'video_reels'
 
 export type PageObjectIdList =
   | { ok: true; ids: string[] }
-  | { ok: false; ids: string[]; error: string }
+  | { ok: false; ids: string[]; error: string; /** Graph error.code, null for network / non-Graph failures. */ code: number | null }
 
 /** Graph error code 1 = "Please reduce the amount of data you're asking for". */
 const GRAPH_REDUCE_DATA_CODE = 1
@@ -217,7 +217,8 @@ export async function listPageObjectIds(input: {
   const ids: string[] = []
   let pageSize = input.pageSize ?? ID_LIST_PAGE_SIZE
   let after: string | undefined
-  const fail = (detail: string): PageObjectIdList => ({ ok: false, ids, error: `${input.edge} ${input.pageId}: ${detail}` })
+  const fail = (detail: string, code: number | null = null): PageObjectIdList =>
+    ({ ok: false, ids, error: `${input.edge} ${input.pageId}: ${detail}`, code })
 
   for (let request = 0; request < ID_LIST_MAX_REQUESTS && ids.length < input.maxItems; request++) {
     const limit = Math.min(pageSize, input.maxItems - ids.length)
@@ -237,7 +238,8 @@ export async function listPageObjectIds(input: {
         pageSize = Math.max(ID_LIST_MIN_PAGE_SIZE, Math.floor(pageSize / 2))
         continue // same cursor, smaller page
       }
-      return fail(`${res.status} code=${body.error.code ?? '?'} ${(body.error.message ?? '').slice(0, 200)}`)
+      const code = typeof body.error.code === 'number' ? body.error.code : null
+      return fail(`${res.status} code=${code ?? '?'} ${(body.error.message ?? '').slice(0, 200)}`, code)
     }
     if (!res.ok || !body) return fail(`HTTP ${res.status}`)
 

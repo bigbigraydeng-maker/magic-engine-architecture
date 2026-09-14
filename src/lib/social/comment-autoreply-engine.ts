@@ -21,7 +21,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { getPageAccessToken, listPageObjectIds } from '@/lib/meta/page-posts'
 import { listGrantedScopes } from '@/lib/meta-oauth/client'
-import { fetchAdStoryIds } from '@/lib/meta/ads-posts'
+import { fetchAdStoryIdsResult } from '@/lib/meta/ads-posts'
 import { fetchPostCommentsResult, replyToComment, sendPrivateReply, hideComment, PageComment } from '@/lib/meta/comments'
 import {
   isPersistableFailure,
@@ -83,16 +83,27 @@ export interface ClientRunResult {
   scan_error?: string
   /**
    * The token lacks pages_manage_engagement, so public replies and hiding
-   * cannot work. Nothing was sent this run; comments stay unclaimed so they
-   * are handled once the permission is granted.
+   * cannot work. Those actions were not attempted; the comments are recorded
+   * as needs-human instead (DMs use pages_messaging and still go out).
    */
   engagement_scope_missing?: boolean
+  /** Comments whose public reply / hide was held back for lack of that permission. */
+  replies_blocked?: number
+  /** Posts whose comment read failed transiently (rate limit / 5xx / network). */
+  posts_comment_read_failed?: number
+  /**
+   * Optional sources (Reels list, boosted-post list) Meta refused for this
+   * token/Page. Not a failure — some Pages simply do not allow them — but kept
+   * visible in the run summary rather than dropped.
+   */
+  sources_skipped?: string[]
 }
 
 /** Newest posts / Reels scanned per run, per edge. */
 const MAX_OBJECTS_PER_EDGE = 100
 /** Meta permission required to reply publicly to, or hide, a Page comment. */
 export const ENGAGEMENT_SCOPE = 'pages_manage_engagement'
+const ENGAGEMENT_BLOCKED_ERROR = `not sent: token lacks ${ENGAGEMENT_SCOPE}`
 
 /** Max send attempts before a 'failed' row stops being retried. */
 export const MAX_ATTEMPTS = 3
@@ -133,12 +144,12 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
     // lookback_days bounds COMMENT freshness, NOT post age — an evergreen post
     // from months ago that still gets fresh comments must be handled.
     const cutoff = Date.now() - config.lookback_days * 86_400_000
-    const { postIds, listErrors } = await collectPostIds(config, pageToken, userToken, ctxBase.adAccountId)
+    const { postIds, listErrors, sourcesSkipped } = await collectPostIds(config, pageToken, userToken, ctxBase.adAccountId)
 
     const now = new Date()
     const skips = new Map<string, PostSkip>()
     for (const s of await loadPostSkips(supabaseAdmin, clientId)) skips.set(s.post_id, s)
-    const scan = { skipped: 0, unreadable: 0, permissionDenied: [] as string[] }
+    const scan = { skipped: 0, attempted: 0, unreadable: 0, transient: 0, permissionDenied: [] as string[] }
     let tokenInvalid: string | undefined
     // 名单没变就不写库 —— 每 30 分钟一次无意义的 UPDATE 没有任何收益
     let skipsChanged = false
@@ -149,6 +160,7 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
         scan.skipped++
         continue
       }
+      scan.attempted++
       const r = await fetchPostCommentsResult(postId, config.fb_page_id, pageToken, 100)
       if (r.ok) {
         // 读通了就把旧标记撤掉 —— 权限补上 / 帖子恢复后不该还挂着
@@ -161,7 +173,11 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
         tokenInvalid = r.failure.message
         break
       }
-      if (!isPersistableFailure(r.failure)) continue
+      if (!isPersistableFailure(r.failure)) {
+        // transient（限流 / 5xx / 网络）—— 下一轮会重试，但**这一轮**确实漏看了
+        scan.transient++
+        continue
+      }
       scan.unreadable++
       if (r.failure.reason === 'permission_denied' && belongsToPage(postId, config.fb_page_id)) {
         scan.permissionDenied.push(postId)
@@ -170,23 +186,30 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
       skipsChanged = true
     }
     if (skipsChanged) await savePostSkips(supabaseAdmin, clientId, Array.from(skips.values()))
+    if (scan.transient > 0) {
+      listErrors.push(`comments unreadable on ${scan.transient}/${scan.attempted} posts (rate limit / 5xx / network)`)
+    }
 
     const candidates = (await filterProcessable(comments)).slice(0, config.max_replies_per_run)
 
     // 🔴 Fail closed on the send permission. Without pages_manage_engagement
     //    every public reply / hide is refused by Meta (2026-09-15: no production
-    //    token has it), and the old path still claimed each comment and marked
-    //    it failed or skipped — so nobody saw the real cause and those comments
-    //    were never revisited. Now: send nothing, claim nothing, raise a to-do.
+    //    token has it), and the old path still tried each one and marked it
+    //    failed — so nobody saw the real cause. Now: don't attempt them, record
+    //    the comment as needs-human (it stays in the human queue and is never
+    //    auto-replied later, so a hand-written reply cannot be doubled), and
+    //    raise a to-do. An unreadable permission list counts as "not granted".
     const granted = await listGrantedScopes(userToken)
     const canEngage = granted?.includes(ENGAGEMENT_SCOPE) ?? false
     const scanErrors = granted === null ? [...listErrors, 'could not read granted permissions (/me/permissions)'] : listErrors
 
     const tally = { public_replies: 0, private_replies: 0, hidden: 0, needs_human: 0, failed: 0 }
-    for (const comment of canEngage ? candidates : []) {
+    let blocked = 0
+    for (const comment of candidates) {
       const claim = await claimComment(comment, config)
       if (!claim) continue // another run/pass owns it, or not retryable
-      const outcome = await processClaimedComment(comment, claim, config, ctxBase, pageToken)
+      const outcome = await processClaimedComment(comment, claim, config, ctxBase, pageToken, canEngage)
+      blocked += outcome.blocked ? 1 : 0
       tally.public_replies += outcome.publicReplied ? 1 : 0
       tally.private_replies += outcome.dmSent ? 1 : 0
       tally.hidden += outcome.hidden ? 1 : 0
@@ -208,7 +231,10 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
       permission_denied_sample: scan.permissionDenied.slice(0, 5),
       new_comments: candidates.length,
       ...tally,
+      posts_comment_read_failed: scan.transient,
+      ...(sourcesSkipped.length > 0 ? { sources_skipped: sourcesSkipped } : {}),
       ...(granted !== null && !canEngage ? { engagement_scope_missing: true } : {}),
+      ...(!canEngage ? { replies_blocked: blocked } : {}),
       ...(scanError ? { scan_error: scanError, error: `comment scan incomplete: ${scanError}` } : {}),
       ...(tokenInvalid ? { token_invalid: tokenInvalid, error: `Meta token rejected: ${tokenInvalid}` } : {}),
     }
@@ -223,14 +249,17 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
  * evergreen posts + boosted story ids from the ad account.
  *
  * A list that fails part-way still returns what it got — the caller replies on
- * those and reports the scan as incomplete via `listErrors`.
+ * those and reports the scan as incomplete via `listErrors`. The feed list is
+ * required; Reels and boosted posts are optional sources — when Meta refuses
+ * them outright (permission / unsupported), that goes to `sourcesSkipped`
+ * instead, so a Page that cannot list Reels does not fail every run forever.
  */
 async function collectPostIds(
   config: CommentConfig,
   pageToken: string,
   userToken: string,
   adAccountId: string | null,
-): Promise<{ postIds: Set<string>; listErrors: string[] }> {
+): Promise<{ postIds: Set<string>; listErrors: string[]; sourcesSkipped: string[] }> {
   const list = (edge: 'published_posts' | 'video_reels') =>
     listPageObjectIds({ pageId: config.fb_page_id, pageAccessToken: pageToken, edge, maxItems: MAX_OBJECTS_PER_EDGE })
   const [posts, reels] = await Promise.all([list('published_posts'), list('video_reels')])
@@ -240,17 +269,31 @@ async function collectPostIds(
   //    每半小时重复一次的 400 就是这么来的。/published_posts 返回的 id 本来就是
   //    fullId；Reels 的 id 就是视频 id，两边可以一视同仁。
   const postIds = new Set([...posts.ids, ...reels.ids])
-  const listErrors = [posts, reels].flatMap(r => (r.ok ? [] : [r.error]))
+  const listErrors: string[] = []
+  const sourcesSkipped: string[] = []
+  if (!posts.ok) listErrors.push(posts.error)
+  if (!reels.ok) (isSourceRefusal(reels.code) ? sourcesSkipped : listErrors).push(reels.error)
   for (const pid of config.pinned_post_ids ?? []) if (pid) postIds.add(pid)
   // Boosted posts/Reels carry paid-delivery comments on the ad's story object,
   // which the organic endpoints undercount. Pull those story ids via the Ads API.
   if (adAccountId) {
-    const storyIds = await fetchAdStoryIds(adAccountId, userToken).catch(() => [])
+    const ads = await fetchAdStoryIdsResult(adAccountId, userToken)
+    if (ads.error) (isSourceRefusal(ads.code) ? sourcesSkipped : listErrors).push(ads.error)
     // 广告账户里会混进**别人主页**的素材（老广告、合作方主页）。用本主页的
     // token 去读它们，Meta 一律回 #10 —— 那不是我们缺权限，是根本不该问。
-    for (const sid of storyIds) if (belongsToPage(sid, config.fb_page_id)) postIds.add(sid)
+    for (const sid of ads.ids) if (belongsToPage(sid, config.fb_page_id)) postIds.add(sid)
   }
-  return { postIds, listErrors }
+  return { postIds, listErrors, sourcesSkipped }
+}
+
+/**
+ * Graph codes that mean "this token/Page may not use this edge at all" —
+ * #3 capability, #10 and #200-299 permission, #100 unsupported / not found.
+ * Asking again next run gets the same answer, so it is not a scan failure.
+ * Code 1 (too much data), 5xx and network errors are NOT refusals.
+ */
+function isSourceRefusal(code: number | null): boolean {
+  return code === 3 || code === 10 || code === 100 || (code !== null && code >= 200 && code < 300)
 }
 
 /**
@@ -364,7 +407,11 @@ async function claimComment(comment: PageComment, config: CommentConfig): Promis
   return updated ? { rowId: row.id, attempts: nextAttempts } : null
 }
 
-interface Outcome { publicReplied: boolean; dmSent: boolean; hidden: boolean; needsHuman: boolean; failed: boolean }
+interface Outcome {
+  publicReplied: boolean; dmSent: boolean; hidden: boolean; needsHuman: boolean; failed: boolean
+  /** A public reply / hide was held back because the token lacks the permission. */
+  blocked: boolean
+}
 
 function categoryAllowed(category: CommentCategory, config: CommentConfig): boolean {
   if (category === 'praise') return config.auto_reply_praise
@@ -380,6 +427,7 @@ async function processClaimedComment(
   config: CommentConfig,
   ctxBase: CommentContext,
   pageToken: string,
+  canEngage: boolean,
 ): Promise<Outcome> {
   const ctx: ReplyContext = {
     clientName: ctxBase.clientName,
@@ -390,11 +438,13 @@ async function processClaimedComment(
 
   // Spam → hide (if enabled). No reply.
   if (decision.shouldHide) {
-    const hidden = config.auto_hide_spam ? await hideComment(comment.commentId, pageToken) : false
+    const blocked = config.auto_hide_spam && !canEngage
+    const hidden = config.auto_hide_spam && canEngage ? await hideComment(comment.commentId, pageToken) : false
     await finalise(claim.rowId, decision, {
-      status: hidden ? 'hidden' : 'skipped', hidden, dmSent: false, publicReplyId: null, publicText: null,
+      status: hidden ? 'hidden' : blocked ? 'pending' : 'skipped', hidden, dmSent: false, publicReplyId: null, publicText: null,
+      ...(blocked ? { needsHuman: true, error: ENGAGEMENT_BLOCKED_ERROR } : {}),
     })
-    return { publicReplied: false, dmSent: false, hidden, needsHuman: false, failed: false }
+    return { publicReplied: false, dmSent: false, hidden, needsHuman: blocked, failed: false, blocked }
   }
 
   // Category disabled → record classification, take no send action.
@@ -402,7 +452,7 @@ async function processClaimedComment(
     await finalise(claim.rowId, decision, {
       status: decision.needsHuman ? 'pending' : 'skipped', hidden: false, dmSent: false, publicReplyId: null, publicText: null,
     })
-    return { publicReplied: false, dmSent: false, hidden: false, needsHuman: decision.needsHuman, failed: false }
+    return { publicReplied: false, dmSent: false, hidden: false, needsHuman: decision.needsHuman, failed: false, blocked: false }
   }
 
   // DM-first, so the public "we've messaged you" wording is only used if it landed.
@@ -414,7 +464,8 @@ async function processClaimedComment(
 
   let publicReplyId: string | null = null
   let publicFailed = false
-  if (publicText) {
+  const blocked = Boolean(publicText) && !canEngage
+  if (publicText && canEngage) {
     publicReplyId = await replyToComment(comment.commentId, publicText, pageToken)
     publicFailed = publicReplyId === null
   }
@@ -422,13 +473,15 @@ async function processClaimedComment(
   const status = publicReplyId ? 'replied'
     : dmSent ? 'dm_sent'
     : publicFailed ? 'failed'
-    : decision.needsHuman ? 'pending'
+    : decision.needsHuman || blocked ? 'pending'
     : 'skipped'
 
   await finalise(claim.rowId, decision, {
     status, hidden: false, dmSent, publicReplyId,
     publicText: publicReplyId ? publicText : null,
-    error: publicFailed ? 'replyToComment returned null (check pages_manage_engagement scope / rate limit)' : undefined,
+    error: publicFailed ? 'replyToComment returned null (check pages_manage_engagement scope / rate limit)'
+      : blocked ? ENGAGEMENT_BLOCKED_ERROR : undefined,
+    ...(blocked ? { needsHuman: true } : {}),
   })
 
   if (publicReplyId || dmSent) await recordFlywheel(comment, config, decision, { publicReplyId, dmSent, hidden: false })
@@ -437,8 +490,9 @@ async function processClaimedComment(
     publicReplied: publicReplyId !== null,
     dmSent,
     hidden: false,
-    needsHuman: decision.needsHuman,
+    needsHuman: decision.needsHuman || blocked,
     failed: status === 'failed',
+    blocked,
   }
 }
 
@@ -449,6 +503,8 @@ interface FinaliseResult {
   publicReplyId: string | null
   publicText: string | null
   error?: string
+  /** Overrides the classifier's needs_human (e.g. a reply we could not send). */
+  needsHuman?: boolean
 }
 
 /** Update the claimed row with the classification + send result. Logs (never throws) on DB error. */
@@ -458,7 +514,7 @@ async function finalise(rowId: string, decision: CommentDecision, r: FinaliseRes
     .update({
       category: decision.category,
       category_confidence: decision.confidence,
-      needs_human: decision.needsHuman,
+      needs_human: r.needsHuman ?? decision.needsHuman,
       guardrail_flags: decision.guardrailFlags,
       reply_source: decision.replySource,
       reply_status: r.status,
