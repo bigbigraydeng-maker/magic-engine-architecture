@@ -7,11 +7,17 @@
 ## 目的（PM 2026-09-15 拍板）
 
 让 ME 的 CRM 系统兼顾：
-1. AI 客服接入 Facebook Messenger / WhatsApp Business
+1. AI 客服接入 Facebook Messenger（WhatsApp 范围见下方"范围已拍板"）
 2. 用户（客户联系人）信息管理
 3. CAPI 数据回传（广告归因闭环）
 4. 知识库训练（AI 该说什么/不该说什么的事实源）
-5. 接收邮件、Messenger、WhatsApp 的对话信息（统一收件）
+5. 接收邮件、Messenger、WhatsApp 的对话信息（统一收件——**收件**跟"AI 主动接
+   WhatsApp Business 客服"是两件事，收件不受下面这条范围决定影响）
+
+**范围已拍板（2026-09-15）**：PM 确认维持 issue #1290 原有冻结决定——**先只做 Messenger
+一条路，WhatsApp Business 的 AI 客服接入暂不启动**，等真的有 ≥2 个客户要用再抽公共
+Adapter。构建控制/任何窗口看到"要不要现在做 WhatsApp AI 客服"，答案是"不做，按老计划"，
+不用再问 PM。
 
 **PM 需要的不是新功能，是一个不会让自己"lost"的控制点** —— 现在有 6+ 个并行窗口在碰这条线的不同角落，PM 自己拼不出全貌，容易重复授权、重复花钱、或者漏掉冲突。
 
@@ -78,10 +84,18 @@
 3. 对答案里任何"已合并"的说法，补一句它有没有真的在生产 apply / 启用（合并 ≠ 上线，这条铁律本仓库反复踩过）
 4. 发现两个窗口在动同一个东西——立刻在两边 issue 上留言 @ 对方，不要等 PM 发现
 
-## PM 今天要澄清的一个范围问题（不是构建控制能自己拍的，标出来等 PM 确认）
+## 范围问题已拍板（2026-09-15，记录不再重问）
 
-issue #1290（CTS Governed Lead-Reply Agent 主设计）里 PM 此前拍板的 4 个岔口第一条明写：**"MVP 覆盖：只 CTS · Messenger 一条路 · WhatsApp 等真接凑 ≥2 客户证据再抽"**——即 WhatsApp 被**明确排除**在当前 MVP 之外。
+issue #1290（CTS Governed Lead-Reply Agent 主设计）此前拍板的 4 个岔口第一条：**"MVP 覆盖：
+只 CTS · Messenger 一条路 · WhatsApp 等真接凑 ≥2 客户证据再抽"**。当天 PM 就"CRM 要不要同时
+接 WhatsApp AI 客服"这个疑似冲突当场确认：**维持原决定，先按老计划走，WhatsApp AI 客服接入
+不启动**。WhatsApp 相关 issue（#1300/#1309/#1455/#1304）保持"设计已存在、暂不启动"状态，
+不用再为这件事去问 PM。
 
-但今天的新指示是"CRM 系统兼顾 AI 客服接入 FB Messenger/**WA Business**"——这跟上面那条冻结决定不一致。需要 PM 确认：是**推翻**"WhatsApp 先不做"这条冻结决定（那就要重新过一轮子牙+魏征复审，WhatsApp 相关 issue #1300/#1309/#1455/#1304 要重新排期），还是先把 Messenger 这条路走完、WhatsApp 仍按原计划往后放（那这次的"提示词"范围应该先只覆盖 Messenger+CRM+CAPI+知识库+邮件，WhatsApp 保持"设计已存在、暂不启动"状态）。
+（"接收 WhatsApp 对话信息进统一收件"跟"AI 主动用 WhatsApp Business 回复客户"是两件事——前者
+本来就在 #1637 里做完了，不受这条范围决定影响；受影响的只是"让 AI 客服本身去说话"这一层。）
 
-另外一条不受任何代码进度影响的外部阻塞：**Meta 企业验证仍未通过**（issue #1299，需要 PM 本人上传公司文件）——不管代码做到多完整，Messenger/WhatsApp 真正对客户生效那天都卡在这一步，跟"WhatsApp 要不要做"是两件事，都需要 PM 处理。
+## 不受范围决定影响的外部阻塞
+
+**Meta 企业验证仍未通过**（issue #1299，需要 PM 本人上传公司文件）——不管 Messenger 这条路
+代码做到多完整，真正对客户生效那天都卡在这一步，需要 PM 处理，不是代码能解的。
