@@ -13,19 +13,26 @@
  * (例如 agent 把团 A 的名字和团 B 的 code 错配,两个独立数组看不出来)。
  *
  * `offerings` 允许为空数组 —— 一条不涉及任何具体团的回复(比如纯粹回答
- * "你们营业时间"这种 factual_bullets 范围内的问题)完全合法。
+ * "你们营业时间"这种客户知识库里 sensitivity='general' 品牌事实范围内的问题)
+ * 完全合法。
  */
 
 import { z } from 'zod'
 
 export const MessengerAgentOfferingRefSchema = z
   .object({
-    /** Agent 在回复文案里实际用的团名(可以是 offerings.yaml 里 name 或 aliases 的原文)。 */
+    /**
+     * Agent 在回复文案里实际用的产品名(可以是客户知识库那条事实的 name 或
+     * aliases 原文——见 `client_knowledge_facts.structured_value` 里
+     * `tour.active.<code>` 那类事实的约定,`verifier/policies/cts.ts` 定义)。
+     * 🔴（魏征复审 2026-09-15 指出）此处原引用 offerings.yaml——那条方案早已
+     * 作废,已改为指向现行的客户知识库事实源。
+     */
     name: z.string().min(1),
     /**
-     * 必须是 offerings.yaml 里那个团的 canonical `code`(见
-     * `offerings-loader.ts` 的 `tourCodeSchema`:小写 kebab-case)—— Verifier
-     * 拿这个 code 去 canonical 清单里逐条核验,不是拿 name 模糊匹配。
+     * 必须是那条知识库事实里的 canonical `code`(`structured_value.code`，
+     * 小写 kebab-case)—— Verifier 拿这个 code 去已确认在售产品清单里逐条
+     * 核验,不是拿 name 模糊匹配。
      */
     code: z.string().min(1),
   })
