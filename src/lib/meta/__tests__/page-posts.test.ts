@@ -209,7 +209,7 @@ describe('readPageStoryId — read-back after the photo is public', () => {
     ['HTTP 200 but body carries an error', 200, { error: { message: 'boom', code: 2 } }, 'graph_error'],
     ['photo deleted (code 100)', 400, { error: { message: 'does not exist', code: 100 } }, 'object_not_found'],
     ['HTTP 500 without an error body', 500, 'nope', 'http_error'],
-  ] as const)('%s → %s (fixed reason code, no raw Graph text)', async (_label, status, body, reason) => {
+  ] as const)('%s → fixed reason code, no raw Graph text', async (_label, status, body, reason) => {
     const { fetcher } = graph(json(status, body))
     const r = await readPageStoryId({ photoId: PHOTO, pageId: PAGE, pageAccessToken: TOKEN, fetcher })
     expect(r).toEqual({ ok: false, reason })
