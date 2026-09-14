@@ -14,6 +14,7 @@ import type { ClientSendConfig, OutcomeForSend } from '@/lib/conversions/destina
 const CONFIG: ClientSendConfig = {
   clientId: 'c0000000-0000-0000-0000-000000000000',
   defaultPhoneCountry: '64',
+  facebookPageId: null,
 }
 
 const META = { eventName: 'Purchase', maxEventAgeDays: 7 }
@@ -32,6 +33,8 @@ function outcome(over: Partial<OutcomeForSend> = {}): OutcomeForSend {
     amountMinor: 2350000,
     currency: 'NZD',
     occurredAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    pageScopedUserId: null,
+    actionSource: 'email',
     ...over,
   }
 }

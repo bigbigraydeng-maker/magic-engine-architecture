@@ -25,6 +25,7 @@ const writer = new MetaCapiWriter()
 const CONFIG: ClientSendConfig = {
   clientId: 'c0000000-0000-0000-0000-000000000000',
   defaultPhoneCountry: '64',
+  facebookPageId: null,
 }
 
 function outcome(over: Partial<OutcomeForSend> = {}): OutcomeForSend {
@@ -41,6 +42,8 @@ function outcome(over: Partial<OutcomeForSend> = {}): OutcomeForSend {
     amountMinor: 388000,
     currency: 'NZD',
     occurredAt: '2026-09-03T10:00:00Z',
+    pageScopedUserId: null,
+    actionSource: 'email',
     ...over,
   }
 }
