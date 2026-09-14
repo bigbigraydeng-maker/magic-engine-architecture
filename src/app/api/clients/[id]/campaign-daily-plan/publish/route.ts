@@ -38,6 +38,7 @@ import {
   CampaignDailyPublishCommandSchema,
   CampaignDailyPublishMetaSchema,
   DAILY_PLAN_POST_PUBLISHED_EVENT,
+  DailyPlanPostPublishedEventSchema,
   measurementSchedule,
   partitionByIdempotency,
   publishIdempotencyKey,
@@ -48,6 +49,7 @@ import {
   type CampaignDailyPublishMeta,
   type CampaignDailyPublishPlannedPost,
   type CampaignDailyPublishedPost,
+  type DailyPlanPostPublishedEvent,
 } from '@/lib/campaign/daily-plan-publish'
 
 function errorMessage(error: unknown): string {
@@ -326,29 +328,27 @@ async function publishPending(
       permalink: result.permalink,
       provider_response: result.raw,
     }
+
+    const event = buildPublishedEvent(record, context)
+    if (!event.ok) {
+      // Fail closed on measurement only. The Post is already accepted by
+      // Facebook, so this stays a published receipt entry (never `failed[]`,
+      // which would invite a duplicate re-post); we just refuse to emit an
+      // event the measurement consumer would reject as `invalid_payload`.
+      record.measurement_skipped_reason = result.postIdUnresolvedReason
+        ? `post_id is a photo id, not a feed post id (${result.postIdUnresolvedReason})`
+        : event.reason
+      console.error('[daily-plan publish] measurement event not emitted', candidate.date, record.measurement_skipped_reason)
+    }
     published.push(record)
+    if (!event.ok) continue
 
     // The Post is already live; an event failure must not discard the receipt.
     try {
       const sent = await sendInngestEvent({
         id: candidate.idempotency_key,
         name: DAILY_PLAN_POST_PUBLISHED_EVENT,
-        data: {
-          client_id: context.clientId,
-          campaign_id: context.command.campaign_id,
-          plan_id: context.row.id,
-          plan_revision: context.row.planRevision,
-          review_revision: context.row.reviewRevision,
-          date: candidate.date,
-          idempotency_key: candidate.idempotency_key,
-          post_id: record.post_id,
-          page_id: record.page_id,
-          published_at: publishedAt,
-          ...(record.scheduled_publish_time ? { scheduled_publish_time: record.scheduled_publish_time } : {}),
-          permalink: record.permalink,
-          // A scheduled receipt confirms submission, not public visibility.
-          measure_at: measurementSchedule(record.scheduled_publish_time ?? record.published_at),
-        },
+        data: event.data,
       })
       eventIds.push(...sent.event_ids)
     } catch (error: unknown) {
@@ -357,6 +357,36 @@ async function publishPending(
   }
 
   return { published, failed, eventIds }
+}
+
+/**
+ * Build the `daily_plan.post.published` payload and check it against the
+ * shared event contract *before* sending. The consumer validates with the same
+ * schema; emitting something it will reject is a silent measurement loss.
+ */
+function buildPublishedEvent(
+  record: CampaignDailyPublishedPost,
+  context: { clientId: string; row: PlanRow; command: CampaignDailyPublishCommand },
+): { ok: true; data: DailyPlanPostPublishedEvent } | { ok: false; reason: string } {
+  const parsed = DailyPlanPostPublishedEventSchema.safeParse({
+    client_id: context.clientId,
+    campaign_id: context.command.campaign_id,
+    plan_id: context.row.id,
+    plan_revision: context.row.planRevision,
+    review_revision: context.row.reviewRevision,
+    date: record.date,
+    idempotency_key: record.idempotency_key,
+    post_id: record.post_id,
+    page_id: record.page_id,
+    published_at: record.published_at,
+    ...(record.scheduled_publish_time ? { scheduled_publish_time: record.scheduled_publish_time } : {}),
+    permalink: record.permalink,
+    // A scheduled receipt confirms submission, not public visibility.
+    measure_at: measurementSchedule(record.scheduled_publish_time ?? record.published_at),
+  })
+  if (parsed.success) return { ok: true, data: parsed.data }
+  const issues = parsed.error.issues.slice(0, 3).map(issue => `${issue.path.join('.')}: ${issue.message}`)
+  return { ok: false, reason: `event payload violates contract: ${issues.join('; ')}` }
 }
 
 /** Compare-and-set write of the receipt onto the exact snapshot we validated. */
@@ -509,6 +539,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       status: receipt.status,
       receipt,
       skipped_as_duplicate: skipped.map(post => ({ date: post.date, idempotency_key: post.idempotency_key })),
+      // Posts that are on Facebook but will not be measured — surfaced here so
+      // the caller sees it without digging through the receipt or server logs.
+      measurement_skipped: outcome.published
+        .filter(post => post.measurement_skipped_reason)
+        .map(post => ({ date: post.date, post_id: post.post_id, reason: post.measurement_skipped_reason })),
     })
   } catch (error: unknown) {
     return NextResponse.json({ success: false, error: errorMessage(error) }, { status: 500 })

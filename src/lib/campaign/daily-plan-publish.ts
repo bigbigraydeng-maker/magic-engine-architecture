@@ -98,8 +98,15 @@ export interface CampaignDailyPublishedPost {
   idempotency_key: string
   /** Real Graph API post id. Never synthesised. */
   post_id: string
-  /** Which Graph field the id came from, so an audit can tell them apart. */
-  post_id_source: 'post_id' | 'id'
+  /** Which Graph field the id came from, so an audit can tell them apart.
+   *  `page_story_id` = read back from the photo after a scheduled publish.
+   *  `id` = the bare photo id; not a feed post id (legacy scheduled receipts,
+   *  or a read-back that failed — see `measurement_skipped_reason`). */
+  post_id_source: 'post_id' | 'page_story_id' | 'id'
+  /** Present when no `daily_plan.post.published` event was emitted because the
+   *  payload would violate the event contract (e.g. `post_id` is a bare photo
+   *  id). The post is still on Facebook; only measurement is missing. */
+  measurement_skipped_reason?: string
   page_id: string
   /** When *we* handed the post to Facebook. Same value whether Facebook
    *  publishes immediately or holds it until `scheduled_publish_time`. */
@@ -159,7 +166,8 @@ const publishedPostSchema = z.object({
   date: dateStringSchema,
   idempotency_key: z.string().min(1),
   post_id: z.string().min(1),
-  post_id_source: z.enum(['post_id', 'id']),
+  post_id_source: z.enum(['post_id', 'page_story_id', 'id']),
+  measurement_skipped_reason: z.string().min(1).optional(),
   page_id: pageIdSchema,
   published_at: z.string().datetime(),
   scheduled_publish_time: z.string().datetime().optional(),

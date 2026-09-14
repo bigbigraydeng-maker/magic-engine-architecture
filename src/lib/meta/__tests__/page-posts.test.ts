@@ -64,14 +64,88 @@ describe('publishPagePhotoPost — immediate vs scheduled', () => {
     expect(r.postIdSource).toBe('post_id')
   })
 
-  it('falls back to id but records the source so an auditor can see', async () => {
-    const { fetcher } = fakeFetch({ ok: true, body: { id: 'PHOTO_OBJ' } })
+  it('immediate publish with post_id makes exactly one Graph call (no read-back)', async () => {
+    const { fetcher, calls } = fakeFetch({ ok: true, body: { post_id: `${PAGE}_1750835520181969`, id: '1750835520181969' } })
     const r = await publishPagePhotoPost({
       pageId: PAGE, pageAccessToken: TOKEN,
       message: 'hi', imageUrl: 'https://x/img.jpg', fetcher,
     })
-    expect(r.postId).toBe('PHOTO_OBJ')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe(`https://graph.facebook.com/v20.0/${PAGE}/photos`)
+    expect(r).toEqual({
+      postId: `${PAGE}_1750835520181969`,
+      postIdSource: 'post_id',
+      permalink: `https://www.facebook.com/${PAGE}_1750835520181969`,
+      raw: { post_id: `${PAGE}_1750835520181969`, id: '1750835520181969' },
+    })
+  })
+})
+
+/**
+ * Fake fetch that answers each call in turn — POST /photos first, then the
+ * read-back. Returns real `Response` objects so no type cast is needed.
+ */
+function sequencedFetch(responses: Array<{ status: number; body: unknown } | Error>) {
+  const calls: Array<{ url: string; init?: RequestInit }> = []
+  const fetcher: typeof fetch = async (input, init) => {
+    calls.push({ url: String(input), init })
+    const next = responses[calls.length - 1]
+    if (!next) throw new Error(`unexpected Graph call #${calls.length}: ${String(input)}`)
+    if (next instanceof Error) throw next
+    return new Response(JSON.stringify(next.body), { status: next.status })
+  }
+  return { fetcher, calls }
+}
+
+describe('publishPagePhotoPost — scheduled photo returns only a photo id', () => {
+  const PHOTO = '1750835520181969'
+  const STORY = `${PAGE}_${PHOTO}`
+  const scheduled = { pageId: PAGE, pageAccessToken: TOKEN, message: 'hi', imageUrl: 'https://x/img.jpg', scheduledPublishTime: new Date('2026-09-16T20:00:00Z') }
+
+  it('🔴 reads page_story_id back from Graph and uses it as the post id', async () => {
+    const { fetcher, calls } = sequencedFetch([
+      { status: 200, body: { id: PHOTO } },
+      { status: 200, body: { page_story_id: STORY, id: PHOTO } },
+    ])
+    const r = await publishPagePhotoPost({ ...scheduled, fetcher })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1].url).toBe(
+      `https://graph.facebook.com/v20.0/${PHOTO}?fields=page_story_id&access_token=${TOKEN}`,
+    )
+    expect(calls[1].init?.method ?? 'GET').toBe('GET')
+    expect(r).toEqual({
+      postId: STORY,
+      postIdSource: 'page_story_id',
+      permalink: `https://www.facebook.com/${STORY}`,
+      raw: { id: PHOTO },
+    })
+  })
+
+  it('🔴 uses whatever page_story_id Graph returns — never composes pageId_photoId itself', async () => {
+    // A story id that is NOT `${page}_${photo}` proves the value is read, not built.
+    const { fetcher } = sequencedFetch([
+      { status: 200, body: { id: PHOTO } },
+      { status: 200, body: { page_story_id: `${PAGE}_99999999999` } },
+    ])
+    const r = await publishPagePhotoPost({ ...scheduled, fetcher })
+    expect(r.postId).toBe(`${PAGE}_99999999999`)
+  })
+
+  it.each([
+    ['Graph error', { status: 400, body: { error: { message: '(#10) permission denied' } } }, /permission denied/],
+    ['no page_story_id field', { status: 200, body: { id: PHOTO } }, /no page_story_id/],
+    ['network error', new Error('socket hang up'), /socket hang up/],
+  ] as const)('🔴 read-back failure (%s) does not throw and flags the photo id as unresolved', async (_label, readback, reason) => {
+    const { fetcher, calls } = sequencedFetch([{ status: 200, body: { id: PHOTO } }, readback])
+    const r = await publishPagePhotoPost({ ...scheduled, fetcher })
+
+    expect(calls).toHaveLength(2) // exactly one POST — never a second publish attempt
+    expect(r.postId).toBe(PHOTO)
     expect(r.postIdSource).toBe('id')
+    expect(r.postIdUnresolvedReason).toMatch(reason)
+    expect(r.permalink).toBe(`https://www.facebook.com/${PHOTO}`)
+    expect(r.raw).toEqual({ id: PHOTO })
   })
 
   it('throws when Meta returns an error — never retries silently', async () => {
@@ -119,6 +193,13 @@ describe('deletePagePost — idempotency and error surfacing', () => {
     await expect(
       deletePagePost({ postId: 'p1', pageAccessToken: TOKEN, fetcher }),
     ).rejects.toThrow(/pages_manage_posts/)
+  })
+
+  it('legacy receipts: a bare photo id is deleted by that exact id (no rewrite to page_post)', async () => {
+    const { fetcher, calls } = fakeFetch({ ok: true, body: { success: true } })
+    await deletePagePost({ postId: '1750835520181969', pageAccessToken: TOKEN, fetcher })
+    expect(calls[0].init?.method).toBe('DELETE')
+    expect(calls[0].url).toBe(`https://graph.facebook.com/v20.0/1750835520181969?access_token=${TOKEN}`)
   })
 
   it('url-encodes the post id — a raw underscore-heavy id must not break the request line', async () => {
