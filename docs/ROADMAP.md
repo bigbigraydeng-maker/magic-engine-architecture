@@ -144,6 +144,32 @@
       没有唯一性约束防止未来配置出两个"已成交"档——目前 NAL 只有一档，可接受，但改 NAL
       阶段配置前要注意这个耦合
 
+## 成交审核换成 AI 全自动判断+自动发送，带异常刹车（PR #1721，已合并，2026-09-15）
+
+> 背景：PM 拍板把审核页面"人工点确认才发给广告平台"这一步换成 AI 直接判断+自动发送，
+> 不要人再点一下；唯一让步是要有"异常刹车"（发送量/金额/批准占比异常时自动暂停+通知）。
+> 两轮设计复审 + 实现完成后两轮实际代码复审，详见提交历史与 CHANGELOG。
+
+**已完成**：
+- [x] `POST /api/admin/conversions/ai-auto-review-run`：AI 判断 + 熔断检查 + 复用既有
+      `sendApprovedOutcome` 发送通道，鉴权按 clientId 有无分别走 `guardConversionRoute`/
+      `guardGlobalAdmin`（最终代码复审揪出并修复了一个真实的权限漏洞——最初错用了
+      更松的 `guardAdmin`）
+- [x] 数据库新增 4 个字段（客户级开关+熔断暂停原因、记录级重判次数+时间戳），已 apply
+- [x] 姓名注入防护（客户可控文本白名单清洗 + 系统提示安全声明）
+- [x] 独立于熔断的客户级停止开关 `clients.ai_auto_review_enabled`（默认 false）
+- [x] 熔断触发后接入既有 PM 待办拉取管道，不新开通知通道
+- [x] 41 条自动化测试覆盖（含两轮复审各自新增的回归测试）
+
+**待办（PM 待拍板）**：
+- [ ] 数据库那两个新开关默认是关的——代码合并上线**不代表**已经对 CTS/NAL 生效，
+      要不要真的打开、先开哪个客户、什么时候开，需要 PM 另外一句话拍板
+- [ ] 这一版只有手动触发入口，没有接 Inngest 定时——先观察几天判断质量和熔断阈值，
+      校准过再决定要不要接定时（子牙复审建议：这次风险比现有手动先例更高，值得先看效果）
+- [ ] 熔断触发后目前只进 PM 每日待办（拉模式），不会主动推送邮件——如果这类"钱可能
+      发错"的异常，PM 觉得需要更及时知道（不等自己点开待办页面），需要另外决定要不要加
+      邮件/即时通知，这次范围内没做（魏征复审标记为非阻塞，留给 PM 判断优先级）
+
 ## CTS Messenger+WhatsApp 治理式客服 v3 —— 事实层改用客户知识库平台能力（2026-09-14）
 
 > 完整方案（v1/v2/v3 全在一份文件里，v3 = WhatsApp 双渠道扩容 + 9 条必补项 + §9.14 C 客户
@@ -162,11 +188,8 @@ GitHub issue（#1574-#1592）。**wave-1/wave-2 共 7 个 issue 已合并到 mai
 更早的真实 PM 决策（`docs/DECISIONS.md` 2026-09-13 记录："客户知识库作为 Governed Lead-Reply
 Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步到位建客户知识库平台能力"
 （独立 L1 候选，见 [docs/registry/platform-candidates.md](./registry/platform-candidates.md)
-及本文档下一节"客户知识库"），6 步建设中前两步已合并：
-- [x] Issue #1643 敏感度检测器 —— PR #1650 已合并
-- [x] Issue #1644 表结构 + `getClientKnowledge` 读取入口 —— PR #1652 已合并（过子牙架构+
-      魏征挑刺+狄仁杰攻击验证三方复审，合并前修了邮箱比较缺 trim、身份唯一性设计跟冲突
-      检测需求冲突两处真问题；确认人登记写入 API 尚未建，见 issue #1669）
+及本文档下一节"客户知识库"）。**2026-09-15 更新：6 步已全部合并完成**，详见下一节
+"客户知识库"的完整清单——不在这里重复列。
 
 本方案 Layer 1（事实层）/2（4 只读工具）/3（五闸）/4（F1 auto-ack）/5（daily-todo 复核栏）
 六处已改接 `getClientKnowledge`，`config/clients/cts/offerings.yaml` 及其加载器整条路线
@@ -199,44 +222,54 @@ Meta webhook 接入等剩余步骤（见本节下方"剩余 issue"）。
 
 **已知但不阻塞的后续项**：
 - `optout.ts` 的撤销入口/分页/写路径归属校验三项小缺口，详见 issue #1290 评论
-- 确认人登记写入 API（issue #1669，P3，随 #1645/#1646 排期）
 
-- [ ] 剩余 issue（Verifier 治理层重做、Inngest 编排 4 函数、Messenger/WhatsApp webhook 剩余
-      接入、门户 UI、dry-run 验证、Delivery day 灰度切换）——客户知识库剩余 4 步（#1645 萃取
-      工作流 / #1646 FDE审核+客户确认页 / #1647 brief.ts 去 CTS 化 / #1648 rollout）见下一节
-      "客户知识库"，进度共享同一个 ROADMAP
+- [ ] 剩余 issue（#1638/#1639 Verifier 重做见上、Inngest 编排 4 函数、Messenger/WhatsApp
+      webhook 剩余接入、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个
+      前置依赖已经全部做完**（见下一节，6 步全部合并），这些是 CTS Messenger+WhatsApp v3
+      自己剩下的、不属于客户知识库范围的收尾项
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
 
-## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步建设中（2026-09-14）
+## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步已全部完成（2026-09-15）
 
 > 方案：`~/.claude/plans/client-knowledge-base-capability.md`（本地文件）。PM 2026-09-13
 > 拍板："长期来看 Magic Engine 后台一定要有自己的客户知识库这样的专门存储，一步到位按正确
 > 做法建"。让 AI 对客户说价格/时效/承诺/政策类事实前，必须先过"ME 内部批准+客户本人确认"
 > 双签闸——直接解决了 CTS "AI 报停售团价格"这类事故的根因（AI 靠训练数据背景知识乱编，不是
-> 靠受控事实源）。
+> 靠受控事实源）。**2026-09-15：6 步全部合并到 main，issue 均已关闭。**
 
-**6 步进度**：
-- [x] 步骤 1（issue #1643）敏感度检测器 —— PR #1650 已合并
-- [x] 步骤 2（issue #1644）表结构 + 读取入口 —— PR #1652 已合并
-- [x] 步骤 3（issue #1645）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）—— PR #1671
-      已合并。移植自另一窗口 PR #1616 已过魏征复审的核心算法，改接真实
-      `detectSensitivity()`/`checkBudget()`，并经过新一轮子牙+魏征复审又修了 6 处真问题
-      （PII 脱敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已
-      关闭并 credit。
-- [x] 步骤 4（issue #1646）FDE 审核页 + 客户确认页 —— PR #1685 已合并（本条此前漏勾，2026-09-15
-      整理 ROADMAP 时发现并补上，不是本次新完成）
-- [x] 步骤 5（issue #1647）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— PR #1694 已合并（同上，
-      漏勾补上）
-- [x] 步骤 6（issue #1648）rollout 阶段（上线阶段机机 + 双签一次性确认链接）—— PR #1693
-      已合并（2026-09-15）。合并前子牙+魏征两轮复审，中间发现并修复：①合并冲突解决时
-      两个测试 fixture 的修复一度只改在工作区没真正提交，被复审用干净代码复核时抓到，
-      已重新提交验证；②`consume_knowledge_rollout_advance_request` 的一个真实竞态漏洞
-      （回退后旧确认链接仍可把客户拉回已回退的阶段）在复审期间被另一并发会话修复。
+**6 步进度（全部完成）**：
+- [x] 步骤 1（issue #1643，已关闭）敏感度检测器 —— PR #1650 已合并
+- [x] 步骤 2（issue #1644，已关闭）表结构 + 读取入口 —— PR #1652 已合并（过子牙架构+魏征
+      挑刺+狄仁杰攻击验证三方复审，合并前修了邮箱比较缺 trim、身份唯一性设计跟冲突检测
+      需求冲突两处真问题）
+- [x] 步骤 3（issue #1645，已关闭）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）
+      —— PR #1671 已合并，PR #1673 修了一处误依赖 budget-guard.ts 的设计违规。移植自另一
+      窗口 PR #1616 已过魏征复审的核心算法，又经新一轮子牙+魏征复审修了 6 处真问题（PII 脱
+      敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已关闭并
+      credit
+- [x] 步骤 4（issue #1646，已关闭）FDE 审核页 + 客户确认链接 —— PR #1685 已合并，PR #1690
+      补了一次迁移版本号冲突。子牙+魏征+板桥三方复审发现并修复：客户确认后想反悔叫停 AI
+      却找不到按钮、页面缺 §9.10 强制安心话、冲突事实被拆到不同批次、"确认了 0 条"文案
+      自相矛盾；另外把"claim 确认请求 + 写事实"两步分开写的半失败态改成一个数据库事务
+      （已用真实本机 Postgres 复现验证）。草稿输出检查（Verifier 层）明确不在本步骤范围，
+      归 #1638/#1639
+- [x] 步骤 5（issue #1647，已关闭）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— PR #1694 已
+      合并，收尾了 PR #1629 当时只是把 CTS 事实从系统提示词搬到 `brief-client-facts.ts`
+      （同一条红线违规换了个文件）没有真正解决的问题；`brief-client-facts.ts` 已删除，CTS
+      的 4 条历史事实迁移进知识库，其中免签政策一条给了到 **2026-10-15** 的确认宽限期（日
+      历提醒已建：过期前一周提醒 FDE/PM 决定要不要走正式客户确认）
+- [x] 步骤 6（issue #1648，已关闭）rollout 三段式阶段切换 + 客户确认链接页面 —— PR #1693
+      已合并。子牙+魏征联合复审各自独立在真实本机 Postgres 上复现了一个真漏洞：ME 一键
+      回退阶段（发现报价说错）后，客户手上一条更早发出的"同意前进"旧链接仍能被点开，把
+      回退悄悄抹掉——已修复（同一个数据库事务里重新核对当前阶段，对不上就拒绝且不留痕
+      迹地保留成可重试状态，不是简单标记失败）；板桥复审同时指出这一步最初交付时完全没
+      有客户能打开的页面，已一并补上。合并过程中两个并发会话各自独立在同一个分支上处理
+      同一个问题，靠互相 SendMessage 核对收敛，没有产生冲突结果
 
 **6 步全部完成。** 遗留跟进（不阻塞，已知不阻塞合并）：
-- issue #1669（确认人登记写入 API，P3）
-- `rollout.ts` 的 `hashesMatch` 跟 `confirmation-requests.ts` 几乎重复实现，未抽共享（魏征复审 ⚠️ 警告项）
-- PR #1693 描述文字落后于最终代码状态，未回填更新（魏征复审 ⚠️ 警告项，不影响代码本身）
+- issue #1669（确认人登记写入 API）已关闭，PR #1674 已合并
+- `rollout.ts` 的 `hashesMatch` 跟 `confirmation-requests.ts` 几乎重复实现，未抽共享（魏征复审 ⚠️ 警告项，技术债不影响正确性）
+- PR #1693 的描述文字落后于最终合并代码状态，未回填更新（魏征复审 ⚠️ 警告项，不影响代码本身）
 - **操作陷阱已记入** [PITFALLS.md §D7](./PITFALLS.md)：给任何客户开 `client_knowledge.read` 授权前，必须确认同步走完 rollout stage 双签，否则 `customer_reply` 会静默读空知识库、不报错
 
 ## ME 旅游版 · Tour 管理模块（2026-09-14 立项，PM 已立版，未授权实施）
@@ -718,6 +751,7 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **TD.16** 未做月报端到端测试（CTS Tours 实际客户）
 - [ ] **TD.17** 聚合器架构文档缺失
 - [ ] **TD.18** 缺少聚合器性能 / 错误监控仪表板
+- [ ] **TD.19**【前置条件未满足，见下】私信 AI 摘要的 `trip`（旅游行程专属字段）在 schema 层被建成"通用必填对象"——`src/lib/messenger/brief-schema.ts` 的 `TripDetailsSchema` 永远存在、永远带默认值，`MessengerBriefSchema.trip` 没有"这个客户要不要这个字段"的开关。**这条记录描述的是止血 PR [#1629](https://github.com/bigbigraydeng-maker/magic-engine/pull/1629)（分支 `feat/messenger-brief-declients-fix-agent`）落地后的目标状态；截至 2026-09-13，#1629 仍是 OPEN、未合并**——当前 main 上 `generateBrief`（`src/lib/messenger/brief.ts`）既不读取 `clients.industry`，也没有 `hasIndustryFeature` 或 `NULL_TRIP` 硬闸，系统提示仍会把非旅游客户的私信摘要当成 CTS 处理，私信 AI 摘要冒充 CTS 身份的事故在 main 上**仍然现行存在**，不只是下面这条 schema 技术债。#1629 提出的止血方案：`generateBrief` 按 `clients.industry` 是否命中旅游关键词（复用 `hasIndustryFeature`）决定 `trip` 能不能非空，命中不了的客户一律强制清空成 `NULL_TRIP`，不管模型实际返回了什么。这只是挡住"身份冒用 + 编造旅游需求"的最小止血，不是"行业专属字段该怎么建模"的长期方案——下一个需要专属结构化字段的行业（例如地产的"看房意向"）会重复同一种补丁思路。长期应随「客户知识库」项目（PM 已拍板，见 [docs/DECISIONS.md「2026-09-13 · 客户知识库作为 Governed Lead-Reply Agent 的事实层」](./DECISIONS.md)）把 `trip` 重新建模成客户可配置的行业专属结构化字段，而不是永远把旅游一个特例硬编码进通用 schema。#1629 范围内未动 schema：止血 PR 的任务范围是修复身份冒用 bug，重新设计 schema 牵连 `brief-cycle.ts` 调用链、数据库列形状和历史数据兼容，超出一次 A 级止血 PR 该做的事，子牙架构复审在设计阶段已指出这一点（见 #1629 PR 描述里的复审记录）。发现：Claude Code 会话，2026-09-13。
 
 ## Phase 11 — Creative Intelligence Engine（未来重点开发方向）
 
