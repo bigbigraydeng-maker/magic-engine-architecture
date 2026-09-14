@@ -10,12 +10,36 @@
  * for that client (by a global admin) BEFORE the confirmation was recorded.
  */
 
-import type { KnowledgeSupabaseClient } from './db-client'
 import { KnowledgeReadError } from './errors'
 import { isGlobalAdminEmail } from '@/lib/auth/whitelist'
 
 interface ConfirmerRow {
   confirmer_email: string
+}
+
+/**
+ * The minimal query surface `getRegisteredConfirmerEmails` actually needs.
+ *
+ * 🔴 Declared here rather than reusing `KnowledgeSupabaseClient` (the read
+ * client) because issue #1646's confirmation-link write path has to consult
+ * the SAME registry through the write client. Typing the parameter as the
+ * narrow read client would have forced that caller into a double type
+ * assertion — i.e. the compiler would stop checking the one call that decides
+ * whether a customer's signature counts. Both `db-client.ts`'s read client
+ * and `write-client.ts`'s write client satisfy this interface structurally,
+ * with no type assertion on either side (verified by `npm run type-check`
+ * passing with both call sites present).
+ */
+export interface ConfirmerRegistryResult {
+  data: unknown
+  error: { message?: string } | null
+}
+export interface ConfirmerRegistryFilter extends PromiseLike<ConfirmerRegistryResult> {
+  eq(column: string, value: unknown): ConfirmerRegistryFilter
+  is(column: string, value: null): ConfirmerRegistryFilter
+}
+export interface ConfirmerRegistryClient {
+  from(table: string): { select(columns: string): ConfirmerRegistryFilter }
 }
 
 /** Case/whitespace-insensitive equality — the one true comparison standard for every email field in this module, aligned with read.ts and whitelist.ts. */
@@ -34,7 +58,7 @@ function sameEmail(a: string, b: string): boolean {
  */
 export async function getRegisteredConfirmerEmails(
   clientId: string,
-  sb: KnowledgeSupabaseClient,
+  sb: ConfirmerRegistryClient,
 ): Promise<Set<string>> {
   const { data, error } = await sb
     .from('client_knowledge_confirmers')
