@@ -71,6 +71,10 @@ type ConversationRow = {
   id: string
   contact_id: string | null
   participant_psid: string | null
+  /** Facebook 私信自带的显示名——PM 反馈：审核页面看不到是谁没法判断，这个填进
+   * customer_first 直接显示。跟 CTS 那条线同一个约定（`classified.fullName`
+   * 整段塞进 customerFirst，不拆姓名），不是新发明的规则。 */
+  participant_name: string | null
 }
 
 type MessageRow = {
@@ -96,7 +100,7 @@ export async function runNalMessengerLeadSync(
   // 来源（子牙评审：幂等设计目前只针对 Messenger 验证过），不在这轮范围内。
   const { data: conversations, error: convErr } = await supabase
     .from('conversations')
-    .select('id, contact_id, participant_psid')
+    .select('id, contact_id, participant_psid, participant_name')
     .eq('client_id', NAL_CLIENT_ID)
     .eq('channel', 'messenger')
 
@@ -151,6 +155,11 @@ export async function runNalMessengerLeadSync(
         sourceKind: 'messenger_conversation',
         sourceRef: nalMessengerSourceRef(conv.contact_id, lead.leadMessageId),
         pageScopedUserId: conv.participant_psid,
+        // 整段塞进 customerFirst，不拆姓名——跟 CTS 那条线同一个约定
+        // （cts-crm-sheet-sync-run.ts 的 processQualifiedLead 也是把
+        // classified.fullName 整段塞给 customerFirst）。PM 反馈：审核页面
+        // 看不到是谁没法判断该不该批，这是唯一能显示的身份信息。
+        customerFirst: conv.participant_name,
       }
 
       const built = buildIntakeRow(input, { defaultPhoneCountry: '64', now: new Date() })
