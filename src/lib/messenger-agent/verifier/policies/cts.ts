@@ -106,6 +106,21 @@ export interface CtsVerifierContext {
 const ACTIVE_PRODUCT_KEY_PREFIX = 'tour.active.'
 
 /**
+ * 🔴 魏征复审（2026-09-15）实测发现的真实漏洞：`parseActiveProductFact` 曾经
+ * 只检查 `factKey` 前缀，没有检查 `sensitivity`——如果一条 `tour.active.*` 事实
+ * 在录入时被错标成 `sensitivity='general'`，`getClientKnowledge`（`read.ts`
+ * `isCustomerReplyEligible`）对 `general` 类事实直接跳过双签判断，这条从未经
+ * 客户确认的价格/团期就会正常出现在 `entries[]` 里；如果这里只按前缀信任它，
+ * gate 3（数字核实）/gate 5（provenance）/gate 7（URL 白名单）就会把一条压根
+ * 没经过客户确认的事实当成"已确认在售产品"放行核验。这里必须再核一遍
+ * sensitivity，作为读取入口那道闸之外的第二道防线——不能假设写入侧永远把
+ * sensitivity 标对。
+ */
+const ACTIVE_PRODUCT_SENSITIVITIES: ReadonlySet<string> = new Set([
+  'price', 'timeline', 'commitment', 'policy',
+])
+
+/**
  * 下架 / 绝不能对客户提起的产品 —— `visibility='forbidden'`,正文永远不通过
  * `getClientKnowledge` 返回,只有 `fact_key` 会出现在 `forbiddenFactKeys[]`
  * 里。约定:`tour.retired.<code>` 是产品自己的 canonical key;如果这个产品有
@@ -113,9 +128,9 @@ const ACTIVE_PRODUCT_KEY_PREFIX = 'tour.active.'
  * <alias-slug>`(alias-slug 同样是归一化后的 kebab-case)。
  *
  * 🔴 已知限制(design doc §9.14 C.2 明确列为开放问题,这里是本次改动给出的
- * MVP 解法,不是把问题解决掉):gate 2 只能用"把整段回复文本归一化成一串
- * kebab-case 词,看这串词里有没有连续出现某个禁止 slug"这种启发式匹配(见
- * `slugify` + `retiredTourMentionGate`)。这意味着:
+ * MVP 解法,不是把问题解决掉):gate 2 只能用"把回复文本按句子切开、逐句归一化
+ * 成一串 kebab-case 词,看词序列里有没有连续出现某个禁止产品的 slug 词序列"
+ * 这种启发式匹配(见 `tokenizeSentence` + `retiredTourMentionGate`)。这意味着:
  *   - 客户说法跟录入的产品名/别名用词差异较大时(意译、拼错、极口语化表达)
  *     可能漏挡——这条闸不是唯一防线,gate 5(provenance)会挡住"回复在
  *     `offerings[]` 里结构化引用了一个不在活跃产品清单里的编码",两道闸合起来
@@ -124,9 +139,40 @@ const ACTIVE_PRODUCT_KEY_PREFIX = 'tour.active.'
  *     萃取工作流(#1645)/ FDE 审核页(#1646)的操作规范问题,不是这个函数能
  *     兜底的——上线前 dry-run(T-14d,见 v3 方案"验证计划")必须用真实历史
  *     对话验证这条闸的实际命中率,而不是假设约定被严格遵守。
+ *   - **fact_key 命名约定本身没有任何代码强制执行**(魏征复审 2026-09-15 指出、
+ *     PM 确认属实):萃取工作流 #1645 的抽取 prompt 是刻意行业中立的通用
+ *     prompt,不知道也不该知道这套 CTS 专属命名约定;FDE 审核页 #1646 也没有
+ *     对 fact_key 格式做任何提示或校验。这意味着如果录入时 fact_key 拼错前缀
+ *     (比如打成 `tours.retired.`),这条记录会在这里"隐形"——不报错,只是
+ *     从此不会被这道闸认出来。已记入 [PITFALLS.md §D8]。合并前只做到"把约定
+ *     写清楚 + 对明显像是打错的 key 打日志"这一步,真正的结构性强制(比如给
+ *     FDE 审核页加格式提示、或给 F4 心跳监控加一条"有多少 forbidden 事实的
+ *     fact_key 不匹配任何已知命名约定"的统计)留给 #1645/#1646/#1579 Layer 4
+ *     心跳监控落地时一起做,不在这两个 PR 范围内。
  */
 const RETIRED_PRODUCT_KEY_PREFIX = 'tour.retired.'
 const RETIRED_PRODUCT_ALIAS_MARKER = '.alias.'
+
+/**
+ * 对"看起来是想写 CTS 团相关 fact_key、但没有匹配上任何一个已知前缀"的情况
+ * 打日志——只能覆盖"还是 `tour.` 开头但后半段拼错"这一类典型笔误,不是穷尽
+ * 校验(比如整段前缀都拼掉不会命中这个检查)。这是魏征复审建议的最小可观测性
+ * 补丁,不是解决方案本身——真正的解决方案是在录入侧强制格式,见上方
+ * `RETIRED_PRODUCT_KEY_PREFIX` 注释。
+ */
+function warnIfLooksLikeMistypedTourFactKey(factKey: string): void {
+  if (
+    factKey.startsWith('tour.') &&
+    !factKey.startsWith(ACTIVE_PRODUCT_KEY_PREFIX) &&
+    !factKey.startsWith(RETIRED_PRODUCT_KEY_PREFIX)
+  ) {
+    console.warn(
+      `[messenger-agent/verifier/cts] fact_key "${factKey}" 以 "tour." 开头，但既不匹配 ` +
+      `"${ACTIVE_PRODUCT_KEY_PREFIX}" 也不匹配 "${RETIRED_PRODUCT_KEY_PREFIX}"——可能是命名` +
+      `约定拼写错误。这条记录不会被 gate 2/3/5/7 中任何一道认出，既不会报错也不会生效。`,
+    )
+  }
+}
 
 interface CtsActiveProductFact {
   factKey: string
@@ -146,7 +192,19 @@ interface CtsActiveProductFact {
  * `parseActiveProductFacts`)按"这行暂时不存在"处理,不 throw。
  */
 function parseActiveProductFact(entry: KnowledgeEntry): CtsActiveProductFact | null {
-  if (!entry.factKey.startsWith(ACTIVE_PRODUCT_KEY_PREFIX)) return null
+  if (!entry.factKey.startsWith(ACTIVE_PRODUCT_KEY_PREFIX)) {
+    warnIfLooksLikeMistypedTourFactKey(entry.factKey)
+    return null
+  }
+  if (!ACTIVE_PRODUCT_SENSITIVITIES.has(entry.sensitivity)) {
+    console.warn(
+      `[messenger-agent/verifier/cts] fact "${entry.factKey}" 的 factKey 前缀是 ` +
+      `"${ACTIVE_PRODUCT_KEY_PREFIX}" 但 sensitivity="${entry.sensitivity}"（应为 price/` +
+      `timeline/commitment/policy 之一）——按"这条产品事实不存在"处理，不信任一条录入时` +
+      `可能绕过了客户确认闸门的记录。`,
+    )
+    return null
+  }
   const v = entry.structuredValue
   if (!v || typeof v !== 'object') return null
   const r = v as Record<string, unknown>
@@ -184,7 +242,10 @@ function parseActiveProductFacts(entries: KnowledgeEntry[]): CtsActiveProductFac
 function extractForbiddenProductSlugs(forbiddenFactKeys: string[]): string[] {
   const slugs: string[] = []
   for (const key of forbiddenFactKeys) {
-    if (!key.startsWith(RETIRED_PRODUCT_KEY_PREFIX)) continue
+    if (!key.startsWith(RETIRED_PRODUCT_KEY_PREFIX)) {
+      warnIfLooksLikeMistypedTourFactKey(key)
+      continue
+    }
     const rest = key.slice(RETIRED_PRODUCT_KEY_PREFIX.length)
     const aliasIdx = rest.indexOf(RETIRED_PRODUCT_ALIAS_MARKER)
     const slug = aliasIdx === -1 ? rest : rest.slice(aliasIdx + RETIRED_PRODUCT_ALIAS_MARKER.length)
@@ -196,6 +257,70 @@ function extractForbiddenProductSlugs(forbiddenFactKeys: string[]): string[] {
 /** 归一化成跟 `tourCodeSchema`(已作废的 `offerings-loader.ts`)同一种 kebab-case 比对形状。 */
 function slugify(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+function slugTokens(slug: string): string[] {
+  return slug.split('-').filter(Boolean)
+}
+
+/**
+ * 🔴 魏征复审（2026-09-15）用 CTS 真实数据实测出的两类假阳性,这里一起修:
+ *
+ * 1. **跨句拼接**:原实现把整段回复文本一次性 slugify,句号/换行等句子边界
+ *    会被当成普通分隔符压扁——"...a full day in Shanghai. Surroundings like
+ *    Zhouzhuang..." 会拼成 `...shanghai-surroundings-like...`,精确命中一个
+ *    真实存在的下架团 slug `shanghai-surroundings`,但这两个词分属两句话、
+ *    语义完全无关。现在按句子切开(`SENTENCE_SPLIT_RE`),只在同一句话内部
+ *    做词序列匹配。
+ * 2. **前缀碰撞**:CTS 真实产品线里 `china-icons-collection` 恰好是
+ *    `china-icons-collection-christchurch` 的 slug 前缀——如果前者下架、
+ *    后者仍在售,任何合法提到 Christchurch 那个团的回复都会因为子串包含
+ *    误判成提到了下架团。`sentenceMentionsForbiddenTokens` 在判定"命中"之前,
+ *    先检查这次匹配是否其实是某个更长的、已确认在售产品完整词序列的前缀
+ *    延伸——如果是,就不算命中禁止 slug,而是在正常提一个不同的、仍在售的
+ *    产品。
+ */
+const SENTENCE_SPLIT_RE = /[.!?\n]+/
+
+/** 单句归一化成词数组(不是一整条 kebab-case 字符串)——匹配靠词序列比较,不是子串比较,这样"words"跟"word"这类真子串不会互相误判。 */
+function tokenizeSentence(sentence: string): string[] {
+  return sentence.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean)
+}
+
+/** 一个已确认在售产品的"身份词序列"集合:code + name + 每个 alias,各自归一化后拆词。 */
+function activeProductIdentityTokenLists(activeProducts: readonly CtsActiveProductFact[]): string[][] {
+  const lists: string[][] = []
+  for (const p of activeProducts) {
+    lists.push(slugTokens(slugify(p.code)))
+    lists.push(slugTokens(slugify(p.name)))
+    for (const alias of p.aliases) lists.push(slugTokens(slugify(alias)))
+  }
+  return lists.filter((tokens) => tokens.length > 0)
+}
+
+/**
+ * 在一句话的词序列里查找 `forbiddenTokens` 是否作为"独立提及"出现——见上方
+ * 文件注释的前缀碰撞说明:命中位置如果能完整延伸拼出某个更长的、已确认在售
+ * 产品的身份词序列,就不算命中(那是在提别的、仍在售的产品)。
+ */
+function sentenceMentionsForbiddenTokens(
+  sentenceTokens: string[],
+  forbiddenTokens: string[],
+  activeIdentityTokenLists: readonly string[][],
+): boolean {
+  for (let start = 0; start + forbiddenTokens.length <= sentenceTokens.length; start++) {
+    const window = sentenceTokens.slice(start, start + forbiddenTokens.length)
+    if (window.join(' ') !== forbiddenTokens.join(' ')) continue
+
+    const belongsToLongerActiveProduct = activeIdentityTokenLists.some((activeTokens) => {
+      if (activeTokens.length <= forbiddenTokens.length) return false
+      if (activeTokens.slice(0, forbiddenTokens.length).join(' ') !== forbiddenTokens.join(' ')) return false
+      const continuation = sentenceTokens.slice(start, start + activeTokens.length)
+      return continuation.join(' ') === activeTokens.join(' ')
+    })
+    if (!belongsToLongerActiveProduct) return true
+  }
+  return false
 }
 
 // ─── Gate 1 · Brand redline ─────────────────────────────────────────────────
@@ -226,9 +351,10 @@ function brandRedlineGate(): Gate<CtsVerifierContext> {
 
 /**
  * v3 改法(design doc §9.14 C.3):不再比对 `retired_tours[].name/aliases` 正文
- * (读取入口不再把这份正文交出来),改成把回复文本整体归一化成 slug 串，看
- * 里面有没有连续出现某个禁止产品的 slug。已知限制见
- * `RETIRED_PRODUCT_KEY_PREFIX` 注释。
+ * (读取入口不再把这份正文交出来),改成把回复文本按句子切开、逐句归一化成
+ * 词序列，看里面有没有作为独立提及出现某个禁止产品的词序列。已知限制见
+ * `RETIRED_PRODUCT_KEY_PREFIX` 注释；跨句拼接 / 前缀碰撞两类假阳性的修法见
+ * `SENTENCE_SPLIT_RE`/`sentenceMentionsForbiddenTokens` 上方注释。
  */
 function retiredTourMentionGate(): Gate<CtsVerifierContext> {
   return {
@@ -236,10 +362,21 @@ function retiredTourMentionGate(): Gate<CtsVerifierContext> {
     check(ctx) {
       const forbiddenSlugs = extractForbiddenProductSlugs(ctx.knowledge.forbiddenFactKeys)
       if (forbiddenSlugs.length === 0) return null
-      const replySlug = slugify(ctx.agentOutput.reply_text)
-      for (const slug of forbiddenSlugs) {
-        if (replySlug.includes(slug)) {
-          return `reply mentions a forbidden/retired product (matched forbidden fact slug "${slug}")`
+
+      const activeIdentityTokenLists = activeProductIdentityTokenLists(
+        parseActiveProductFacts(ctx.knowledge.entries),
+      )
+      const sentences = ctx.agentOutput.reply_text.split(SENTENCE_SPLIT_RE)
+
+      for (const sentence of sentences) {
+        const sentenceTokens = tokenizeSentence(sentence)
+        if (sentenceTokens.length === 0) continue
+        for (const slug of forbiddenSlugs) {
+          const forbiddenTokens = slugTokens(slug)
+          if (forbiddenTokens.length === 0) continue
+          if (sentenceMentionsForbiddenTokens(sentenceTokens, forbiddenTokens, activeIdentityTokenLists)) {
+            return `reply mentions a forbidden/retired product (matched forbidden fact slug "${slug}")`
+          }
         }
       }
       return null
@@ -284,15 +421,23 @@ function numberClaimGate(): Gate<CtsVerifierContext> {
         activeProducts.flatMap((t) => t.departure_dates.map((d) => d.slice(0, 10)))
       )
 
+      // 魏征复审(2026-09-15)建议:区分"压根没有任何已确认产品能核对"和"核过
+      // 了、这个具体数字不对"——前者多半是知识库那边的数据问题(fact_key 拼错/
+      // sensitivity 标错/尚未双签),后者才是回复本身编造了数字。人工复核看到
+      // 前一种 blocked_reasons 时该去查知识库,不是去查 Agent 的回复。
+      const noConfirmedProducts = activeProducts.length === 0
+        ? ' (no confirmed active products were found in the knowledge base at all — check for a data issue upstream, e.g. missing/mislabeled fact_key or sensitivity, before assuming the reply itself is wrong)'
+        : ''
+
       const text = ctx.agentOutput.reply_text
       for (const price of extractPriceMentions(text)) {
         if (!validPrices.has(price)) {
-          return `reply states price "$${price}" that does not match any confirmed active product's price`
+          return `reply states price "$${price}" that does not match any confirmed active product's price${noConfirmedProducts}`
         }
       }
       for (const date of extractIsoDateMentions(text)) {
         if (!validDates.has(date)) {
-          return `reply states date "${date}" that does not match any confirmed active product's departure dates`
+          return `reply states date "${date}" that does not match any confirmed active product's departure dates${noConfirmedProducts}`
         }
       }
       return null
@@ -346,6 +491,9 @@ function provenanceGate(): Gate<CtsVerifierContext> {
     id: 'provenance',
     check(ctx) {
       const activeProducts = parseActiveProductFacts(ctx.knowledge.entries)
+      const noConfirmedProducts = activeProducts.length === 0
+        ? ' (no confirmed active products were found in the knowledge base at all — check for a data issue upstream before assuming the reply itself is wrong)'
+        : ''
       for (const ref of ctx.agentOutput.offerings) {
         const normalizedRefName = normalizeAngle(ref.name)
         const matchedProduct = activeProducts.find((product) => {
@@ -353,7 +501,7 @@ function provenanceGate(): Gate<CtsVerifierContext> {
           return candidateNames.some((name) => normalizeAngle(name) === normalizedRefName)
         })
         if (!matchedProduct) {
-          return `offering name "${ref.name}" does not match any confirmed active product's name or aliases`
+          return `offering name "${ref.name}" does not match any confirmed active product's name or aliases${noConfirmedProducts}`
         }
         if (matchedProduct.code !== ref.code) {
           return `offering name "${ref.name}" resolves to product code "${matchedProduct.code}", but reply claims code "${ref.code}"`

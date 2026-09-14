@@ -164,6 +164,83 @@ describe('Gate 2 — retired/forbidden product mention (via forbiddenFactKeys)',
     )
     expect(result.blocked_reasons.some((r) => r.startsWith('retired_tour_mention:'))).toBe(false)
   })
+
+  it(
+    '魏征复审 blocker: does NOT false-positive when two unrelated words from different sentences ' +
+    'happen to concatenate into a forbidden slug ("...a full day in Shanghai. Surroundings like ' +
+    'Zhouzhuang..." must not match a real forbidden slug "shanghai-surroundings")',
+    () => {
+      const result = verifyCtsReply(
+        baseContext({
+          knowledge: {
+            ...KNOWLEDGE,
+            forbiddenFactKeys: [...KNOWLEDGE.forbiddenFactKeys, 'tour.retired.shanghai-surroundings'],
+          },
+          agentOutput: {
+            reply_text:
+              'The Golden China tour includes a full day in Shanghai. ' +
+              'Surroundings like Zhouzhuang water town are stunning at this time of year.',
+            confidence: 0.9,
+            offerings: [{ name: 'Golden China', code: 'golden-china' }],
+          },
+        })
+      )
+      expect(result.blocked_reasons.some((r) => r.startsWith('retired_tour_mention:'))).toBe(false)
+    },
+  )
+
+  it(
+    '魏征/子牙复审 blocker: a forbidden slug that is a PREFIX of a longer confirmed active ' +
+    "product's slug does not false-block a legitimate mention of that longer active product " +
+    '("china-icons-collection" retired, "china-icons-collection-christchurch" still active)',
+    () => {
+      const christchurchTour = activeProductFact({
+        id: 'fact-china-icons-collection-christchurch',
+        factKey: 'tour.active.china-icons-collection-christchurch',
+        statement: 'China Icons Collection — Christchurch Departure',
+        structuredValue: {
+          code: 'china-icons-collection-christchurch',
+          name: 'China Icons Collection — Christchurch Departure',
+          aliases: [],
+          price_nzd: 5555,
+          departure_dates: ['2026-08-01'],
+          itinerary_url: 'https://www.ctstours.co.nz/tours/china-icons-collection-christchurch',
+        },
+      })
+      const knowledge: KnowledgeReadResult = {
+        entries: [christchurchTour],
+        forbiddenFactKeys: ['tour.retired.china-icons-collection'],
+      }
+
+      const mentionsLongerActiveProduct = verifyCtsReply(
+        baseContext({
+          knowledge,
+          agentOutput: {
+            reply_text: 'The China Icons Collection Christchurch Departure tour is a great choice.',
+            confidence: 0.9,
+            offerings: [],
+          },
+        })
+      )
+      expect(
+        mentionsLongerActiveProduct.blocked_reasons.some((r) => r.startsWith('retired_tour_mention:')),
+      ).toBe(false)
+
+      const mentionsRetiredProductAlone = verifyCtsReply(
+        baseContext({
+          knowledge,
+          agentOutput: {
+            reply_text: 'The China Icons Collection tour is a great choice.',
+            confidence: 0.9,
+            offerings: [],
+          },
+        })
+      )
+      expect(
+        mentionsRetiredProductAlone.blocked_reasons.some((r) => r.startsWith('retired_tour_mention:')),
+      ).toBe(true)
+    },
+  )
 })
 
 // ─── Gate 3: Number claim ────────────────────────────────────────────────────
@@ -234,6 +311,39 @@ describe('Gate 3 — number claim (price/date must be verifiable)', () => {
     expect(result.ok).toBe(false)
     expect(result.blocked_reasons.some((r) => r.startsWith('number_claim:'))).toBe(true)
   })
+
+  it(
+    '魏征复审 blocker: a tour.active.* fact mislabeled sensitivity="general" does NOT count as a ' +
+    'confirmed product (general facts skip the dual-sign customer-confirmation gate in read.ts — ' +
+    'trusting it here would let an unconfirmed price through)',
+    () => {
+      const mislabeled = activeProductFact({
+        factKey: 'tour.active.mislabeled',
+        sensitivity: 'general', // should be 'price' — this is the exact bug 魏征 found
+        structuredValue: {
+          code: 'mislabeled',
+          name: 'Mislabeled Tour',
+          aliases: [],
+          price_nzd: 3333,
+          departure_dates: ['2026-05-05'],
+          itinerary_url: 'https://www.ctstours.co.nz/tours/mislabeled',
+        },
+      })
+      const result = verifyCtsReply(
+        baseContext({
+          knowledge: { entries: [mislabeled], forbiddenFactKeys: [] },
+          agentOutput: {
+            reply_text: 'The Mislabeled Tour costs $3333 and departs 2026-05-05.',
+            confidence: 0.9,
+            offerings: [{ name: 'Mislabeled Tour', code: 'mislabeled' }],
+          },
+        })
+      )
+      expect(result.ok).toBe(false)
+      expect(result.blocked_reasons.some((r) => r.startsWith('number_claim:'))).toBe(true)
+      expect(result.blocked_reasons.some((r) => r.startsWith('provenance:'))).toBe(true)
+    },
+  )
 })
 
 // ─── Gate 4: Reply forbidden topics ─────────────────────────────────────────
