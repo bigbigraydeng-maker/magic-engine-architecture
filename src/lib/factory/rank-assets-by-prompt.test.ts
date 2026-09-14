@@ -152,6 +152,33 @@ describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选�
     })
     expect(picks.map((p) => p.id)).toEqual(['palace'])
   })
+
+  it('素材正向命中(palace)但 brand_elements 里带着否定分句禁止的内容(logo)时,整张图仍要被挡住', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // objects 里没有 logo(所以只查 objects 挡不住),但 brand_elements 明确写了可见 logo。
+    const assets = [
+      asset('palace-with-logo', {
+        vision_metadata: { objects: ['palace'], brand_elements: ['visible logo'], quality_score: 8 },
+      }),
+    ]
+    const picks = await rankAssetsByPrompt('palace courtyard, no product/logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks).toEqual([])
+  })
+
+  it('否定分句禁止的内容出现在 scene 字段里同样要被挡住,不止查 objects/brand_elements', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    const assets = [
+      asset('storefront', {
+        vision_metadata: { objects: ['palace'], scene: 'storefront with logo signage', quality_score: 8 },
+      }),
+    ]
+    const picks = await rankAssetsByPrompt('palace courtyard, no product/logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks).toEqual([])
+  })
 })
 
 describe('rankAssetsByPrompt — objects 里混进非字符串元素不炸', () => {

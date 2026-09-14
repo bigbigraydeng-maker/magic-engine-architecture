@@ -110,19 +110,26 @@ export async function rankAssetsByPrompt(
  *  scene-plan.ts 的输出格式固定是逗号分句,这个启发式覆盖的是实际会出现的形态。 */
 const NEGATION_WORDS = new Set(['no', 'not', 'without', 'excluding', 'never'])
 
-/** 只按 ASCII 字母数字切词——CTS 现有 imagePrompt 全英文,够用。哪天有客户的
+/** 按逗号/分号分段,段首是否定词的分句单独收进 `negated`,其余收进 `positive`——
+ *  只按 ASCII 字母数字切词,CTS 现有 imagePrompt 全英文,够用。哪天有客户的
  *  imagePrompt/objects 混进中文,纯中文段会被当分隔符整段吃掉,判成零重叠,
  *  `requireConfidentMatch` 会把这类 prompt 的匹配全部清空,不是漏改,是已知边界。 */
-function promptWordsOf(prompt: string): Set<string> {
-  const words = new Set<string>()
+function parsePromptWords(prompt: string): { positive: Set<string>; negated: Set<string> } {
+  const positive = new Set<string>()
+  const negated = new Set<string>()
   for (const segment of prompt.split(/[,;]/)) {
     const rawWords = segment.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
-    if (rawWords.length > 0 && NEGATION_WORDS.has(rawWords[0])) continue
+    const isNegated = rawWords.length > 0 && NEGATION_WORDS.has(rawWords[0])
+    const target = isNegated ? negated : positive
     for (const w of rawWords) {
-      if (w.length >= 3) words.add(w)
+      if (w.length >= 3 && !NEGATION_WORDS.has(w)) target.add(w)
     }
   }
-  return words
+  return { positive, negated }
+}
+
+function promptWordsOf(prompt: string): Set<string> {
+  return parsePromptWords(prompt).positive
 }
 
 /** 太笼统的名词自己撑不起"文对图对"——比如 prompt 是 "Forbidden City courtyard",
@@ -200,12 +207,32 @@ function subjectOverlap(promptWords: Set<string>, objects: string[]): number {
   }, 0)
 }
 
+/** 素材的 objects/scene/brand_elements 里只要出现一个否定分句的词,直接判"带着
+ *  被禁内容",不管别处有没有正向命中——2026-09-14 复审第二次指出:上一轮只堵了
+ *  "否定词自己贡献正向重叠",没堵"素材本身确实带着被禁内容,却靠另一个正向词
+ *  (比如 palace)照样通过置信度门"。可见 logo 由 `vision-analyzer.ts` 存进
+ *  `brand_elements`,不保证也写进 `objects`,所以三个字段都要查,不能只查 objects。 */
+function containsNegatedContent(negated: Set<string>, pick: AssetPick): boolean {
+  if (negated.size === 0) return false
+  const meta = pick.metadata
+  const fields = [...(meta?.objects ?? []), meta?.scene, ...(meta?.brand_elements ?? [])]
+  return fields.some((f) => {
+    if (typeof f !== 'string') return false
+    return f
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .some((w) => negated.has(w))
+  })
+}
+
 /** prompt 与素材 objects 的主体/地标重叠数——挑图理由文字读着再确定,这个数字对不上就不算数。
  *  只看 `vision_metadata.objects`(最多 5 项"主要物体"),不看自由文本的 `ai_notes`——
  *  地标名字只写在 ai_notes 里、没挤进 objects 的图会被误判成零重叠,即使排序本来选对了。
  *  这是"宁可错杀不可放过"的保守选择,不是遗漏;objects 命中率不够再考虑纳入 ai_notes。 */
 function keywordOverlap(prompt: string, pick: AssetPick): number {
-  return subjectOverlap(promptWordsOf(prompt), pick.metadata?.objects ?? [])
+  const { positive, negated } = parsePromptWords(prompt)
+  if (containsNegatedContent(negated, pick)) return 0
+  return subjectOverlap(positive, pick.metadata?.objects ?? [])
 }
 
 // 让 GPT-4o-mini 挑最匹配的几张。模型不可用/返回不可用结果时降级关键词重叠打分。
