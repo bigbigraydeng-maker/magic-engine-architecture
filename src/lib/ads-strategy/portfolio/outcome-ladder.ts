@@ -113,7 +113,7 @@ export function countOutcome(
       attribution: 'none',
       note: opts.messagingReferralAvailable
         ? '合格询盘/成交需要把 CRM 结果按广告 id 连回来，阶段 1 未接'
-        : '合格询盘/成交归不到广告单位（私信来源要等 #1299 企业验证通过、Webhook 收到来源；CRM 结果未按广告 id 连回）',
+        : '系统还分不清哪条私信、哪笔成交是哪条广告带来的（在等 Meta 企业验证通过）',
     }
   }
   const types = ACTION_TYPES[step] ?? []

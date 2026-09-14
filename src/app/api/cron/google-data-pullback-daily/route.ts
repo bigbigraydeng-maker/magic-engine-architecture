@@ -61,6 +61,8 @@ import { findSharedAdAccounts, getClientAdAccountIds } from '@/lib/meta/client-a
 import { hasVideoColumns, syncAdDailyInsights, syncAdsetDailyInsights, syncCampaignDailyInsights } from '@/lib/ads-strategy/daily-insights'
 import { evaluateClientAdHealth } from '@/lib/ads-strategy/evaluate'
 import { sendAdHealthDigest } from '@/lib/ads-strategy/digest'
+import { runPortfolioDiagnostics } from '@/lib/ads-strategy/portfolio/run-daily'
+import { snapshotTablesExist } from '@/lib/ads-strategy/portfolio/snapshot-sync'
 import { loadAdStrategyConfigWithSource, resolveDigestRecipients } from '@/lib/ads-strategy/config'
 
 export const dynamic = 'force-dynamic'
@@ -101,6 +103,8 @@ interface ClientResult {
   ad_health?: { success: boolean; overall_verdict?: string; campaigns_evaluated?: number; error?: string }
   /** P21.K.4 daily email digest decision + send outcome. */
   ad_digest?: { sent: boolean; decision: string; error?: string }
+  /** ads IMPACT 阶段 1：只读诊断 + 内部版日报 */
+  ad_diagnostics?: { success: boolean; hits: number; not_comparable: number; excluded: number; digest_decision?: string; digest_sent?: boolean; recipients_dropped?: number; error?: string }
   /**
    * 2026-09-13: `ad_daily`/`ad_level` above stay the PRIMARY account's result
    * (unchanged shape, unchanged tallying). Any additional registered accounts
@@ -136,6 +140,8 @@ export async function GET(req: NextRequest) {
   // ads IMPACT 阶段 1：视频完播 + actions 9 列（migration 20260914000001）在不在库里。
   // 不在就照旧只写老列——不能为了新列把现有每日数据同步整条弄挂。结果进 summary。
   const withVideo = await hasVideoColumns()
+  // 快照表在不在（migration 20260914000001）：在 → 跑只读诊断发内部版日报；不在 → 照旧发原日报
+  const snapshotsReady = await snapshotTablesExist()
 
   // ── 1. Load connected Google connectors + Meta + Google Ads accounts in parallel
   const [connResult, metaResult, googleAdsResult] = await Promise.all([
@@ -349,7 +355,9 @@ export async function GET(req: NextRequest) {
             // Skip sending when the config was a read-error fallback: enabled is
             // then a guess, and re-opening a paused client to email is the one
             // irreversible mistake we don't fail-open on (魏征).
-            if (adConfigSource !== 'fallback' && result.ad_health?.success && result.ad_health.overall_verdict) {
+            // ads IMPACT 阶段 1 第 7 步：快照表已建时改由下方（广告组级同步之后）的只读诊断发**内部版**日报；
+            // 表还没建（migration 未 apply）→ 照旧在这里发原日报，行为不变。
+            if (!snapshotsReady && adConfigSource !== 'fallback' && result.ad_health?.success && result.ad_health.overall_verdict) {
               const digest = await sendAdHealthDigest(
                 client.client_id,
                 client.client_name ?? 'Client',
@@ -377,6 +385,23 @@ export async function GET(req: NextRequest) {
           result.adset_level = isShared(client.meta_ad_account_id)
             ? skippedShared
             : await syncAdsetDailyInsights(client.client_id, client.meta_ad_account_id, metaToken, { withVideo })
+
+          // ads IMPACT 阶段 1：只读诊断 + 内部版日报。放在广告组级同步之后（诊断要广告组级数据），
+          // 且**不依赖**当天拉数/体检成功——授权断了导致拉数失败时，D7「授权/数据体检」正是要报这件事（子牙复审）。
+          // 诊断出错：计入 errors；当天原体检成功的话退回发原日报，保证 PM 当天仍收得到信（魏征复审）。
+          if (snapshotsReady && adConfigSource !== 'fallback') {
+            const diagDate = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+            result.ad_diagnostics = await runPortfolioDiagnostics(
+              client.client_id,
+              client.client_name ?? 'Client',
+              diagDate,
+              adStrategyConfig.digest_recipients,
+            )
+            if (!result.ad_diagnostics.success && result.ad_health?.success && result.ad_health.overall_verdict) {
+              const digest = await sendAdHealthDigest(client.client_id, client.client_name ?? 'Client', diagDate, resolveDigestRecipients(adStrategyConfig))
+              result.ad_digest = { sent: digest.sent, decision: `fallback:${digest.decision}`, error: digest.error }
+            }
+          }
         }
       }
     }
@@ -417,7 +442,7 @@ export async function GET(req: NextRequest) {
   // Collect per-client errors so postmortem is possible without Render logs.
   // Diagnostic only — no behavior change.
   const errors = results.flatMap(r => {
-    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'|'ad_daily'|'ad_level'|'adset_level'|'ad_health'|'ad_digest'|'ad_daily_secondary'; error: string }> = []
+    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'|'ad_daily'|'ad_level'|'adset_level'|'ad_health'|'ad_digest'|'ad_diagnostics'|'ad_daily_secondary'; error: string }> = []
     if (r.gsc?.success === false && r.gsc.error)               out.push({ client_id: r.client_id, source: 'gsc',        error: r.gsc.error })
     if (r.ga4?.success === false && r.ga4.error)               out.push({ client_id: r.client_id, source: 'ga4',        error: r.ga4.error })
     if (r.meta?.success === false && r.meta.error)             out.push({ client_id: r.client_id, source: 'meta',       error: r.meta.error })
@@ -427,6 +452,7 @@ export async function GET(req: NextRequest) {
     if (r.adset_level?.success === false && r.adset_level.error) out.push({ client_id: r.client_id, source: 'adset_level', error: r.adset_level.error })
     if (r.ad_health?.success === false && r.ad_health.error)   out.push({ client_id: r.client_id, source: 'ad_health', error: r.ad_health.error })
     if (r.ad_digest && !r.ad_digest.sent && r.ad_digest.error)  out.push({ client_id: r.client_id, source: 'ad_digest', error: r.ad_digest.error })
+    if (r.ad_diagnostics?.error) out.push({ client_id: r.client_id, source: 'ad_diagnostics', error: r.ad_diagnostics.error })
     // 2026-09-13 (魏征 review): a secondary account's sync failure used to be
     // completely invisible — not in `failed`, not here, not console.error'd —
     // the exact "looks fine, actually never worked" shape this whole PR is

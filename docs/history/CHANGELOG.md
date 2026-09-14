@@ -5,6 +5,14 @@
 
 ---
 
+### 2026-09-13（Park Homes：Forrest Hill 效果图上线）
+
+PR [#1609](https://github.com/bigbigraydeng-maker/magic-engine/pull/1609) 已合并并部署生产。客户邮件发来的 4 张 Forrest Hill 楼盘效果图（artist's impression）已接入官网 `parkhomes.nz/forrest-hill` 项目页图集，"Register Interest" 询盘表单同页可用。生产验证：网页实际打开确认 4 张图全部正常加载、无 404/占位图。
+
+**Reuse Statement**：纯客户私有素材（Park Homes 自己的楼盘渲染图）接入既有 Park Homes 官网项目页模板，无新增平台能力，不涉及 shared runtime 改动。
+
+---
+
 ### 2026-09-13（视频工厂：资料包自助管理界面 + 视频归属选择 + CTS 真实 7 团接入）
 
 同一天会话继续：PM 追问"这个能力在 Magic Engine 里是不是真的做完了"，倒逼出两块此前一直靠工程手改数据库的界面。
