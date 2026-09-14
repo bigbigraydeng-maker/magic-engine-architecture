@@ -205,6 +205,24 @@ describe('看得懂', () => {
   })
 })
 
+describe('查看这个客人（否则一屏记录长得都一样，没法判断该不该批）', () => {
+  it('有 contact_id 时给出跳转链接，指向客户管理页的直达地址', async () => {
+    mountWith([
+      outcome({ outcome_kind: 'lead', amount_minor: null, currency: null, contact_id: 'ct-1' }),
+    ])
+    const link = (await screen.findByText('查看这个客人 →')) as HTMLAnchorElement
+    expect(link.closest('a')?.getAttribute('href')).toBe(
+      `/dashboard/clients/${CLIENT}/crm/all?contact=ct-1`,
+    )
+  })
+
+  it('没有 contact_id 时不出现这个链接（没东西可查）', async () => {
+    mountWith([outcome({ contact_id: null })])
+    await screen.findByText(/收到定金/)
+    expect(screen.queryByText('查看这个客人 →')).toBeNull()
+  })
+})
+
 describe('键盘批量', () => {
   it('按 Y 触发确认框（一天十来条要能连着批）', async () => {
     mountWith([outcome()])

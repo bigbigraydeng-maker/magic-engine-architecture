@@ -159,8 +159,10 @@ export async function GET(request: Request) {
     //    需要看全的走单条详情（尚未实现）。
     //    也不要加已经不存在的列：dispatched_at 随异步队列一起删了，
     //    留在这里会让整个查询报 42703，页面恒空 —— 2026-09-05 魏征实测抓到。
+    // contact_id 本身不是 PII（内部 UUID），前端拿它跳转去客户管理页看这个人是谁——
+    // 不是"看全"，只是给一个入口，跟上面那条注释挡的东西不冲突。
     'id, outcome_kind, order_ref, amount_minor, currency, occurred_at, ' +
-    'review_status, reject_reason, redacted_at, source_kind, created_at, ' +
+    'review_status, reject_reason, redacted_at, source_kind, created_at, contact_id, ' +
     'me_conversion_writebacks(id, status, last_error, next_attempt_at)'
 
   // 深链目标查询：今日待办邮件里的 ?focus=<id> 指向的记录可能比列表的
