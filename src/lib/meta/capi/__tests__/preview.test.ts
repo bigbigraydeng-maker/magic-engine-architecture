@@ -53,6 +53,21 @@ describe('不留明文', () => {
     const p = JSON.stringify(maskForPreview(outcome(), CONFIG, META))
     expect(p).not.toMatch(/[0-9a-f]{64}/)
   })
+
+  it('Facebook 私信身份也只给「有/无」，原始 PSID 绝不出现在返回对象里', () => {
+    // 🔴 这个返回对象会被写进 me_conversion_writebacks.payload_preview 永久留底
+    // （试运行阶段必经路径）——PSID 是 Meta 官方文档说"不哈希发给他们"的原始值，
+    // 跟"我们自己存的时候要不要打码"是两件事，这里必须守住后者。
+    const psid = '28681838868174032'
+    const result = maskForPreview(outcome({ pageScopedUserId: psid }), CONFIG, META)
+    expect(JSON.stringify(result)).not.toContain(psid)
+    expect(result.匹配键_有).toContain('Facebook 私信身份')
+  })
+
+  it('没有 PSID 时，「Facebook 私信身份」进匹配键_无', () => {
+    const result = maskForPreview(outcome({ pageScopedUserId: null }), CONFIG, META)
+    expect(result.匹配键_无).toContain('Facebook 私信身份')
+  })
 })
 
 describe('但要认得出是谁', () => {
