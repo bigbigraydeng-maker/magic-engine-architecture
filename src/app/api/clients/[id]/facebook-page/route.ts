@@ -39,6 +39,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
+import { guardGlobalAdmin } from '@/lib/auth/require-admin'
 import { getMetaTokenForClient, getStoredPageToken } from '@/lib/meta/token-manager'
 import { listManagedPages, type ManagedPage } from '@/lib/meta/page-posts'
 import { projectFactoryConfig } from '@/lib/factory/client-config'
@@ -171,6 +172,13 @@ export async function PATCH(
   if (!access.ok) {
     return NextResponse.json({ error: access.error }, { status: access.status })
   }
+
+  // 改绑定主页只许内部员工（全局 admin）。2026-09-14 子牙+魏征复审 PR #1658：
+  // facebook_page_id 是 boost-post / draft / winner-reel-sync 归属校验的依据，
+  // 客户成员能改它 = 先把主页改成别家的，再用自己的账户推别家的帖子。
+  // 与 #1649（广告账户号只许员工改）同一个坑；客户成员仍可 GET 查看。
+  const staffGuard = await guardGlobalAdmin()
+  if (staffGuard) return staffGuard
 
   let body: { page_id?: unknown }
   try {

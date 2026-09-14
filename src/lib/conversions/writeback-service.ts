@@ -23,6 +23,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import type {
   ClientSendConfig,
   DestinationWriter,
@@ -141,14 +142,40 @@ export async function sendApprovedOutcome(
   }
 
   // ── 2. 客人说过「别再联系我」就不发 ────────────────────────────────
-  // contacts.do_not_contact 是既有字段，不另建一张退出名单表。
+  // 🔴 真相源是不可变触点，不是 contacts.do_not_contact 那一列（见
+  // src/lib/crm/dnc.ts 顶部说明：那一列是尽力维护的反规范化，写失败过）。
+  // 入站私信刚出现拒联信号时，那一列还没来得及被人工确认写上——这段窗口里
+  // 只查那一列会把明确拒联的人的数据发出去。跟今日名单/受众导出同一套判据，
+  // 不能各查各的。
   if (outcome.contact_id) {
-    const { data: contact } = await supabase
-      .from('contacts')
-      .select('do_not_contact')
-      .eq('id', outcome.contact_id)
-      .maybeSingle()
-    if ((contact as { do_not_contact?: boolean } | null)?.do_not_contact) {
+    const [contactRes, touchRes] = await Promise.all([
+      supabase.from('contacts').select('do_not_contact').eq('id', outcome.contact_id).maybeSingle(),
+      supabase
+        .from('contact_touchpoints')
+        .select('occurred_at, metadata')
+        .eq('contact_id', outcome.contact_id)
+        .eq('client_id', outcome.client_id),
+    ])
+    // 查不出来就当「不知道」，绝不能悄悄当成「这个人没说过别联系」——
+    // 这条判断守的是全文件唯一撤不回的动作，查询失败不能变成「放行发送」。
+    if (contactRes.error) throw new Error(`读取联系人拒联标记失败：${contactRes.error.message}`)
+    if (touchRes.error) throw new Error(`读取联系人触点失败：${touchRes.error.message}`)
+    const contactFlag =
+      (contactRes.data as { do_not_contact?: boolean } | null)?.do_not_contact ?? false
+    const touches: DncTouch[] = ((touchRes.data ?? []) as { occurred_at: string; metadata: unknown }[]).map(
+      (t) => {
+        const meta =
+          t.metadata && typeof t.metadata === 'object' && !Array.isArray(t.metadata)
+            ? (t.metadata as Record<string, unknown>)
+            : null
+        return {
+          outcome: (meta?.outcome as string | undefined) ?? null,
+          flagged: meta?.do_not_contact === true,
+          occurredAt: t.occurred_at,
+        }
+      },
+    )
+    if (isDoNotContact(contactFlag, touches)) {
       return {
         status: 'redacted',
         message: '这位客人已标记「别再联系」，不把他的数据发给广告平台',
