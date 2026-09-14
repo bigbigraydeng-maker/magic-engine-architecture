@@ -132,6 +132,26 @@ describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选�
     expect(picks).toEqual([])
     vi.doUnmock('@/lib/ai/openai-client')
   })
+
+  it('否定分句里的词(scene-plan.ts 固定生成的 "no product/logo")不能被当成正向主体命中', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // prompt 明确说"不要出现 logo",但素材标了 logo——这张图恰恰是该分句要挡住的,
+    // 不能因为字面上都有 "logo" 就判成"文对图对"通过置信度门。
+    const assets = [asset('has-logo', { vision_metadata: { objects: ['storefront', 'logo'], quality_score: 8 } })]
+    const picks = await rankAssetsByPrompt('vertical 9:16 ambient b-roll, English, no product/logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks).toEqual([])
+  })
+
+  it('否定分句不连累同一 prompt 里其他正向分句的正常匹配', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    const assets = [asset('palace', { vision_metadata: { objects: ['palace', 'lion statue'], quality_score: 8 } })]
+    const picks = await rankAssetsByPrompt('forbidden city palace courtyard, no product/logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks.map((p) => p.id)).toEqual(['palace'])
+  })
 })
 
 describe('rankAssetsByPrompt — objects 里混进非字符串元素不炸', () => {

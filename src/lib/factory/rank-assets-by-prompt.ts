@@ -101,16 +101,28 @@ export async function rankAssetsByPrompt(
   return opts.requireConfidentMatch ? picks.filter((p) => keywordOverlap(prompt, p) > 0) : picks
 }
 
+/** scene-plan.ts 生成的 imagePrompt 按铁律固定带 "no product/logo" 这类否定分句
+ *  (绝不能出现客户真实产品/logo)。按逗号/分号分段,某段第一个词是否定词时整段
+ *  剔除——不然 "no product/logo" 里的 product/logo 会被当成正向主体词,让一张
+ *  明确标着 "logo" 的素材(比如换脸/换 logo 那类本该排除的图)反而"文对图对"地
+ *  通过置信度门,直接违反这条分句本来要挡的事(2026-09-13 复审 P1 指出)。
+ *  只认段首否定词,不处理句中嵌套否定("...with no crowd")——已知边界,不是漏改,
+ *  scene-plan.ts 的输出格式固定是逗号分句,这个启发式覆盖的是实际会出现的形态。 */
+const NEGATION_WORDS = new Set(['no', 'not', 'without', 'excluding', 'never'])
+
 /** 只按 ASCII 字母数字切词——CTS 现有 imagePrompt 全英文,够用。哪天有客户的
  *  imagePrompt/objects 混进中文,纯中文段会被当分隔符整段吃掉,判成零重叠,
  *  `requireConfidentMatch` 会把这类 prompt 的匹配全部清空,不是漏改,是已知边界。 */
 function promptWordsOf(prompt: string): Set<string> {
-  return new Set(
-    prompt
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length >= 3),
-  )
+  const words = new Set<string>()
+  for (const segment of prompt.split(/[,;]/)) {
+    const rawWords = segment.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+    if (rawWords.length > 0 && NEGATION_WORDS.has(rawWords[0])) continue
+    for (const w of rawWords) {
+      if (w.length >= 3) words.add(w)
+    }
+  }
+  return words
 }
 
 /** 太笼统的名词自己撑不起"文对图对"——比如 prompt 是 "Forbidden City courtyard",
