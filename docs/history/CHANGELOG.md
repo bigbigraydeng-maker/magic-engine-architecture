@@ -31,6 +31,20 @@ runtime；换成 Oztop/Roman 需要各自另填一行，逻辑代码不需要改
 
 ---
 
+### 2026-09-15（CRM 里能回邮件了，Leads 营销中心 M3）
+
+PR [#1716](https://github.com/bigbigraydeng-maker/magic-engine/pull/1716)（原 #1714，因单个 PR 改动超过自动修车道 800 行上限换分支重开）已合并。客户邮箱的读信同步（`mail-ingest.ts`）挂在 `messenger-sync-hourly` 里已经跑了一个多月，但从 CRM 里回一封邮件出去这件事此前完全不存在——授权时早就要过 `Mail.Send`，一直没人用。现在补上：`sendMailReply()` + `POST /api/clients/[id]/email/conversations/[conversationId]/reply`，形状照抄已上线的 Messenger 回复路由，走 Microsoft Graph 的 `createReply`+`send` 两步（不是一步到位的 `/reply`，因为后者拿不到消息 id，没法跟下一次每小时同步对上号）。
+
+三轮独立复审共抓出 6 个真会导致"发不出去"或"发错人"的问题，全部修好：① 建草稿这个动作需要 `Mail.ReadWrite` 权限，光有 `Mail.Send` 会在第一步就被拒（已扩展 `MICROSOFT_MAIL_SCOPES`）；② 客户连了不止一个邮箱时会拿错授权，改成按 `conversations.page_id` 精确匹配连接；③ 线程最后一条如果是我们自己发的，回复会把收件人变成自己、客人收不到，改成只认客人最后一次开口的那一封；④ Graph 消息 id 在草稿变已发送时会漂移，两端都加了 `Prefer: IdType="ImmutableId"`；⑤ 401 会强制刷新令牌重试一次；⑥ 那段处理"id 漂移导致重复"的兜底逻辑原本没有失效期，会永久误判同一秒内两封不同邮件为重复并静默丢弃，已加上只对切换时刻之前的历史信生效的时间闸（用变异测试验证过：临时关掉这道闸，相关测试会真的报错）。
+
+**范围内明确没做**：审计沿用 `conversation_outbound_log` 的自由文本列（`meta_message_id`/`messaging_type` 存字面量），不是给邮件另开一张 schema；没有接入 AI 自动回复（`messenger-agent/channel-dispatch.ts` 目前只认 `messenger`/`whatsapp` 两个渠道，接入邮件是 M7 的范围，需要单独设计+复审）；没有接进 `lib/messaging/channels.ts` 那套通用发送总线——那套总线目前零生产调用方，连 Messenger 自己都没注册进去，往上加只会多一层没人用的架子。
+
+**待办（不卡这次上线，但影响能不能真用）**：`Mail.ReadWrite` 是新申请的权限，CTS 现有邮箱连接刷新令牌时换不来一个从没同意过的权限，需要重新走一次登录同意才能用上这个新功能（读信本身不受影响，且 CTS 从没用过回信这个功能，不算回退）；本轮选定的首个真实测试客户 NAL 尚未连接邮箱（`platform_oauth_connections` 里还没有它的 `microsoft_mail` 记录），这个功能目前只有 145 个自动化测试验证过，还没有真实邮箱跑通过一次。
+
+**Reuse Statement**：完全复用既有平台能力——`conversations`/`conversation_messages`/`contact_touchpoints` 三张表、`platform_oauth_connections` + `token-manager` 的令牌管理、Messenger 回复路由已经验证过的隔离/错误映射形状。新增的发送半边（`mail-send.ts` + 路由）是平台通用能力，不含任何客户专属逻辑，NAL/CTS 用的是同一份代码。唯一的平台层改动是 `MICROSOFT_MAIL_SCOPES` 扩展一个权限，影响所有走这条授权的客户（目前只有 CTS），已在 PR 里说明其对现有连接的影响面。
+
+---
+
 ### 2026-09-15（NAL 私信 → Meta CAPI 有效咨询同步，dry_run）
 
 PR [#1675](https://github.com/bigbigraydeng-maker/magic-engine/pull/1675)、[#1684](https://github.com/bigbigraydeng-maker/magic-engine/pull/1684)、[#1689](https://github.com/bigbigraydeng-maker/magic-engine/pull/1689) 已合并并部署生产，migration 已 apply。New Asian Logistics（NAL，跨境集运物流代理）的 Facebook Messenger 私信对话现在能被自动判定为"有效咨询"并写入 `me_sale_outcomes`，复用 CTS 那条线已上线的 Meta 广告转化 API（CAPI）回写通道。判据用 21 个真实对话人工标注 + 模拟跑规则验证过（0 假阳性，约 69% 召回）；生产库真实跑通：186 段对话，判出 20 条有效咨询全部正确写入 `pending_review`，重跑确认幂等键生效。
