@@ -56,6 +56,14 @@ export interface KnowledgeWriteTable {
 
 export interface KnowledgeWriteClient {
   from(table: string): KnowledgeWriteTable
+  /**
+   * Call a Postgres function (one statement-level transaction). The only
+   * write path that needs this today is `consume_knowledge_confirmation_request`
+   * — claiming a confirmation request AND writing every fact's sign-off must
+   * commit or roll back together, which a sequence of separate `.update()`
+   * calls from JS cannot guarantee (see confirmation-requests.ts).
+   */
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<KnowledgeWriteResult>
 }
 
 /**

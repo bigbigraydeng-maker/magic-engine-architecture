@@ -39,8 +39,10 @@ import {
 import { getRegisteredConfirmerEmails } from '@/lib/knowledge/confirmers'
 import { checkConfirmerIdentity } from '@/lib/knowledge/dual-sign'
 import { stopAiRepliesForClient } from '@/lib/knowledge/kill-switch'
+import { asRows } from '@/lib/knowledge/write-client'
 import {
   CONFIRMATION_CHANGE_LEAD_TIME_NOTE,
+  CONFIRMATION_QUALITY_ASSURANCE_NOTE,
   CONFIRMATION_RESPONSIBILITY_NOTE,
   sendKnowledgeConfirmationReceipt,
 } from '@/lib/email/knowledge-confirmation'
@@ -119,10 +121,48 @@ function messagePage(title: string, message: string): string {
   return shell(title, `<div class="block"><h1>${escapeHtml(title)}</h1><p class="lede">${escapeHtml(message)}</p></div>`)
 }
 
-/** §9.10：一组 ≤5 行。 */
-function chunk<T>(items: T[], size: number): T[][] {
+/**
+ * §9.10：一组 ≤5 行 —— 但同一个 conflict_group_id 的几条必须落在同一组里，
+ * 否则客户根本看不到两个版本摆在一起，"这几条是同一件事的不同说法"这句
+ * 提示就是废话（板桥客户体验复审 2026-09-14 抓到：原来的 chunk() 只管数量、
+ * 不管分组，纯粹按顺序切，冲突组号在第 5/6 条边界就可能被切开）。
+ *
+ * 先把同一个冲突组的条目聚成一簇，再按簇（不拆簇）装进 ≤size 的组；单簇本
+ * 身超过 size 时只能让这一组超一点点——"看到完整的两个版本"比"严格 5 条
+ * 一组"更重要。
+ */
+function groupFactsByConflict(facts: ConfirmationFactView[]): ConfirmationFactView[][] {
+  const clusters: ConfirmationFactView[][] = []
+  const clusterIndexByGroup = new Map<string, number>()
+  for (const fact of facts) {
+    if (fact.conflictGroupId) {
+      const existingIndex = clusterIndexByGroup.get(fact.conflictGroupId)
+      if (existingIndex !== undefined) {
+        clusters[existingIndex].push(fact)
+        continue
+      }
+      clusterIndexByGroup.set(fact.conflictGroupId, clusters.length)
+    }
+    clusters.push([fact])
+  }
+  return clusters
+}
+
+function chunkClusters<T>(clusters: T[][], size: number): T[][] {
   const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  let current: T[] = []
+  for (const cluster of clusters) {
+    if (current.length > 0 && current.length + cluster.length > size) {
+      out.push(current)
+      current = []
+    }
+    current.push(...cluster)
+    if (current.length >= size) {
+      out.push(current)
+      current = []
+    }
+  }
+  if (current.length > 0) out.push(current)
   return out
 }
 
@@ -148,7 +188,7 @@ function factRow(fact: ConfirmationFactView): string {
 
 function confirmPage(view: ConfirmationLinkView, nonce: string, rawToken: string): string {
   const who = view.clientName ? `${view.clientName}` : '你的账户'
-  const blocks = chunk(view.facts, CONFIRMATION_BATCH_BLOCK_SIZE)
+  const blocks = chunkClusters(groupFactsByConflict(view.facts), CONFIRMATION_BATCH_BLOCK_SIZE)
   // 一个冲突组号在这一批里出现两次以上，才说明客户真的在这页上看到了两种
   // 互相矛盾的说法；只出现一次的组号（另一条不在这批里）提示了也没用。
   const groupCounts = new Map<string, number>()
@@ -169,18 +209,40 @@ function confirmPage(view: ConfirmationLinkView, nonce: string, rawToken: string
     .join('')
 
   return shell(
-    `确认 ${who} 的 AI 回复口径`,
+    `确认 ${who} 的 AI 回复说法`,
     `<h1>请你确认一下</h1>
 <p class="lede">下面每一句，都是 AI 以后回复顾客时会用的说法。<strong>你点「对」的那几条，AI 才会说；没点的，AI 遇到会转给你们的人。</strong></p>
 <form method="POST">
 <input type="hidden" name="token" value="${escapeHtml(rawToken)}"/>
 <input type="hidden" name="nonce" value="${escapeHtml(nonce)}"/>
 ${blockHtml}
-<div class="note">${escapeHtml(CONFIRMATION_RESPONSIBILITY_NOTE)}<br/>${escapeHtml(CONFIRMATION_CHANGE_LEAD_TIME_NOTE)}</div>
+<div class="note">${escapeHtml(CONFIRMATION_RESPONSIBILITY_NOTE)}<br/>${escapeHtml(CONFIRMATION_CHANGE_LEAD_TIME_NOTE)}<br/>${escapeHtml(CONFIRMATION_QUALITY_ASSURANCE_NOTE)}</div>
 <button class="primary" type="submit" name="intent" value="confirm">提交我的确认</button>
 <button class="stop" type="submit" name="intent" value="stop_ai" formnovalidate>先别让 AI 回复顾客（立刻停掉）</button>
 </form>
 <p class="foot">这个页面是发给 ${escapeHtml(view.confirmerEmail)} 的，链接只能用一次。</p>`,
+  )
+}
+
+/**
+ * 已经用过的链接 —— 板桥客户体验复审 2026-09-14 抓到：以前这种情况只渲染
+ * 一句"这批内容已经确认过了"就完了，客户想反悔叫停 AI 却根本找不到按钮，
+ * 跟设计稿"客户也有停止 AI 回复按钮，不只 ME 能按"（§9.10）直接矛盾。
+ * `handleStopAi` 本身从来就不检查链接是否已用过（见其函数注释），缺的只是
+ * 这张页面——现在补上停止表单，跟 confirmPage 用同一套 nonce/CSRF 机制。
+ */
+function alreadyUsedPage(nonce: string, rawToken: string): string {
+  return shell(
+    '这批内容已经确认过了',
+    `<div class="block">
+<h1>这批内容已经确认过了</h1>
+<p class="lede">不用再点一次。如果你改主意了，想让我们先别让 AI 自动回复顾客，可以随时点下面这个按钮——跟这批内容是否已经确认过没关系。</p>
+<form method="POST">
+<input type="hidden" name="token" value="${escapeHtml(rawToken)}"/>
+<input type="hidden" name="nonce" value="${escapeHtml(nonce)}"/>
+<button class="stop" type="submit" name="intent" value="stop_ai" formnovalidate>先别让 AI 回复顾客（立刻停掉）</button>
+</form>
+</div>`,
   )
 }
 
@@ -209,6 +271,15 @@ export async function GET(request: NextRequest, { params }: Params) {
   }
 
   if (!result.ok) {
+    // 🔴 已经用过的链接仍要让客户能按到"停止 AI 回复"——那个按钮不要求
+    //    链接还没被用过（见 handleStopAi 的注释），缺的只是这张页面本身。
+    //    其余问题（令牌不对/过期/身份不对）没有可信身份可用，维持原样。
+    if (result.problem === 'already_used') {
+      const nonce = randomUUID()
+      const response = htmlResponse(alreadyUsedPage(nonce, rawToken))
+      setNonceCookie(response, nonce, origin, params.requestId)
+      return response
+    }
     return htmlResponse(messagePage('这个链接用不了', describeLinkProblem(result.problem)), 200)
   }
 
@@ -216,14 +287,18 @@ export async function GET(request: NextRequest, { params }: Params) {
   //    一张 HTML 和一个它无法跨源转发到 POST 的 cookie。
   const nonce = randomUUID()
   const response = htmlResponse(confirmPage(result, nonce, rawToken))
+  setNonceCookie(response, nonce, origin, params.requestId)
+  return response
+}
+
+function setNonceCookie(response: NextResponse, nonce: string, origin: string, requestId: string): void {
   response.cookies.set(NONCE_COOKIE, nonce, {
     httpOnly: true,
     sameSite: 'strict',
     secure: origin.startsWith('https://'),
-    path: cookiePathFor(params.requestId),
+    path: cookiePathFor(requestId),
     maxAge: NONCE_MAX_AGE_SECONDS,
   })
-  return response
 }
 
 // ── POST：唯一会写东西的路径 ────────────────────────────────────────────────
@@ -288,7 +363,13 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   await sendReceipt(result.clientId, result.confirmerEmail, result.confirmedFactIds, result.rejectedFactIds, result.staleFactIds)
 
-  const parts = [`你确认了 ${result.confirmedFactIds.length} 条，AI 从现在起会按这些说法回复顾客。`]
+  // 🔴 板桥客户体验复审 2026-09-14 抓到：一条都没确认时说"你确认了 0
+  //    条，AI 从现在起会按这些说法回复顾客"，指代的"这些说法"是空集合，
+  //    自相矛盾。0 条和 ≥1 条要用两句不同的话，不能只是把数字代进模板。
+  const parts =
+    result.confirmedFactIds.length > 0
+      ? [`你确认了 ${result.confirmedFactIds.length} 条，AI 从现在起会按这些说法回复顾客。`]
+      : ['这次你没有确认任何一条，AI 遇到这些问题会转给你们的人，不会自己乱答。']
   if (result.rejectedFactIds.length > 0) {
     parts.push(`有 ${result.rejectedFactIds.length} 条你说要改 —— 这几条 AI 不会说，遇到会转给你们的人。${CONFIRMATION_CHANGE_LEAD_TIME_NOTE}`)
   }
@@ -329,17 +410,27 @@ async function handleStopAi(
   requestId: string,
   rawToken: string,
 ): Promise<NextResponse> {
-  const { data, error } = await supabaseAdmin
+  // 🔴 走 sb（knowledgeWriteClient()），不直接用 supabaseAdmin —— admin-client.ts
+  // 的注释写明"整个代码库里只有那一行需要被审计"，这里绕开会让以后任何在
+  // 那一行做拦截/审计/换客户端的人漏看这个调用点（魏征复审 2026-09-14）。
+  const queryResult = await sb
     .from('client_knowledge_confirmation_requests')
     .select('id, client_id, confirmer_email, token_hash, expires_at')
     .eq('id', requestId)
-    .maybeSingle()
-  if (error || !data) {
+  const rows = asRows<{ client_id: string; confirmer_email: string; token_hash: string; expires_at: string }>(
+    queryResult.data,
+  )
+  if (queryResult.error || rows.length === 0) {
     return htmlResponse(messagePage('这个链接用不了', describeLinkProblem('not_found')), 200)
   }
-  const row = data as { client_id: string; confirmer_email: string; token_hash: string; expires_at: string }
+  const row = rows[0]
 
-  if (row.token_hash !== hashConfirmationToken(rawToken)) {
+  // 🔴 常量时间比较，跟本文件其余令牌比较（timingSafeEqualStrings）、以及
+  // confirmation-requests.ts 的 hashesMatch 保持一致的写法（魏征复审
+  // 2026-09-14：这里之前是裸 `!==`。核实过 SHA256 的雪崩效应让这条时序侧
+  // 信道即使被完美利用也拿不到可用的原始令牌，不构成真实漏洞，但统一写法
+  // 经得住下一次静态扫描或复审追问，不留一个看着不一致的比较）。
+  if (!timingSafeEqualStrings(row.token_hash, hashConfirmationToken(rawToken))) {
     return htmlResponse(messagePage('这个链接用不了', describeLinkProblem('bad_token')), 200)
   }
   if (Date.parse(row.expires_at) <= Date.now()) {

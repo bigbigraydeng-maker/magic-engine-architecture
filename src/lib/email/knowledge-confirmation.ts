@@ -22,6 +22,14 @@ export const CONFIRMATION_RESPONSIBILITY_NOTE =
 /** §9.10：客户改了内容要回 ME 再批一次，页面和邮件都要把这句话说清楚。 */
 export const CONFIRMATION_CHANGE_LEAD_TIME_NOTE = '改动约 1 个工作日后生效。'
 
+/**
+ * §9.10「对客一句话」——设计稿逐字给定，之前只落进了责任说明附近的代码
+ * 注释里，没有真的出现在客户看到的页面或邮件正文上（板桥客户体验复审
+ * 2026-09-14 抓到）。这里补上，页面和邀请邮件共用同一个常量。
+ */
+export const CONFIRMATION_QUALITY_ASSURANCE_NOTE =
+  'AI 客服报的价跟你们最好的员工一样准，每个价格都经过你点头；报价口径乱了，我们先提醒你。'
+
 export interface KnowledgeConfirmationEmailInput {
   to: string
   clientName: string
@@ -73,6 +81,8 @@ function requestText(input: KnowledgeConfirmationEmailInput): string {
     '',
     CONFIRMATION_RESPONSIBILITY_NOTE,
     '',
+    CONFIRMATION_QUALITY_ASSURANCE_NOTE,
+    '',
     '有问题直接回这封邮件。',
     '',
     '— Magic Engine',
@@ -98,6 +108,7 @@ ${more}
 </p>
 <p style="color:#666;font-size:13px">打开只是看一眼，点了页面上的按钮才算确认。链接 ${escapeHtml(formatDay(input.expiresAt))} 前有效。</p>
 <p style="color:#2a2a2a;font-size:13px;background:#faf6ef;border-left:3px solid #B8863A;padding:10px 12px">${escapeHtml(CONFIRMATION_RESPONSIBILITY_NOTE)}</p>
+<p style="color:#2a2a2a;font-size:13px;background:#faf6ef;border-left:3px solid #B8863A;padding:10px 12px">${escapeHtml(CONFIRMATION_QUALITY_ASSURANCE_NOTE)}</p>
 <p style="color:#888;font-size:13px;margin-top:32px">有问题直接回这封邮件。<br>— Magic Engine</p>
 </body></html>`
 }
@@ -113,7 +124,7 @@ export async function sendKnowledgeConfirmationRequest(
   const { error } = await sender.send({
     from: meMailFrom('Magic Engine'),
     to: input.to,
-    subject: `请确认：${sanitizeHeader(input.clientName)} 的 AI 回复口径（${input.statements.length} 条）`,
+    subject: `请确认：${sanitizeHeader(input.clientName)} 的 AI 回复说法（${input.statements.length} 条）`,
     text: requestText(input),
     html: requestHtml(input),
   })

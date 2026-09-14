@@ -448,16 +448,21 @@ export type ConsumeResult =
  *      every fact's approver — reject the whole request before any write.
  *   3. Work out the full outcome in memory (which facts drifted, which the
  *      customer confirmed, which they pushed back on).
- *   4. **Claim the request atomically** (`WHERE status='pending'`) with the
- *      final status and outcome. Zero rows back = somebody else already
- *      submitted this link; stop, write nothing.
- *   5. Only then write the facts.
+ *   4. Call `consume_knowledge_confirmation_request` — ONE Postgres function
+ *      that claims the request (`WHERE status='pending'`) AND writes every
+ *      fact's sign-off inside a single transaction.
  *
- * Claiming before writing the facts is deliberate. A crash between 4 and 5
- * leaves the link burnt with a recorded outcome and some facts unwritten —
- * visible, and fixable by issuing a new link. The other order would let a
- * double-submit write two confirmations from one link, which is precisely the
- * single-use property this is here to guarantee.
+ * 🔴 Steps 4 used to be two separate JS statements: claim the request, then
+ * loop over facts writing each one. 子牙 + 魏征's independent reviews of this
+ * PR both caught the same real gap: a crash or network drop between "claim"
+ * and "finish the loop" left the request burnt (status='confirmed', outcome
+ * listing every fact as done) while some facts never got
+ * `client_confirmed_at` written — a silent, permanent inconsistency nothing
+ * ever re-checks, and the customer sees "please try the link again" for a
+ * link that then reports "already confirmed". Folding both writes into one
+ * `rpc()` call makes them one statement-level transaction: any failure rolls
+ * back the claim too, so the link genuinely stays retryable instead of
+ * lying about it.
  */
 export async function consumeConfirmationRequest(
   sb: KnowledgeWriteClient,
@@ -524,64 +529,36 @@ export async function consumeConfirmationRequest(
     }
   }
 
-  // ── Claim ────────────────────────────────────────────────────────────────
+  // ── Claim + write, atomically ────────────────────────────────────────────
   const finalStatus = outcome.confirmedFactIds.length > 0 ? 'confirmed' : 'rejected'
-  const claim = await sb
-    .from('client_knowledge_confirmation_requests')
-    .update({
-      status: finalStatus,
-      confirmed_at: now.toISOString(),
-      outcome: {
-        confirmed_fact_ids: outcome.confirmedFactIds,
-        rejected_fact_ids: outcome.rejectedFactIds,
-        stale_fact_ids: outcome.staleFactIds,
-      },
-    })
-    .eq('id', request.id)
-    .eq('status', 'pending')
-    .select('id')
-  if (claim.error) {
-    throw new KnowledgeConfirmationError(`确认失败：${claim.error.message ?? '未知错误'}`)
+  const confirmedAtIso = now.toISOString()
+  const rpcResult = await sb.rpc('consume_knowledge_confirmation_request', {
+    p_request_id: request.id,
+    p_client_id: request.client_id,
+    p_confirmer_email: request.confirmer_email,
+    p_final_status: finalStatus,
+    p_confirmed_at: confirmedAtIso,
+    p_outcome: {
+      confirmed_fact_ids: outcome.confirmedFactIds,
+      rejected_fact_ids: outcome.rejectedFactIds,
+      stale_fact_ids: outcome.staleFactIds,
+    },
+    p_confirmed: outcome.confirmedFactIds.map((factId) => ({
+      fact_id: factId,
+      fingerprint: fingerprintByFactId.get(factId) ?? null,
+    })),
+    p_rejected: outcome.rejectedFactIds.map((factId) => ({
+      fact_id: factId,
+      note: params.notes?.[factId]?.trim() || null,
+    })),
+  })
+  if (rpcResult.error) {
+    throw new KnowledgeConfirmationError(`确认失败：${rpcResult.error.message ?? '未知错误'}`)
   }
-  if (asRows<{ id: string }>(claim.data).length === 0) {
-    // 有人（或另一个浏览器标签）刚刚抢先提交了同一条链接。
+  const claimed = asRows<{ claimed: boolean }>(rpcResult.data)[0]?.claimed
+  if (!claimed) {
+    // 有人（或另一个浏览器标签）刚刚抢先提交了同一条链接。一个字都没写。
     return { ok: false, problem: 'already_used' }
-  }
-
-  // ── Write the facts ──────────────────────────────────────────────────────
-  for (const factId of outcome.confirmedFactIds) {
-    const result = await sb
-      .from('client_knowledge_facts')
-      .update({
-        client_confirmed_by_email: request.confirmer_email,
-        client_confirmed_at: now.toISOString(),
-        client_confirmed_fingerprint: fingerprintByFactId.get(factId),
-        // 客户这次说「对」，就把上一轮「需要修改」的留言清掉，免得记录自相矛盾。
-        client_rejection_note: null,
-      })
-      .eq('id', factId)
-      .eq('client_id', request.client_id)
-      .eq('status', 'approved')
-      // 已经确认过的不再重复写 —— 双提交时第二次是空操作，不是覆盖。
-      .is('client_confirmed_at', null)
-      .select('id')
-    if (result.error) {
-      throw new KnowledgeConfirmationError(`写入客户确认失败：${result.error.message ?? '未知错误'}`)
-    }
-  }
-
-  for (const factId of outcome.rejectedFactIds) {
-    const note = params.notes?.[factId]?.trim()
-    const result = await sb
-      .from('client_knowledge_facts')
-      .update({ client_rejection_note: note || '客户表示需要修改，未写原因' })
-      .eq('id', factId)
-      .eq('client_id', request.client_id)
-      .eq('status', 'approved')
-      .select('id')
-    if (result.error) {
-      throw new KnowledgeConfirmationError(`写入客户意见失败：${result.error.message ?? '未知错误'}`)
-    }
   }
 
   return {
@@ -605,10 +582,10 @@ export function describeLinkProblem(problem: ConfirmationLinkProblem): string {
       return '这批内容已经确认过了，不用再点一次。'
     case 'missing':
     case 'not_registered':
-      return '你的邮箱目前不在这个账户的确认人名单里，所以这次确认没有生效。请联系 Magic Engine 团队重新登记。'
+      return '你的邮箱目前不在这个账户的确认人名单里，所以这次确认没有生效。回这封邮件告诉我们，我们帮你登记。'
     case 'same_as_approver':
-      return '这批内容需要由你们公司的人确认，不能由整理这批内容的人自己确认。请联系 Magic Engine 团队。'
+      return '这批内容需要由你们公司的人确认，不能由整理这批内容的人自己确认。回这封邮件告诉我们一声。'
     case 'global_admin':
-      return 'Magic Engine 的账号不能代你们确认。请联系 Magic Engine 团队用你们自己的邮箱重发一条。'
+      return 'Magic Engine 的账号不能代你们确认。回这封邮件告诉我们，我们用你们自己的邮箱重发一条。'
   }
 }

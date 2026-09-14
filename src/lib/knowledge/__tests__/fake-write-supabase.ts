@@ -41,6 +41,14 @@ export type Row = Record<string, unknown>
 export interface FakeWriteOptions {
   /** Any operation on these tables resolves as a Postgres-shaped failure. */
   errorTables?: ReadonlySet<string>
+  /**
+   * Any `.rpc(name, …)` call whose name is in this set resolves as a
+   * Postgres-shaped failure WITHOUT mutating any table — models a real
+   * Postgres function's transaction rolling back on error, so a test can
+   * assert atomicity (nothing partially written) instead of only checking
+   * that an error surfaced.
+   */
+  rpcErrors?: ReadonlySet<string>
   /** Turn off constraint emulation for a test that deliberately seeds "impossible" data. */
   enforceConstraints?: boolean
 }
@@ -268,6 +276,65 @@ export class FakeWriteSupabase implements KnowledgeWriteClient {
       insert: (row: Row) => new Builder(this, table, 'insert', row),
       update: (fields: Row) => new Builder(this, table, 'update', fields),
     }
+  }
+
+  /**
+   * Models `consume_knowledge_confirmation_request` — the one Postgres
+   * function this module's write paths call. `rpcErrors` simulates the
+   * function raising mid-transaction: real Postgres would roll the whole
+   * call back, so this branch returns the error WITHOUT touching either
+   * table — that's the exact property (all-or-nothing) the real migration
+   * exists to guarantee, and what regression tests assert against.
+   */
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<KnowledgeWriteResult> {
+    return Promise.resolve(this.runRpc(fn, args))
+  }
+
+  private runRpc(fn: string, args: Record<string, unknown>): KnowledgeWriteResult {
+    if (fn !== 'consume_knowledge_confirmation_request') {
+      throw new Error(`fake supabase: unmodelled rpc "${fn}"`)
+    }
+    if (this.options.rpcErrors?.has(fn)) {
+      return { data: null, error: { message: `simulated failure inside rpc "${fn}" — no table touched` } }
+    }
+
+    const requests = this.rowsFor('client_knowledge_confirmation_requests')
+    const facts = this.rowsFor('client_knowledge_facts')
+    const request = requests.find((row) => row.id === args.p_request_id)
+    if (!request || request.status !== 'pending') {
+      return { data: [{ claimed: false }], error: null }
+    }
+
+    request.status = args.p_final_status
+    request.confirmed_at = args.p_confirmed_at
+    request.outcome = args.p_outcome
+
+    for (const item of (args.p_confirmed as Array<{ fact_id: string; fingerprint: string | null }>) ?? []) {
+      const fact = facts.find(
+        (row) =>
+          row.id === item.fact_id &&
+          row.client_id === args.p_client_id &&
+          row.status === 'approved' &&
+          (row.client_confirmed_at ?? null) === null,
+      )
+      if (fact) {
+        fact.client_confirmed_by_email = args.p_confirmer_email
+        fact.client_confirmed_at = args.p_confirmed_at
+        fact.client_confirmed_fingerprint = item.fingerprint
+        fact.client_rejection_note = null
+      }
+    }
+
+    for (const item of (args.p_rejected as Array<{ fact_id: string; note: string | null }>) ?? []) {
+      const fact = facts.find(
+        (row) => row.id === item.fact_id && row.client_id === args.p_client_id && row.status === 'approved',
+      )
+      if (fact) {
+        fact.client_rejection_note = item.note?.trim() || '客户表示需要修改，未写原因'
+      }
+    }
+
+    return { data: [{ claimed: true }], error: null }
   }
 }
 

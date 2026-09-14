@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  CONFIRMATION_QUALITY_ASSURANCE_NOTE,
   CONFIRMATION_RESPONSIBILITY_NOTE,
   sendKnowledgeConfirmationReceipt,
   sendKnowledgeConfirmationRequest,
@@ -57,6 +58,22 @@ describe('sendKnowledgeConfirmationRequest', () => {
     expect(sent[0].html).toContain('AI 以后会这样回复顾客：20 公斤以下每公斤 NZD 4')
     expect(sent[0].text).toContain(CONFIRMATION_RESPONSIBILITY_NOTE)
     expect(sent[0].html).toContain(CONFIRMATION_RESPONSIBILITY_NOTE)
+  })
+
+  it('🔴 §9.10：对客一句话（定心话）逐字出现在邀请邮件里（板桥复审：之前完全没写进去）', async () => {
+    const { sent, sender } = captureSender()
+    await sendKnowledgeConfirmationRequest(
+      {
+        to: 'owner@ctstours.co.nz',
+        clientName: 'CTS Tours NZ',
+        statements: ['20 公斤以下每公斤 NZD 4'],
+        confirmUrl: CONFIRM_URL,
+        expiresAt: '2026-09-28T00:00:00.000Z',
+      },
+      { sender },
+    )
+    expect(sent[0].text).toContain(CONFIRMATION_QUALITY_ASSURANCE_NOTE)
+    expect(sent[0].html).toContain(CONFIRMATION_QUALITY_ASSURANCE_NOTE)
   })
 
   it('说清楚「打开只是看，点按钮才算数」—— 这是 §9.14 A.D 要客户理解的那件事', async () => {

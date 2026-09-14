@@ -446,6 +446,49 @@ describe('consumeConfirmationRequest —— 唯一会写东西的路径', () => 
     expect(tables.client_knowledge_facts[0].client_confirmed_at).toBeNull()
   })
 
+  it('🔴 claim 和写事实是一个事务：中途失败一个字都不会落库（子牙+魏征 复审发现）', async () => {
+    // 复现两份独立复审都抓到的同一个问题：旧代码先 UPDATE 确认请求表把
+    // 状态改成 confirmed，再逐条 UPDATE client_knowledge_facts —— 中间任何
+    // 一次失败都会留下"请求已终态但事实没写全"的中间态，而且没人会去查。
+    // 现在两步收进同一个 Postgres 函数（一次 rpc 调用 = 一个事务），这里
+    // 用 rpcErrors 模拟函数内部失败，断言请求表和事实表都完全没变——
+    // 不是"部分写了"，是"什么都没写"，客户重新点链接才能真的重试。
+    const fact = approvedFact({ id: 'f1' })
+    const tables = baseTables([fact])
+    const sb = createFakeWriteSupabase(tables, { rpcErrors: new Set(['consume_knowledge_confirmation_request']) })
+    const created = await createConfirmationRequest(sb, {
+      clientId: CLIENT_A,
+      factIds: ['f1'],
+      confirmerEmail: CONFIRMER,
+      actorEmail: FDE,
+      now: NOW,
+    })
+
+    await expect(
+      consumeConfirmationRequest(sb, {
+        requestId: created.requestId,
+        rawToken: created.rawToken,
+        choices: { f1: 'confirm' },
+        now: NOW,
+      }),
+    ).rejects.toThrow(KnowledgeConfirmationError)
+
+    // 请求本身仍是 pending —— 没有变成"已确认但没写全"的假终态。
+    expect(tables.client_knowledge_confirmation_requests[0].status).toBe('pending')
+    expect(tables.client_knowledge_confirmation_requests[0].confirmed_at ?? null).toBeNull()
+    // 事实一个字都没被写上。
+    expect(tables.client_knowledge_facts[0].client_confirmed_at).toBeNull()
+    expect(tables.client_knowledge_facts[0].client_confirmed_by_email).toBeNull()
+
+    // 链接因此真的可以重试（不是撞上"已经确认过了"的假墙）。
+    const retry = await consumeConfirmationRequest(
+      createFakeWriteSupabase(tables),
+      { requestId: created.requestId, rawToken: created.rawToken, choices: { f1: 'confirm' }, now: NOW },
+    )
+    expect(retry.ok).toBe(true)
+    expect(tables.client_knowledge_facts[0].client_confirmed_at).toBe('2026-09-14T00:00:00.000Z')
+  })
+
   it('一批多条：确认一条、驳回一条、第三条被改过 —— 三种结果各归各的', async () => {
     const f1 = approvedFact({ id: 'f1' })
     const f2 = approvedFact({ id: 'f2', fact_key: 'cutoff', statement: '空运周五 18:00 截单', sensitivity: 'timeline' })

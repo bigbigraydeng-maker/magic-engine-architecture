@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS public.client_knowledge_confirmation_requests (
   -- 时整体读出来比对一次。建子表只会多一张需要自己维护一致性的表。
   fact_fingerprints  jsonb NOT NULL,
 
+  -- 🔴 `expired` / `superseded` 是这张表**预留**的两个终态，目前没有任何代码
+  --    路径会真的把它们写进去（过期判定始终是运行时算的——见 gateRequest，
+  --    从不落库；"重发新链接时把旧链接标记掉"也还没实现）。子牙复审
+  --    2026-09-14 确认这不是安全缺口（旧的 pending 链接被消费时，身份/指纹/
+  --    终态检查都还在），但如果将来有人指望这两个值真的会出现（比如做一个
+  --    "待处理确认链接"列表页），会踩空——留这条注释，免得下次看代码的人
+  --    以为"声明了 = 已经接上了"。
   status             text NOT NULL DEFAULT 'pending'
                       CHECK (status IN ('pending','confirmed','rejected','expired','superseded')),
 
