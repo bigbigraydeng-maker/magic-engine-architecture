@@ -87,6 +87,32 @@ interface StoredConversation {
 }
 
 /**
+ * The fields on an existing `conversations` row that this sync and the
+ * real-time Messenger webhook (`/api/webhooks/meta/messenger`, issue #1581)
+ * both write. Fetched before the upsert so this cron — now the FALLBACK path,
+ * not the authoritative one — can tell whether its own Graph API snapshot is
+ * fresher than what the webhook already wrote.
+ */
+interface ExistingSummary {
+  participantName: string | null
+  lastMessageAt: string | null
+}
+
+async function loadExistingSummary(clientId: string, conversationId: string): Promise<ExistingSummary | null> {
+  const { data } = await supabaseAdmin
+    .from('conversations')
+    .select('participant_name, last_message_at')
+    .eq('client_id', clientId)
+    .eq('conversation_id', conversationId)
+    .maybeSingle()
+  if (!data) return null
+  return {
+    participantName: (data.participant_name as string | null) ?? null,
+    lastMessageAt: (data.last_message_at as string | null) ?? null,
+  }
+}
+
+/**
  * Store one thread and its messages.
  * Throws on the conversation upsert failing — the per-thread try/catch in the
  * caller isolates it so one bad thread never aborts the client's remaining threads.
@@ -97,25 +123,41 @@ async function storeConversation(
   convo: MessengerConversation,
 ): Promise<StoredConversation> {
   const last = convo.messages[convo.messages.length - 1]
+  const incomingLastMessageAt = last?.sentAt ?? null
+  const incomingLastMessageFrom = last ? (last.direction === 'inbound' ? 'customer' : 'page') : null
+
+  // 🔴 **webhook 权威、这条 cron 只兜底**（issue #1581，H14）：`participant_name` /
+  // `last_message_at` / `last_message_from` 现在也由 `/api/webhooks/meta/messenger`
+  // 实时写。这条 2 小时一轮的 Graph API 拉取如果照旧无条件覆盖，会把 webhook
+  // 刚落的更新用一份更旧的快照冲掉——参照 whatsapp webhook 的 `entry_referral`
+  // /`occurred_at` 那两处「只往前推」写法，这里同理：只在本轮数据比已存的新
+  // （或者压根还没有）时才覆盖这三列；已存的行更新，就原样保留，只补
+  // page_id/message_count/meta_updated_time/last_synced_at 这些 cron 独有的列。
+  const existing = await loadExistingSummary(clientId, convo.conversationId)
+  const existingTime = existing?.lastMessageAt ? new Date(existing.lastMessageAt).getTime() : null
+  const incomingTime = incomingLastMessageAt ? new Date(incomingLastMessageAt).getTime() : null
+  const shouldOverwriteLastMessage =
+    !existing || existingTime === null || (incomingTime !== null && incomingTime > existingTime)
+
+  const payload: Record<string, unknown> = {
+    client_id: clientId,
+    page_id: pageId,
+    conversation_id: convo.conversationId,
+    participant_psid: convo.participantPsid,
+    message_count: convo.messageCount,
+    meta_updated_time: convo.updatedTime,
+    last_synced_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }
+  if (shouldOverwriteLastMessage) {
+    payload.participant_name = convo.participantName
+    payload.last_message_at = incomingLastMessageAt
+    payload.last_message_from = incomingLastMessageFrom
+  }
 
   const { data: row, error } = await supabaseAdmin
     .from('conversations')
-    .upsert(
-      {
-        client_id: clientId,
-        page_id: pageId,
-        conversation_id: convo.conversationId,
-        participant_psid: convo.participantPsid,
-        participant_name: convo.participantName,
-        message_count: convo.messageCount,
-        meta_updated_time: convo.updatedTime,
-        last_message_at: last?.sentAt ?? null,
-        last_message_from: last ? (last.direction === 'inbound' ? 'customer' : 'page') : null,
-        last_synced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'client_id,conversation_id' },
-    )
+    .upsert(payload, { onConflict: 'client_id,conversation_id' })
     // contact_id comes back so the linker knows whether this thread is already
     // attached to a person (upsert preserves it — we never send it here).
     .select('id, contact_id')

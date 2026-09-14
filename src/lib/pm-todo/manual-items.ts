@@ -22,6 +22,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { pushConversionReviewItems } from './conversion-review-items'
+import { pushDailyPlanMeasurementItems, type DailyPlanMeasurementItemKind } from './daily-plan-measurement-items'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
@@ -98,6 +99,8 @@ export type ManualItemKind =
   | 'linkedin_progress_needs_setup'
   | 'linkedin_progress_failed'
   | EmailReplyItemKind
+  /** 排期发的 Facebook 帖子发出去了，但一直拿不到帖子编号 —— 成绩收不回来 */
+  | DailyPlanMeasurementItemKind
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -373,6 +376,10 @@ export async function loadManualItems(
   // Creatomate 渲染失败/超时 —— 旧路径的卡死回收已死透，这是它的替代（spec §4.4 B4）
   await pushCreatomateRenderItems(supabase, items, now, clients).catch((e) =>
     console.warn('[manual-items] Creatomate 渲染检查失败（不阻塞其他待办）:', e),
+  )
+  // 排期帖发出去了但拿不到帖子编号 —— 成绩收不回来，只写运行记录等于没人知道
+  await pushDailyPlanMeasurementItems(supabase, items, now, clients).catch((e) =>
+    console.warn('[manual-items] 帖子成绩回收失败检查读取失败（不阻塞其他待办）:', e),
   )
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
   await pushAdReadbackItems(supabase, items, now).catch((e) =>
@@ -1129,7 +1136,7 @@ export async function pushMailchimpExportItems(
  *
  * 不落新状态、不加新表：判定条件跟闸本身同源，改好文案或确认好素材，这条自己就消失。
  */
-async function pushPriceGateItems(
+export async function pushPriceGateItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   nameOf: (id: string) => string,
@@ -1170,6 +1177,19 @@ async function pushPriceGateItems(
     })
     if (!verdict.blocked) continue
 
+    // href 要指到「这张图真的能改」的地方——素材库页面只操作 client_assets，
+    // 不是这条闸真正查的表。图必须在素材库里才有「改来源」这个动作可点；
+    // 不在库里（比如纯 AI 生成、从没进过素材库）就没有素材库能改，那条选项对
+    // PM 来说是死链接，只剩「把价格去掉」这一条路是真能做的。
+    const { data: libraryRow } = await supabase
+      .from('client_assets')
+      .select('id')
+      .eq('client_id', post.client_id)
+      .eq('storage_url', storageUrl)
+      .limit(1)
+      .maybeSingle()
+    const libraryAssetId = (libraryRow as { id: string } | null)?.id
+
     items.push({
       kind: 'price_claim_unbacked',
       client_id: post.client_id,
@@ -1178,10 +1198,14 @@ async function pushPriceGateItems(
         `帖子「${post.title ?? post.id}」已审批但发不出去 —— 文案里写了价格，` +
         `配图来源是「${SOURCE_LABELS[verdict.source]}」。真实价格只能配真实画面，` +
         '客人按图下单拿到的东西对不上，投诉算客户的。',
-      how:
-        '两条路选一条：① 最快 —— 把价格从文案里去掉；' +
-        '② 如果那张图确实是客户实拍，去素材库点开它，把来源改成「客户实拍（已确认）」，再回来重发。',
-      href: `https://app.magicengine.com.au/dashboard/clients/${post.client_id}/assets`,
+      how: libraryAssetId
+        ? '两条路选一条：① 最快 —— 把价格从文案里去掉；' +
+          '② 如果那张图确实是客户实拍，点这个链接会直接跳到那张图，把来源改成「客户实拍（已确认）」，再回来重发。'
+        : '这张图不在素材库里（不是客户实拍上传的，多半是系统自动生成的），没法回去"确认成客户实拍"——' +
+          '唯一能做的是把价格从文案里去掉，再重发。',
+      href: libraryAssetId
+        ? `https://app.magicengine.com.au/dashboard/clients/${post.client_id}/assets?highlight=${libraryAssetId}`
+        : `https://app.magicengine.com.au/dashboard/clients/${post.client_id}/execution`,
     })
   }
 }

@@ -4,10 +4,12 @@ import { CLOUD_FN_PREFIX } from '../client'
 import { probePing } from './probe'
 import { geoRemeasureOne } from './geo-remeasure'
 import { dailyPlanPostFanOut, dailyPlanPostMeasure } from './daily-plan-post-measurement'
+import { dailyPlanPostStoryResolve } from './daily-plan-post-story-resolve'
 import { factoryReelMeasurementAdapter } from './factory-reel-measurement-adapter'
 import { flywheelSeoWeeklyFanOut, flywheelSeoSnapshotOne } from './flywheel-seo-weekly'
 import { messengerBriefAfterSync } from './messenger-brief-after-sync'
 import { factoryCreatomateRender } from './factory-creatomate-render'
+import { knowledgeMiningRequested } from './knowledge-mining'
 
 export const cloudFunctions = [
   webIntelligenceCapture,
@@ -17,11 +19,13 @@ export const cloudFunctions = [
   geoRemeasureOne,
   dailyPlanPostFanOut,
   dailyPlanPostMeasure,
+  dailyPlanPostStoryResolve,
   factoryReelMeasurementAdapter,
   flywheelSeoWeeklyFanOut,
   flywheelSeoSnapshotOne,
   messengerBriefAfterSync,
   factoryCreatomateRender,
+  knowledgeMiningRequested,
 ]
 
 /** 命名空间自检：所有注册函数 id 必须以 cloud- 开头（契约测试 + 运行期双保险）。 */
