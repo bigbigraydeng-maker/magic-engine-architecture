@@ -123,16 +123,18 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 **6 步进度**：
 - [x] 步骤 1（issue #1643）敏感度检测器 —— PR #1650 已合并
 - [x] 步骤 2（issue #1644）表结构 + 读取入口 —— PR #1652 已合并
-- [ ] 步骤 3（issue #1645）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）——
-      另一窗口（PR #1616）已产出一份经魏征复审的萃取代码，计划移植改接本步的表结构，不重写
+- [x] 步骤 3（issue #1645）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）—— PR #1671
+      已合并。移植自另一窗口 PR #1616 已过魏征复审的核心算法，改接真实
+      `detectSensitivity()`/`checkBudget()`，并经过新一轮子牙+魏征复审又修了 6 处真问题
+      （PII 脱敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已
+      关闭并 credit。
 - [ ] 步骤 4（issue #1646）FDE 审核页 + 客户确认页（客户对外可见，需板桥复审）
 - [ ] 步骤 5（issue #1647）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— **已有两个重复实现**
       （PR #1623 已关闭 credit 给下方 PR；PR #1629 已合并作为紧急修复主线，`brief-client-
       facts.ts` 临时文件明确标注等本步骤替换）
 - [ ] 步骤 6（issue #1648）rollout 阶段
 
-**后续跟踪**：issue #1669（确认人登记写入 API，P3）。PR #1616（重复步骤 1-3 的另一窗口
-产出）保持 open，等步骤 3 真正合并后关闭并 credit 其萃取工作流思路。
+**后续跟踪**：issue #1669（确认人登记写入 API，P3）。
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
