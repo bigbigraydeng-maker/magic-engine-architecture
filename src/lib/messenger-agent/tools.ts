@@ -1,43 +1,59 @@
 /**
- * CTS Governed Reply Agent — 4 只读工具(Issue #1580)。
+ * CTS Governed Reply Agent — 只读工具(Issue #1580 · v3 改接客户知识库)。
  *
  * 🔴 安全模型抄 `src/lib/agent-tools/readonly/types.ts`(诸葛亮/张骞等 4 agent
  * 共用的资源身份强作用域 pattern):这套工具喂给 Claude(黑盒,可幻觉/被
- * prompt 注入)。这个 agent 的越权轴跟 SEO/GA4 那组不一样 —— 不是
- * domain/siteUrl/propertyId,而是 clientId / conversationId / configSlug 三条:
- *   - clientId       —— 查哪个客户的 brief / 哪个客户名下的会话
+ * prompt 注入)。这个 agent 的越权轴是 clientId / conversationId 两条:
+ *   - clientId       —— 查哪个客户的知识库事实 / 哪个客户的 brief
  *   - conversationId —— 查哪一段对话历史
- *   - configSlug     —— 读哪个客户的 config/clients/<slug>/offerings.yaml
  * 全部由**服务端注入 ctx**(`buildMessengerAgentTools` 冻结进 handler 闭包),
  * 工具 input_schema 一律不暴露这些字段,handler 只用 ctx.* 查询,即便 Claude
  * 在 input 里硬塞了这些字段也被忽略(见 `warnOnResourceIds`)。
  *
- * offerings.yaml 是 Verifier(#1579)判"这个团到底能不能订"的唯一事实源
- * (`offerings-loader.ts` 头注释)——`query_active_tours` / `query_retired_tours`
- * 让 agent 在生成回复**之前**就主动核实,而不是凭训练知识或网站缓存内容
- * 编造团期/价格,这正是这整套治理系统要堵住的那个真实事故(Meta 官方 AI
- * 把已下架的团说成可订)。
+ * ## v3 改接(design doc §9.14 C.2)—— 不再有 configSlug 越权轴
+ *
+ * v2 设计读 `config/clients/<configSlug>/offerings.yaml`(见 `offerings-loader.ts`
+ * —— 该文件仍在仓库里但已不被这套工具使用,是否要连接 ME 旅游版 Tour 管理
+ * 模块 P1 阶段留给那条 roadmap 自行判断,见 docs/ROADMAP.md),需要第三条
+ * configSlug 越权轴。v3 唯一读取入口是
+ * [`getClientKnowledge(clientId, { purpose })`](../knowledge/read.ts) —— 只认
+ * DB `clientId`,不需要目录名映射,越权轴收敛回 2 条。
+ *
+ * `getClientKnowledge` 本身已经做完"这条事实现在能不能被这个用途看到"的全部
+ * 判断(entitlement、批准状态、有效期、可见性、双签、上线阶段/kill switch —
+ * 见 `read.ts` 文件头),这两个工具只负责按 `sensitivity` 把结果分成两类摆给
+ * Claude,不重复任何一道闸:
+ *   - `query_customer_facing_facts` —— sensitivity 为 price/timeline/commitment/
+ *     policy 的事实(取代 v2 的 `query_active_tours`)。这些事实已经在读取入口
+ *     那一关被要求"已批准 + 客户已确认 + 确认指纹未失效",工具层不用也不能
+ *     再自己判断一遍。
+ *   - `query_client_brand_facts` —— sensitivity='general' 的事实 + Master
+ *     Brief 品牌语气(取代 v2 的 `canonical.factual_bullets`)。
+ * `visibility='forbidden'` 的事实(如已停售的产品/团)**永远不会出现在这两个
+ * 工具的输出里**——`getClientKnowledge` 在读取入口那一层就已经把它们的正文
+ * 挡掉,只把 `fact_key` 报给调用方(见 Verifier `verifier/policies/cts.ts` 的
+ * gate 2)。所以 v2 的 `query_retired_tours` 工具在 v3 里整个删除:Agent 不
+ * 需要、也没有渠道主动查"哪些产品下架了"——这正是防止 Agent 反而学会怎么
+ * 措辞提及一个下架产品的设计意图,事后校验完全交给 Verifier。
  */
 
 import type Anthropic from '@anthropic-ai/sdk'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getActiveBrief } from '@/lib/content/brief-injector'
-import { loadOfferings, type ActiveTour, type RetiredTour } from './offerings-loader'
+import { getClientKnowledge, type KnowledgeEntry } from '@/lib/knowledge'
 
 // ─── ctx + 越权轴守卫(照抄 agent-tools/readonly/types.ts 的 pattern)──────────
 
 /**
- * 三条越权轴全部服务端注入,冻结进 handler 闭包。Claude 全程无法通过工具
- * input 指定查哪个客户 / 哪段对话 / 哪份 offerings 配置。
+ * 两条越权轴全部服务端注入,冻结进 handler 闭包。Claude 全程无法通过工具
+ * input 指定查哪个客户 / 哪段对话。
  */
 export interface MessengerAgentToolContext {
-  /** 越权轴 1 —— brief / 对话归属校验用 */
+  /** 越权轴 1 —— 知识库事实 / brief / 对话归属校验用 */
   clientId: string
   /** 越权轴 2 —— 查哪一段对话历史 */
   conversationId: string
-  /** 越权轴 3 —— `config/clients/<configSlug>/offerings.yaml` 的目录名,不是 DB UUID */
-  configSlug: string
   supabase: SupabaseClient
 }
 
@@ -56,6 +72,8 @@ export interface MessengerAgentToolModule {
 const FORBIDDEN_INPUT_KEYS = [
   'client_id', 'clientId', 'client',
   'conversation_id', 'conversationId', 'conversation',
+  // v2 遗留 configSlug 轴已删除(见文件头),仍然挡住,防止有人把已作废的
+  // offerings.yaml 越权字段习惯性塞回来。
   'config_slug', 'configSlug',
   // 照抄 readonly 工具集那 4 条轴的字面量,防止有人把这套工具误接到别的
   // 上下文时也一并挡住 —— 这套工具本身不用这几条轴,但挡上不会有副作用。
@@ -92,49 +110,40 @@ function optStringArray(raw: unknown): string[] {
   return single ? [single] : []
 }
 
-function matchesAnyKeyword(haystack: string[], keywords: string[]): boolean {
-  const lowerHaystack = haystack.map((h) => h.toLowerCase())
-  return keywords.some((kw) => {
-    const needle = kw.toLowerCase()
-    return lowerHaystack.some((h) => h.includes(needle))
-  })
+/** 关键词是否命中一条知识事实——匹配 `statement` 正文和 `scope`(产品线/门店等细分范围)。 */
+function factMatchesAnyKeyword(entry: KnowledgeEntry, keywords: string[]): boolean {
+  const haystack = `${entry.statement} ${JSON.stringify(entry.scope)}`.toLowerCase()
+  return keywords.some((kw) => haystack.includes(kw.toLowerCase()))
 }
 
-function activeTourSummary(t: ActiveTour) {
+function summarizeFact(entry: KnowledgeEntry) {
   return {
-    code: t.code,
-    name: t.name,
-    aliases: t.aliases,
-    price_nzd: t.price_nzd,
-    departure_dates: t.departure_dates,
-    nights: t.nights,
-    itinerary_url: t.itinerary_url,
-    highlights: t.highlights,
+    fact_key: entry.factKey,
+    scope: entry.scope,
+    statement: entry.statement,
+    structured_value: entry.structuredValue,
+    valid_until: entry.validUntil,
   }
 }
 
-function retiredTourSummary(t: RetiredTour) {
-  return {
-    code: t.code,
-    name: t.name,
-    aliases: t.aliases,
-    retired_reason: t.retired_reason,
-    still_visible_on_website: t.still_visible_on_website ?? null,
-  }
-}
+/** `sensitivity` 分类见 `src/lib/knowledge/sensitivity.ts`:客户确认过的商业事实(价格/时效/承诺/政策)。 */
+const CUSTOMER_FACING_SENSITIVITIES = new Set(['price', 'timeline', 'commitment', 'policy'])
 
-// ─── 工具 1 — query_active_tours ─────────────────────────────────────────────
+// ─── 工具 1 — query_customer_facing_facts(取代 v2 的 query_active_tours)───────
 
-export const queryActiveTours: MessengerAgentToolModule = {
+export const queryCustomerFacingFacts: MessengerAgentToolModule = {
   tool: {
-    name: 'query_active_tours',
+    name: 'query_customer_facing_facts',
     description:
-      'Look up the canonical, currently-bookable tours from the offerings fact layer ' +
-      '(config/clients/<client>/offerings.yaml — the single source of truth for what is ' +
-      'actually for sale right now, NOT the website or your training knowledge). Use this ' +
-      'BEFORE stating any tour name, price, date, or itinerary to a customer. Optionally ' +
-      'filter by keywords extracted from the customer\'s message (matched against tour name, ' +
-      'aliases, and highlights). Omit the filter to list every active tour.',
+      'Look up this client\'s confirmed commercial facts (prices, timelines, commitments, policies — ' +
+      'e.g. a specific tour\'s price and departure dates, a refund policy) from the Client Knowledge ' +
+      'Base — the single source of truth for what may actually be stated to a customer right now, NOT ' +
+      'the website or your training knowledge. Every fact returned here has already passed internal ' +
+      'approval AND the customer\'s own confirmation. Use this BEFORE stating any price, date, or ' +
+      'commitment to a customer. If something you would otherwise assume from general knowledge does ' +
+      'not show up here, treat it as UNKNOWN — do not state it, offer a human follow-up instead. ' +
+      'Optionally filter by keywords from the customer\'s message. Omit the filter to list everything ' +
+      'available.',
     input_schema: {
       type: 'object',
       properties: {
@@ -142,92 +151,39 @@ export const queryActiveTours: MessengerAgentToolModule = {
           type: 'array',
           items: { type: 'string' },
           description:
-            'Optional keywords from the customer\'s message (e.g. ["Silk Road"], ["Christmas", "China"]) ' +
-            'to narrow down which active tours to return. Case-insensitive substring match against ' +
-            'tour name / aliases / highlights. Omit to get the full active list.',
+            'Optional keywords from the customer\'s message (e.g. ["Silk Road"], ["refund"]) to narrow ' +
+            'down which facts to return. Case-insensitive substring match against the fact text. Omit ' +
+            'to get everything available.',
         },
       },
     },
   },
 
   async handler(input, ctx) {
-    warnOnResourceIds(input, 'query_active_tours')
+    warnOnResourceIds(input, 'query_customer_facing_facts')
     const args = (input ?? {}) as Record<string, unknown>
     const keywords = optStringArray(args.intent_keywords)
 
     try {
-      const offerings = await loadOfferings({ configSlug: ctx.configSlug })
-      const tours = keywords.length === 0
-        ? offerings.active_tours
-        : offerings.active_tours.filter((t) =>
-            matchesAnyKeyword([t.name, ...t.aliases, ...t.highlights], keywords),
-          )
+      const result = await getClientKnowledge(ctx.clientId, { purpose: 'customer_reply' })
+      const facts = result.entries
+        .filter((e) => CUSTOMER_FACING_SENSITIVITIES.has(e.sensitivity))
+        .filter((e) => keywords.length === 0 || factMatchesAnyKeyword(e, keywords))
 
       return truncateToolOutput(JSON.stringify({
-        fact_layer: 'offerings.yaml',
-        last_verified_at: offerings.last_verified_at,
+        fact_layer: 'client_knowledge_base',
         matched_by_keywords: keywords.length > 0 ? keywords : null,
-        active_tours: tours.map(activeTourSummary),
+        facts: facts.map(summarizeFact),
       }))
     } catch (err) {
       return JSON.stringify({
-        error: `Active tours lookup failed — treat tour availability as UNKNOWN, do not guess: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Knowledge base lookup failed — treat every commercial fact as UNKNOWN, do not guess: ${err instanceof Error ? err.message : String(err)}`,
       })
     }
   },
 }
 
-// ─── 工具 2 — query_retired_tours ────────────────────────────────────────────
-
-export const queryRetiredTours: MessengerAgentToolModule = {
-  tool: {
-    name: 'query_retired_tours',
-    description:
-      'Look up tours that are RETIRED / no longer for sale (offerings.yaml retired_tours). Use ' +
-      'this whenever a customer asks about a tour you cannot find in query_active_tours, or ' +
-      'mentions a tour name you are not fully sure is still current — some retired tours\' ' +
-      'marketing pages are still live on the website (still_visible_on_website), which is exactly ' +
-      'the trap this check exists to catch. If found here, tell the customer it is no longer ' +
-      'offered (state retired_reason if useful) and never offer to book it.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        name_or_alias: {
-          type: 'string',
-          description:
-            'Optional tour name or alias mentioned by the customer, to check specifically. ' +
-            'Case-insensitive substring match against name / aliases. Omit to list every retired tour.',
-        },
-      },
-    },
-  },
-
-  async handler(input, ctx) {
-    warnOnResourceIds(input, 'query_retired_tours')
-    const args = (input ?? {}) as Record<string, unknown>
-    const nameOrAlias = optString(args.name_or_alias)
-
-    try {
-      const offerings = await loadOfferings({ configSlug: ctx.configSlug })
-      const tours = nameOrAlias === undefined
-        ? offerings.retired_tours
-        : offerings.retired_tours.filter((t) => matchesAnyKeyword([t.name, ...t.aliases], [nameOrAlias]))
-
-      return truncateToolOutput(JSON.stringify({
-        fact_layer: 'offerings.yaml',
-        last_verified_at: offerings.last_verified_at,
-        matched_by: nameOrAlias ?? null,
-        retired_tours: tours.map(retiredTourSummary),
-      }))
-    } catch (err) {
-      return JSON.stringify({
-        error: `Retired tours lookup failed — treat tour status as UNKNOWN, do not guess: ${err instanceof Error ? err.message : String(err)}`,
-      })
-    }
-  },
-}
-
-// ─── 工具 3 — query_conversation_history ─────────────────────────────────────
+// ─── 工具 2 — query_conversation_history ─────────────────────────────────────
 
 const CONVERSATION_HISTORY_LIMIT = 50
 
@@ -302,16 +258,18 @@ export const queryConversationHistory: MessengerAgentToolModule = {
   },
 }
 
-// ─── 工具 4 — query_client_brand_facts ───────────────────────────────────────
+// ─── 工具 3 — query_client_brand_facts(取代 v2 的 canonical.factual_bullets)───
 
 export const queryClientBrandFacts: MessengerAgentToolModule = {
   tool: {
     name: 'query_client_brand_facts',
     description:
-      'Look up THIS client\'s brand voice facts from their active Master Brief (tone, target ' +
-      'audience, pain points, words to avoid). Use this to keep your reply on-brand. Scoped to ' +
-      'the current client only — does not return tour/pricing facts (use query_active_tours / ' +
-      'query_retired_tours for those).',
+      'Look up THIS client\'s general brand facts (company history, support contact, corrections to ' +
+      'common misconceptions — Client Knowledge Base entries with sensitivity="general", which do not ' +
+      'require customer confirmation) plus their active Master Brief (tone, target audience, pain ' +
+      'points, words to avoid). Use this to keep your reply on-brand and factually correct about the ' +
+      'company itself. Scoped to the current client only — does not return commercial facts like ' +
+      'prices or policies (use query_customer_facing_facts for those).',
     input_schema: { type: 'object', properties: {} },
   },
 
@@ -319,23 +277,39 @@ export const queryClientBrandFacts: MessengerAgentToolModule = {
     warnOnResourceIds(input, 'query_client_brand_facts')
 
     try {
-      // 🔴 clientId is server-injected — this can only ever read this client's own brief.
-      const brief = await getActiveBrief(ctx.clientId)
-      if (!brief) {
+      const [knowledge, brief] = await Promise.all([
+        getClientKnowledge(ctx.clientId, { purpose: 'customer_reply' }).catch((err) => {
+          console.warn(
+            `[messenger-agent/tools] query_client_brand_facts: knowledge base lookup failed, ` +
+            `continuing with brief only: ${err instanceof Error ? err.message : String(err)}`,
+          )
+          return null
+        }),
+        // 🔴 clientId is server-injected — this can only ever read this client's own brief.
+        getActiveBrief(ctx.clientId),
+      ])
+
+      const generalFacts = (knowledge?.entries ?? [])
+        .filter((e) => e.sensitivity === 'general')
+        .map(summarizeFact)
+
+      if (!brief && generalFacts.length === 0) {
         return JSON.stringify({
-          note: 'No active Master Brief found for this client — no brand-voice facts available.',
+          note: 'No active Master Brief and no general knowledge-base facts found for this client — ' +
+            'no brand-voice facts available.',
         })
       }
 
       return truncateToolOutput(JSON.stringify({
         client_scoped: true,
-        brand_name: brief.brand_name ?? null,
-        tagline: brief.tagline ?? brief.core_proposition ?? null,
-        tone: brief.tone ?? null,
-        primary_audience: brief.primary_audience ?? null,
-        pain_points: brief.pain_points ?? [],
-        buying_trigger: brief.buying_trigger ?? null,
-        avoid_words: brief.avoid_words ?? [],
+        general_facts: generalFacts,
+        brand_name: brief?.brand_name ?? null,
+        tagline: brief?.tagline ?? brief?.core_proposition ?? null,
+        tone: brief?.tone ?? null,
+        primary_audience: brief?.primary_audience ?? null,
+        pain_points: brief?.pain_points ?? [],
+        buying_trigger: brief?.buying_trigger ?? null,
+        avoid_words: brief?.avoid_words ?? [],
       }))
     } catch (err) {
       return JSON.stringify({
@@ -348,8 +322,7 @@ export const queryClientBrandFacts: MessengerAgentToolModule = {
 // ─── 工厂 — buildMessengerAgentTools ──────────────────────────────────────────
 
 const MODULES: MessengerAgentToolModule[] = [
-  queryActiveTours,
-  queryRetiredTours,
+  queryCustomerFacingFacts,
   queryConversationHistory,
   queryClientBrandFacts,
 ]
@@ -357,14 +330,13 @@ const MODULES: MessengerAgentToolModule[] = [
 export interface BuildMessengerAgentToolsInput {
   clientId: string
   conversationId: string
-  configSlug: string
   supabase?: SupabaseClient
 }
 
 /**
- * Build the 4-tool set for one conversation. `ctx` is captured in closure —
- * Claude cannot influence clientId / conversationId / configSlug through any
- * tool input, matching `agent-tools/readonly/index.ts`'s `buildReadonlyTools`.
+ * Build the 3-tool set for one conversation. `ctx` is captured in closure —
+ * Claude cannot influence clientId / conversationId through any tool input,
+ * matching `agent-tools/readonly/index.ts`'s `buildReadonlyTools`.
  */
 export function buildMessengerAgentTools(base: BuildMessengerAgentToolsInput): {
   tools: Anthropic.Tool[]
@@ -373,7 +345,6 @@ export function buildMessengerAgentTools(base: BuildMessengerAgentToolsInput): {
   const ctx: MessengerAgentToolContext = {
     clientId: base.clientId,
     conversationId: base.conversationId,
-    configSlug: base.configSlug,
     supabase: base.supabase ?? supabaseAdmin,
   }
 

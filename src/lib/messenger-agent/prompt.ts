@@ -1,27 +1,56 @@
 /**
- * CTS Governed Reply Agent — system prompt assembly (Issue #1580).
+ * CTS Governed Reply Agent — system prompt assembly (Issue #1580 · v3 改接客户知识库)。
  *
  * 组装喂给 `callClaudeWithTools`(`src/lib/anthropic/client.ts`)的 system prompt:
- * brief(品牌语气)+ canonical 团清单事实(offerings.yaml,已经是这次调用时刻
- * 读到的快照)+ 对话历史(调用方已经取好的最近几轮)+ 硬闸文案(输出契约 +
+ * brief(品牌语气)+ 客户知识库事实快照(`getClientKnowledge` 已经是这次调用
+ * 时刻读到的结果)+ 对话历史(调用方已经取好的最近几轮)+ 硬闸文案(输出契约 +
  * 绝不能做的事)。
  *
- * 为什么 canonical 事实已经写进 prompt 了,`tools.ts` 还要再给一遍
- * `query_active_tours` / `query_retired_tours`:这里写进去的是**这一刻的快照**,
- * 只用来让 Claude 一眼看到"大概有哪些团"，降低多余的工具调用；但 Verifier
- * (#1579)的 provenance 闸门只认工具调用轨迹,不认"prompt 里写过"——回复里
- * 提到的每个团都必须能对应到一次真实的 `query_active_tours` /
- * `query_retired_tours` 调用结果,而不是 Claude 凭 prompt 里的文字自己拼出来的。
- * 硬闸文案里因此明确要求:提到具体团之前必须先调用对应工具核实。
+ * 为什么知识库事实已经写进 prompt 了,`tools.ts` 还要再给一遍
+ * `query_customer_facing_facts`:这里写进去的是**这一刻的快照**,只用来让
+ * Claude 一眼看到"大概有哪些已确认事实"，降低多余的工具调用；但 Verifier
+ * (#1579)的 provenance / number-claim 闸门只认工具调用轨迹,不认"prompt 里
+ * 写过"——回复里提到的每一条商业事实都必须能对应到一次真实的
+ * `query_customer_facing_facts` 调用结果,而不是 Claude 凭 prompt 里的文字自己
+ * 拼出来的。硬闸文案里因此明确要求:提到具体价格/团期之前必须先调用工具核实。
  *
- * 这个模块是纯函数(不碰数据库/网络)——所有材料由调用方(F1 Inngest 函数,
+ * ## v3 改接(design doc §9.14 C.2)—— 不再区分"在售/下架"两个数组
+ *
+ * v2 的 `formatOfferingsSnapshot` 分别列出 `active_tours`(可推荐)和
+ * `retired_tours`(已下架,明确警示官网仍可见的陷阱)。v3 改用 `getClientKnowledge`
+ * 后,`visibility='forbidden'` 的事实(取代 v2 的下架团)**永远不会作为正文
+ * 出现在这里**——读取入口本身就不把这些事实的内容交给任何用途(见
+ * `read.ts` 文件头 §4),Agent 完全看不到"曾经有哪些团、为什么下架"。这不是
+ * 疏漏:防止 Agent 反而从这些描述里学会怎么委婉提及一个下架产品,是这次
+ * 改接的设计意图之一(design doc §9.14 C.2)。因此硬闸文案第 2 条从 v2 的
+ * "查到下架就明确告知已下架"改为"查不到就一律当作未知,交给人工跟进"——
+ * 两种情况(真的下架 / 单纯没被问到的产品)对 Agent 而言现在是同一种处理:
+ * 说"不确定,请人工同事确认"。是否真的下架,由 Verifier 的
+ * `retired_tour_mention` 闸事后用 `forbiddenFactKeys` 校验,不再是 Agent 的
+ * 前置判断职责。
+ *
+ * ## 未收进本次改动:`reply_forbidden_topics`(CTS 话题禁区静态清单)
+ *
+ * v2 从 `offerings.yaml` 读到的 `reply_forbidden_topics` 会被写进这份 prompt,
+ * 提前提醒 Agent 别碰这些话题。v3 设计文档"三份禁止清单分工"表把这份清单
+ * 划给 CTS Verifier policy(`verifier/policies/cts.ts`,Issue #1579,另一个
+ * PR)的静态配置,不再挂在知识库事实结构里。这个模块(Issue #1580)刻意不去
+ * import 另一个未合并 PR 的文件(跟 `agent-output-schema.ts` 与
+ * `verifier/policies/cts.ts` 之间"契约靠注释约定、不靠代码 import"是同一个
+ * 既有惯例),所以这份提前提醒**这次没有迁移过来**——话题闸门仍然 100% 生效
+ * (Verifier gate 4 事后拦截,不受影响),只是 Agent 不再有机会提前"礼貌绕开"
+ * 这些话题,命中时会先答一次再被挡下、转人工,而不是一次到位礼貌转人工。
+ * 这是已知的、经过取舍的行为退化(不影响安全性,只影响一次交互的顺滑度),
+ * 留给复审判断是否值得为此单独接一条只读静态数组的最小依赖。
+ *
+ * 这个模块是纯函数(不碰数据库/网络)——所有材料由调用方(F2 Inngest 函数,
  * 未来 issue 落地)先各自取好再传进来,方便单测,也让"取数据"和"拼文案"
  * 两件事解耦。
  */
 
 import type { MasterBrief } from '@/types/magic-engine'
 import { formatBriefForPrompt } from '@/lib/content/brief-injector'
-import type { OfferingsFile } from './offerings-loader'
+import type { KnowledgeEntry } from '@/lib/knowledge'
 
 export interface ConversationHistoryTurn {
   direction: 'inbound' | 'outbound'
@@ -33,46 +62,38 @@ export interface ConversationHistoryTurn {
 export interface BuildMessengerAgentSystemPromptInput {
   /** 该客户当前生效的 Master Brief;没有则明确告诉 Claude 不要编造品牌信息。 */
   brief: MasterBrief | null
-  /** `loadOfferings({ configSlug })` 读到的这一刻快照。 */
-  offerings: OfferingsFile
+  /**
+   * `getClientKnowledge(clientId, { purpose: 'customer_reply' })` 这一刻读到的
+   * 结果里,sensitivity 为 price/timeline/commitment/policy 的条目(取代 v2 的
+   * `offerings.active_tours`)。跟 `tools.ts` 的 `query_customer_facing_facts`
+   * 读的是同一个筛选条件,调用方各自取一次即可,互不依赖。
+   */
+  customerFacingFacts: KnowledgeEntry[]
+  /**
+   * 同一次读取结果里 sensitivity='general' 的条目(取代 v2 的
+   * `offerings.factual_bullets`)。
+   */
+  brandFacts: KnowledgeEntry[]
   /** 调用方已经取好的最近几轮对话,时间正序(最老的在前)。 */
   conversationHistory: ConversationHistoryTurn[]
 }
 
-function formatOfferingsSnapshot(offerings: OfferingsFile): string {
-  const activeLines = offerings.active_tours.length === 0
-    ? '  (目前没有任何在售团 —— 不要向客户推荐任何具体团)'
-    : offerings.active_tours
-        .map((t) => `  - [${t.code}] ${t.name} —— NZ$${t.price_nzd}，${t.nights} 晚，出发日期：${t.departure_dates.join(' / ')}`)
-        .join('\n')
+function formatKnowledgeSnapshot(customerFacingFacts: KnowledgeEntry[], brandFacts: KnowledgeEntry[]): string {
+  const commercialLines = customerFacingFacts.length === 0
+    ? '  (目前没有任何已确认可对客户说的商业事实 —— 不要向客户报价、说团期、或承诺任何政策细节)'
+    : customerFacingFacts.map((f) => `  - [${f.factKey}] ${f.statement}`).join('\n')
 
-  const retiredLines = offerings.retired_tours.length === 0
-    ? '  (目前没有已知的下架团记录)'
-    : offerings.retired_tours
-        .map((t) => `  - [${t.code}] ${t.name} —— 下架原因：${t.retired_reason}${t.still_visible_on_website ? '（⚠️ 官网页面仍在线，客户可能会问起）' : ''}`)
-        .join('\n')
-
-  const bullets = offerings.factual_bullets.length === 0
+  const brandLines = brandFacts.length === 0
     ? '  (无)'
-    : offerings.factual_bullets.map((b) => `  - ${b}`).join('\n')
+    : brandFacts.map((f) => `  - ${f.statement}`).join('\n')
 
-  const forbidden = offerings.reply_forbidden_topics.length === 0
-    ? '  (无)'
-    : offerings.reply_forbidden_topics.map((t) => `  - ${t}`).join('\n')
+  return `事实层快照(客户知识库,读取时刻的结果 —— 每条都已经过内部批准 + 客户本人确认):
 
-  return `事实层快照(offerings.yaml，最后核实时间：${offerings.last_verified_at}):
+已确认可对客户说的商业事实(价格 / 团期 / 承诺 / 政策)：
+${commercialLines}
 
-在售团（canonical，可以推荐/报价/给出行程链接）：
-${activeLines}
-
-已下架团（绝不能说成可订，问起时要明确说明已下架）：
-${retiredLines}
-
-可直接陈述的硬事实：
-${bullets}
-
-禁止直接作答的话题（应礼貌说明会有人工跟进，不要自己回答）：
-${forbidden}`
+品牌 / 公司事实：
+${brandLines}`
 }
 
 function formatConversationHistory(history: ConversationHistoryTurn[]): string {
@@ -90,24 +111,23 @@ function formatConversationHistory(history: ConversationHistoryTurn[]): string {
 
 const HARD_GATE_TEXT = `硬性规则（不可违反）：
 
-1. 在回复里提到任何具体团名 / 价格 / 团期 / 行程链接之前，必须先调用
-   \`query_active_tours\` 核实它确实在售。只凭上面的事实层快照或你自己的记忆
-   直接下结论 = 违规，因为快照可能在这次对话过程中已经过期，Verifier 只认
+1. 在回复里提到任何具体价格 / 团期 / 政策承诺之前，必须先调用
+   \`query_customer_facing_facts\` 核实它确实存在。只凭上面的事实层快照或你自己的
+   记忆直接下结论 = 违规，因为快照可能在这次对话过程中已经过期，Verifier 只认
    真实的工具调用记录，不认 prompt 里写过什么。
-2. 如果客户问起的团不在 \`query_active_tours\` 的结果里，必须调用
-   \`query_retired_tours\` 确认——命中就明确告诉客户这个团已经不再销售，绝不能
-   说它可订、绝不能报价或给出行程链接，即使官网页面看起来还在线。
-3. 绝不能编造、猜测、或用"大概"这类模糊说法陈述价格、团期、行程细节——
+2. 如果客户问起的产品 / 价格 / 政策不在 \`query_customer_facing_facts\` 的结果
+   里，一律当作"未知"处理——不要假设它已下架，也不要假设它仍然可订，明确告诉
+   客户这个问题需要人工同事确认，绝不能凭训练知识或网站印象自己回答。
+3. 绝不能编造、猜测、或用"大概"这类模糊说法陈述价格、团期、政策细节——
    要么有事实层数据支撑，要么明确告诉客户这个问题需要人工确认。
-4. 遇到"禁止直接作答的话题"清单里的内容，礼貌说明会有人工同事跟进，不要自己
-   给出实质性答案。
-5. 输出必须严格符合以下 JSON 契约（不要输出任何 JSON 之外的文字）：
+4. 输出必须严格符合以下 JSON 契约（不要输出任何 JSON 之外的文字）：
    { "reply_text": string, "confidence": number（0 到 1 之间，代表这条回复可以
    直接发送、不需要人工介入的把握）, "offerings": [{ "name": string, "code": string }] }
-   \`offerings\` 是 reply_text 里提到的每一个具体团，按 {name, code} 一一配对——
-   name 用你回复里实际写的团名，code 必须是工具返回结果里那个团的 canonical
-   code。没有提到任何具体团时 \`offerings\` 传空数组 \`[]\`，不要省略这个字段。
-6. 对自己没有把握回答好、或者需要人工判断的问题（例如投诉、退款、超出上面
+   \`offerings\` 是 reply_text 里提到的每一个具体产品，按 {name, code} 一一配对——
+   name 用你回复里实际写的名称，code 必须是工具返回结果里那条事实的 canonical
+   code（\`structured_value.code\`）。没有提到任何具体产品时 \`offerings\` 传空
+   数组 \`[]\`，不要省略这个字段。
+5. 对自己没有把握回答好、或者需要人工判断的问题（例如投诉、退款、超出上面
    事实层范围的追问），把 \`confidence\` 调低，而不是硬答一个听起来合理但没有
    事实支撑的回复。`
 
@@ -119,7 +139,7 @@ export function buildMessengerAgentSystemPrompt(input: BuildMessengerAgentSystem
   return [
     '你是 CTS Tours NZ 的 Messenger 客服回复助手。',
     briefSection,
-    formatOfferingsSnapshot(input.offerings),
+    formatKnowledgeSnapshot(input.customerFacingFacts, input.brandFacts),
     `最近的对话历史：\n${formatConversationHistory(input.conversationHistory)}`,
     HARD_GATE_TEXT,
   ].join('\n\n')
