@@ -15,18 +15,27 @@
  *
  * Fail-closed budget (§9.8): every run declares max messages / max model
  * calls / max spend up front; missing any one of the three refuses to run
- * at all (`assertMiningBudget`) — there is no "unlimited" default. On top of
- * that per-run hard cap, `checkBudget()` (`@/lib/mtc/budget-guard`, the
- * platform's existing monthly MTC burn-rate governor) is consulted as a
- * READ-ONLY headroom check before running — see the "MTC budget" section
- * below for why this run never itself deducts MTC.
+ * at all (`assertMiningBudget`) — there is no "unlimited" default. These
+ * three per-run hard caps ARE the spend governor for this feature.
+ *
+ * 🔴 事故预防（2026-09-14，读设计文档 §9.8 逐字核对后发现的自我纠错）：
+ * 早期版本额外调用了 `@/lib/mtc/budget-guard` 的 `checkBudget()` 做"只读
+ * 月度预算头寸检查"，理由是issue #1645 的一句话概述提到"复用既有预算
+ * 闸"。但设计文档 §9.8（魏征 11）明确写了**不用**这个模块，并给了两条
+ * 理由：① 它管的是客户自己购买的 MTC 积分余额，跟 ME 自己付给模型
+ * 供应商的钱是两个完全不同的账本，语义层不对；② 实测确认
+ * `getMonthlyCap()` 读失败时会静默放行、退回默认上限 5000（`budget-
+ * guard.ts` 的 `getMonthlyCap` 函数），这是"读失败=放行"的 fail-open
+ * 设计，跟本文件"缺任一硬顶就拒绝运行"的 fail-closed 原则直接矛盾——
+ * 把这道本该严格的闸，接到一个允许静默放行的模块上。issue 文本本身在
+ * 设计文档这条修正之后没有同步更新，本文件之前照着 issue 的旧描述实现
+ * 是错的，已经删掉这个依赖，只保留本来就正确的三道硬顶。
  */
 
 import { randomUUID } from 'node:crypto'
 import { supabaseAdmin } from '@/lib/supabase'
 import { callClaudeChat } from '@/lib/anthropic/client'
 import { jsonrepair } from 'jsonrepair'
-import { checkBudget } from '@/lib/mtc/budget-guard'
 import { getClientKnowledge } from './read'
 import { detectSensitivity, type Sensitivity } from './sensitivity'
 
@@ -721,17 +730,10 @@ interface SurvivingCandidate {
  * on this value the moment a candidate is later approved. Nothing written
  * by this function is ever `status='approved'`.
  *
- * MTC budget (`checkBudget`): this run reuses the platform's existing
- * monthly MTC burn-rate governor as a READ-ONLY headroom check
- * (`projectedMtc=0`, i.e. "is this client already over its monthly cap from
- * OTHER activity") before running — refusing to pile more automated
- * internal work onto a client who is already maxed out. It deliberately
- * does **not** deduct MTC from the client's own purchased balance: whether
- * ME-initiated knowledge maintenance should be billed to the client at all
- * is a pricing/business-model question for PM, not decided by this
- * implementation. The per-run hard caps (`budget` parameter, enforced via
- * `assertMiningBudget` and the `client_knowledge_mining_runs` schema's own
- * CHECK constraints) are the real spend governor for this feature.
+ * Spend governance is entirely the three per-run hard caps in `budget`
+ * (enforced via `assertMiningBudget` and the `client_knowledge_mining_runs`
+ * schema's own CHECK constraints) — see the file header for why this
+ * deliberately does not also consult `@/lib/mtc/budget-guard`.
  */
 export async function runKnowledgeMining(
   clientId: string,
@@ -801,35 +803,6 @@ export async function runKnowledgeMining(
     // Non-terminal: reclaim this row's id and actually retry below, instead
     // of reporting a fabricated failure and leaving the row stuck forever.
     reclaimedRunId = row.id
-  }
-
-  const mtcHeadroom = await checkBudget(clientId, 0)
-  if (!mtcHeadroom.allowed) {
-    const message = `client ${clientId} monthly MTC budget already exhausted (${mtcHeadroom.spent}/${mtcHeadroom.cap}) — refusing to run knowledge mining`
-    const refusedRunId = await upsertRunRow(reclaimedRunId, {
-      request_id: requestId,
-      client_id: clientId,
-      status: 'failed',
-      error: message,
-      max_messages_cap: budget.maxMessages,
-      max_model_calls_cap: budget.maxModelCalls,
-      max_spend_usd_cap: budget.maxSpendUsd,
-      finished_at: new Date().toISOString(),
-    })
-    return {
-      runId: refusedRunId ?? '',
-      status: 'failed',
-      conversationsScanned: 0,
-      messagesScanned: 0,
-      templatesMerged: 0,
-      candidatesWritten: 0,
-      conflictGroups: 0,
-      dealSpecificSkipped: 0,
-      provenanceRejected: 0,
-      modelCallsUsed: 0,
-      costUsd: 0,
-      error: message,
-    }
   }
 
   let watermark: string | null
