@@ -22,6 +22,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { pushConversionReviewItems } from './conversion-review-items'
+import { pushAiAutoReviewCircuitBreakerItems } from './ai-auto-review-circuit-breaker-items'
 import { pushDailyPlanMeasurementItems, type DailyPlanMeasurementItemKind } from './daily-plan-measurement-items'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
@@ -93,6 +94,8 @@ export type ManualItemKind =
   | 'conversion_needs_review'
   /** 发给广告平台时断线了，不知道对方收没收 —— 程序绝不自己重发，等人核对 */
   | 'conversion_send_in_doubt'
+  /** AI 全自动审核发现异常，已经自动暂停发送（PM 拍板 2026-09-15："要有异常刹车"） */
+  | 'ai_auto_review_circuit_breaker'
   | AttributionItemKind
   | ClientRosterItemKind
   | 'linkedin_progress_needs_review'
@@ -366,6 +369,10 @@ export async function loadManualItems(
   // 成交/咨询等着人核对要不要告诉广告平台 —— 撤不回的动作，只能人点（#1397）
   await pushConversionReviewItems(supabase, items, clients, now).catch((e) =>
     console.warn('[manual-items] 成交待核对读取失败（不阻塞其他待办）:', e),
+  )
+  // AI 全自动审核被异常刹车暂停了 —— 拉模式，事件送达失败也照样出得来
+  await pushAiAutoReviewCircuitBreakerItems(supabase, items).catch((e) =>
+    console.warn('[manual-items] AI 自动审核熔断状态读取失败（不阻塞其他待办）:', e),
   )
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
