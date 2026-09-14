@@ -1,5 +1,5 @@
 /**
- * Tests for the CTS verifier policy (Issue #1579).
+ * Tests for the CTS verifier policy (Issue #1579 · v3 改接客户知识库)。
  *
  * Every negative case here asserts the actual `verifyCtsReply(...).ok` result
  * (and, where it matters, which gate fired) — not that some internal function
@@ -9,49 +9,63 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import type { OfferingsFile } from '../../offerings-loader'
+import type { KnowledgeEntry, KnowledgeReadResult } from '@/lib/knowledge'
 import { CTS_CLIENT_ID, verifyCtsReply, type CtsVerifierContext } from '../policies/cts'
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
-const CANONICAL: OfferingsFile = {
-  active_tours: [
-    {
+function activeProductFact(overrides: Partial<KnowledgeEntry> = {}): KnowledgeEntry {
+  return {
+    id: `fact-${overrides.factKey ?? 'active'}`,
+    clientId: CTS_CLIENT_ID,
+    factKey: 'tour.active.golden-china',
+    scope: {},
+    statement: 'China Discovery — Golden China',
+    structuredValue: {
       code: 'golden-china',
       name: 'China Discovery — Golden China',
       aliases: ['Golden China'],
       price_nzd: 4999,
       departure_dates: ['2026-11-16'],
-      nights: 9,
       itinerary_url: 'https://www.ctstours.co.nz/tours/china/discovery/golden-china',
-      highlights: ['Great Wall', 'Terracotta Warriors'],
     },
-    {
-      code: 'christmas-tour-akl',
-      name: 'Christmas Tour — Auckland Departure',
-      aliases: ['Auckland Christmas Tour'],
-      price_nzd: 7188,
-      departure_dates: ['2026-12-20'],
-      nights: 16,
-      itinerary_url: 'https://tours.example-partner.co.nz/christmas-akl',
-      highlights: [],
-    },
+    conflictGroupId: null,
+    status: 'approved',
+    visibility: 'customer_ok',
+    sensitivity: 'price',
+    validFrom: '2026-09-01T00:00:00Z',
+    validUntil: null,
+    lastVerifiedAt: null,
+    approvedByEmail: 'ray@magicengine.cloud',
+    approvedAt: '2026-09-01T00:00:00Z',
+    clientConfirmedByEmail: 'client@ctstours.co.nz',
+    clientConfirmedAt: '2026-09-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+const CHRISTMAS_TOUR = activeProductFact({
+  id: 'fact-christmas-tour-akl',
+  factKey: 'tour.active.christmas-tour-akl',
+  statement: 'Christmas Tour — Auckland Departure',
+  structuredValue: {
+    code: 'christmas-tour-akl',
+    name: 'Christmas Tour — Auckland Departure',
+    aliases: ['Auckland Christmas Tour'],
+    price_nzd: 7188,
+    departure_dates: ['2026-12-20'],
+    itinerary_url: 'https://tours.example-partner.co.nz/christmas-akl',
+  },
+})
+
+const KNOWLEDGE: KnowledgeReadResult = {
+  entries: [activeProductFact(), CHRISTMAS_TOUR],
+  // "Silk Road Discovery" / alias "Silk Road" — 遵循 cts.ts 头注释定的 fact_key
+  // 命名约定:canonical key + 一条 .alias. 覆盖条目。
+  forbiddenFactKeys: [
+    'tour.retired.silk-road-discovery',
+    'tour.retired.silk-road-discovery.alias.silk-road',
   ],
-  retired_tours: [
-    {
-      code: 'silk-road-discovery',
-      name: 'Silk Road Discovery',
-      aliases: ['Silk Road'],
-      retired_reason: 'PM plan marks this retired.',
-      still_visible_on_website: true,
-    },
-  ],
-  factual_bullets: ['CTS Tours NZ has operated in New Zealand for 25 years.'],
-  reply_forbidden_topics: [
-    'Refund or compensation decisions',
-    'Visa outcome guarantees',
-  ],
-  last_verified_at: '2026-09-13T00:00:00+13:00',
 }
 
 const BRAND_REDLINES = ['100% guaranteed', 'no risk at all', 'cheapest in NZ']
@@ -67,7 +81,7 @@ function baseContext(overrides: Partial<CtsVerifierContext> = {}): CtsVerifierCo
       offerings: [{ name: 'Golden China', code: 'golden-china' }],
     },
     brandRedlinePhrases: BRAND_REDLINES,
-    canonical: CANONICAL,
+    knowledge: KNOWLEDGE,
     ...overrides,
   }
 }
@@ -109,9 +123,9 @@ describe('Gate 1 — brand redline', () => {
   })
 })
 
-// ─── Gate 2: Retired tour mention ───────────────────────────────────────────
+// ─── Gate 2: Retired/forbidden product mention ──────────────────────────────
 
-describe('Gate 2 — retired tour mention', () => {
+describe('Gate 2 — retired/forbidden product mention (via forbiddenFactKeys)', () => {
   const retiredMentions = [
     'The Silk Road Discovery tour is available in March.',
     'Yes, Silk Road is one of our most popular routes!',
@@ -126,8 +140,28 @@ describe('Gate 2 — retired tour mention', () => {
     expect(result.blocked_reasons.some((r) => r.startsWith('retired_tour_mention:'))).toBe(true)
   })
 
-  it('does not block a reply that never mentions any retired tour', () => {
+  it('does not block a reply that never mentions any forbidden product', () => {
     const result = verifyCtsReply(baseContext())
+    expect(result.blocked_reasons.some((r) => r.startsWith('retired_tour_mention:'))).toBe(false)
+  })
+
+  it('does not block when forbiddenFactKeys is empty (no forbidden products known)', () => {
+    const result = verifyCtsReply(
+      baseContext({
+        knowledge: { ...KNOWLEDGE, forbiddenFactKeys: [] },
+        agentOutput: { reply_text: 'Silk Road Discovery sounds great!', confidence: 0.9, offerings: [] },
+      })
+    )
+    expect(result.blocked_reasons.some((r) => r.startsWith('retired_tour_mention:'))).toBe(false)
+  })
+
+  it('ignores a forbiddenFactKey outside the tour.retired. namespace (not this CTS convention)', () => {
+    const result = verifyCtsReply(
+      baseContext({
+        knowledge: { ...KNOWLEDGE, forbiddenFactKeys: ['policy.some_other_forbidden_fact'] },
+        agentOutput: { reply_text: 'Silk Road Discovery sounds great!', confidence: 0.9, offerings: [] },
+      })
+    )
     expect(result.blocked_reasons.some((r) => r.startsWith('retired_tour_mention:'))).toBe(false)
   })
 })
@@ -135,7 +169,7 @@ describe('Gate 2 — retired tour mention', () => {
 // ─── Gate 3: Number claim ────────────────────────────────────────────────────
 
 describe('Gate 3 — number claim (price/date must be verifiable)', () => {
-  it('blocks a price that matches no active tour', () => {
+  it('blocks a price that matches no confirmed active product', () => {
     const result = verifyCtsReply(
       baseContext({
         agentOutput: { reply_text: 'The Golden China tour costs $5,500.', confidence: 0.9, offerings: [] },
@@ -147,7 +181,7 @@ describe('Gate 3 — number claim (price/date must be verifiable)', () => {
     )
   })
 
-  it('blocks a departure date that matches no active tour', () => {
+  it('blocks a departure date that matches no confirmed active product', () => {
     const result = verifyCtsReply(
       baseContext({
         agentOutput: { reply_text: 'Departure is on 2027-01-01.', confidence: 0.9, offerings: [] },
@@ -173,7 +207,7 @@ describe('Gate 3 — number claim (price/date must be verifiable)', () => {
     expect(result.blocked_reasons.some((r) => r.startsWith('number_claim:'))).toBe(true)
   })
 
-  it('does not block a price and date that both match an active tour', () => {
+  it('does not block a price and date that both match a confirmed active product', () => {
     const result = verifyCtsReply(
       baseContext({
         agentOutput: {
@@ -185,11 +219,26 @@ describe('Gate 3 — number claim (price/date must be verifiable)', () => {
     )
     expect(result.blocked_reasons.some((r) => r.startsWith('number_claim:'))).toBe(false)
   })
+
+  it('a fact whose structured_value is missing required fields does not count as a confirmed product', () => {
+    const malformed = activeProductFact({
+      factKey: 'tour.active.broken',
+      structuredValue: { code: 'broken', name: 'Broken Tour' }, // missing price_nzd/departure_dates/itinerary_url
+    })
+    const result = verifyCtsReply(
+      baseContext({
+        knowledge: { entries: [malformed], forbiddenFactKeys: [] },
+        agentOutput: { reply_text: 'Broken Tour costs $1 and departs 2026-01-01.', confidence: 0.9, offerings: [] },
+      })
+    )
+    expect(result.ok).toBe(false)
+    expect(result.blocked_reasons.some((r) => r.startsWith('number_claim:'))).toBe(true)
+  })
 })
 
 // ─── Gate 4: Reply forbidden topics ─────────────────────────────────────────
 
-describe('Gate 4 — reply forbidden topics', () => {
+describe('Gate 4 — reply forbidden topics (static CTS policy list, not knowledge-sourced)', () => {
   const forbiddenReplies = [
     'Yes, we can process your refund or compensation decisions right away.',
     'I can confirm a visa outcome guarantees for your application.',
@@ -213,7 +262,7 @@ describe('Gate 4 — reply forbidden topics', () => {
 // ─── Gate 5: Provenance (name↔code one-to-one) ──────────────────────────────
 
 describe('Gate 5 — provenance one-to-one mapping', () => {
-  it('BLOCKS the exact attack this gate exists for: real tour name + fabricated code', () => {
+  it('BLOCKS the exact attack this gate exists for: real product name + fabricated code', () => {
     const result = verifyCtsReply(
       baseContext({
         agentOutput: {
@@ -231,7 +280,7 @@ describe('Gate 5 — provenance one-to-one mapping', () => {
     ).toBe(true)
   })
 
-  it('blocks a name that resolves to a DIFFERENT real tour\'s code (cross-tour swap)', () => {
+  it('blocks a name that resolves to a DIFFERENT real product\'s code (cross-product swap)', () => {
     const result = verifyCtsReply(
       baseContext({
         agentOutput: {
@@ -246,7 +295,7 @@ describe('Gate 5 — provenance one-to-one mapping', () => {
     expect(result.blocked_reasons.some((r) => r.startsWith('provenance:'))).toBe(true)
   })
 
-  it('blocks an offering name that matches no active tour name or alias at all', () => {
+  it('blocks an offering name that matches no confirmed active product name or alias at all', () => {
     const result = verifyCtsReply(
       baseContext({
         agentOutput: {
@@ -260,7 +309,7 @@ describe('Gate 5 — provenance one-to-one mapping', () => {
     expect(result.blocked_reasons.some((r) => r.startsWith('provenance:'))).toBe(true)
   })
 
-  it('passes when name (via alias) and code correctly correspond to the same tour', () => {
+  it('passes when name (via alias) and code correctly correspond to the same product', () => {
     const result = verifyCtsReply(
       baseContext({
         agentOutput: {
@@ -345,7 +394,7 @@ describe('Gate 7 — URL allowlist', () => {
     expect(result.blocked_reasons.some((r) => r.startsWith('url_allowlist:'))).toBe(true)
   })
 
-  it('allows ctstours.co.nz, google.com/maps, immigration.govt.nz, and an active tour itinerary host', () => {
+  it('allows ctstours.co.nz, google.com/maps, immigration.govt.nz, and a confirmed active product itinerary host', () => {
     const result = verifyCtsReply(
       baseContext({
         agentOutput: {
