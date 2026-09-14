@@ -101,17 +101,17 @@ export async function rankAssetsByPrompt(
   return opts.requireConfidentMatch ? picks.filter((p) => keywordOverlap(prompt, p) > 0) : picks
 }
 
-/** scene-plan.ts 生成的 imagePrompt 按铁律固定带 "no product/logo" 这类否定分句
- *  (绝不能出现客户真实产品/logo)。按逗号/分号分段,某段第一个词是否定词时整段
- *  剔除——不然 "no product/logo" 里的 product/logo 会被当成正向主体词,让一张
- *  明确标着 "logo" 的素材(比如换脸/换 logo 那类本该排除的图)反而"文对图对"地
- *  通过置信度门,直接违反这条分句本来要挡的事(2026-09-13 复审 P1 指出)。
- *  只认段首否定词,不处理句中嵌套否定("...with no crowd")——已知边界,不是漏改,
- *  scene-plan.ts 的输出格式固定是逗号分句,这个启发式覆盖的是实际会出现的形态。 */
+/** scene-plan.ts 生成的 imagePrompt 按铁律固定带 "no product/logo" 这类否定约束
+ *  (绝不能出现客户真实产品/logo)。这些约束不保证总是逗号打头的独立分句——
+ *  scene-plan.ts 只要求"不要描述产品/logo",没规定固定措辞,LLM 完全可能写成
+ *  "palace courtyard with no product or logo" 这种否定词出现在分句中间的自然
+ *  表述(2026-09-14 复审第三次指出:只查段首否定词的上一版会漏掉这种写法)。 */
 const NEGATION_WORDS = new Set(['no', 'not', 'without', 'excluding', 'never'])
 
-/** 按逗号/分号分段,段首是否定词的分句单独收进 `negated`,其余收进 `positive`——
- *  只按 ASCII 字母数字切词,CTS 现有 imagePrompt 全英文,够用。哪天有客户的
+/** 按逗号/分号分段,每段内逐词扫描——遇到否定词之前的词进 `positive`,遇到之后
+ *  (包括同一段里否定词右边的所有词,直到这一段结束)全部转入 `negated`,不再要求
+ *  否定词必须是段首("no product/logo" 和 "...with no product or logo" 都要能
+ *  识别)。只按 ASCII 字母数字切词,CTS 现有 imagePrompt 全英文,够用。哪天有客户的
  *  imagePrompt/objects 混进中文,纯中文段会被当分隔符整段吃掉,判成零重叠,
  *  `requireConfidentMatch` 会把这类 prompt 的匹配全部清空,不是漏改,是已知边界。 */
 function parsePromptWords(prompt: string): { positive: Set<string>; negated: Set<string> } {
@@ -119,10 +119,14 @@ function parsePromptWords(prompt: string): { positive: Set<string>; negated: Set
   const negated = new Set<string>()
   for (const segment of prompt.split(/[,;]/)) {
     const rawWords = segment.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
-    const isNegated = rawWords.length > 0 && NEGATION_WORDS.has(rawWords[0])
-    const target = isNegated ? negated : positive
+    let inNegatedScope = false
     for (const w of rawWords) {
-      if (w.length >= 3 && !NEGATION_WORDS.has(w)) target.add(w)
+      if (NEGATION_WORDS.has(w)) {
+        inNegatedScope = true
+        continue
+      }
+      if (w.length < 3) continue
+      ;(inNegatedScope ? negated : positive).add(w)
     }
   }
   return { positive, negated }
@@ -215,7 +219,11 @@ function subjectOverlap(promptWords: Set<string>, objects: string[]): number {
 function containsNegatedContent(negated: Set<string>, pick: AssetPick): boolean {
   if (negated.size === 0) return false
   const meta = pick.metadata
-  const fields = [...(meta?.objects ?? []), meta?.scene, ...(meta?.brand_elements ?? [])]
+  // objects/brand_elements 理论上是 string[],但跟 asObjectList 同样的理由(见其注释):
+  // 老数据/坏数据可能把整个字段存成非数组,直接展开(...)会在 typeof 防护跑到之前就抛出
+  // TypeError,把整条自动选图链路炸掉——必须先用 asObjectList 归一化,不能只信类型声明
+  // (2026-09-14 复审第三次指出:这里新写的展开路径漏了这道已有的防护)。
+  const fields = [...asObjectList(meta?.objects), meta?.scene, ...asObjectList(meta?.brand_elements)]
   return fields.some((f) => {
     if (typeof f !== 'string') return false
     return f

@@ -179,6 +179,48 @@ describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选�
     })
     expect(picks).toEqual([])
   })
+
+  it('否定词出现在分句中间(不是段首)也要识别——"palace courtyard with no product or logo"', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // scene-plan.ts 没规定否定约束必须写成独立的逗号分句,LLM 完全可能写成这种
+    // 否定词夹在分句中间的自然表述。
+    const assets = [
+      asset('has-logo', { vision_metadata: { objects: ['palace', 'logo'], quality_score: 8 } }),
+    ]
+    const picks = await rankAssetsByPrompt('palace courtyard with no product or logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks).toEqual([])
+  })
+
+  it('分句中间的否定不连累否定词之前的正向词——同一分句里 "palace" 仍算正向命中', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    const assets = [asset('palace', { vision_metadata: { objects: ['palace', 'lion statue'], quality_score: 8 } })]
+    const picks = await rankAssetsByPrompt('palace courtyard with no product or logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks.map((p) => p.id)).toEqual(['palace'])
+  })
+
+  it('objects/brand_elements 字段本身不是数组时,否定内容检查不炸,当空数组处理', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // 同文件已有的"objects 字段本身不是数组"用例(见下方 describe 块)同款构造方式,这里
+    // 额外覆盖 containsNegatedContent 新引入的 brand_elements 展开路径——实测跑通不抛异常,
+    // 断言 picks 为空(归一化成空数组后零重叠,被过滤掉)证明了这一点,不是空口说白话。
+    const assets = [
+      asset('bad-shape', {
+        vision_metadata: {
+          objects: 'palace' as unknown as string[],
+          brand_elements: { visible: true } as unknown as string[],
+          quality_score: 8,
+        },
+      }),
+    ]
+    const picks = await rankAssetsByPrompt('palace courtyard, no product/logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks).toEqual([])
+  })
 })
 
 describe('rankAssetsByPrompt — objects 里混进非字符串元素不炸', () => {
