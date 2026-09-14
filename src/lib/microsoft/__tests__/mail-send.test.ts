@@ -25,6 +25,7 @@ const INPUT = { clientId: 'c1', conversationId: 'cv1', body: '好的，帮您留
 interface DbOpts {
   conversation?: { id: string; client_id: string; channel: string; contact_id: string | null } | null
   latestMessageId?: string | null
+  auditInsertError?: { message: string } | null
 }
 
 let inserted: Record<string, unknown>[]
@@ -88,7 +89,10 @@ function mockDb(opts: DbOpts) {
           auditInserted.push(row)
           return {
             select: () => ({
-              single: async () => ({ data: { id: `audit-${auditInserted.length}` } }),
+              single: async () =>
+                opts.auditInsertError
+                  ? { data: null, error: opts.auditInsertError }
+                  : { data: { id: `audit-${auditInserted.length}` }, error: null },
             }),
           }
         },
@@ -104,14 +108,23 @@ function mockDb(opts: DbOpts) {
   })
 }
 
-function mockGraph(steps: { createReply?: { ok: boolean; status?: number; id?: string }; send?: { ok: boolean; status?: number } }) {
+function mockGraph(steps: {
+  createReply?: { ok: boolean; status?: number; id?: string }
+  /** 依次消费——用来钉「第一次 401，强刷后重试一次」这种多次调用的场景。 */
+  createReplySequence?: { ok: boolean; status?: number; id?: string }[]
+  send?: { ok: boolean; status?: number }
+}) {
   let call = 0
+  let createReplyCall = 0
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       call += 1
       if (String(url).includes('/createReply')) {
-        const s = steps.createReply ?? { ok: true, id: 'draft-1' }
+        const s = steps.createReplySequence
+          ? steps.createReplySequence[Math.min(createReplyCall, steps.createReplySequence.length - 1)]
+          : steps.createReply ?? { ok: true, id: 'draft-1' }
+        createReplyCall += 1
         return {
           ok: s.ok,
           status: s.status ?? (s.ok ? 201 : 400),
@@ -285,5 +298,51 @@ describe('发送审计（跟私信同一张表、同一个原则）', () => {
     mockGraph({ createReply: { ok: true, id: 'g7' }, send: { ok: false, status: 500 } })
     await sendMailReply(INPUT)
     expect(auditUpdates[0]).toMatchObject({ status: 'failed' })
+  })
+
+  /**
+   * 审计这一行写不进去时，Supabase 默认不抛异常，只回 `{ data: null, error }`。
+   * 不检查就往下调 Graph 的话，客人照样收到信，却完全没有「谁发的」这条记录，
+   * 违背新增这层审计的目的——必须 fail-closed，宁可不发，也不留无据可查的外发。
+   */
+  it('审计这行写不进去 → 中止发送，绝不调 Graph（fail-closed）', async () => {
+    mockDb({ conversation: convo, latestMessageId: 'm-parent', auditInsertError: { message: 'db down' } })
+    mockGraph({ createReply: { ok: true, id: 'should-not-be-called' } })
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const r = await sendMailReply(INPUT)
+    expect(r).toMatchObject({ ok: false, status: 502, reason: 'graph_failed' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('缓存令牌在 Graph 返回 401 时强刷重试', () => {
+  const convo = { id: 'cv1', client_id: 'c1', channel: 'email', contact_id: 'p1' }
+
+  it('createReply 401 → 强刷令牌后重试一次，成功就正常发出去', async () => {
+    mockDb({ conversation: convo, latestMessageId: 'm-parent' })
+    mockGraph({
+      createReplySequence: [{ ok: false, status: 401 }, { ok: true, id: 'draft-after-refresh' }],
+    })
+    const r = await sendMailReply(INPUT)
+    expect(r).toMatchObject({ ok: true, messageId: 'draft-after-refresh' })
+    expect(getValidTokenForConnection).toHaveBeenCalledWith('conn-1', { forceRefresh: true })
+  })
+
+  it('强刷之后仍然失败 → 502，不会一直重试', async () => {
+    mockDb({ conversation: convo, latestMessageId: 'm-parent' })
+    mockGraph({
+      createReplySequence: [{ ok: false, status: 401 }, { ok: false, status: 401 }],
+    })
+    const r = await sendMailReply(INPUT)
+    expect(r).toMatchObject({ ok: false, status: 502, reason: 'graph_failed' })
+  })
+
+  it('非 401 的失败（比如 400）→ 不触发强刷重试', async () => {
+    mockDb({ conversation: convo, latestMessageId: 'm-parent' })
+    mockGraph({ createReply: { ok: false, status: 400 } })
+    const r = await sendMailReply(INPUT)
+    expect(r).toMatchObject({ ok: false, status: 502, reason: 'graph_failed' })
+    expect(getValidTokenForConnection).toHaveBeenCalledTimes(1)
   })
 })

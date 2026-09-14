@@ -351,6 +351,21 @@ interface StoredThread {
   newMessages: number
 }
 
+/**
+ * 「同一封信」的兜底指纹——方向 + 发送时间，精确到毫秒。
+ *
+ * PR #1714 把 `mail-graph.ts` 读信时用的消息 id 从 Graph 默认的 REST id 换成了
+ * `ImmutableId`。这个同步在那之前已经长期把 REST id 存进 `message_id` /
+ * `source_ref`，上线当次的水位线回看窗口（6 小时，见 `WATERMARK_LOOKBACK_MS`）
+ * 会把刚存过的信再读一遍——但这次 Graph 吐出来的是另一种 id，跟库里存的对不上，
+ * `(conversation_id, message_id)` / `(client_id, source, source_ref)` 两个唯一键
+ * 都认不出是同一封，会被当成新信重复插入。同一封信不管用哪种 id 格式，方向和
+ * 发送时间不会变，拿它兜底再认一次（2026-09-15 Codex 复审 PR #1714 指出）。
+ */
+function messageSignature(direction: string, at: string): string {
+  return `${direction}|${new Date(at).getTime()}`
+}
+
 /** 存一条邮件线程和它的信。抛异常一路上抛 —— 调用方要靠它决定停不停。 */
 async function storeThread(
   clientId: string,
@@ -385,24 +400,48 @@ async function storeThread(
     throw new Error(`存邮件对话失败: ${error?.message}`)
   }
 
-  const { data: inserted, error: msgErr } = await supabaseAdmin
+  // 先看这条线程库里已经有哪些信——message_id 精确匹配的照常交给下面的 upsert
+  // 去重；id 对不上但「方向 + 发送时间」对得上的，说明是同一封信换了个 id 格式
+  // 读回来的，直接跳过，不再插一行。
+  const { data: existingRows } = await supabaseAdmin
     .from('conversation_messages')
-    .upsert(
-      thread.messages.map((m) => ({
-        conversation_id: row.id,
-        message_id: m.id,
-        direction: m.direction,
-        sender_name: m.direction === 'inbound' ? thread.counterparty.name : null,
-        body: m.preview,
-        sent_at: m.receivedAt,
-      })),
-      { onConflict: 'conversation_id,message_id', ignoreDuplicates: true },
-    )
-    .select('id')
+    .select('message_id, direction, sent_at')
+    .eq('conversation_id', row.id)
 
-  if (msgErr) {
-    // 信没存下是可惜，但线程行已经在了、人还能接上 —— 不为此放弃整条线程。
-    console.error('[mail-ingest] 存邮件正文失败:', msgErr)
+  const existingIds = new Set((existingRows ?? []).map((r) => r.message_id as string))
+  const existingSignatures = new Set(
+    (existingRows ?? []).map((r) =>
+      messageSignature(r.direction as string, r.sent_at as string),
+    ),
+  )
+  const toStore = thread.messages.filter(
+    (m) =>
+      existingIds.has(m.id) ||
+      !existingSignatures.has(messageSignature(m.direction, m.receivedAt)),
+  )
+
+  let inserted: { id: string }[] | null = []
+  if (toStore.length > 0) {
+    const { data, error: msgErr } = await supabaseAdmin
+      .from('conversation_messages')
+      .upsert(
+        toStore.map((m) => ({
+          conversation_id: row.id,
+          message_id: m.id,
+          direction: m.direction,
+          sender_name: m.direction === 'inbound' ? thread.counterparty.name : null,
+          body: m.preview,
+          sent_at: m.receivedAt,
+        })),
+        { onConflict: 'conversation_id,message_id', ignoreDuplicates: true },
+      )
+      .select('id')
+
+    if (msgErr) {
+      // 信没存下是可惜，但线程行已经在了、人还能接上 —— 不为此放弃整条线程。
+      console.error('[mail-ingest] 存邮件正文失败:', msgErr)
+    }
+    inserted = data
   }
 
   // 消息数用**库里实际有多少条**，不能用这一批的条数。
@@ -433,10 +472,35 @@ async function writeTouchpoints(
   contactId: string,
   thread: PlannedThread,
 ): Promise<number> {
+  // 按**这个人**取已有触点，不按这条线程——线程缺 conversationId 时会用
+  // `mail-msg:<id>` 自成一条线程（见 threadKey），id 格式一换，那条线程本身
+  // 都是新的，光比对同一条线程里的旧记录挡不住重复。同一个人身上不会有两条
+  // 「同一时刻、同一方向」的真实触点，按人比对能兜住这种情况。
+  const { data: existingRows } = await supabaseAdmin
+    .from('contact_touchpoints')
+    .select('source_ref, direction, occurred_at')
+    .eq('client_id', clientId)
+    .eq('contact_id', contactId)
+    .eq('channel', 'email')
+
+  const existingRefs = new Set((existingRows ?? []).map((r) => r.source_ref as string))
+  const existingSignatures = new Set(
+    (existingRows ?? []).map((r) =>
+      messageSignature(r.direction as string, r.occurred_at as string),
+    ),
+  )
+  const toWrite = thread.messages.filter(
+    (m) =>
+      existingRefs.has(m.id) ||
+      !existingSignatures.has(messageSignature(m.direction, m.receivedAt)),
+  )
+
+  if (toWrite.length === 0) return 0
+
   const { data, error } = await supabaseAdmin
     .from('contact_touchpoints')
     .upsert(
-      thread.messages.map((m) => ({
+      toWrite.map((m) => ({
         client_id: clientId,
         contact_id: contactId,
         channel: 'email',

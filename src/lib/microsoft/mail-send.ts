@@ -74,7 +74,7 @@ async function createReplyDraft(
   token: string,
   parentMessageId: string,
   comment: string,
-): Promise<{ ok: true; draftId: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; draftId: string } | { ok: false; status: number; error: string }> {
   let res: Response
   try {
     res = await fetch(`${GRAPH}/me/messages/${encodeURIComponent(parentMessageId)}/createReply`, {
@@ -91,14 +91,14 @@ async function createReplyDraft(
       body: JSON.stringify({ comment }),
     })
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) }
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` }
+    return { ok: false, status: res.status, error: `HTTP ${res.status}: ${text.slice(0, 300)}` }
   }
   const data = (await res.json()) as { id?: string }
-  if (!data.id) return { ok: false, error: '建草稿成功但没拿到消息 id' }
+  if (!data.id) return { ok: false, status: res.status, error: '建草稿成功但没拿到消息 id' }
   return { ok: true, draftId: data.id }
 }
 
@@ -184,8 +184,12 @@ export async function sendMailReply(input: SendMailReplyInput): Promise<SendMail
   }
 
   // 发之前先插一行——Graph 调用中途崩溃也要能查出「谁试过发、发了什么」，
-  // 跟私信那条路同一张表、同一个原则（见文件头）。
-  const { data: audit } = await supabaseAdmin
+  // 跟私信那条路同一张表、同一个原则（见文件头）。这一步写不进去就不能往下
+  // 调 Graph：插入失败时 Supabase 默认不抛异常，只回 `{ data: null, error }`，
+  // 不检查的话客人照样会收到信，却完全没有「谁发的」这条审计——
+  // fail-closed，宁可这次不发，也不留一条查不出来源的外发记录
+  // （2026-09-15 Codex 复审 PR #1714 指出）。
+  const { data: audit, error: auditError } = await supabaseAdmin
     .from('conversation_outbound_log')
     .insert({
       conversation_id: convo.id,
@@ -199,8 +203,17 @@ export async function sendMailReply(input: SendMailReplyInput): Promise<SendMail
     .select('id')
     .single()
 
+  if (auditError || !audit?.id) {
+    console.error('[mail-send] 写发送审计失败，按 fail-closed 中止发送:', auditError)
+    return {
+      ok: false,
+      status: 502,
+      error: '发送前的审计记录没写成功，已中止发送，请重试',
+      reason: 'graph_failed',
+    }
+  }
+
   const finishAudit = async (patch: Record<string, unknown>) => {
-    if (!audit?.id) return
     try {
       await supabaseAdmin.from('conversation_outbound_log').update(patch).eq('id', audit.id)
     } catch (err) {
@@ -208,7 +221,20 @@ export async function sendMailReply(input: SendMailReplyInput): Promise<SendMail
     }
   }
 
-  const draft = await createReplyDraft(token, parentMessageId, body)
+  let draft = await createReplyDraft(token, parentMessageId, body)
+  if (!draft.ok && draft.status === 401) {
+    // 缓存的令牌在名义过期时间（token_expiry）之前被吊销、但 refresh token
+    // 还有效——token manager 早就支持强刷（forceRefresh），只是这里之前没用：
+    // 不强刷的话，下次重试拿到的还是同一个失效令牌，要等到名义过期时间才会
+    // 自愈。强刷一次拿新令牌，安全地重试一次建草稿
+    // （2026-09-15 Codex 复审 PR #1714 指出）。
+    try {
+      token = await getValidTokenForConnection(connection.id, { forceRefresh: true })
+      draft = await createReplyDraft(token, parentMessageId, body)
+    } catch {
+      // 刷新本身失败——保留第一次 401 的结果，走下面统一的失败分支。
+    }
+  }
   if (!draft.ok) {
     await finishAudit({ status: 'failed', error_message: draft.error })
     return { ok: false, status: 502, error: `建回复草稿失败: ${draft.error}`, reason: 'graph_failed' }
