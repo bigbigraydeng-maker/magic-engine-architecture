@@ -83,7 +83,8 @@ function installGraph(script: GraphScript) {
     }
     if (p === '/act_123/ads') {
       const r = script.ads ?? { status: 200, body: { data: [] } }
-      return json(r.status, r.body)
+      // a raw string body = a truncated / proxied response that is not JSON
+      return typeof r.body === 'string' ? new Response(r.body, { status: r.status }) : json(r.status, r.body)
     }
     if (p === `/${POST}/comments` && method === 'GET') {
       const r = script.comments ?? {
@@ -194,6 +195,20 @@ describe('processClientComments — scan', () => {
 
     expect(r.ok).toBe(false)
     expect(r.scan_error).toContain('ads act_123')
+  })
+
+  it('🔴 a boosted-post list whose body is not JSON does not abort the organic comments', async () => {
+    db.adAccountId = '123'
+    installGraph({
+      publishedPosts: [onePostPage],
+      permissions: grants('pages_manage_engagement'),
+      ads: { status: 200, body: '{"data":[{"creative":' },
+    })
+    const r = await processClientComments(config)
+
+    expect(r.ok).toBe(false)
+    expect(r.scan_error).toContain('not valid JSON')
+    expect(r.public_replies).toBe(1)
   })
 })
 
