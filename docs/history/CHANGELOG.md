@@ -5,6 +5,20 @@
 
 ---
 
+### 2026-09-15（NAL 私信 → Meta CAPI 有效咨询同步，dry_run）
+
+PR [#1675](https://github.com/bigbigraydeng-maker/magic-engine/pull/1675)、[#1684](https://github.com/bigbigraydeng-maker/magic-engine/pull/1684)、[#1689](https://github.com/bigbigraydeng-maker/magic-engine/pull/1689) 已合并并部署生产，migration 已 apply。New Asian Logistics（NAL，跨境集运物流代理）的 Facebook Messenger 私信对话现在能被自动判定为"有效咨询"并写入 `me_sale_outcomes`，复用 CTS 那条线已上线的 Meta 广告转化 API（CAPI）回写通道。判据用 21 个真实对话人工标注 + 模拟跑规则验证过（0 假阳性，约 69% 召回）；生产库真实跑通：186 段对话，判出 20 条有效咨询全部正确写入 `pending_review`，重跑确认幂等键生效。
+
+顺带修了一个跟 NAL 无关、影响 CTS 现有真实发送的漏洞：发送前的拒联检查原来只查 `contacts.do_not_contact` 一列，客人刚说"别再联系我"、这一列还没来得及被人工确认更新的窗口期内可能仍会发送，改成跟受众导出/今日名单同一套真相源（`contact_touchpoints`）判断。
+
+`me_sale_outcomes` 扩展支持 Facebook 私信身份（page-scoped user id）当第三种客户匹配键（原来只认邮箱/电话，NAL 182 个联系人几乎全无），已过 Meta 官方文档核实、两轮子牙+魏征设计评审 + 每次实现完再复审实际代码。客人要求删除个人信息的接口/约束同步扩展覆盖新字段。
+
+**范围内明确没做**：本轮不做"已成交"判定（NAL 184 个联系人的 CRM 阶段字段全空、集运报价无团价表可查金额，拼不出合法记录）；不接 WhatsApp（NAL 现有对话 100% 是 Messenger 渠道）；不接 cron/Inngest（人工手动触发 `POST /api/admin/conversions/nal-messenger-sync`）；不切换到真发送（`conversion_stage` 仍是 `dry_run`）。
+
+**Reuse Statement**：完整复用既有共享能力（CAPI 回写通道 `writeback-service.ts`/`me_sale_outcomes`/审核 UI、`qualified-buyer.ts` 抽出的否定窗口检测现独立成 `src/lib/crm/negation.ts` 共享模块）。NAL 专属的判断规则（关键词表、批次边界启发式）封在 `nal-messenger-lead-classify.ts` 一个文件里，按 `docs/registry/platform-candidates.md` 已登记的 L4 客户专属实现路线，未下沉进 shared runtime。`page_scoped_user_id`/`action_source` 是本次新增的跨客户共享字段/契约扩展（CTS 现有记录不受影响，行为原样不变）。
+
+---
+
 ### 2026-09-13（Park Homes：Forrest Hill 效果图上线）
 
 PR [#1609](https://github.com/bigbigraydeng-maker/magic-engine/pull/1609) 已合并并部署生产。客户邮件发来的 4 张 Forrest Hill 楼盘效果图（artist's impression）已接入官网 `parkhomes.nz/forrest-hill` 项目页图集，"Register Interest" 询盘表单同页可用。生产验证：网页实际打开确认 4 张图全部正常加载、无 404/占位图。
