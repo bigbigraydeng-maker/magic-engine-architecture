@@ -179,7 +179,7 @@ export function groupMessagesIntoTemplates(messages: RawMessage[]): MessageTempl
 const EMAIL_PATTERN = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi
 
 // Phone-number-or-postcode SHAPE: a digit, then a run of digits/space/tab/
-// hyphen/parens/dot, ending in a digit. Deliberately permissive about the
+// hyphen/parens, ending in a digit. Deliberately permissive about the
 // separators — a real ANZ phone number is almost always written WITH
 // separators ("021 234 5678", "021-234-5678", "+64 21 234 5678",
 // "(09) 123 4567"); a bare `\d{6,}` (no separators allowed) would miss every
@@ -189,7 +189,13 @@ const EMAIL_PATTERN = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi
 // digit-count check (not match length) happens in the replace callback
 // below — a match's *length* can be inflated by punctuation without its
 // *digit count* being a real phone number, so length alone isn't the gate.
-const PHONE_CANDIDATE_PATTERN = /\+?\(?\d[\d \t\-().]{2,}\d\)?/g
+//
+// 🔴 魏征复审（2026-09-14）实测发现：字符类里原来含字面 `.`，会把
+// "NZD 1234.56" 这类真实报价金额也当成电话号码抹掉（小数点当成分隔符，
+// 凑够 6 位数字触发）。NZ 电话号码从不用句点做分隔符，去掉 `.` 后金额
+// 的整数部分（"1234"，4 位）够不到 MIN_PHONE_DIGITS，小数部分（"56"，
+// 2 位）单独也够不到——两边都不会被误判成电话。
+const PHONE_CANDIDATE_PATTERN = /\+?\(?\d[\d \t\-()]{2,}\d\)?/g
 const MIN_PHONE_DIGITS = 6
 
 function countDigits(text: string): number {
@@ -200,28 +206,59 @@ function countDigits(text: string): number {
 const TRACKING_NUMBER_PATTERN = /\b[A-Za-z]{2,6}\d{4,8}\b/g
 
 // A line is treated as a physical address once it contains 2+ Chinese
-// administrative/street markers.
-const ADDRESS_MARKERS = ['省', '市', '区', '镇', '村', '路', '街', '号', '栋', '幢', '单元', '室', '邮编']
+// administrative/street markers (simplified AND traditional variants —
+// 魏征复审 2026-09-14 实测发现原列表只有简体，一条纯繁体地址会漏判).
+const ADDRESS_MARKERS = [
+  '省', '市', '区', '區', '镇', '鎮', '村', '路', '街', '巷', '弄',
+  '号', '號', '栋', '棟', '幢', '单元', '單元', '室', '邮编', '郵編', '县', '縣',
+]
 
-function looksLikeAddressLine(line: string): boolean {
+function looksLikeChineseAddressLine(line: string): boolean {
   const hits = ADDRESS_MARKERS.filter((marker) => line.includes(marker)).length
   return hits >= 2
 }
+
+// 🔴 魏征复审（2026-09-14）实测确认的高危缺口：原实现只认中文地址标记，
+// 一条普通的新西兰英文地址（"42 Ponsonby Road, Grey Lynn, Auckland 1021"）
+// 完全不脱敏，原样发给 Anthropic API——这条 PR 存在的理由本身被打穿。
+// 英文地址判定：一个数字门牌号 + 附近出现常见街道类型词，不要求门牌号
+// 紧邻词本身（"12 Beach Road" / "Unit 3, 42 Ponsonby Road" 都要抓住）。
+const ENGLISH_STREET_TYPE_RE =
+  /\b\d+[a-z]?\b[\s\S]{0,40}\b(road|rd|street|st|avenue|ave|drive|dr|lane|ln|place|pl|way|crescent|cres|terrace|tce|highway|hwy|grove|close|court|ct|boulevard|blvd)\b/i
+
+function looksLikeEnglishAddressLine(line: string): boolean {
+  return ENGLISH_STREET_TYPE_RE.test(line)
+}
+
+// 🔴 魏征复审（2026-09-14）实测确认：客户/收件人姓名从未被任何一类规则
+// 覆盖过（PR 自带的地址夹具脱敏后 "TJJ28967 - Praash" 变成
+// "[已抹去:单号] - Praash"，姓名原样保留，是作者自己的测试数据证明的）。
+// 姓名本身无法用正则可靠识别（没有词典/NER），退而求其次：只要一行文本
+// 带有"收件人/联系人/客户姓名/Recipient/Contact/Attn/Attention/Name"这类
+// 标签+冒号，就把标签之后的整段内容当成姓名整行抹掉——覆盖不了没有显式
+// 标签的姓名提及（如正文里随口一句"跟 John 说一声"），这是已知残留风险，
+// 不是这次能用正则彻底解决的问题，故显式记录、不假装做到了。
+const NAME_LABEL_RE = /(收件人|联系人|客户姓名|姓名|recipient|contact(?:\s*person)?|attn(?:ention)?|customer\s*name|name)\s*[:：]\s*(.+)/i
 
 export interface RedactResult {
   text: string
   hits: string[]
 }
 
-/** Strip email / phone-or-postcode / tracking-number / Chinese-address content before any text leaves ME for an LLM call. */
+/** Strip email / phone-or-postcode / tracking-number / address / labelled-name content before any text leaves ME for an LLM call. */
 export function redactPersonalInfo(input: string): RedactResult {
   const hits = new Set<string>()
   const lines = input.normalize('NFKC').split('\n')
 
   const redactedLines = lines.map((line) => {
-    if (looksLikeAddressLine(line)) {
+    if (looksLikeChineseAddressLine(line) || looksLikeEnglishAddressLine(line)) {
       hits.add('address')
       return '[已抹去:地址]'
+    }
+    const nameMatch = line.match(NAME_LABEL_RE)
+    if (nameMatch) {
+      hits.add('name')
+      return line.slice(0, nameMatch.index! + nameMatch[1].length) + '：[已抹去:姓名]'
     }
     // Every pattern below uses a replace-callback (not test-then-replace) so
     // there is exactly one pass per pattern and no reliance on a global
@@ -248,10 +285,15 @@ export function redactPersonalInfo(input: string): RedactResult {
 
 // ── Number provenance ────────────────────────────────────────────────────
 
+// 🔴 魏征复审（2026-09-14）实测发现：原正则 `\d+(\.\d+)?` 把逗号当成非数字
+// 分隔符，"NZD 1,000" 会被拆成两个独立的数字 1 和 000（=0），候选侧写的
+// "1000" 永远核不到源文本里的 "1,000"，导致合法候选被误杀（物流报价过
+// 千很常见千分位写法，不是边缘场景）。先尝试匹配"千分位逗号分组"的完整
+// 数字，匹配不到才退化成普通连续数字，匹配到之后统一去掉逗号再转数值。
 function extractNumbers(text: string): Set<number> {
   const normalised = text.normalize('NFKC')
-  const matches = normalised.match(/\d+(\.\d+)?/g) ?? []
-  return new Set(matches.map(Number))
+  const matches = normalised.match(/\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?/g) ?? []
+  return new Set(matches.map((m) => Number(m.replace(/,/g, ''))))
 }
 
 /**
@@ -326,7 +368,15 @@ export interface ConflictMember {
   factKey: string
   unit: string | null
   valueSignature: string
-  /** Only set for 'existing_candidate' — the conflict group it already belongs to, if any. */
+  /**
+   * Set for 'approved' and 'existing_candidate' — the conflict group this
+   * row already belongs to, if any (both are rows already sitting in
+   * `client_knowledge_facts`, so both can already carry one from a prior
+   * run). 🔴 魏征复审（2026-09-14）实测发现：原实现只给
+   * 'existing_candidate' 设这个字段，'approved' 分支从未参与过"复用已有
+   * 组号"和"回填组号"两段逻辑——已批准事实一旦被新候选顶上冲突，那一行
+   * 自己的 conflict_group_id 永远是 null，复审页面按组号联查看不到它。
+   */
   existingConflictGroupId?: string | null
 }
 
@@ -544,6 +594,26 @@ async function fetchExistingCandidateFacts(clientId: string): Promise<ExistingCa
   return asRows<ExistingCandidateRow>(data)
 }
 
+/**
+ * Create a fresh `client_knowledge_mining_runs` row, or — when `reclaimId`
+ * is set — UPDATE that existing row in place instead. Reclaiming (rather
+ * than inserting) is what lets a retry recover a row left stuck in
+ * `running`/`queued` by a crashed prior attempt: the table's
+ * `request_id` unique constraint means a second INSERT for the same
+ * request_id would always fail, so the only way to actually retry is to
+ * reuse the existing row's id.
+ */
+async function upsertRunRow(reclaimId: string | null, fields: Record<string, unknown>): Promise<string | null> {
+  if (reclaimId) {
+    const { error } = await supabaseAdmin.from('client_knowledge_mining_runs').update(fields).eq('id', reclaimId)
+    if (error) throw new Error(`upsertRunRow: reclaim update failed for run ${reclaimId}: ${error.message}`)
+    return reclaimId
+  }
+  const { data, error } = await supabaseAdmin.from('client_knowledge_mining_runs').insert(fields).select('id').single()
+  if (error) throw new Error(`upsertRunRow: insert failed: ${error.message}`)
+  return (data as { id: string } | null)?.id ?? null
+}
+
 async function fetchWatermark(clientId: string): Promise<string | null> {
   const { data, error } = await supabaseAdmin
     .from('client_knowledge_mining_runs')
@@ -673,12 +743,24 @@ export async function runKnowledgeMining(
   // 🔴 Idempotency at the request_id layer: `client_knowledge_mining_runs`
   // requires request_id to be unique. Inngest's own `idempotency` config
   // stops the SAME event from starting a fresh execution, but a step retry
-  // WITHIN one execution (a transient network blip after the run row was
-  // already inserted) would otherwise hit that unique constraint on retry.
-  // Checking for an existing row first makes a retry return the prior
-  // attempt's receipt instead of erroring — the actual re-scan-safety
-  // ("run twice, no duplicate candidates") is a separate property, provided
-  // by the watermark mechanism below, not by this check.
+  // WITHIN one execution (the whole point of `retries: 2` on the Inngest
+  // function — recovering from a transient crash) would otherwise hit that
+  // unique constraint the moment it tries to insert a second `running` row
+  // for the same request_id.
+  //
+  // 🔴 子牙+魏征联合复审（2026-09-14）实测发现的真问题，已修：早期版本在
+  // 找到一条既有记录时，无论它是终态（succeeded/failed）还是"卡在
+  // running"，一律直接拼一个 receipt 返回，从不写回数据库。如果进程恰好
+  // 崩溃在"插入 running 行"和"标成 succeeded/failed"之间（现实中最常见
+  // 的崩溃时机——OOM/超时/网络分区），这一行会永远卡在 running、error 永
+  // 远是 NULL，而 Inngest 的 retries:2 配置对这种情况完全不起作用：重试
+  // 命中的是这段短路逻辑，只会拼一个"failed 但没有 error 文案"的假回执
+  // 给调用方，数据库里那行本身从未被更新，retries 形同虚设。
+  //
+  // 现在的处理：终态记录直接返回（真正的幂等短路，不重跑，不重复扣费）；
+  // 非终态（running/queued）记录视为"上一次执行崩溃留下的残留"，复用同一
+  // 行的 id 重新走一遍完整流程（下面创建/复用 running 行那一步用 UPDATE
+  // 而不是 INSERT），让 retries:2 真正发挥作用，而不是被这层短路吃掉。
   const existing = await supabaseAdmin
     .from('client_knowledge_mining_runs')
     .select(
@@ -687,6 +769,8 @@ export async function runKnowledgeMining(
     .eq('request_id', requestId)
     .maybeSingle()
   if (existing.error) throw new Error(`runKnowledgeMining: idempotency check failed: ${existing.error.message}`)
+
+  let reclaimedRunId: string | null = null
   if (existing.data) {
     const row = existing.data as {
       id: string
@@ -698,41 +782,42 @@ export async function runKnowledgeMining(
       conflict_groups_found: number
       llm_cost_usd: number | null
     }
-    return {
-      runId: row.id,
-      status: row.status === 'succeeded' ? 'succeeded' : 'failed',
-      conversationsScanned: row.conversations_scanned,
-      messagesScanned: row.messages_scanned,
-      templatesMerged: 0,
-      candidatesWritten: row.candidates_found,
-      conflictGroups: row.conflict_groups_found,
-      dealSpecificSkipped: 0,
-      provenanceRejected: 0,
-      modelCallsUsed: 0,
-      costUsd: row.llm_cost_usd ?? 0,
-      ...(row.error ? { error: row.error } : {}),
+    if (row.status === 'succeeded' || row.status === 'failed') {
+      return {
+        runId: row.id,
+        status: row.status,
+        conversationsScanned: row.conversations_scanned,
+        messagesScanned: row.messages_scanned,
+        templatesMerged: 0,
+        candidatesWritten: row.candidates_found,
+        conflictGroups: row.conflict_groups_found,
+        dealSpecificSkipped: 0,
+        provenanceRejected: 0,
+        modelCallsUsed: 0,
+        costUsd: row.llm_cost_usd ?? 0,
+        ...(row.error ? { error: row.error } : {}),
+      }
     }
+    // Non-terminal: reclaim this row's id and actually retry below, instead
+    // of reporting a fabricated failure and leaving the row stuck forever.
+    reclaimedRunId = row.id
   }
 
   const mtcHeadroom = await checkBudget(clientId, 0)
   if (!mtcHeadroom.allowed) {
     const message = `client ${clientId} monthly MTC budget already exhausted (${mtcHeadroom.spent}/${mtcHeadroom.cap}) — refusing to run knowledge mining`
-    const { data: refusedRunRow } = await supabaseAdmin
-      .from('client_knowledge_mining_runs')
-      .insert({
-        request_id: requestId,
-        client_id: clientId,
-        status: 'failed',
-        error: message,
-        max_messages_cap: budget.maxMessages,
-        max_model_calls_cap: budget.maxModelCalls,
-        max_spend_usd_cap: budget.maxSpendUsd,
-        finished_at: new Date().toISOString(),
-      })
-      .select('id')
-      .single()
+    const refusedRunId = await upsertRunRow(reclaimedRunId, {
+      request_id: requestId,
+      client_id: clientId,
+      status: 'failed',
+      error: message,
+      max_messages_cap: budget.maxMessages,
+      max_model_calls_cap: budget.maxModelCalls,
+      max_spend_usd_cap: budget.maxSpendUsd,
+      finished_at: new Date().toISOString(),
+    })
     return {
-      runId: (refusedRunRow as { id: string } | null)?.id ?? '',
+      runId: refusedRunId ?? '',
       status: 'failed',
       conversationsScanned: 0,
       messagesScanned: 0,
@@ -761,22 +846,18 @@ export async function runKnowledgeMining(
     // operator must never have to go spelunking through Inngest's own
     // execution log to find out mining silently never ran for a client.
     const message = error instanceof Error ? error.message : String(error)
-    const { data: failedRunRow } = await supabaseAdmin
-      .from('client_knowledge_mining_runs')
-      .insert({
-        request_id: requestId,
-        client_id: clientId,
-        status: 'failed',
-        error: message,
-        max_messages_cap: budget.maxMessages,
-        max_model_calls_cap: budget.maxModelCalls,
-        max_spend_usd_cap: budget.maxSpendUsd,
-        finished_at: new Date().toISOString(),
-      })
-      .select('id')
-      .single()
+    const failedRunId = await upsertRunRow(reclaimedRunId, {
+      request_id: requestId,
+      client_id: clientId,
+      status: 'failed',
+      error: message,
+      max_messages_cap: budget.maxMessages,
+      max_model_calls_cap: budget.maxModelCalls,
+      max_spend_usd_cap: budget.maxSpendUsd,
+      finished_at: new Date().toISOString(),
+    })
     return {
-      runId: (failedRunRow as { id: string } | null)?.id ?? '',
+      runId: failedRunId ?? '',
       status: 'failed',
       conversationsScanned: 0,
       messagesScanned: 0,
@@ -791,26 +872,25 @@ export async function runKnowledgeMining(
     }
   }
 
-  const { data: runRow, error: runInsertError } = await supabaseAdmin
-    .from('client_knowledge_mining_runs')
-    .insert({
-      request_id: requestId,
-      client_id: clientId,
-      status: 'running',
-      max_messages_cap: budget.maxMessages,
-      max_model_calls_cap: budget.maxModelCalls,
-      max_spend_usd_cap: budget.maxSpendUsd,
-      low_watermark_at: watermark,
-      conversations_scanned: conversationIds.length,
-      messages_scanned: messages.length,
-      started_at: new Date().toISOString(),
-    })
-    .select('id')
-    .single()
-  if (runInsertError || !runRow) {
-    throw new Error(`runKnowledgeMining: could not create run row: ${runInsertError?.message}`)
+  const runId = await upsertRunRow(reclaimedRunId, {
+    request_id: requestId,
+    client_id: clientId,
+    status: 'running',
+    max_messages_cap: budget.maxMessages,
+    max_model_calls_cap: budget.maxModelCalls,
+    max_spend_usd_cap: budget.maxSpendUsd,
+    low_watermark_at: watermark,
+    conversations_scanned: conversationIds.length,
+    messages_scanned: messages.length,
+    started_at: new Date().toISOString(),
+    // Reclaiming a stale row: clear whatever partial counters/error a
+    // crashed prior attempt may have left, so this fresh attempt's own
+    // numbers aren't polluted by leftovers.
+    ...(reclaimedRunId ? { error: null, candidates_found: 0, conflict_groups_found: 0, llm_cost_usd: null } : {}),
+  })
+  if (!runId) {
+    throw new Error('runKnowledgeMining: could not create or reclaim run row')
   }
-  const runId = (runRow as { id: string }).id
 
   let modelCallsUsed = 0
   let costUsd = 0
@@ -820,6 +900,15 @@ export async function runKnowledgeMining(
   let runError: string | undefined
 
   try {
+    // 🔴 子牙复审（2026-09-14）实测发现：entitlement 检查（藏在
+    // getClientKnowledge 内部）原来排在整个抽取循环之后——一个没有知识库
+    // 授权的客户，代码会先跑完整个抽取循环（真调用 Anthropic API、真花
+    // 钱），最后才在这里报错，等于白花钱白算。跟本文件反复强调的"花钱前
+    // 先判上限"原则矛盾：应该先判"这个客户到底有没有资格用这个功能"，
+    // 再花钱，不是跑完才发现白跑。挪到循环最前面，未授权客户在第一次
+    // 模型调用之前就失败。
+    const knowledgeRead = await getClientKnowledge(clientId, { purpose: 'internal_brief' })
+
     for (const template of templates) {
       if (modelCallsUsed >= budget.maxModelCalls) break
 
@@ -861,7 +950,6 @@ export async function runKnowledgeMining(
       }
     }
 
-    const knowledgeRead = await getClientKnowledge(clientId, { purpose: 'internal_brief' })
     const approvedMembers: ConflictMember[] = knowledgeRead.entries.map((fact) => {
       const structured = fact.structuredValue as Record<string, unknown> | null
       return {
@@ -870,6 +958,7 @@ export async function runKnowledgeMining(
         factKey: fact.factKey,
         unit: typeof structured?.unit === 'string' ? structured.unit : null,
         valueSignature: computeValueSignature(fact.structuredValue),
+        existingConflictGroupId: fact.conflictGroupId,
       }
     })
     const candidateMembers: ConflictMember[] = survivingCandidates.map((entry, index) => ({
@@ -904,41 +993,48 @@ export async function runKnowledgeMining(
     ]).filter((g) => g.hasConflict)
 
     const conflictGroupIdByCandidateIndex = new Map<number, string>()
-    // Existing candidate rows this run's conflicts touch but that don't yet
-    // carry a conflict_group_id — a group formed for the first time around
-    // an old, previously-solo candidate needs to retroactively tag it too,
-    // or the review page still can't show them together.
-    const existingCandidateIdsToBackfill = new Map<string, string>() // existing row id -> group id
+    // Rows already sitting in client_knowledge_facts (both 'approved' and
+    // 'existing_candidate' origins — anything already in the table) that
+    // this run's conflicts touch but that don't yet carry the resolved
+    // conflict_group_id — a group formed for the first time around an old
+    // row (whether it's a still-unreviewed candidate OR an approved fact
+    // that a new candidate now contradicts) needs to retroactively tag it
+    // too, or the review page still can't show them together.
+    const factIdsToBackfill = new Map<string, string>() // existing row id -> group id
 
     for (const group of conflictGroups) {
-      // Reuse a group id already present among this group's existing
-      // candidate rows (from a prior run) instead of minting a new one —
-      // that's what actually keeps the same disagreement in one place
-      // across runs. If members disagree on which existing group id to
-      // reuse, deterministically pick the smallest one rather than silently
-      // picking whichever the Set/Map iteration happened to hit first.
+      // Reuse a group id already present among this group's existing rows
+      // (approved or unreviewed-candidate, from a prior run) instead of
+      // minting a new one — that's what actually keeps the same
+      // disagreement in one place across runs. If members disagree on which
+      // existing group id to reuse, deterministically pick the smallest one
+      // rather than silently picking whichever the Set/Map iteration
+      // happened to hit first.
       const existingGroupIds = group.members
-        .filter((m) => m.origin === 'existing_candidate' && m.existingConflictGroupId)
+        .filter((m) => (m.origin === 'existing_candidate' || m.origin === 'approved') && m.existingConflictGroupId)
         .map((m) => m.existingConflictGroupId as string)
       const groupId = existingGroupIds.length > 0 ? [...existingGroupIds].sort()[0] : randomUUID()
 
       for (const member of group.members) {
         if (member.origin === 'candidate') {
           conflictGroupIdByCandidateIndex.set(Number(member.refId), groupId)
-        } else if (member.origin === 'existing_candidate' && member.existingConflictGroupId !== groupId) {
-          existingCandidateIdsToBackfill.set(member.refId, groupId)
+        } else if (
+          (member.origin === 'existing_candidate' || member.origin === 'approved') &&
+          member.existingConflictGroupId !== groupId
+        ) {
+          factIdsToBackfill.set(member.refId, groupId)
         }
       }
     }
 
-    if (existingCandidateIdsToBackfill.size > 0) {
-      for (const [factId, groupId] of existingCandidateIdsToBackfill) {
+    if (factIdsToBackfill.size > 0) {
+      for (const [factId, groupId] of factIdsToBackfill) {
         const { error: backfillError } = await supabaseAdmin
           .from('client_knowledge_facts')
           .update({ conflict_group_id: groupId })
           .eq('id', factId)
         if (backfillError) {
-          throw new Error(`conflict_group_id backfill failed for existing candidate ${factId}: ${backfillError.message}`)
+          throw new Error(`conflict_group_id backfill failed for fact ${factId}: ${backfillError.message}`)
         }
       }
     }

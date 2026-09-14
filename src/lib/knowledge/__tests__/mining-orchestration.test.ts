@@ -598,13 +598,135 @@ describe('runKnowledgeMining — failure handling', () => {
     expect(runRow?.status).toBe('failed')
   })
 
-  it('records a failed run when the client has no knowledge-base entitlement grant', async () => {
+  it('records a failed run when the client has no knowledge-base entitlement grant, WITHOUT spending any model calls first', async () => {
+    // 子牙复审（2026-09-14）：entitlement 检查必须排在抽取循环之前——一个
+    // 没有授权的客户不该先花钱跑完整个抽取循环才发现白跑。
     fixture.policies = [] // no grant at all
-    fixture.messages.push(outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z'), outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z'))
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
+    fixture.messages.push(
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z', 'c2'),
+    )
     mockCallClaudeChat.mockResolvedValueOnce(extractionResponse(false, []))
     const receipt = await runKnowledgeMining(CLIENT_A, BUDGET, 'req-fail-2')
     expect(receipt.status).toBe('failed')
+    expect(mockCallClaudeChat).not.toHaveBeenCalled()
     const runRow = fixture.miningRuns.find((r) => r.id === receipt.runId)
     expect(runRow?.status).toBe('failed')
+  })
+})
+
+describe('runKnowledgeMining — crash recovery (子牙+魏征联合复审 2026-09-14)', () => {
+  it('reclaims a run row stuck in "running" from a crashed prior attempt and actually retries, instead of returning a fabricated failure', async () => {
+    // Simulates: a prior execution inserted the running row then crashed
+    // before ever reaching a terminal status — exactly what happens if the
+    // process dies between "insert running" and "update succeeded/failed".
+    fixture.miningRuns.push({
+      id: 'stale-run-1',
+      request_id: 'req-crash-1',
+      client_id: CLIENT_A,
+      status: 'running',
+      error: null,
+      conversations_scanned: 0,
+      messages_scanned: 0,
+      candidates_found: 0,
+      conflict_groups_found: 0,
+      llm_cost_usd: null,
+      created_at: '2026-01-01T00:00:00Z',
+    })
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
+    fixture.messages.push(
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z', 'c2'),
+    )
+    mockCallClaudeChat.mockResolvedValueOnce(
+      extractionResponse(false, [
+        { fact_key: 'rate.x', scope: {}, statement: 'Under 20 kg: NZD 4/kg', structured_value: { unit: 'NZD/kg', rate: 4 } },
+      ]),
+    )
+
+    const receipt = await runKnowledgeMining(CLIENT_A, BUDGET, 'req-crash-1')
+
+    // The retry actually ran the real logic (called the model, wrote a
+    // candidate) instead of just reporting a fake failure.
+    expect(mockCallClaudeChat).toHaveBeenCalledTimes(1)
+    expect(receipt.status).toBe('succeeded')
+    expect(receipt.candidatesWritten).toBe(1)
+    // The SAME row was reused (reclaimed), not a second row created for the
+    // same request_id (which would violate the real unique constraint).
+    expect(receipt.runId).toBe('stale-run-1')
+    expect(fixture.miningRuns.filter((r) => r.request_id === 'req-crash-1')).toHaveLength(1)
+    const reclaimedRow = fixture.miningRuns.find((r) => r.id === 'stale-run-1')
+    expect(reclaimedRow?.status).toBe('succeeded')
+    expect(reclaimedRow?.error).toBeFalsy()
+  })
+
+  it('reclaims a stuck "running" row even when the retry itself also fails, leaving a real error instead of a permanent silent zombie', async () => {
+    fixture.miningRuns.push({
+      id: 'stale-run-2',
+      request_id: 'req-crash-2',
+      client_id: CLIENT_A,
+      status: 'running',
+      error: null,
+      conversations_scanned: 0,
+      messages_scanned: 0,
+      candidates_found: 0,
+      conflict_groups_found: 0,
+      llm_cost_usd: null,
+      created_at: '2026-01-01T00:00:00Z',
+    })
+    fixture.messages.push(outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z'), outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z'))
+    mockCallClaudeChat.mockRejectedValueOnce(new Error('anthropic 503 on retry'))
+
+    const receipt = await runKnowledgeMining(CLIENT_A, BUDGET, 'req-crash-2')
+
+    expect(receipt.status).toBe('failed')
+    expect(receipt.error).toContain('anthropic 503 on retry')
+    const reclaimedRow = fixture.miningRuns.find((r) => r.id === 'stale-run-2')
+    // 🔴 This is the exact defect 子牙/魏征 found: before the fix, this row
+    // would be left at status='running' with error=null forever, and the
+    // returned receipt would claim 'failed' without that ever being true in
+    // the database. Now the row itself is truthfully updated.
+    expect(reclaimedRow?.status).toBe('failed')
+    expect(reclaimedRow?.error).toContain('anthropic 503 on retry')
+  })
+})
+
+describe('runKnowledgeMining — conflict_group_id backfill covers approved facts too (魏征复审 2026-09-14)', () => {
+  it('backfills conflict_group_id onto the APPROVED row, not just the new candidate row', async () => {
+    fixture.facts.push({
+      id: 'approved-1',
+      client_id: CLIENT_A,
+      fact_key: 'rate.parcel.per_kg',
+      scope: {},
+      statement: 'Under 20 kg: NZD 4/kg',
+      structured_value: { unit: 'NZD/kg', rate: 4 },
+      status: 'approved',
+      visibility: 'internal_only',
+      sensitivity: 'general',
+      valid_from: '2026-01-01T00:00:00Z',
+      valid_until: null,
+      approved_by_email: 'fde@magicengine.cloud',
+      approved_at: '2026-01-01T00:00:00Z',
+      client_confirmed_by_email: null,
+      client_confirmed_at: null,
+      conflict_group_id: null,
+      value_fingerprint: 'approved-fp',
+    })
+    fixture.conversations.push({ id: 'c2', client_id: CLIENT_A })
+    fixture.messages.push(
+      outbound('Under 20 kg: NZD 9/kg', '2026-01-01T00:01:00Z', 'conv-1'),
+      outbound('Under 20 kg: NZD 9/kg', '2026-01-02T00:01:00Z', 'c2'),
+    )
+    mockCallClaudeChat.mockResolvedValueOnce(
+      extractionResponse(false, [
+        { fact_key: 'rate.parcel.per_kg', scope: {}, statement: 'Under 20 kg: NZD 9/kg', structured_value: { unit: 'NZD/kg', rate: 9 } },
+      ]),
+    )
+    await runKnowledgeMining(CLIENT_A, BUDGET, 'req-approved-backfill')
+    const approvedRow = fixture.facts.find((f) => f.id === 'approved-1')
+    const newRow = fixture.facts.find((f) => f.id !== 'approved-1')
+    expect(approvedRow?.conflict_group_id).toBeTruthy()
+    expect(approvedRow?.conflict_group_id).toBe(newRow?.conflict_group_id)
   })
 })

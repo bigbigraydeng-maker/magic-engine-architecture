@@ -189,6 +189,55 @@ describe('redactPersonalInfo', () => {
     expect(result.text).toBe(REAL_MAIN_TEMPLATE)
     expect(result.hits).toEqual([])
   })
+
+  // 魏征复审（2026-09-14）实测确认的高危缺口：跑代码验证过原实现对这条最
+  // 普通的新西兰英文送货地址完全不脱敏，整句原样发给 Anthropic API。
+  it('redacts a real English NZ street address (the exact gap 魏征 found empirically)', () => {
+    const result = redactPersonalInfo('Please deliver to 42 Ponsonby Road, Grey Lynn, Auckland 1021')
+    expect(result.text).not.toContain('Ponsonby')
+    expect(result.text).not.toContain('1021')
+    expect(result.hits).toContain('address')
+  })
+
+  it('redacts an English address with a unit number prefix', () => {
+    const result = redactPersonalInfo('Unit 3, 15 Beach Road, Papakura')
+    expect(result.text).not.toContain('Beach Road')
+    expect(result.hits).toContain('address')
+  })
+
+  it('redacts a labelled recipient name (Chinese label)', () => {
+    const result = redactPersonalInfo('收件人：Praash')
+    expect(result.text).not.toContain('Praash')
+    expect(result.hits).toContain('name')
+  })
+
+  it('redacts a labelled recipient name (English label)', () => {
+    const result = redactPersonalInfo('Recipient: John Smith')
+    expect(result.text).not.toContain('John Smith')
+    expect(result.hits).toContain('name')
+  })
+
+  it('redacts the name in the exact fixture line 魏征 found leaking a name (tracking number line with a trailing name)', () => {
+    // The real fixture's "收件人：TJJ28967 - Praash" line is itself labelled
+    // with 收件人 — the name-label rule now catches the whole remainder of
+    // that line, including the previously-leaking "Praash".
+    const result = redactPersonalInfo('收件人：TJJ28967 - Praash')
+    expect(result.text).not.toContain('Praash')
+    expect(result.hits).toContain('name')
+  })
+
+  it('does NOT misredact a traditional-Chinese-only address as a phone/tracking number (regression: address check runs first)', () => {
+    const result = redactPersonalInfo('地址：台北市信義區信義路五段7號')
+    expect(result.hits).toContain('address')
+  })
+
+  // 魏征复审（2026-09-14）实测确认的真 bug：原 PHONE_CANDIDATE_PATTERN 把
+  // 句点当分隔符，会把 "NZD 1234.56" 这类真实报价金额当成电话号码抹掉。
+  it('does NOT misredact a decimal money amount as a phone number', () => {
+    const result = redactPersonalInfo('Total NZD 1234.56 today')
+    expect(result.text).toBe('Total NZD 1234.56 today')
+    expect(result.hits).toEqual([])
+  })
 })
 
 // ── number provenance ────────────────────────────────────────────────────
@@ -208,6 +257,25 @@ describe('validateNumberProvenance', () => {
 
   it('trivially accepts a candidate with no numbers at all', () => {
     expect(validateNumberProvenance('We ship worldwide', null, 'Some unrelated source text')).toBe(true)
+  })
+
+  // 魏征复审（2026-09-14）实测确认的真 bug：千分位逗号会把 "1,000" 拆成
+  // 两个独立数字 1 和 0，候选侧写的完整 "1000" 永远核不到——合法候选被
+  // 误杀。物流报价过千用千分位写法很常见，不是边缘场景。
+  it('does not false-positive-reject a value written with a thousand-separator comma in the source', () => {
+    expect(
+      validateNumberProvenance(
+        'Orders over NZD 1000 incur a NZD 50 surcharge.',
+        { threshold: 1000, surcharge: 50 },
+        'Rush fee for orders over NZD 1,000: NZD 50 surcharge applies.',
+      ),
+    ).toBe(true)
+  })
+
+  it('still rejects a genuinely fabricated number even when the source has comma-grouped numbers nearby', () => {
+    expect(
+      validateNumberProvenance('Orders over NZD 1000 incur a NZD 99 surcharge.', { surcharge: 99 }, 'Rush fee for orders over NZD 1,000: NZD 50 surcharge applies.'),
+    ).toBe(false)
   })
 })
 

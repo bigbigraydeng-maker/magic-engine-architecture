@@ -80,6 +80,7 @@ interface FactRow {
   scope: Record<string, unknown>
   statement: string
   structured_value: unknown
+  conflict_group_id: string | null
   status: FactStatus
   visibility: Visibility
   sensitivity: Sensitivity
@@ -189,6 +190,7 @@ function toKnowledgeEntry(row: FactRow): KnowledgeEntry {
     scope: row.scope,
     statement: row.statement,
     structuredValue: row.structured_value,
+    conflictGroupId: row.conflict_group_id,
     status: row.status,
     visibility: row.visibility,
     sensitivity: row.sensitivity,
@@ -230,7 +232,7 @@ export async function getClientKnowledge(
   // deliberately, so each rule is one isolated, independently mutation-
   // testable `if`, not a single opaque query string.
   const FACT_COLUMNS =
-    'id, client_id, fact_key, scope, statement, structured_value, status, visibility, sensitivity, valid_from, valid_until, last_verified_at, approved_by_email, approved_at, client_confirmed_by_email, client_confirmed_at, client_confirmed_fingerprint'
+    'id, client_id, fact_key, scope, statement, structured_value, conflict_group_id, status, visibility, sensitivity, valid_from, valid_until, last_verified_at, approved_by_email, approved_at, client_confirmed_by_email, client_confirmed_at, client_confirmed_fingerprint'
 
   const { data, error } = await sb
     .from('client_knowledge_facts')

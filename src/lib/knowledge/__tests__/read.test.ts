@@ -37,6 +37,7 @@ interface FactFixture {
   client_confirmed_at?: string | null
   confirmFingerprint?: boolean // if true, compute a matching fingerprint from current content
   client_confirmed_fingerprint?: string | null
+  conflict_group_id?: string | null
 }
 
 /** Build one client_knowledge_facts fixture row with sane defaults. */
@@ -67,6 +68,7 @@ function fact(f: FactFixture): Row {
     scope,
     statement,
     structured_value: structuredValue,
+    conflict_group_id: f.conflict_group_id ?? null,
     status: f.status ?? 'approved',
     visibility: f.visibility,
     sensitivity: f.sensitivity,
@@ -455,6 +457,22 @@ describe('getClientKnowledge — dual-sign gate (customer_reply only)', () => {
     ])
     const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => NOW })
     expect(result.entries).toEqual([])
+  })
+})
+
+describe('getClientKnowledge — conflictGroupId pass-through (issue #1645 needs this to link mining conflicts back to approved facts)', () => {
+  it('surfaces a non-null conflict_group_id on the returned entry', async () => {
+    const sb = makeSb([
+      fact({ id: 'f1', fact_key: 'k.general', visibility: 'customer_ok', sensitivity: 'general', conflict_group_id: 'group-xyz' }),
+    ])
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'internal_brief' }, { supabase: sb, now: () => NOW })
+    expect(result.entries[0]?.conflictGroupId).toBe('group-xyz')
+  })
+
+  it('surfaces null when the fact was never part of a conflict', async () => {
+    const sb = makeSb([fact({ id: 'f1', fact_key: 'k.general', visibility: 'customer_ok', sensitivity: 'general' })])
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'internal_brief' }, { supabase: sb, now: () => NOW })
+    expect(result.entries[0]?.conflictGroupId).toBeNull()
   })
 })
 
