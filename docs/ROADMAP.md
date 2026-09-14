@@ -150,9 +150,11 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 六处已改接 `getClientKnowledge`，`config/clients/cts/offerings.yaml` 及其加载器整条路线
 已作废（详见方案文末"§9.14 C 同步修改"章节）。
 
-**Held 待重做的 PR**（依赖 `getClientKnowledge`，等它合并后改接）：
-- [ ] #1638 Verifier 框架 + CTS policy —— 改接新的 `forbiddenFactKeys`/数字核实闸设计
-- [ ] #1639 agent-core prompt.ts + tools.ts —— 4 只读工具改用 purpose+visibility 模型
+**此前 Held 的 PR，依赖已解除（2026-09-15）**：等的是 `getClientKnowledge` 全部 6 步真正合并
+完，2026-09-15 步骤 6（#1648）合并后 6 步已全部到位——`gh pr view` 核实 #1638/#1639 现在
+`MERGEABLE`，跟主线没有冲突。**仍未做的是这两个 PR 自己的改接工作和复审**，不是被别的东西挡着：
+- [ ] #1638 Verifier 框架 + CTS policy —— 改接新的 `forbiddenFactKeys`/数字核实闸设计，0 复审
+- [ ] #1639 agent-core prompt.ts + tools.ts —— 4 只读工具改用 purpose+visibility 模型，0 复审
 
 **审查过程发现并已修复的关键问题**（wave-1，不是走过场，逐条真实验证）：数据库外键漏写级联
 删除；退订判断第一版设计换渠道即失效（已改用现成的 `contacts.do_not_contact` 机制）；CTS
@@ -184,13 +186,32 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
       `detectSensitivity()`/`checkBudget()`，并经过新一轮子牙+魏征复审又修了 6 处真问题
       （PII 脱敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已
       关闭并 credit。
-- [ ] 步骤 4（issue #1646）FDE 审核页 + 客户确认页（客户对外可见，需板桥复审）
-- [ ] 步骤 5（issue #1647）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— **已有两个重复实现**
-      （PR #1623 已关闭 credit 给下方 PR；PR #1629 已合并作为紧急修复主线，`brief-client-
-      facts.ts` 临时文件明确标注等本步骤替换）
-- [ ] 步骤 6（issue #1648）rollout 阶段
+- [x] 步骤 4（issue #1646）FDE 审核页 + 客户确认页 —— PR #1685 已合并（本条此前漏勾，2026-09-15
+      整理 ROADMAP 时发现并补上，不是本次新完成）
+- [x] 步骤 5（issue #1647）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— PR #1694 已合并（同上，
+      漏勾补上）
+- [x] 步骤 6（issue #1648）rollout 阶段（上线阶段机机 + 双签一次性确认链接）—— PR #1693
+      已合并（2026-09-15）。合并前子牙+魏征两轮复审，中间发现并修复：①合并冲突解决时
+      两个测试 fixture 的修复一度只改在工作区没真正提交，被复审用干净代码复核时抓到，
+      已重新提交验证；②`consume_knowledge_rollout_advance_request` 的一个真实竞态漏洞
+      （回退后旧确认链接仍可把客户拉回已回退的阶段）在复审期间被另一并发会话修复。
 
-**后续跟踪**：issue #1669（确认人登记写入 API，P3）。
+**6 步全部完成。** 遗留跟进（不阻塞，已知不阻塞合并）：
+- issue #1669（确认人登记写入 API，P3）
+- `rollout.ts` 的 `hashesMatch` 跟 `confirmation-requests.ts` 几乎重复实现，未抽共享（魏征复审 ⚠️ 警告项）
+- PR #1693 描述文字落后于最终代码状态，未回填更新（魏征复审 ⚠️ 警告项，不影响代码本身）
+- **操作陷阱已记入** [PITFALLS.md §D7](./PITFALLS.md)：给任何客户开 `client_knowledge.read` 授权前，必须确认同步走完 rollout stage 双签，否则 `customer_reply` 会静默读空知识库、不报错
+
+## ME 旅游版 · Tour 管理模块（2026-09-14 立项，PM 已立版，未授权实施）
+
+规划见 [`specs/2026-09-14-me-tour-management-module-plan.md`](./specs/2026-09-14-me-tour-management-module-plan.md)。ME 旅游版已正式立版（`registry/product-versions.md`，Customer Zero = CTS）。**已上线的只有「行程路线地图」这一块**（8 个 CTS 团在正式站，见 CHANGELOG 2026-09-14）；下面是模块化的未完成项，每步走双审 + 五道 Build Gate：
+
+- [ ] **P1 · 统一/连接现有团事实源 + 最小营销快照**（A 级）：连接 `config/clients/cts/offerings.yaml` / `src/lib/web-intelligence/first-party-tours.ts`(`FirstPartyTour`) / 客户官网，**不新建第三份权威源**；价格/库存/出发日期按 `ME_PRODUCT_DEFINITION.md` §3.2 留外部源 Connector 读。先解决「多份源漂移、各渠道给客户不同答案」。
+- [ ] **P2 · 路线图生成器产品化**（B 级）：把原型 `docs/specs/prototypes/tour-route-map/` 搬成 ME 正式能力，输入 = P1 快照，输出 PC + 手机 SVG 落公开桶。**前置：品牌/logo、底图、地理标注规则参数化**（当前 CTS/中国硬编码）。晋升门槛 = 第 2 个旅游客户复制（L2）。
+- [ ] **P3 · Tour 管理后台 UI**（B 级）：ME 后台录入营销快照 + 一键生成地图；价格/出发日期只读展示。
+- [ ] **P4 · 内容 + 定价产出**（B 级）：接现有 AI 文案 / SEO writer / grounding，从快照产出各渠道文案；价格读统一事实源。
+- [ ] **P5 · 一键交付**（C 级）：地图 + 文案 + PDF brochure + 落地页片段打包。
+- **PM 待拍板**：优先级（P1+P2 何时排期）· 第一版范围（只做地图+行程 vs 四块一起）。
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 

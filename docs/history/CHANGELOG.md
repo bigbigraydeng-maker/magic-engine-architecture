@@ -5,6 +5,32 @@
 
 ---
 
+### 2026-09-15（客户知识库 6 步全部合并 · 广告结果阶梯上线 CTS）
+
+PR [#1693](https://github.com/bigbigraydeng-maker/magic-engine/pull/1693) 已合并。客户知识库
+（Client Knowledge Base，L1 平台能力）6 步建设全部完成——步骤 6（issue #1648，rollout stage
++ 双签一次性确认链接）合并后，`getClientKnowledge(purpose:'customer_reply')` 补齐了最后一道
+闸：客户必须走完"ME 发起 + 客户自己确认"两次签名才算"正式上线"，上线前默认对客户不放行知识库
+事实（fail-closed）。合并前过子牙（架构）+ 魏征（挑刺）两轮独立复审：过程中发现并修复两处真
+问题——①合并冲突解决时两个既有测试的 fixture 修复一度只落在工作区没有真正提交，被复审用干净
+代码复核时抓到，重新提交并用直接读远端 commit 对象的方式验证；②另一并发会话在复审期间修了
+`consume_knowledge_rollout_advance_request` 一处真实竞态漏洞（客户点开一条已经被 ME 单方回退
+过的旧确认链接，本应拒绝却会把客户重新拉回已回退的阶段）。这一步合并后，此前被它挡住的
+Governed Reply Agent 两个 PR（#1638 verifier 框架、#1639 agent-core prompt/tools）确认跟主线
+无冲突，可以进入各自复审排期。
+
+同一会话把 CTS 接入了新上线的"广告结果阶梯"体检（issue ADS-IMPACT-P1）：留资（lead）定为主
+结果、私信开聊为领先信号、目标成本 $11/留资（按 CTS 最近 11 天真实均价 $9.78/留资定的目标线）。
+`ad_strategy_configs` 新增一行，走的是既有设置接口同款的字段/校验规则（顺序不能颠倒、成本区间
+0-100000）。
+
+**Reuse Statement**：#1693 是纯平台能力收尾，无新增独立能力线；`client_knowledge_rollout_advance_
+requests` 复用 issue #1646 已验证过的一次性签名链接安全姿态（GET 只读/POST 才消费/CSRF nonce），
+双签身份判据复用 `dual-sign.ts`，未另起第二套。CTS 结果阶梯是纯客户配置（L4），未写入 shared
+runtime；换成 Oztop/Roman 需要各自另填一行，逻辑代码不需要改。
+
+---
+
 ### 2026-09-15（NAL 私信 → Meta CAPI 有效咨询同步，dry_run）
 
 PR [#1675](https://github.com/bigbigraydeng-maker/magic-engine/pull/1675)、[#1684](https://github.com/bigbigraydeng-maker/magic-engine/pull/1684)、[#1689](https://github.com/bigbigraydeng-maker/magic-engine/pull/1689) 已合并并部署生产，migration 已 apply。New Asian Logistics（NAL，跨境集运物流代理）的 Facebook Messenger 私信对话现在能被自动判定为"有效咨询"并写入 `me_sale_outcomes`，复用 CTS 那条线已上线的 Meta 广告转化 API（CAPI）回写通道。判据用 21 个真实对话人工标注 + 模拟跑规则验证过（0 假阳性，约 69% 召回）；生产库真实跑通：186 段对话，判出 20 条有效咨询全部正确写入 `pending_review`，重跑确认幂等键生效。
@@ -16,6 +42,19 @@ PR [#1675](https://github.com/bigbigraydeng-maker/magic-engine/pull/1675)、[#16
 **范围内明确没做**：本轮不做"已成交"判定（NAL 184 个联系人的 CRM 阶段字段全空、集运报价无团价表可查金额，拼不出合法记录）；不接 WhatsApp（NAL 现有对话 100% 是 Messenger 渠道）；不接 cron/Inngest（人工手动触发 `POST /api/admin/conversions/nal-messenger-sync`）；不切换到真发送（`conversion_stage` 仍是 `dry_run`）。
 
 **Reuse Statement**：完整复用既有共享能力（CAPI 回写通道 `writeback-service.ts`/`me_sale_outcomes`/审核 UI、`qualified-buyer.ts` 抽出的否定窗口检测现独立成 `src/lib/crm/negation.ts` 共享模块）。NAL 专属的判断规则（关键词表、批次边界启发式）封在 `nal-messenger-lead-classify.ts` 一个文件里，按 `docs/registry/platform-candidates.md` 已登记的 L4 客户专属实现路线，未下沉进 shared runtime。`page_scoped_user_id`/`action_source` 是本次新增的跨客户共享字段/契约扩展（CTS 现有记录不受影响，行为原样不变）。
+
+---
+
+### 2026-09-14（CTS 行程路线地图 8 团上线 + ME 旅游版立版 + Tour 管理模块规划）
+
+PM 从「给 CTS 也做一张 Golden China 那样的路线图」起步，最终沉淀成 ME 旅游版的第一个共享能力候选 + 一条产品线立版。
+
+1. **8 个 CTS 在售团的「行程路线地图」上线正式站**（`chinatravel` 仓 `ctstours.co.nz`，PR #184/#185）：Golden China + 双城记 / 上海周边 / Best of China / 丝路 / 27 天全景 / 圣诞团（奥克兰 + 基督城）。每张按各团**真实行程**（城市顺序 / 每城住几晚 / 交通方式 / 活动，全部取自官网行程数据或 `tours.ts`，未编造）自动生成，PC 宽版 + 手机竖版随屏切换，挂在各团行程页「Itinerary」标签顶部。地图用真实中国边界数据（非手画）、台湾按中国惯例标注、CTS 品牌 + logo、无价格无固定出发日期（通用图）。
+2. **统一为 Golden China 风格**（PM 复审后返工）：卡片按到达顺序排（第一站在最上、国际进出/中转城市排到它实际停留的最后位置）、城市名紧贴圆点无引导线、城市铺开、箭头顺行程走，一眼读出第 1 站→第 2 站。
+3. **ME 旅游版正式立版**（PM 2026-09-14 拍板，`docs/registry/product-versions.md`）：Customer Zero = CTS；首个 L2 能力候选 = 行程转路线地图生成器（`candidate · 1/2`，未晋升共享能力）。
+4. **ME Tour 管理模块规划成文**（`docs/specs/2026-09-14-me-tour-management-module-plan.md`，未授权实施）：一个团推广前统一备好内容/定价/行程/地图；经 Codex 复审修正为「连接现有事实源（`offerings.yaml`/`FirstPartyTour`）+ 最小营销快照」，遵守 `ME_PRODUCT_DEFINITION.md` §3.2/§3.3——**ME 不自建旅游库存/报价系统**。生成器原型存进受跟踪路径 `docs/specs/prototypes/tour-route-map/`。
+
+**Reuse Statement**：地图生成器逻辑不含写死的客户名/城市/价格（全来自输入 specs）；但视觉资产（CTS 品牌色/logo、中国底图、台湾标注）当前**硬编码**，故严格范围 = 「中国线路 · CTS 首例」，未取得旅游版共享资格。产品化前置：品牌/底图/地理规则参数化 + 团事实走 Connector。晋升门槛 = 第 2 个旅游客户事实复制（L2，非 L1 跨行业）。
 
 ---
 
@@ -149,6 +188,18 @@ PR #1500 已上线；用户明确批准生产数据库更新后应用 6 张隔�
 实际验收：生产 run `e7b5e805-e56f-45b5-9814-7ca9708f1f00` 经后台提交完成，Apify `X60junDpOkJqCAOig` SUCCEEDED，快照 `efb3fd1d-5cab-4b01-9acd-fcdec05ef3f6` 含 19,393 字符，基准跳过模型。供应商 US$0.0009246626，含间接成本记账 NZ$0.0215774744。启用暴露的既有客户 GUID / Actor 必需代理兼容问题已通过最小补丁 #1506/#1507 修复；后者 88 项相关测试、lint、远端构建及双人复审通过。
 
 真实变化的模型建议仍待独立回执。复用边界：共享 adapter / evidence / budget / workflow；CTS ID、网址、市场语境仅配置，无客户语义写入共享运行时代码，无行业/全局学习晋升。详细记录见 [rollout receipt](../specs/2026-09-09-web-intelligence-v01.md)。
+
+### 2026-09-08（Park Homes：网站搭了一条自动上线的通道，以前每次改动都要人手动推）
+
+PR [#1501](https://github.com/bigbigraydeng-maker/magic-engine/pull/1501) 已合并并实测跑通。发现 `parkhomes-site` 这个 Cloudflare Pages 项目从建站起就没接过任何自动部署——每次改动都是靠人手动在本机敲命令推上线，合并代码本身完全不会让网站更新。新增一条自动化：以后代码一合并到 `main` 且改动了 Park Homes 网站目录，会自动打包、自动推上线，不用再手动操作。用来推送的这把钥匙权限锁到最小（只能碰这一个网站的部署，碰不了这个账号下任何别的东西）。已实测：手动触发过一次，确认真的能从零到上线全程自动跑完。
+
+**Reuse Statement**：纯 Park Homes 专属的部署管线搭建（该网站独立托管在 Cloudflare Pages），不涉及平台共享代码，换客户不影响。
+
+### 2026-09-08（Park Homes：修复 Google 收录被拆成两份的问题）
+
+PR [#1496](https://github.com/bigbigraydeng-maker/magic-engine/pull/1496) 已合并并部署生产。排查网站数据时发现 `www.parkhomes.nz` 和 `parkhomes.nz` 两个网址一直没有互相跳转，导致 Google 把同一个网页当成两个不同页面分别计数，搜索数据被拆散。已在 Cloudflare 加了跳转规则把 www 版本统一跳到不带 www 的正式版本；顺手把一个查无来源的历史死链接也改成跳转到项目列表页，不再是 404。生产实测：两条跳转都返回正确的 301，网站首页、各项目页确认没有被误改。
+
+**Reuse Statement**：纯 Park Homes 网站配置修复（该客户独立域名/独立 Cloudflare 账号），不涉及平台共享代码。
 
 ### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
 
