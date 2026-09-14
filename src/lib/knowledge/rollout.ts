@@ -71,6 +71,17 @@ export const LIVE_STAGE: KnowledgeRolloutStage = 2
 /** Reuse the same default TTL as fact-confirmation links (design doc doesn't specify a different one). */
 export const ROLLOUT_ADVANCE_LINK_DEFAULT_TTL_HOURS = CONFIRMATION_LINK_DEFAULT_TTL_HOURS
 
+/**
+ * 板桥客户体验复审（issue #1648）："阶段号别裸给客户看"——客户确认页/邮件
+ * 绝不能出现 "stage 1" / "阶段 1" 这种代号，只能用这几句大白话。ME 内部
+ * 文档和日志仍然用数字（本文件头部注释、`KnowledgeRolloutStage` 本身）。
+ */
+export const ROLLOUT_STAGE_LABELS: Record<KnowledgeRolloutStage, string> = {
+  0: '内部整理阶段',
+  1: '客户共测阶段',
+  2: '正式上线阶段',
+}
+
 function parseStageValue(value: unknown): KnowledgeRolloutStage | null {
   if (value === '0') return 0
   if (value === '1') return 1
@@ -307,7 +318,22 @@ export async function createRolloutAdvanceRequest(
   return { requestId: inserted.id, rawToken, confirmerEmail, fromStage, toStage, expiresAt }
 }
 
-export type RolloutAdvanceLinkProblem = 'not_found' | 'bad_token' | 'expired' | 'already_used' | ConfirmerIdentityRejection
+export type RolloutAdvanceLinkProblem =
+  | 'not_found'
+  | 'bad_token'
+  | 'expired'
+  | 'already_used'
+  /**
+   * 🔴 跟 `already_used` 是两件不同的事，不能合并（2026-09-15 子牙+魏征联合
+   * 复审）：`already_used` 是"这条链接已经被点过一次了"（有人抢跑，或者
+   * 客户自己点了两次）；`superseded` 是"这条链接从来没被点过，但客户的
+   * 实际阶段已经不是这条请求创建时冻死的 from_stage 了"——最典型的原因是
+   * 中途被一键回退。运营看到 `already_used` 会以为是重复提交，看到
+   * `superseded` 才知道是"这条链接背后的前提已经不成立了，得重新走一次
+   * 前进流程"，两者混在一起会误导运营去查错方向。
+   */
+  | 'superseded'
+  | ConfirmerIdentityRejection
 
 export interface RolloutAdvanceLinkView {
   ok: true
@@ -356,6 +382,36 @@ function gateRolloutRequest(request: RolloutRequestRow, rawToken: string, now: D
   if (request.status !== 'pending') return 'already_used'
   if (Date.parse(request.expires_at) <= now.getTime()) return 'expired'
   return null
+}
+
+/**
+ * Human-readable reason for a refused link, shown on the customer's confirm
+ * page — same discipline as `confirmation-requests.ts`'s `describeLinkProblem`
+ * (issue #1646): no field names, no stage numbers, written for the person
+ * receiving the email, not for an engineer reading a log.
+ */
+export function describeRolloutLinkProblem(problem: RolloutAdvanceLinkProblem): string {
+  switch (problem) {
+    case 'not_found':
+    case 'bad_token':
+      return '这个确认链接不对。请用我们发给你的那封邮件里的链接重新打开；如果找不到，回一封邮件告诉我们，我们重发一条。'
+    case 'expired':
+      return '这个确认链接已经过期了。回一封邮件告诉我们一声，我们马上重发一条新的。'
+    case 'already_used':
+      return '这次阶段切换已经确认过了，不用再点一次。'
+    case 'superseded':
+      // 🔴 板桥客户体验复审：不能说"链接过期"或"已经用过"——那会让客户
+      // 以为自己操作重复了，实际是我们这边中途改了主意（比如发现价格错
+      // 了先退回去核对），这条链接对应的前提已经不成立。
+      return '在你点这个链接之前，我们这边发现需要先重新核对一下，暂停了这次切换。这条链接已经不能用了，等我们核对完会重新发一条给你，麻烦你留意一下。'
+    case 'missing':
+    case 'not_registered':
+      return '你的邮箱目前不在这个账户的确认人名单里，所以这次确认没有生效。回这封邮件告诉我们，我们帮你登记。'
+    case 'same_as_approver':
+      return '这次切换需要由你们公司的人确认，不能由发起这次切换的人自己确认。回这封邮件告诉我们一声。'
+    case 'global_admin':
+      return 'Magic Engine 的账号不能代你们确认。回这封邮件告诉我们，我们用你们自己的邮箱重发一条。'
+  }
 }
 
 async function readClientNameForRollout(sb: KnowledgeWriteClient, clientId: string): Promise<string | null> {
@@ -437,10 +493,14 @@ export async function consumeRolloutAdvanceRequest(
   if (rpcResult.error) {
     throw new KnowledgeRolloutError(`阶段切换确认失败：${rpcResult.error.message ?? '未知错误'}`)
   }
-  const outcome = asRows<{ claimed: boolean; event_id: string | null }>(rpcResult.data)[0]
+  const outcome = asRows<{ claimed: boolean; event_id: string | null; stale: boolean }>(rpcResult.data)[0]
   if (!outcome?.claimed) {
-    // 有人（或另一个浏览器标签）刚刚抢先提交了同一条链接。一个字都没写。
-    return { ok: false, problem: 'already_used' }
+    // 🔴 两种不同的拒绝原因，不能合并（见 RolloutAdvanceLinkProblem 的注释）：
+    //   stale=true  —— 链接本身没被点过，但客户实际阶段已经被别的东西（典型：
+    //                   一键回退）带走了，跟这条请求冻死的 from_stage 不一致。
+    //   stale=false —— 有人（或另一个浏览器标签）刚刚抢先提交了同一条链接。
+    // 两种情况都一个字没写。
+    return { ok: false, problem: outcome?.stale ? 'superseded' : 'already_used' }
   }
 
   return {

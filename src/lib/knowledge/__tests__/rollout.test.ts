@@ -316,6 +316,55 @@ describe('createRolloutAdvanceRequest → loadRolloutAdvanceRequest → consumeR
     expect(db.client_knowledge_events).toHaveLength(0)
   })
 
+  it('🔴 2026-09-15 子牙+魏征联合复审：a rollback that supersedes a still-pending advance link is refused as "superseded", NOT silently honoured, and NOT collapsed into "already_used"', async () => {
+    // 攻击场景（两位复审各自对真实本机 Postgres 复现）：客户在阶段 1 →
+    // ME 建一条 1→2 的前进请求（from_stage 冻成 '1'）→ 在客户点它之前，
+    // ME 发现价格错了，一键回退到阶段 0 → 客户之后才点开这条仍然"有效、
+    // 未过期、pending"的链接。修复前：consume 只查 status==='pending'，
+    // 照旧把它 claim 掉，写一条 value='2' 的事件，把刚做的回退原样抹掉。
+    const db = tables({ client_knowledge_events: [phaseEvent('1', '2026-01-01T00:00:00.000Z')] })
+    const sb = createFakeWriteSupabase(db)
+
+    const created = await createRolloutAdvanceRequest(sb, {
+      clientId: CLIENT_A,
+      toStage: 2,
+      confirmerEmail: CUSTOMER_SIGNER,
+      actorEmail: ME_ACTOR,
+      sampleCheck: GOOD_SAMPLE_CHECK,
+      now: () => NOW,
+    })
+    expect(await getCurrentRolloutStage(CLIENT_A, sb)).toBe(1)
+
+    // ME 发现价格错了，在客户点链接之前一键退回阶段 0。
+    const rollbackTime = new Date(NOW.getTime() + 60_000)
+    await rollbackKnowledgeRolloutStage(sb, {
+      clientId: CLIENT_A,
+      toStage: 0,
+      reason: '停售团报价写错了',
+      actorEmail: ME_ACTOR,
+      now: () => rollbackTime,
+    })
+    expect(await getCurrentRolloutStage(CLIENT_A, sb)).toBe(0)
+    expect(db.client_knowledge_events).toHaveLength(2)
+
+    // 客户现在才点开那条链接（回退之前发的，本身没过期、没被用过）。
+    const clickTime = new Date(rollbackTime.getTime() + 60_000)
+    const consumed = await consumeRolloutAdvanceRequest(sb, {
+      requestId: created.requestId,
+      rawToken: created.rawToken,
+      now: () => clickTime,
+    })
+
+    // 拒绝，且是能跟"链接已经被点过"分开的、专门的原因码。
+    expect(consumed).toEqual({ ok: false, problem: 'superseded' })
+    // 一个字没写：还是回退之后那 2 条事件，没有第 3 条 value='2' 的事件。
+    expect(db.client_knowledge_events).toHaveLength(2)
+    expect(db.client_knowledge_events.some((e) => e.value === '2')).toBe(false)
+    expect(await getCurrentRolloutStage(CLIENT_A, sb)).toBe(0)
+    // 请求本身也没有被打上终态——留 pending，跟真实 RPC 的行为一致。
+    expect(db.client_knowledge_rollout_advance_requests[0].status).toBe('pending')
+  })
+
   it('🔴 只有一个签字人不推进: confirmer registration revoked after the link was sent — consuming it is refused, no event is inserted, and the effective stage does not change', async () => {
     const db = tables()
     const sb = createFakeWriteSupabase(db)
