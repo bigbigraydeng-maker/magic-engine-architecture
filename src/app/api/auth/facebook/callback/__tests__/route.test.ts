@@ -153,6 +153,41 @@ describe('scope persistence — provider-authoritative, never the requested cons
     expect(mocks.upsertCalls[0].scopes).toEqual(full)
   })
 
+  it('still connects when the user unticks pages_manage_engagement — degrades, never errors, and stores no engagement grant', async () => {
+    // Requested now, but optional: a user who declines comment-writing on the
+    // consent screen must still get a working inbox/publish connection.
+    const withoutEngagement = [
+      'pages_show_list',
+      'pages_messaging',
+      'pages_read_engagement',
+      'pages_read_user_content',
+      'pages_manage_posts',
+    ]
+    mocks.listGrantedScopes.mockResolvedValue(withoutEngagement)
+
+    const inbox = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+    expect(outcomeOf(inbox)).toBe('connected')
+    expect(mocks.upsertCalls).toHaveLength(1)
+    expect(mocks.upsertCalls[0].scopes).toEqual(withoutEngagement)
+    expect(mocks.upsertCalls[0].scopes).not.toContain('pages_manage_engagement')
+
+    // The publishing reauth keys only on pages_manage_posts — a missing
+    // engagement grant must not turn it into publish_not_granted.
+    mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, intent: 'publishing' })
+    const publishing = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+    expect(outcomeOf(publishing)).toBe('publish_ready')
+  })
+
+  it('persists pages_manage_engagement when Meta grants it', async () => {
+    const full = ['pages_show_list', 'pages_manage_posts', 'pages_manage_engagement']
+    mocks.listGrantedScopes.mockResolvedValue(full)
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(outcomeOf(res)).toBe('connected')
+    expect(mocks.upsertCalls[0].scopes).toEqual(full)
+  })
+
   it('writes NOTHING and stamps no timestamp when the permissions read fails — never fabricates a grant (#1152 P2)', async () => {
     mocks.listGrantedScopes.mockResolvedValue(null) // read failed / unparseable
 
