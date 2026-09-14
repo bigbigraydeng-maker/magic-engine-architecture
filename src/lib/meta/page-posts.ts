@@ -221,53 +221,76 @@ export interface PublishedPagePost {
   postId: string
   /** Which Graph field the id came from. `/photos` returns both `id` (the
    *  photo object) and `post_id` (the feed story); they are not the same
-   *  object and only the latter is a Page post. We prefer `post_id`.
-   *
-   *  A *scheduled* photo (`published:false` + `scheduled_publish_time`) comes
-   *  back with `id` only, so we read the photo's `page_story_id` back from
-   *  Graph (`page_story_id`). If that read-back fails we fall back to the photo
-   *  id (`id`) and say so in `postIdUnresolvedReason`, rather than silently
-   *  passing off a photo id as a post id. */
-  postIdSource: 'post_id' | 'page_story_id' | 'id'
-  /** Present only when `postIdSource === 'id'`: why no real post id could be
-   *  obtained. The post itself was accepted by Facebook — this is not a
-   *  publish failure and must not trigger a re-post. */
-  postIdUnresolvedReason?: string
+   *  object and only the latter is a Page post. We prefer `post_id` and record
+   *  when we had to fall back, rather than silently passing off a photo id as
+   *  a post id. A scheduled photo only ever returns `id` — its story id is
+   *  resolved later, after it goes public (see `readPageStoryId`). */
+  postIdSource: 'post_id' | 'id'
   permalink: string
-  /** Raw `/photos` response, kept verbatim so a receipt can be audited later. */
+  /** Raw response, kept verbatim so a receipt can be audited later. */
   raw: Record<string, unknown>
 }
 
-type PageStoryIdReadback = { ok: true; postId: string } | { ok: false; reason: string }
+/** Fixed reason codes — never raw Graph error text, which can carry ids/tokens. */
+export type PageStoryIdFailureReason =
+  | 'timeout'
+  | 'network_error'
+  | 'http_error'
+  | 'graph_error'
+  | 'object_not_found'
+  | 'no_page_story_id'
+  | 'page_prefix_mismatch'
+
+export type PageStoryIdReadback =
+  | { ok: true; postId: string }
+  | { ok: false; reason: PageStoryIdFailureReason }
+
+const STORY_ID_TIMEOUT_MS = 10_000
+
+function storyIdHttpFailure(res: Response, body: { error?: { code?: number } } | null): PageStoryIdReadback | null {
+  if (body?.error) return { ok: false, reason: body.error.code === 100 ? 'object_not_found' : 'graph_error' }
+  if (!res.ok) return { ok: false, reason: 'http_error' }
+  return null
+}
 
 /**
- * Read a photo's feed story id back from Graph. Never throws: the photo has
- * already been accepted by Facebook, so a failure here must surface as data,
- * not as an exception the caller would read as "publish failed".
+ * Read a photo's feed story id (`page_story_id`) back from Graph.
+ *
+ * Meta documents `page_story_id` as applying only to *published* photos, so a
+ * scheduled photo has none until Facebook makes it public — callers must wait
+ * until after `scheduled_publish_time` (see the story-resolve workflow).
+ *
+ * Only an id of the form `<pageId>_<digits>` is accepted: anything else is not
+ * a story on this Page. Never throws; `object_not_found` (Graph code 100) means
+ * the photo is gone, e.g. recalled.
  */
-async function readPageStoryId(
-  photoId: string,
-  pageAccessToken: string,
-  doFetch: typeof fetch,
-): Promise<PageStoryIdReadback> {
-  const url = `${GRAPH_BASE}/${encodeURIComponent(photoId)}?fields=page_story_id&access_token=${encodeURIComponent(pageAccessToken)}`
+export async function readPageStoryId(input: {
+  photoId: string
+  pageId: string
+  pageAccessToken: string
+  fetcher?: typeof fetch
+  timeoutMs?: number
+}): Promise<PageStoryIdReadback> {
+  const doFetch = input.fetcher ?? fetch
+  const url = `${GRAPH_BASE}/${encodeURIComponent(input.photoId)}?fields=page_story_id&access_token=${encodeURIComponent(input.pageAccessToken)}`
+  let res: Response
   try {
-    const res = await doFetch(url)
-    const body = (await res.json().catch(() => null)) as
-      | { page_story_id?: unknown; error?: { message?: string } }
-      | null
-    if (!res.ok || body?.error) {
-      return { ok: false, reason: `page_story_id readback failed: ${body?.error?.message ?? `HTTP ${res.status}`}` }
-    }
-    const storyId = body?.page_story_id
-    if (typeof storyId !== 'string' || storyId.length === 0) {
-      return { ok: false, reason: 'page_story_id readback returned no page_story_id' }
-    }
-    return { ok: true, postId: storyId }
+    res = await doFetch(url, { signal: AbortSignal.timeout(input.timeoutMs ?? STORY_ID_TIMEOUT_MS) })
   } catch (error: unknown) {
-    const detail = error instanceof Error ? error.message : String(error)
-    return { ok: false, reason: `page_story_id readback failed: ${detail}` }
+    // The abort reason is a DOMException, which is not always `instanceof Error`.
+    const name = typeof error === 'object' && error !== null && 'name' in error ? String(error.name) : ''
+    return { ok: false, reason: name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'network_error' }
   }
+  const body = (await res.json().catch(() => null)) as { page_story_id?: unknown; error?: { code?: number } } | null
+  const failure = storyIdHttpFailure(res, body)
+  if (failure) return failure
+
+  const storyId = body?.page_story_id
+  if (typeof storyId !== 'string' || storyId.length === 0) return { ok: false, reason: 'no_page_story_id' }
+  if (!/^\d{5,25}_\d{5,25}$/.test(storyId) || !storyId.startsWith(`${input.pageId}_`)) {
+    return { ok: false, reason: 'page_prefix_mismatch' }
+  }
+  return { ok: true, postId: storyId }
 }
 
 /**
@@ -328,26 +351,14 @@ export async function publishPagePhotoPost(input: {
     throw new Error(`publishPagePhotoPost ${input.pageId}: ${detail}`)
   }
 
-  const raw = (body ?? {}) as Record<string, unknown>
-  if (body?.post_id) {
-    return { postId: body.post_id, postIdSource: 'post_id', permalink: `https://www.facebook.com/${body.post_id}`, raw }
-  }
-  const photoId = body?.id
-  if (!photoId) throw new Error(`publishPagePhotoPost ${input.pageId}: provider returned no post id`)
+  const postId = body?.post_id ?? body?.id
+  if (!postId) throw new Error(`publishPagePhotoPost ${input.pageId}: provider returned no post id`)
 
-  // Scheduled photos return only the photo id. Ask Graph for the real story id
-  // instead of composing `${pageId}_${photoId}` — that equality is an
-  // observed coincidence, not a documented contract.
-  const story = await readPageStoryId(photoId, input.pageAccessToken, doFetch)
-  if (story.ok) {
-    return { postId: story.postId, postIdSource: 'page_story_id', permalink: `https://www.facebook.com/${story.postId}`, raw }
-  }
   return {
-    postId: photoId,
-    postIdSource: 'id',
-    postIdUnresolvedReason: story.reason,
-    permalink: `https://www.facebook.com/${photoId}`,
-    raw,
+    postId,
+    postIdSource: body?.post_id ? 'post_id' : 'id',
+    permalink: `https://www.facebook.com/${postId}`,
+    raw: (body ?? {}) as Record<string, unknown>,
   }
 }
 

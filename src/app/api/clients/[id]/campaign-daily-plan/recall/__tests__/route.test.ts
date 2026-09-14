@@ -1,10 +1,11 @@
 /**
  * Recall route — the stored `post_id` is passed to Graph DELETE verbatim.
  *
- * Production holds two receipt shapes for scheduled photo Posts:
- *  - legacy: `post_id` is the bare photo id (`post_id_source: 'id'`), written
- *    before the page_story_id read-back existed;
- *  - current: `post_id` is the `<page>_<post>` story id (`page_story_id`).
+ * Receipts hold two id shapes, both already in production and both still
+ * written after the story-resolve change:
+ *  - scheduled photo: `post_id` is the bare photo id (`post_id_source: 'id'`);
+ *    the resolved story id lives only in the measurement action row;
+ *  - immediate publish: `post_id` is the `<page>_<post>` feed id (`post_id`).
  * Both must stay recallable, and the route must not rewrite either id.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -43,7 +44,7 @@ const PAGE_ID = '1616575215312482'
 const LEGACY_PHOTO_ID = '1750835520181969'
 const STORY_ID = `${PAGE_ID}_1750835520182000`
 
-function publishedEntry(date: string, postId: string, source: 'id' | 'page_story_id') {
+function publishedEntry(date: string, postId: string, source: 'id' | 'post_id') {
   return {
     date,
     idempotency_key: `fbpost_${date}`,
@@ -74,7 +75,7 @@ function receipt() {
     created_at: '2026-09-02T00:00:00.000Z',
     published: [
       publishedEntry('2026-09-03', LEGACY_PHOTO_ID, 'id'),
-      publishedEntry('2026-09-04', STORY_ID, 'page_story_id'),
+      publishedEntry('2026-09-04', STORY_ID, 'post_id'),
     ],
     failed: [],
     event_ids: [],
@@ -147,7 +148,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe('recall — legacy bare photo id and read-back story id receipts', () => {
+describe('recall — bare photo id and feed post id receipts', () => {
   it('🔴 deletes each receipt entry by its stored post_id, unchanged', async () => {
     stubTables()
 

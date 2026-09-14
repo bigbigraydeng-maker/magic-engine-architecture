@@ -22,6 +22,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
+import type { z } from 'zod'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { sendInngestEvent } from '@/lib/workflows/inngest-event'
@@ -38,8 +39,11 @@ import {
   CampaignDailyPublishCommandSchema,
   CampaignDailyPublishMetaSchema,
   DAILY_PLAN_POST_PUBLISHED_EVENT,
+  DAILY_PLAN_POST_STORY_RESOLVE_EVENT,
   DailyPlanPostPublishedEventSchema,
+  StoryResolveDueSchema,
   measurementSchedule,
+  storyResolveEventId,
   partitionByIdempotency,
   publishIdempotencyKey,
   resolvePublishSchedule,
@@ -50,6 +54,7 @@ import {
   type CampaignDailyPublishPlannedPost,
   type CampaignDailyPublishedPost,
   type DailyPlanPostPublishedEvent,
+  type StoryResolveDue,
 } from '@/lib/campaign/daily-plan-publish'
 
 function errorMessage(error: unknown): string {
@@ -329,27 +334,21 @@ async function publishPending(
       provider_response: result.raw,
     }
 
-    const event = buildPublishedEvent(record, context)
+    const event = buildMeasurementEvent(record, context)
     if (!event.ok) {
       // Fail closed on measurement only. The Post is already accepted by
       // Facebook, so this stays a published receipt entry (never `failed[]`,
       // which would invite a duplicate re-post); we just refuse to emit an
-      // event the measurement consumer would reject as `invalid_payload`.
-      record.measurement_skipped_reason = result.postIdUnresolvedReason
-        ? `post_id is a photo id, not a feed post id (${result.postIdUnresolvedReason})`
-        : event.reason
-      console.error('[daily-plan publish] measurement event not emitted', candidate.date, record.measurement_skipped_reason)
+      // event its consumer would reject as `invalid_payload`.
+      record.measurement_skipped_reason = event.reason
+      console.error('[daily-plan publish] measurement event not emitted', candidate.date, event.reason)
     }
     published.push(record)
     if (!event.ok) continue
 
     // The Post is already live; an event failure must not discard the receipt.
     try {
-      const sent = await sendInngestEvent({
-        id: candidate.idempotency_key,
-        name: DAILY_PLAN_POST_PUBLISHED_EVENT,
-        data: event.data,
-      })
+      const sent = await sendInngestEvent({ id: event.id, name: event.name, data: event.data })
       eventIds.push(...sent.event_ids)
     } catch (error: unknown) {
       console.error('[daily-plan publish] measurement event failed', candidate.date, errorMessage(error))
@@ -359,16 +358,32 @@ async function publishPending(
   return { published, failed, eventIds }
 }
 
+type MeasurementEvent =
+  | { ok: true; id: string; name: string; data: DailyPlanPostPublishedEvent | StoryResolveDue }
+  | { ok: false; reason: string }
+
+function contractViolation(error: z.ZodError): { ok: false; reason: string } {
+  const issues = error.issues.slice(0, 3).map(issue => `${issue.path.join('.')}: ${issue.message}`)
+  return { ok: false, reason: `event payload violates contract: ${issues.join('; ')}` }
+}
+
 /**
- * Build the `daily_plan.post.published` payload and check it against the
- * shared event contract *before* sending. The consumer validates with the same
- * schema; emitting something it will reject is a silent measurement loss.
+ * Pick and validate the event that starts measurement for this Post.
+ *
+ * - Graph returned a feed `post_id` (immediate publish): the standard
+ *   `daily_plan.post.published`, event id = idempotency key.
+ * - Graph returned only a photo `id` (scheduled photo): Meta only exposes
+ *   `page_story_id` once the photo is public, so emit a story-resolve event
+ *   (id `<key>:resolve`); the cloud workflow emits the standard event, with the
+ *   same idempotency-key id, after it reads the story id back.
+ *
+ * Both are checked against the consumer's own schema *before* sending.
  */
-function buildPublishedEvent(
+function buildMeasurementEvent(
   record: CampaignDailyPublishedPost,
   context: { clientId: string; row: PlanRow; command: CampaignDailyPublishCommand },
-): { ok: true; data: DailyPlanPostPublishedEvent } | { ok: false; reason: string } {
-  const parsed = DailyPlanPostPublishedEventSchema.safeParse({
+): MeasurementEvent {
+  const identity = {
     client_id: context.clientId,
     campaign_id: context.command.campaign_id,
     plan_id: context.row.id,
@@ -376,17 +391,22 @@ function buildPublishedEvent(
     review_revision: context.row.reviewRevision,
     date: record.date,
     idempotency_key: record.idempotency_key,
-    post_id: record.post_id,
     page_id: record.page_id,
     published_at: record.published_at,
     ...(record.scheduled_publish_time ? { scheduled_publish_time: record.scheduled_publish_time } : {}),
-    permalink: record.permalink,
     // A scheduled receipt confirms submission, not public visibility.
     measure_at: measurementSchedule(record.scheduled_publish_time ?? record.published_at),
-  })
-  if (parsed.success) return { ok: true, data: parsed.data }
-  const issues = parsed.error.issues.slice(0, 3).map(issue => `${issue.path.join('.')}: ${issue.message}`)
-  return { ok: false, reason: `event payload violates contract: ${issues.join('; ')}` }
+  }
+
+  if (record.post_id_source === 'id') {
+    const parsed = StoryResolveDueSchema.safeParse({ ...identity, photo_id: record.post_id })
+    if (!parsed.success) return contractViolation(parsed.error)
+    return { ok: true, id: storyResolveEventId(record.idempotency_key), name: DAILY_PLAN_POST_STORY_RESOLVE_EVENT, data: parsed.data }
+  }
+
+  const parsed = DailyPlanPostPublishedEventSchema.safeParse({ ...identity, post_id: record.post_id, permalink: record.permalink })
+  if (!parsed.success) return contractViolation(parsed.error)
+  return { ok: true, id: record.idempotency_key, name: DAILY_PLAN_POST_PUBLISHED_EVENT, data: parsed.data }
 }
 
 /** Compare-and-set write of the receipt onto the exact snapshot we validated. */

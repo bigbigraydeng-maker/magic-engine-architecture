@@ -22,6 +22,7 @@ import { getPageAccessToken, publishPagePhotoPost } from '@/lib/meta/page-posts'
 import {
   CampaignDailyPublishMetaSchema,
   DailyPlanPostPublishedEventSchema,
+  StoryResolveDueSchema,
   publishIdempotencyKey,
 } from '@/lib/campaign/daily-plan-publish'
 
@@ -617,46 +618,16 @@ describe('publish bridge — live run records real provider ids', () => {
     ])
   })
 
-  it('🔴 scheduled Post: read-back story id lands in the receipt and the event passes the consumer contract', async () => {
+  it('🔴 scheduled photo (Graph returns only id): receipt keeps the photo id, a story-resolve event is sent, no published event', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-09-02T00:00:00.000Z'))
     stubTables()
     armProvider()
     mockPublish.mockReset()
-    mockPublish.mockResolvedValueOnce({
-      postId: `${PAGE_ID}_1750835520181969`,
-      postIdSource: 'page_story_id',
-      permalink: `https://www.facebook.com/${PAGE_ID}_1750835520181969`,
-      raw: { id: '1750835520181969' },
-    })
-
-    const json = await (await POST(request({ no_publish: false, dates: [DATES[0]] }), params)).json()
-
-    expect(mockPublish.mock.calls[0][0].scheduledPublishTime).toBeInstanceOf(Date)
-    const entry = json.receipt.published[0]
-    expect(entry.post_id).toBe(`${PAGE_ID}_1750835520181969`)
-    expect(entry.post_id_source).toBe('page_story_id')
-    expect(entry.permalink).toBe(`https://www.facebook.com/${PAGE_ID}_1750835520181969`)
-    expect(entry).not.toHaveProperty('measurement_skipped_reason')
-    expect(CampaignDailyPublishMetaSchema.safeParse(json.receipt).success).toBe(true)
-    expect(mockSendInngestEvent).toHaveBeenCalledTimes(1)
-    const event = mockSendInngestEvent.mock.calls[0][0]
-    expect(DailyPlanPostPublishedEventSchema.safeParse(event.data).success).toBe(true)
-    expect(event.data.post_id).toBe(`${PAGE_ID}_1750835520181969`)
-    expect(json.measurement_skipped).toEqual([])
-  })
-
-  it('🔴 unresolved photo id: stays published (no re-post), no contract-violating event, reason recorded', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(new Date('2026-09-02T00:00:00.000Z'))
-    stubTables()
-    armProvider()
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    mockPublish.mockReset()
+    // Real Graph shape for a scheduled photo: `{id}` only.
     mockPublish.mockResolvedValueOnce({
       postId: '1750835520181969',
       postIdSource: 'id',
-      postIdUnresolvedReason: 'page_story_id readback failed: HTTP 500',
       permalink: 'https://www.facebook.com/1750835520181969',
       raw: { id: '1750835520181969' },
     })
@@ -664,25 +635,72 @@ describe('publish bridge — live run records real provider ids', () => {
     const response = await POST(request({ no_publish: false, dates: [DATES[0]] }), params)
     const json = await response.json()
 
-    // Not a publish failure: the post is on Facebook, so it must not land in
-    // failed[] (which a caller would retry, double-posting).
+    expect(response.status).toBe(200)
+    expect(json.status).toBe('PUBLISHED')
+    expect(json.receipt.failed).toEqual([])
+    const entry = json.receipt.published[0]
+    expect(entry.post_id).toBe('1750835520181969')
+    expect(entry.post_id_source).toBe('id')
+    expect(entry.scheduled_publish_time).toBe('2026-09-02T20:00:00.000Z')
+    expect(entry).not.toHaveProperty('measurement_skipped_reason')
+    expect(CampaignDailyPublishMetaSchema.safeParse(json.receipt).success).toBe(true)
+
+    expect(mockSendInngestEvent).toHaveBeenCalledTimes(1)
+    const event = mockSendInngestEvent.mock.calls[0][0]
+    expect(event.name).toBe('daily_plan.post.story_resolve_due')
+    expect(event.id).toBe(`${keyFor(DATES[0])}:resolve`)
+    expect(StoryResolveDueSchema.safeParse(event.data).success).toBe(true)
+    expect(event.data).toMatchObject({
+      client_id: CLIENT_ID,
+      campaign_id: CAMPAIGN_ID,
+      plan_id: PLAN_ID,
+      plan_revision: PLAN_REVISION,
+      review_revision: REVIEW_REVISION,
+      date: DATES[0],
+      idempotency_key: keyFor(DATES[0]),
+      photo_id: '1750835520181969',
+      page_id: PAGE_ID,
+      scheduled_publish_time: '2026-09-02T20:00:00.000Z',
+      measure_at: [
+        { hours: 4, at: '2026-09-03T00:00:00.000Z' },
+        { hours: 72, at: '2026-09-05T20:00:00.000Z' },
+      ],
+    })
+    // It must not smuggle a post id in: the story id does not exist yet.
+    expect(event.data).not.toHaveProperty('post_id')
+    expect(DailyPlanPostPublishedEventSchema.safeParse(event.data).success).toBe(false)
+    expect(json.receipt.event_ids).toEqual(['evt_pub_1'])
+    expect(json.measurement_skipped).toEqual([])
+  })
+
+  it('🔴 contract violation: stays published (no re-post), no event sent, reason recorded and surfaced', async () => {
+    stubTables()
+    armProvider()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockPublish.mockReset()
+    // A non-numeric photo id cannot satisfy the story-resolve contract.
+    mockPublish.mockResolvedValueOnce({
+      postId: 'not-a-photo-id',
+      postIdSource: 'id',
+      permalink: 'https://www.facebook.com/not-a-photo-id',
+      raw: { id: 'not-a-photo-id' },
+    })
+
+    const response = await POST(request({ no_publish: false, dates: [DATES[0]] }), params)
+    const json = await response.json()
+
     expect(response.status).toBe(200)
     expect(json.success).toBe(true)
     expect(json.status).toBe('PUBLISHED')
     expect(json.receipt.failed).toEqual([])
-    expect(json.receipt.published).toHaveLength(1)
     const entry = json.receipt.published[0]
-    expect(entry.post_id).toBe('1750835520181969')
-    expect(entry.post_id_source).toBe('id')
-    expect(entry.measurement_skipped_reason).toContain('page_story_id readback failed: HTTP 500')
+    expect(entry.measurement_skipped_reason).toMatch(/photo_id/)
     expect(mockSendInngestEvent).not.toHaveBeenCalled()
     expect(json.receipt.event_ids).toEqual([])
     expect(json.measurement_skipped).toEqual([
-      { date: DATES[0], post_id: '1750835520181969', reason: entry.measurement_skipped_reason },
+      { date: DATES[0], post_id: 'not-a-photo-id', reason: entry.measurement_skipped_reason },
     ])
-    // The stored receipt still parses, and its idempotency key blocks a re-post.
     expect(CampaignDailyPublishMetaSchema.safeParse(json.receipt).success).toBe(true)
-    expect(updateSpy).toHaveBeenCalledTimes(1)
   })
 
   it('🔴 a re-run over a receipt holding a bare photo id does not publish that date again', async () => {
