@@ -395,6 +395,17 @@ export class FakeWriteSupabase implements KnowledgeWriteClient {
    * event, atomically. `rpcErrors` simulates the function raising mid-
    * transaction: nothing is touched, same "all or nothing" property the
    * real migration's SECURITY DEFINER function guarantees.
+   *
+   * 🔴 2026-09-15 子牙+魏征联合复审：this fake used to only check
+   * `status !== 'pending'` before writing the phase event — exactly the gap
+   * the real RPC had (see the migration's own header comment for the attack
+   * scenario: rollback supersedes a still-pending advance link). A fake more
+   * lenient than the corrected real function would hide this exact class of
+   * bug again, so this re-derives the client's ACTUAL current stage from
+   * `client_knowledge_events` (same "latest row by created_at where
+   * dimension='phase', no row = '0'" logic as `getCurrentRolloutStage`) and
+   * refuses — WITHOUT writing anything, and WITHOUT flipping the request's
+   * status — when it no longer matches the request's frozen `from_stage`.
    */
   private runConsumeRolloutAdvanceRpc(args: Record<string, unknown>): KnowledgeWriteResult {
     if (this.options.rpcErrors?.has('consume_knowledge_rollout_advance_request')) {
@@ -405,7 +416,14 @@ export class FakeWriteSupabase implements KnowledgeWriteClient {
     const events = this.rowsFor('client_knowledge_events')
     const request = requests.find((row) => row.id === args.p_request_id)
     if (!request || request.status !== 'pending') {
-      return { data: [{ claimed: false, event_id: null }], error: null }
+      return { data: [{ claimed: false, event_id: null, stale: false }], error: null }
+    }
+
+    const actualStage = this.actualPhaseValue(request.client_id)
+    if (actualStage !== request.from_stage) {
+      // 阶段已经被别的东西（典型：一键回退）改到跟这条请求冻死的 from_stage
+      // 不一样了——拒绝，不写事件，也不把请求标记成终态（跟真实 RPC 一致）。
+      return { data: [{ claimed: false, event_id: null, stale: true }], error: null }
     }
 
     request.status = 'confirmed'
@@ -432,7 +450,20 @@ export class FakeWriteSupabase implements KnowledgeWriteClient {
       created_at: new Date().toISOString(),
     })
 
-    return { data: [{ claimed: true, event_id: eventId }], error: null }
+    return { data: [{ claimed: true, event_id: eventId, stale: false }], error: null }
+  }
+
+  /** Same query shape as `getCurrentRolloutStage`: latest `dimension='phase'` row by `created_at`, no row = '0'. */
+  private actualPhaseValue(clientId: unknown): string {
+    const events = this.rowsFor('client_knowledge_events')
+    const phaseEvents = events.filter((row) => row.client_id === clientId && row.dimension === 'phase')
+    if (phaseEvents.length === 0) return '0'
+    const latest = [...phaseEvents].sort((a, b) => {
+      const at = typeof a.created_at === 'string' ? Date.parse(a.created_at) : 0
+      const bt = typeof b.created_at === 'string' ? Date.parse(b.created_at) : 0
+      return bt - at
+    })[0]
+    return typeof latest.value === 'string' ? latest.value : '0'
   }
 }
 

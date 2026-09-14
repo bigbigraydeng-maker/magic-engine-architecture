@@ -62,6 +62,7 @@ export { stopAiRepliesForClient, KnowledgeKillSwitchError } from './kill-switch'
 export {
   consumeRolloutAdvanceRequest,
   createRolloutAdvanceRequest,
+  describeRolloutLinkProblem,
   getCurrentRolloutStage,
   INITIAL_STAGE,
   isKnowledgeLiveForCustomerReply,
@@ -72,6 +73,7 @@ export {
   rollbackKnowledgeRolloutStage,
   ROLLOUT_ADVANCE_LINK_DEFAULT_TTL_HOURS,
   ROLLOUT_SAMPLE_CHECK_FLOOR,
+  ROLLOUT_STAGE_LABELS,
 } from './rollout'
 export type {
   ConsumeRolloutAdvanceOutcome,
