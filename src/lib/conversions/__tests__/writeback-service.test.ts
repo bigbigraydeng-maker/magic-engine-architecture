@@ -23,7 +23,11 @@ class FakeDb {
     contact_touchpoints: [],
   }
 
+  /** 按表名注入一次性查询失败，测「查不到就当放行」这类假开的坑。 */
+  errorOn: Partial<Record<string, { message: string }>> = {}
+
   from(table: string) {
+    const failure = this.errorOn[table]
     const rows = this.tables[table] ?? []
     const q: {
       _filters: Array<(r: Row) => boolean>
@@ -35,8 +39,10 @@ class FakeDb {
       in: (c: string, v: unknown[]) => typeof q
       update: (p: Row) => typeof q
       insert: (r: Row) => Promise<{ data: null; error: { message: string; code?: string } | null }>
-      maybeSingle: () => Promise<{ data: Row | null; error: null }>
-      then: (res: (v: { data: Row[]; error: null }) => unknown) => Promise<unknown>
+      maybeSingle: () => Promise<{ data: Row | null; error: { message: string } | null }>
+      then: (
+        res: (v: { data: Row[] | null; error: { message: string } | null }) => unknown,
+      ) => Promise<unknown>
     } = {
       _filters: [],
       _op: 'select',
@@ -80,10 +86,12 @@ class FakeDb {
         return { data: null, error: null }
       },
       maybeSingle: async () => {
+        if (failure) return { data: null, error: failure }
         const hit = rows.find((r) => q._filters.every((f) => f(r)))
         return { data: hit ?? null, error: null }
       },
       then: async (resolve) => {
+        if (failure) return resolve({ data: null, error: failure })
         const matched = rows.filter((r) => q._filters.every((f) => f(r)))
         if (q._op === 'update') {
           // 条件更新的真语义：只改命中的行，返回改到的行数
@@ -315,6 +323,7 @@ describe('不该发的都不发', () => {
       touchpoints: [
         {
           contact_id: 'ct-1',
+          client_id: CLIENT,
           occurred_at: new Date().toISOString(),
           metadata: { outcome: 'do_not_contact' },
         },
@@ -335,11 +344,13 @@ describe('不该发的都不发', () => {
       touchpoints: [
         {
           contact_id: 'ct-1',
+          client_id: CLIENT,
           occurred_at: new Date(Date.now() - 60_000).toISOString(),
           metadata: { outcome: 'do_not_contact' },
         },
         {
           contact_id: 'ct-1',
+          client_id: CLIENT,
           occurred_at: new Date().toISOString(),
           metadata: { outcome: 'dnc_cleared' },
         },
@@ -349,6 +360,41 @@ describe('不该发的都不发', () => {
     const r = await sendApprovedOutcome(OUTCOME, deps(db, w))
     expect(w.sendSpy).toHaveBeenCalled()
     expect(r.message).not.toContain('别再联系')
+  })
+
+  it('只查这个联系人自己的触点——别的联系人、别的客户标了拒联不受牵连', async () => {
+    // 干扰行：换 contact_id、换 client_id 各标一条拒联，任何一个过滤条件
+    // 手滑被删掉，这条测试都会因为误判成「别再联系」而红。
+    seed(db, {
+      outcome: { contact_id: 'ct-1' },
+      contact: { id: 'ct-1', do_not_contact: false },
+      touchpoints: [
+        {
+          contact_id: 'ct-other',
+          client_id: CLIENT,
+          occurred_at: new Date().toISOString(),
+          metadata: { outcome: 'do_not_contact' },
+        },
+        {
+          contact_id: 'ct-1',
+          client_id: 'other-client',
+          occurred_at: new Date().toISOString(),
+          metadata: { outcome: 'do_not_contact' },
+        },
+      ],
+    })
+    const w = makeWriter()
+    const r = await sendApprovedOutcome(OUTCOME, deps(db, w))
+    expect(w.sendSpy).toHaveBeenCalled()
+    expect(r.message).not.toContain('别再联系')
+  })
+
+  it('查拒联记录时数据库出错——绝不能当成「没说过别联系」就放行发送', async () => {
+    seed(db, { outcome: { contact_id: 'ct-1' }, contact: { id: 'ct-1', do_not_contact: false } })
+    db.errorOn.contact_touchpoints = { message: '数据库连接超时' }
+    const w = makeWriter()
+    await expect(sendApprovedOutcome(OUTCOME, deps(db, w))).rejects.toThrow('触点')
+    expect(w.sendSpy).not.toHaveBeenCalled()
   })
 
   it('超过平台时间窗口的不发，并说清早了几天', async () => {

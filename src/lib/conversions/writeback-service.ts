@@ -148,21 +148,33 @@ export async function sendApprovedOutcome(
   // 只查那一列会把明确拒联的人的数据发出去。跟今日名单/受众导出同一套判据，
   // 不能各查各的。
   if (outcome.contact_id) {
-    const [{ data: contact }, { data: touchRows }] = await Promise.all([
+    const [contactRes, touchRes] = await Promise.all([
       supabase.from('contacts').select('do_not_contact').eq('id', outcome.contact_id).maybeSingle(),
       supabase
         .from('contact_touchpoints')
         .select('occurred_at, metadata')
-        .eq('contact_id', outcome.contact_id),
+        .eq('contact_id', outcome.contact_id)
+        .eq('client_id', outcome.client_id),
     ])
-    const contactFlag = (contact as { do_not_contact?: boolean } | null)?.do_not_contact ?? false
-    const touches: DncTouch[] = (
-      (touchRows ?? []) as { occurred_at: string; metadata: Record<string, unknown> | null }[]
-    ).map((t) => ({
-      outcome: (t.metadata?.outcome as string | undefined) ?? null,
-      flagged: t.metadata?.do_not_contact === true,
-      occurredAt: t.occurred_at,
-    }))
+    // 查不出来就当「不知道」，绝不能悄悄当成「这个人没说过别联系」——
+    // 这条判断守的是全文件唯一撤不回的动作，查询失败不能变成「放行发送」。
+    if (contactRes.error) throw new Error(`读取联系人拒联标记失败：${contactRes.error.message}`)
+    if (touchRes.error) throw new Error(`读取联系人触点失败：${touchRes.error.message}`)
+    const contactFlag =
+      (contactRes.data as { do_not_contact?: boolean } | null)?.do_not_contact ?? false
+    const touches: DncTouch[] = ((touchRes.data ?? []) as { occurred_at: string; metadata: unknown }[]).map(
+      (t) => {
+        const meta =
+          t.metadata && typeof t.metadata === 'object' && !Array.isArray(t.metadata)
+            ? (t.metadata as Record<string, unknown>)
+            : null
+        return {
+          outcome: (meta?.outcome as string | undefined) ?? null,
+          flagged: meta?.do_not_contact === true,
+          occurredAt: t.occurred_at,
+        }
+      },
+    )
     if (isDoNotContact(contactFlag, touches)) {
       return {
         status: 'redacted',
