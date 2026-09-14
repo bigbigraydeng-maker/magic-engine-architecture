@@ -16,6 +16,7 @@ type ConversationSeed = {
   id: string
   contact_id: string | null
   participant_psid: string | null
+  participant_name?: string | null
 }
 
 type MessageSeed = {
@@ -38,7 +39,7 @@ function fakeSupabase(seed: { conversations: ConversationSeed[]; messages: Messa
     from(table: string) {
       if (table === 'conversations') {
         // 实测核实：nal-messenger-lead-sync-run.ts 对这张表只调用
-        // .select('id, contact_id, participant_psid').eq('client_id', ...).eq('channel', 'messenger')，
+        // .select('id, contact_id, participant_psid, participant_name').eq('client_id', ...).eq('channel', 'messenger')，
         // 直接 await（不接 .single()）。
         return {
           select: () => ({
@@ -123,9 +124,9 @@ function qualifyingMessages(convId = CONV): MessageSeed[] {
 }
 
 describe('runNalMessengerLeadSync', () => {
-  it('识别出真商机并写库，带上 contact_id、PSID、幂等键', async () => {
+  it('识别出真商机并写库，带上 contact_id、PSID、幂等键、客户姓名', async () => {
     const { client, outcomes, audits } = fakeSupabase({
-      conversations: [{ id: CONV, contact_id: CONTACT, participant_psid: PSID }],
+      conversations: [{ id: CONV, contact_id: CONTACT, participant_psid: PSID, participant_name: 'Jordan Example' }],
       messages: qualifyingMessages(),
     })
 
@@ -134,6 +135,9 @@ describe('runNalMessengerLeadSync', () => {
     expect(summary.qualifiedLeadsFound).toBe(1)
     expect(summary.insertedLeads).toBe(1)
     expect(outcomes).toHaveLength(1)
+    // customer_first 走跟 CTS 同一条规范化（buildIntakeRow 里全小写），审核页面
+    // 显示时才转成首字母大写——PM 反馈"看不到名字没法判断"，这是唯一能显示的身份信息。
+    expect(outcomes[0].customer_first).toBe('jordan example')
     expect(outcomes[0]).toMatchObject({
       client_id: '4ae76381-cd45-43bd-85cd-98cfd7604007',
       contact_id: CONTACT,

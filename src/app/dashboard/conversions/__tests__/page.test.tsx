@@ -143,7 +143,10 @@ describe('🔴 页面不留客户明文（会被截图、会投屏）', () => {
     await screen.findByText(/收到定金/)
     const text = document.body.textContent ?? ''
     expect(text).not.toMatch(/@/)
-    expect(text).not.toMatch(/\d{8,}/) // 连号数字（电话）
+    // 连号数字（电话，规范化后一律 9 位以上，如 NZ「64215551234」11 位）。
+    // 门槛从 8 提到 9——名单下载区块（下载文件名带 YYYYMMDD 日期）现在会自动
+    // 统计并渲染，8 位的日期字符串不是客户数据，不该被这条测试当成电话误判。
+    expect(text).not.toMatch(/\d{9,}/)
   })
 })
 
@@ -166,7 +169,7 @@ describe('回写表还没建时优雅降级（不弹红）', () => {
     // 不该出现"读取出错"的红色报错
     expect(screen.queryByText(/读取出错/)).toBeNull()
     // 名单下载那块照常在（不受影响）
-    expect(screen.getAllByText(/先看人数/).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText(/重新统计人数/).length).toBeGreaterThanOrEqual(1)
   })
 })
 
@@ -220,6 +223,20 @@ describe('查看这个客人（否则一屏记录长得都一样，没法判断�
     mountWith([outcome({ contact_id: null })])
     await screen.findByText(/收到定金/)
     expect(screen.queryByText('查看这个客人 →')).toBeNull()
+  })
+})
+
+describe('看得见名字（PM 反馈：一屏记录都长一样，看不出是谁没法判断该不该批）', () => {
+  it('customer_first 有值时显示名字，且首字母大写（库里存的是全小写规范化形式）', async () => {
+    mountWith([outcome({ customer_first: 'dundee montealegre tan' })])
+    expect(await screen.findByText('Dundee Montealegre Tan')).toBeTruthy()
+  })
+
+  it('没有 customer_first 时不显示名字那一行，也不报错', async () => {
+    mountWith([outcome({ customer_first: null })])
+    await screen.findByText(/收到定金/)
+    // 没有名字可显示——不应该出现空字符串或 "null" 这类渲染事故
+    expect(document.body.textContent).not.toContain('null')
   })
 })
 
