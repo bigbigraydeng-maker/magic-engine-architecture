@@ -174,9 +174,13 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 
 **此前 Held 的 PR，依赖已解除（2026-09-15）**：等的是 `getClientKnowledge` 全部 6 步真正合并
 完，2026-09-15 步骤 6（#1648）合并后 6 步已全部到位——`gh pr view` 核实 #1638/#1639 现在
-`MERGEABLE`，跟主线没有冲突。**仍未做的是这两个 PR 自己的改接工作和复审**，不是被别的东西挡着：
-- [ ] #1638 Verifier 框架 + CTS policy —— 改接新的 `forbiddenFactKeys`/数字核实闸设计，0 复审
-- [ ] #1639 agent-core prompt.ts + tools.ts —— 4 只读工具改用 purpose+visibility 模型，0 复审
+`MERGEABLE`，跟主线没有冲突。**改接工作已完成（2026-09-15），子牙+魏征两轮独立复审进行中**：
+- [ ] #1638 Verifier 框架 + CTS policy —— 已改接 `forbiddenFactKeys`/数字核实闸设计（新定义
+      `tour.active.<code>`/`tour.retired.<code>[.alias.<slug>]` fact_key 命名约定供 gate 2 用），
+      39 条测试通过，`npm run build` 通过，复审中
+- [ ] #1639 agent-core prompt.ts + tools.ts —— 已改接（4 工具收敛为 3 个：
+      `query_customer_facing_facts`/`query_conversation_history`/`query_client_brand_facts`，按
+      purpose+sensitivity 模型），154 条测试通过，`npm run build` 通过，复审中
 
 **审查过程发现并已修复的关键问题**（wave-1，不是走过场，逐条真实验证）：数据库外键漏写级联
 删除；退订判断第一版设计换渠道即失效（已改用现成的 `contacts.do_not_contact` 机制）；CTS
