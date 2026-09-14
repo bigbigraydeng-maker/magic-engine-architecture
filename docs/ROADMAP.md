@@ -140,17 +140,14 @@ GitHub issue（#1574-#1592）。**wave-1/wave-2 共 7 个 issue 已合并到 mai
 更早的真实 PM 决策（`docs/DECISIONS.md` 2026-09-13 记录："客户知识库作为 Governed Lead-Reply
 Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步到位建客户知识库平台能力"
 （独立 L1 候选，见 [docs/registry/platform-candidates.md](./registry/platform-candidates.md)
-及本文档下一节"客户知识库"），6 步建设中前两步已合并：
-- [x] Issue #1643 敏感度检测器 —— PR #1650 已合并
-- [x] Issue #1644 表结构 + `getClientKnowledge` 读取入口 —— PR #1652 已合并（过子牙架构+
-      魏征挑刺+狄仁杰攻击验证三方复审，合并前修了邮箱比较缺 trim、身份唯一性设计跟冲突
-      检测需求冲突两处真问题；确认人登记写入 API 尚未建，见 issue #1669）
+及本文档下一节"客户知识库"）。**2026-09-15 更新：6 步已全部合并完成**，详见下一节
+"客户知识库"的完整清单——不在这里重复列。
 
 本方案 Layer 1（事实层）/2（4 只读工具）/3（五闸）/4（F1 auto-ack）/5（daily-todo 复核栏）
 六处已改接 `getClientKnowledge`，`config/clients/cts/offerings.yaml` 及其加载器整条路线
 已作废（详见方案文末"§9.14 C 同步修改"章节）。
 
-**Held 待重做的 PR**（依赖 `getClientKnowledge`，等它合并后改接）：
+**Held 待重做的 PR**（依赖 `getClientKnowledge`——依赖已就位，可以开工改接了）：
 - [ ] #1638 Verifier 框架 + CTS policy —— 改接新的 `forbiddenFactKeys`/数字核实闸设计
 - [ ] #1639 agent-core prompt.ts + tools.ts —— 4 只读工具改用 purpose+visibility 模型
 
@@ -160,37 +157,50 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 
 **已知但不阻塞的后续项**：
 - `optout.ts` 的撤销入口/分页/写路径归属校验三项小缺口，详见 issue #1290 评论
-- 确认人登记写入 API（issue #1669，P3，随 #1645/#1646 排期）
 
-- [ ] 剩余 issue（Verifier 治理层重做、Inngest 编排 4 函数、Messenger/WhatsApp webhook 剩余
-      接入、门户 UI、dry-run 验证、Delivery day 灰度切换）——客户知识库剩余 4 步（#1645 萃取
-      工作流 / #1646 FDE审核+客户确认页 / #1647 brief.ts 去 CTS 化 / #1648 rollout）见下一节
-      "客户知识库"，进度共享同一个 ROADMAP
+- [ ] 剩余 issue（#1638/#1639 Verifier 重做见上、Inngest 编排 4 函数、Messenger/WhatsApp
+      webhook 剩余接入、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个
+      前置依赖已经全部做完**（见下一节，6 步全部合并），这些是 CTS Messenger+WhatsApp v3
+      自己剩下的、不属于客户知识库范围的收尾项
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
 
-## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步建设中（2026-09-14）
+## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步已全部完成（2026-09-15）
 
 > 方案：`~/.claude/plans/client-knowledge-base-capability.md`（本地文件）。PM 2026-09-13
 > 拍板："长期来看 Magic Engine 后台一定要有自己的客户知识库这样的专门存储，一步到位按正确
 > 做法建"。让 AI 对客户说价格/时效/承诺/政策类事实前，必须先过"ME 内部批准+客户本人确认"
 > 双签闸——直接解决了 CTS "AI 报停售团价格"这类事故的根因（AI 靠训练数据背景知识乱编，不是
-> 靠受控事实源）。
+> 靠受控事实源）。**2026-09-15：6 步全部合并到 main，issue 均已关闭。**
 
-**6 步进度**：
-- [x] 步骤 1（issue #1643）敏感度检测器 —— PR #1650 已合并
-- [x] 步骤 2（issue #1644）表结构 + 读取入口 —— PR #1652 已合并
-- [x] 步骤 3（issue #1645）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）—— PR #1671
-      已合并。移植自另一窗口 PR #1616 已过魏征复审的核心算法，改接真实
-      `detectSensitivity()`/`checkBudget()`，并经过新一轮子牙+魏征复审又修了 6 处真问题
-      （PII 脱敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已
-      关闭并 credit。
-- [ ] 步骤 4（issue #1646）FDE 审核页 + 客户确认页（客户对外可见，需板桥复审）
-- [ ] 步骤 5（issue #1647）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— **已有两个重复实现**
-      （PR #1623 已关闭 credit 给下方 PR；PR #1629 已合并作为紧急修复主线，`brief-client-
-      facts.ts` 临时文件明确标注等本步骤替换）
-- [ ] 步骤 6（issue #1648）rollout 阶段
+**6 步进度（全部完成）**：
+- [x] 步骤 1（issue #1643，已关闭）敏感度检测器 —— PR #1650 已合并
+- [x] 步骤 2（issue #1644，已关闭）表结构 + 读取入口 —— PR #1652 已合并（过子牙架构+魏征
+      挑刺+狄仁杰攻击验证三方复审，合并前修了邮箱比较缺 trim、身份唯一性设计跟冲突检测
+      需求冲突两处真问题）
+- [x] 步骤 3（issue #1645，已关闭）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）
+      —— PR #1671 已合并，PR #1673 修了一处误依赖 budget-guard.ts 的设计违规。移植自另一
+      窗口 PR #1616 已过魏征复审的核心算法，又经新一轮子牙+魏征复审修了 6 处真问题（PII 脱
+      敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已关闭并
+      credit
+- [x] 步骤 4（issue #1646，已关闭）FDE 审核页 + 客户确认链接 —— PR #1685 已合并，PR #1690
+      补了一次迁移版本号冲突。子牙+魏征+板桥三方复审发现并修复：客户确认后想反悔叫停 AI
+      却找不到按钮、页面缺 §9.10 强制安心话、冲突事实被拆到不同批次、"确认了 0 条"文案
+      自相矛盾；另外把"claim 确认请求 + 写事实"两步分开写的半失败态改成一个数据库事务
+      （已用真实本机 Postgres 复现验证）。草稿输出检查（Verifier 层）明确不在本步骤范围，
+      归 #1638/#1639
+- [x] 步骤 5（issue #1647，已关闭）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— PR #1694 已
+      合并，收尾了 PR #1629 当时只是把 CTS 事实从系统提示词搬到 `brief-client-facts.ts`
+      （同一条红线违规换了个文件）没有真正解决的问题；`brief-client-facts.ts` 已删除，CTS
+      的 4 条历史事实迁移进知识库，其中免签政策一条给了到 **2026-10-15** 的确认宽限期（日
+      历提醒已建：过期前一周提醒 FDE/PM 决定要不要走正式客户确认）
+- [x] 步骤 6（issue #1648，已关闭）rollout 三段式阶段切换 + 客户确认链接页面 —— PR #1693
+      已合并。子牙+魏征联合复审各自独立在真实本机 Postgres 上复现了一个真漏洞：ME 一键
+      回退阶段（发现报价说错）后，客户手上一条更早发出的"同意前进"旧链接仍能被点开，把
+      回退悄悄抹掉——已修复（同一个数据库事务里重新核对当前阶段，对不上就拒绝且不留痕
+      迹地保留成可重试状态，不是简单标记失败）；板桥复审同时指出这一步最初交付时完全没
+      有客户能打开的页面，已一并补上
 
-**后续跟踪**：issue #1669（确认人登记写入 API，P3）。
+**跟踪单独走完的小 issue**：#1669（客户确认人登记写入 API，已关闭，PR #1674 已合并）。
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
