@@ -22,6 +22,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { pushConversionReviewItems } from './conversion-review-items'
+import { pushDailyPlanMeasurementItems, type DailyPlanMeasurementItemKind } from './daily-plan-measurement-items'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
@@ -98,6 +99,8 @@ export type ManualItemKind =
   | 'linkedin_progress_needs_setup'
   | 'linkedin_progress_failed'
   | EmailReplyItemKind
+  /** 排期发的 Facebook 帖子发出去了，但一直拿不到帖子编号 —— 成绩收不回来 */
+  | DailyPlanMeasurementItemKind
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -373,6 +376,10 @@ export async function loadManualItems(
   // Creatomate 渲染失败/超时 —— 旧路径的卡死回收已死透，这是它的替代（spec §4.4 B4）
   await pushCreatomateRenderItems(supabase, items, now, clients).catch((e) =>
     console.warn('[manual-items] Creatomate 渲染检查失败（不阻塞其他待办）:', e),
+  )
+  // 排期帖发出去了但拿不到帖子编号 —— 成绩收不回来，只写运行记录等于没人知道
+  await pushDailyPlanMeasurementItems(supabase, items, now, clients).catch((e) =>
+    console.warn('[manual-items] 帖子成绩回收失败检查读取失败（不阻塞其他待办）:', e),
   )
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
   await pushAdReadbackItems(supabase, items, now).catch((e) =>

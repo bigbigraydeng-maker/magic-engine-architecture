@@ -86,6 +86,42 @@
 - [ ] 若未来这条同步的记录量明显起量（不再是当前的 0-1 条成交/次），"查不到价格/缺日期"的搁置项要不要
       升级成正式的 `pm-todo` manual item（而不是只在同步响应里一次性返回），需要重新评估
 
+## NAL 私信 → Meta CAPI 有效咨询同步（PR #1675/#1684/#1689，dry_run，已合并，2026-09-14/15）
+
+> 背景：CTS 那条线（上一节）接的是结构化 Google 表格；NAL（New Asian Logistics，跨境集运
+> 物流代理）182 个 Messenger 联系人几乎全无邮箱/电话（2/182 有电话，3/182 有邮箱），得先
+> 给 `me_sale_outcomes` → Meta CAPI 这条共享通道扩展第三种匹配键（Facebook 私信身份/PSID）
+> 才能接上这条数据源。全程经两轮子牙+魏征设计评审 + 每次实现完再复审一遍实际代码，
+> 详见 `src/lib/conversions/nal-messenger-lead-classify.ts` 文件头的完整设计说明。
+
+**已完成**：
+- [x] 修了一个**跟 NAL 无关、影响 CTS 现有真实发送**的漏洞——发送前的拒联检查原来查
+      `contacts.do_not_contact` 那一列，可能漏看还没被人工确认的最新拒联信号（PR #1675）
+- [x] `me_sale_outcomes` 扩展支持 Facebook 私信身份（PSID）当第三种匹配键（PR #1684，
+      migration `20260915000001_conversion_page_scoped_user_id` 已 apply 到生产库）：客人
+      要求删除个人信息时这一列同步清空、`action_source` 由数据来源渠道决定不靠字段反推、
+      预览界面绝不暴露 PSID 原始值
+- [x] 用 21 个真实 NAL 联系人的对话人工标注 + 模拟跑规则验证过判据（0 假阳性，约 69% 召回），
+      判据实现 + 编排层（PR #1689）：186 段真实对话跑通，判出 20 条有效咨询，全部正确写入
+      `pending_review`；重跑一次确认幂等键生效，不会重复写
+- [x] 手动触发入口 `POST /api/admin/conversions/nal-messenger-sync`（`guardGlobalAdmin`）
+
+**范围内明确没做**（PM 待日后决定）：
+- 「已成交」判定本轮完全没做——NAL 184 个联系人的 CRM 阶段字段全是空的（员工从没标过阶段），
+  且集运报价没有团价表可查金额，`me_sale_outcomes` 的 purchase 类型要求金额非空，现在拼不出
+  合法记录。等 CRM 工作台（`/dashboard/clients/4ae76381-cd45-43bd-85cd-98cfd7604007/crm`，
+  已给 NAL 配置好阶段档位）被员工真正用起来、有金额来源了再补
+- WhatsApp 未接入——设计标题写"私信/WhatsApp"，但 NAL 现有 1913 段对话 100% 是 Messenger
+  渠道，没有等价的稳定消息 id 来源可验证幂等设计，这次范围收窄到 Messenger
+
+**待办**：
+- [ ] PM/FDE 决定要不要开始审核这 20 条 `pending_review` 记录、要不要切到真发送
+- [ ] 编排层目前每次全量重扫该客户全部历史消息（无增量游标），今天 186 段对话（最长 102
+      条消息）跑得动，量级明显起量后建议加时间下界过滤——魏征复审记录的已知技术债，不影响
+      当前正确性
+- [ ] 对话没有关联联系人的情况目前生产库实测 0 个，代码已加 `skippedNoContact` 计数防呆，
+      后续若这个数字非零需要去查联系人建档流程是不是有延迟/漏建档
+
 ## CTS Messenger+WhatsApp 治理式客服 v3 —— 事实层改用客户知识库平台能力（2026-09-14）
 
 > 完整方案（v1/v2/v3 全在一份文件里，v3 = WhatsApp 双渠道扩容 + 9 条必补项 + §9.14 C 客户
