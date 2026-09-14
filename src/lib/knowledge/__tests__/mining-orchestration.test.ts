@@ -15,11 +15,9 @@ import { KNOWLEDGE_READ_ACTION_KEY } from '../entitlement'
 
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
 vi.mock('@/lib/anthropic/client', () => ({ callClaudeChat: vi.fn() }))
-vi.mock('@/lib/mtc/budget-guard', () => ({ checkBudget: vi.fn() }))
 
 import { supabaseAdmin } from '@/lib/supabase'
 import { callClaudeChat } from '@/lib/anthropic/client'
-import { checkBudget } from '@/lib/mtc/budget-guard'
 
 const CLIENT_A = 'aaaaaaaa-0000-0000-0000-000000000001'
 
@@ -250,7 +248,6 @@ const REAL_MAIN_TEMPLATE =
 const BUDGET = { maxMessages: 1000, maxModelCalls: 10, maxSpendUsd: 1 }
 
 let mockCallClaudeChat: ReturnType<typeof vi.fn>
-let mockCheckBudget: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   fixture = baseFixture()
@@ -258,9 +255,6 @@ beforeEach(() => {
   vi.mocked(supabaseAdmin.from).mockImplementation(fakeFrom as never)
   mockCallClaudeChat = vi.mocked(callClaudeChat)
   mockCallClaudeChat.mockReset()
-  mockCheckBudget = vi.mocked(checkBudget)
-  mockCheckBudget.mockReset()
-  mockCheckBudget.mockResolvedValue({ allowed: true, spent: 0, cap: 5000, remaining: 5000, capIsCustom: false })
 })
 
 describe('runKnowledgeMining — request_id idempotency (safe against step retries)', () => {
@@ -283,22 +277,23 @@ describe('runKnowledgeMining — request_id idempotency (safe against step retri
   })
 })
 
-describe('runKnowledgeMining — MTC budget headroom (checkBudget reuse)', () => {
-  it('refuses to run and records a failed receipt when the client is already over their monthly MTC cap', async () => {
-    mockCheckBudget.mockResolvedValue({ allowed: false, spent: 5000, cap: 5000, remaining: 0, capIsCustom: false })
-    fixture.messages.push(outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z'), outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z'))
-    const receipt = await runKnowledgeMining(CLIENT_A, BUDGET, 'req-over-budget')
-    expect(receipt.status).toBe('failed')
-    expect(receipt.error).toContain('MTC budget')
-    expect(mockCallClaudeChat).not.toHaveBeenCalled()
-    expect(fixture.miningRuns.find((r) => r.request_id === 'req-over-budget')?.status).toBe('failed')
-  })
-
-  it('checks budget as a pure read (projectedMtc=0) — never deducts MTC for the client', async () => {
+// 🔴 事故预防回归测试（2026-09-14）：设计文档 §9.8（魏征 11）明确规定
+// 萃取工作流不用 src/lib/mtc/budget-guard.ts——它管的是客户自己的 MTC
+// 积分余额，不是 ME 付给模型供应商的钱，而且读失败会静默放行退回默认
+// 上限，跟"缺任一硬顶就拒绝运行"的 fail-closed 原则矛盾。早期版本误引
+// 用了这个模块（照着 issue 文本一句过时的话），已经删掉。这条测试锁死
+// "不再引入这个依赖"，防止以后被误解成"复用现成预算闸"又加回来。
+describe('runKnowledgeMining — does not depend on src/lib/mtc/budget-guard (design doc §9.8 explicitly forbids it)', () => {
+  it('completes a run with no mtc/budget-guard mock registered at all', async () => {
+    // 这条测试本身不能证明"没有调用 checkBudget"（这个 fake 对未建模的表
+    // 一律返回空结果而不是抛错，真调了也未必炸）——真正的证据是源码里已
+    // 经删掉了 `import { checkBudget } from '@/lib/mtc/budget-guard'` 这一
+    // 行（对照本文件顶部也没有对应的 vi.mock）。这条测试只是回归锁：以后
+    // 如果有人重新加回这个依赖但忘了在测试里也加对应 mock，这里会先炸。
     fixture.messages.push(outbound(REAL_MAIN_TEMPLATE, '2026-01-01T00:01:00Z'), outbound(REAL_MAIN_TEMPLATE, '2026-01-02T00:01:00Z'))
     mockCallClaudeChat.mockResolvedValueOnce(extractionResponse(true, []))
-    await runKnowledgeMining(CLIENT_A, BUDGET, 'req-1')
-    expect(mockCheckBudget).toHaveBeenCalledWith(CLIENT_A, 0)
+    const receipt = await runKnowledgeMining(CLIENT_A, BUDGET, 'req-no-budget-guard')
+    expect(receipt.status).toBe('succeeded')
   })
 })
 
