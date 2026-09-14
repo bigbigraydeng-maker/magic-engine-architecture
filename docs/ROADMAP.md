@@ -53,7 +53,9 @@
 - [ ] `pickRealPhoto`/`loadRankableClientAssets` 补一道质量分门槛（`client-asset-pool.ts` 的 `MIN_QUALITY=5` 口径目前真实照片路径没用上）
 - [ ] `PreparedScene.visualSource` 接入人工分镜自检表 UI，让 FDE 逐镜看时能分清"这镜是真图"
 - [ ] `pickRealPhoto` 内部调用 `rankAssetsByPrompt` 的 `gpt-4o-mini` 排序成本（分钱级）没有计入 `content_factory_render_jobs.cost_usd`
-- [x] CTS 真实素材库缺 Hutong（Still-5 专属）、西安城墙（Still-6 专属，不是兵马俑）的真实照片——2026-09-13 发现公司自己的 Dropbox 素材库（`CTS/footage/photos/`）里其实早就有 2 张胡同 + 1 张西安城墙真实照片，只是从未录入 `client_assets`，不需要去 Unsplash 找。已上传+PM 过目确认+标记 `client_verified`。**注意**：这两个landmark 目前仍不在 `factory_config.render.creatomate.scene_field_map`（该客户脚本目前只生成 4 个镜头，对应 Still-3/4/7/8），要真的让这两张照片出现在成片里，还需要把内容生成扩到 6 个镜头并给 Still-5/Still-6 各加一条 `scene_field_map` 条目——这是下一步待决定的事，不是"现在已经在用"
+- [x] CTS 真实素材库缺 Hutong（Still-5 专属）、西安城墙（Still-6 专属，不是兵马俑）的真实照片——2026-09-13 发现公司自己的 Dropbox 素材库（`CTS/footage/photos/`）里其实早就有 2 张胡同 + 1 张西安城墙真实照片，只是从未录入 `client_assets`，不需要去 Unsplash 找。已上传+PM 过目确认+标记 `client_verified`。2026-09-15 已真正接进成片生成：`scene_field_map` 从 4 条扩到 6 条（新增 Still-5/Still-6），原标注太笼统（西安城墙那张标注甚至没有"wall"这个词）已按真实图核对改准。胡同照片现在能稳定被选中；西安城墙照片因素材库里还有 4 张别的"墙"容易混淆，选不准时会正确回退 AI 现画，不算 bug，是已知限制。详见 memory `project-cts-video-factory-decision-ledger`。
+- [ ] Still-5/Still-6 的 `caption`（大字标题）Creatomate 元素名还没核实——本地 `.env.local` 没有 `CREATOMATE_API_KEY`，Chrome 里登录的 Creatomate 账号也找不到生产用的那个模板，需要能进生产 Creatomate 账号的人去模板 Code 视图查真实元素名再回填，否则这两镜头的大字标题会停在模板默认占位文字（画面本身的真实照片不受影响）
+- [ ] PR [#1655](https://github.com/bigbigraydeng-maker/magic-engine/pull/1655) 待 PM 拍板合并：`rankAssetsByPrompt` 加"没把握就别选"的置信度门（`requireConfidentMatch`），修复"素材库有对的照片，排序器却选了完全文不对题的图，还写了个听着很确定的理由"这个问题（2026-09-14 用真实脚本诊断发现）。已过 6 轮 Codex 复审，测试/类型检查/构建全过
 - [x] 那个已确认"退役但没真的关掉、还在偷偷抢渲染任务"的老 Render 服务（`content-factory-render-worker`）——PM 2026-09-13 拍板彻底删除，已在 Render 后台执行删除，服务已不存在
 - [ ] PM 拍板"AI 配音统一用 ElevenLabs"，账号免费版无法通过 API 调用任何声音——PM 2026-09-13 拍板暂不升级付费，先维持现状；CTS 出片全程仍未真正测过配音这一步
 - [ ] "多开发不同模板"：PM 不想招人代画，已验证 Creatomate 模板编辑页的 Code 视图（`{}` 图标）能直接读出完整模板 JSON 源码，理论上也能反向粘贴编辑保存，但只验证了"读"，没验证"改并保存"这一步
