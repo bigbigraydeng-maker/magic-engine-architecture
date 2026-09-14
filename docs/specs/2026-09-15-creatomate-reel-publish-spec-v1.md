@@ -1,5 +1,7 @@
 # Creatomate 成片 → 人工授权 → 原生发 Facebook Reel → 首评 CTA → T+4/T+72 成绩回收 · spec v1
 
+> ⛔ **已被 v2 取代**：[`2026-09-15-creatomate-reel-publish-spec-v2.md`](./2026-09-15-creatomate-reel-publish-spec-v2.md)（子牙 + 魏征设计审查后按协调方裁决 D1–D16 与生产探针 X1/X2/X4 重写）。本文件仅保留作审查记录，**不得据此实现**。
+
 > 起草：Claude Code · 2026-09-15 · 状态：**设计稿，未写任何业务代码 / migration / 路由 / Inngest 函数**
 > 基线：`git fetch origin` 于 2026-09-15 01:45 NZST，`origin/main` = `f9c8f3aa5dad51ff5f593edce329833e260a91d3`（含 #1686）
 > 风险级别：**A 级**（对外发布不可逆副作用 + 幂等/状态机 + 新 Inngest 工作流 + 客户可见外发）
