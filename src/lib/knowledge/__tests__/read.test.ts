@@ -38,6 +38,7 @@ interface FactFixture {
   confirmFingerprint?: boolean // if true, compute a matching fingerprint from current content
   client_confirmed_fingerprint?: string | null
   conflict_group_id?: string | null
+  historical_confirmation_grandfather_until?: string | null
 }
 
 /** Build one client_knowledge_facts fixture row with sane defaults. */
@@ -80,6 +81,7 @@ function fact(f: FactFixture): Row {
     client_confirmed_by_email: f.client_confirmed_by_email ?? null,
     client_confirmed_at: f.client_confirmed_at ?? null,
     client_confirmed_fingerprint: confirmedFingerprint,
+    historical_confirmation_grandfather_until: f.historical_confirmation_grandfather_until ?? null,
   }
 }
 
@@ -457,6 +459,93 @@ describe('getClientKnowledge — dual-sign gate (customer_reply only)', () => {
     ])
     const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => NOW })
     expect(result.entries).toEqual([])
+  })
+})
+
+/**
+ * Issue #1647 / design doc §9.14 B "CTS 历史未确认"有条件接受: a sensitive
+ * (dual-sign-required) fact can carry `historical_confirmation_grandfather_
+ * until` — while `now <= that timestamp`, it is treated as eligible for
+ * `customer_reply` even with `client_confirmed_at` unset. After the
+ * deadline it falls straight back to the normal rule (still unconfirmed →
+ * excluded), with no separate "is it expired" branch.
+ */
+describe('getClientKnowledge — historical confirmation grandfather (issue #1647)', () => {
+  it('🔴 宽限期内：未确认的敏感事实仍然对 customer_reply 可见', async () => {
+    const sb = makeSb([
+      fact({
+        id: 'f1',
+        fact_key: 'policy.visa_free_entry',
+        visibility: 'customer_ok',
+        sensitivity: 'policy',
+        client_confirmed_by_email: null,
+        client_confirmed_at: null,
+        historical_confirmation_grandfather_until: '2026-10-15T23:59:59+13:00',
+      }),
+    ])
+    const beforeDeadline = new Date('2026-09-20T00:00:00.000Z')
+    const result = await getClientKnowledge(
+      CLIENT_A,
+      { purpose: 'customer_reply' },
+      { supabase: sb, now: () => beforeDeadline },
+    )
+    expect(result.entries.map((e) => e.id)).toEqual(['f1'])
+  })
+
+  it('🔴 变异测试：过了截止日，同一条未确认事实自动从 customer_reply 撤出', async () => {
+    const sb = makeSb([
+      fact({
+        id: 'f1',
+        fact_key: 'policy.visa_free_entry',
+        visibility: 'customer_ok',
+        sensitivity: 'policy',
+        client_confirmed_by_email: null,
+        client_confirmed_at: null,
+        historical_confirmation_grandfather_until: '2026-10-15T23:59:59+13:00',
+      }),
+    ])
+    const afterDeadline = new Date('2026-10-16T00:00:00.000Z')
+    const result = await getClientKnowledge(
+      CLIENT_A,
+      { purpose: 'customer_reply' },
+      { supabase: sb, now: () => afterDeadline },
+    )
+    expect(result.entries).toEqual([])
+  })
+
+  it('宽限期恰好在截止时刻仍然有效（<=，不是 <）', async () => {
+    const sb = makeSb([
+      fact({
+        id: 'f1',
+        fact_key: 'policy.visa_free_entry',
+        visibility: 'customer_ok',
+        sensitivity: 'policy',
+        client_confirmed_by_email: null,
+        client_confirmed_at: null,
+        historical_confirmation_grandfather_until: '2026-10-15T23:59:59.000Z',
+      }),
+    ])
+    const exactly = new Date('2026-10-15T23:59:59.000Z')
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => exactly })
+    expect(result.entries.map((e) => e.id)).toEqual(['f1'])
+  })
+
+  it('宽限期不适用于 general 类事实之外的正常判据——一条真的已被客户确认的敏感事实，不需要也不受这个字段影响', async () => {
+    const sb = makeSb([
+      fact({
+        id: 'f1',
+        fact_key: 'k.price',
+        visibility: 'customer_ok',
+        sensitivity: 'price',
+        approved_by_email: 'fde@magicengine.cloud',
+        client_confirmed_by_email: 'owner@ctstours.co.nz',
+        client_confirmed_at: '2026-02-01T00:00:00.000Z',
+        confirmFingerprint: true,
+        historical_confirmation_grandfather_until: null,
+      }),
+    ])
+    const result = await getClientKnowledge(CLIENT_A, { purpose: 'customer_reply' }, { supabase: sb, now: () => NOW })
+    expect(result.entries.map((e) => e.id)).toEqual(['f1'])
   })
 })
 
