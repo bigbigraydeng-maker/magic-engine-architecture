@@ -41,6 +41,7 @@ export interface CommentRunResult {
   scan_error?: string
   engagement_scope_missing?: boolean
   replies_blocked?: number
+  sources_skipped?: string[]
   page_id?: string
   posts_scanned?: number
   permission_denied_count?: number
@@ -57,6 +58,7 @@ export type CommentScopeTodoKind =
   | 'comment_engagement_scope_missing'
   | 'comment_token_invalid'
   | 'comment_scan_failed'
+  | 'comment_source_refused'
 
 export interface CommentScopeTodo {
   kind: CommentScopeTodoKind
@@ -96,7 +98,29 @@ export function buildCommentScopeTodos(r: CommentRunResult): CommentScopeTodo[] 
   if (r.ok === false) todos.push(scanFailedTodo(r, page))
   const scope = scopeMissingTodo(r, page)
   if (scope) todos.push(scope)
+  const refused = (r.sources_skipped ?? []).filter((x): x is string => typeof x === 'string')
+  if (refused.length > 0) todos.push(sourceRefusedTodo(r, page, refused))
   return todos
+}
+
+/**
+ * Reels 列表 / 投放帖子列表被 Meta 明确拒了。不算这一轮失败（每轮都会一样），
+ * 但那一类帖子下面的评论系统一直看不见 —— 这是盲区，不能只留在运行记录里。
+ */
+function sourceRefusedTodo(r: CommentRunResult, page: string, refused: string[]): CommentScopeTodo {
+  const labels = refused.map((x) => (x.startsWith('video_reels') ? 'Reels' : x.startsWith('ads') ? '投放（加热）帖子' : x.split(' ')[0]))
+  return {
+    kind: 'comment_source_refused',
+    client_id: r.client_id,
+    what:
+      `这个客户 Facebook 主页${page}的评论自动回复读不到「${Array.from(new Set(labels)).join('、')}」的列表 —— ` +
+      `Meta 拒了（原话：${refused.join(' ; ').slice(0, 160)}），这类帖子下面客人的评论系统一直看不见。`,
+    how:
+      '打开链接（这个客户设置页的「内容」标签）→ 找到「评论自动回复」→ 点「检查 Meta 权限」，' +
+      '有打 ✗ 的一项（「回帖 / 隐藏」除外）就按页面提示补上；都是 ✓ 的话，把上面的原话发给开发 —— ' +
+      '投放帖子要令牌能读这个客户的广告账户，那一步开发知道怎么查。',
+    href: `https://app.magicengine.com.au/dashboard/clients/${r.client_id}/settings?tab=content`,
+  }
 }
 
 function tokenInvalidTodo(r: CommentRunResult, page: string): CommentScopeTodo {
@@ -159,11 +183,9 @@ function scopeMissingTodo(r: CommentRunResult, page: string): CommentScopeTodo |
     const held = r.replies_blocked ?? 0
     problems.push(
       '评论自动回复已经暂停：我们的令牌少了「以主页身份回评论、隐藏评论」这项权限（pages_manage_engagement），' +
-      'Meta 会拒掉每一条公开回复和隐藏，所以系统不再硬发。' +
-      (held > 0
-        ? `这一轮有 ${held} 条本该自动回复/隐藏的评论没发出去，已标成「要人工回」` +
-          '（在客户设置页「内容」标签 → 评论自动回复 → 最近自动回复里能看到），权限补上之前请在 Business Suite 收件箱里人工回。'
-        : ''),
+      'Meta 会拒掉每一条公开回复和隐藏，所以系统不再硬发，本该自动回复/隐藏的评论一律标成「要人工回」' +
+      '（客户设置页「内容」标签 → 最近自动回复里能看到），权限补上之前请在 Business Suite 收件箱里人工回。' +
+      (held > 0 ? `最近一轮新标了 ${held} 条。` : ''),
     )
     scopes.push('pages_manage_engagement')
   }

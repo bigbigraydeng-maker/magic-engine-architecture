@@ -198,14 +198,18 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
     //    failed — so nobody saw the real cause. Now: don't attempt them, record
     //    the comment as needs-human (it stays in the human queue and is never
     //    auto-replied later, so a hand-written reply cannot be doubled), and
-    //    raise a to-do. An unreadable permission list counts as "not granted".
+    //    raise a to-do.
+    //    An UNREADABLE permission list (Meta 5xx / network blip) is different:
+    //    don't send, but don't claim either — marking those comments needs-human
+    //    would take them away from auto-reply for good over a transient error.
+    //    They are retried next run; the run itself is reported as failed.
     const granted = await listGrantedScopes(userToken)
     const canEngage = granted?.includes(ENGAGEMENT_SCOPE) ?? false
     const scanErrors = granted === null ? [...listErrors, 'could not read granted permissions (/me/permissions)'] : listErrors
 
     const tally = { public_replies: 0, private_replies: 0, hidden: 0, needs_human: 0, failed: 0 }
     let blocked = 0
-    for (const comment of candidates) {
+    for (const comment of granted === null ? [] : candidates) {
       const claim = await claimComment(comment, config)
       if (!claim) continue // another run/pass owns it, or not retryable
       const outcome = await processClaimedComment(comment, claim, config, ctxBase, pageToken, canEngage)

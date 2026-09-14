@@ -248,6 +248,9 @@ describe('processClientComments — reply permission', () => {
     expect(r.engagement_scope_missing).toBeUndefined()
     expect(r.scan_error).toContain('/me/permissions')
     expect(sends()).toEqual([])
+    // 🔴 a blip must not park comments as needs-human forever — nothing claimed, retried next run
+    expect(engagementWrites('insert')).toEqual([])
+    expect(engagementWrites('update')).toEqual([])
   })
 
   it('with the permission granted the reply path still runs (the guard does not block a healthy client)', async () => {

@@ -101,10 +101,22 @@ describe('buildCommentScopeTodos', () => {
     expect(t.kind).toBe('comment_engagement_scope_missing')
     expect(t.what).toContain('自动回复已经暂停')
     expect(t.what).toContain('pages_manage_engagement')
-    expect(t.what).toContain('4 条本该自动回复/隐藏的评论没发出去')
+    expect(t.what).toContain('最近一轮新标了 4 条')
+    // 下一轮这些评论已经是 pending、计数归零 —— 去哪看人工队列不能跟着消失
+    expect(buildCommentScopeTodo(result({ engagement_scope_missing: true, replies_blocked: 0 }))!.what).toContain('最近自动回复里能看到')
     expect(t.how).toContain('勾上 pages_manage_engagement')
     expect(t.how).toContain('应用审核')
     expect(t.href).toBe('https://developers.facebook.com/tools/explorer/')
+  })
+
+  it('🔴 Reels / 投放帖子列表被拒要单独报 —— 不算失败，但那类帖子的评论一直是盲区', () => {
+    const t = buildCommentScopeTodo(
+      result({ ok: true, sources_skipped: ['ads act_123: 400 code=200', 'video_reels 1616575215312482: 400 code=10 (#10) no permission'] }),
+    )!
+    expect(t.kind).toBe('comment_source_refused')
+    expect(t.what).toContain('投放（加热）帖子、Reels')
+    expect(t.what).toContain('code=10')
+    expect(t.href).toBe('https://app.magicengine.com.au/dashboard/clients/cts/settings?tab=content')
   })
 
   it('两个权限都缺时合成一条待办，一次授权两项都勾上', () => {
