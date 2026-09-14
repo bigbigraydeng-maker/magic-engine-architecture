@@ -391,9 +391,11 @@ function planLockedResponse(
       error: reason,
       plan_id: planId,
       publish_status: typeof publishStatus === 'string' ? publishStatus : null,
-      message: reason === 'PLAN_ALREADY_PUBLISHED'
-        ? 'This campaign plan already has Posts published to Facebook. Saving a new plan here would erase the publish record needed to recall them. Create a new campaign for the new plan.'
-        : 'This campaign plan is already in the publish queue. Saving a new plan here would discard that queue record. Create a new campaign for the new plan.',
+      // Archiving keeps the old campaign out of active-campaign prompt
+      // injection; GET and recall still resolve it by id regardless of status.
+      message: `${reason === 'PLAN_ALREADY_PUBLISHED'
+        ? 'This campaign plan already has Posts published to Facebook. Saving a new plan here would erase the publish record needed to recall them.'
+        : 'This campaign plan is already in the publish queue. Saving a new plan here would discard that queue record.'} Create a new campaign for the new plan and archive this one.`,
       next_step: 'CREATE_NEW_CAMPAIGN',
     },
     { status: 409 }

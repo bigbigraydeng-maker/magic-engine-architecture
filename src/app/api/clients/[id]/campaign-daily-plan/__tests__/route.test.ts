@@ -1698,6 +1698,30 @@ describe('campaign-daily-plan POST — never erases a publish or publish-queue r
     expect((plans.rows[0].plan_data.command_meta as { received_at: string }).received_at).toBe(STORED_PLAN_REVISION)
   })
 
+  // Each compare-and-set guard is locked on its own: the realistic race is a
+  // publish-queue write alone (publish needs that receipt first), but either
+  // receipt landing alone must stop the overwrite.
+  it.each([
+    ['publish_queue_meta', () => ({ publish_queue_meta: storedQueueMeta() })],
+    ['publish_meta', () => ({ publish_meta: storedPublishMeta() })],
+  ])('refuses when only %s lands between the read and the write', async (key, landed) => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const plans = socialPlansTable([storedPlanRow({ review_meta: storedReviewMeta() })], {
+      beforeUpdate: rows => {
+        rows[0].plan_data = { ...rows[0].plan_data, ...landed() }
+      },
+    })
+    mockPostTables(plans)
+
+    const res = await POST(postRequest(validCommand()), params())
+
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('PLAN_CHANGED_DURING_SAVE')
+    expect(plans.rows[0].plan_data[key]).toEqual(landed()[key as keyof ReturnType<typeof landed>])
+    expect((plans.rows[0].plan_data.command_meta as { received_at: string }).received_at).toBe(STORED_PLAN_REVISION)
+  })
+
   it('a failed plan lookup returns 500 and never inserts a second row that would hide the receipt', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
