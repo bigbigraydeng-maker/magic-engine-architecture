@@ -150,6 +150,14 @@ PR #1500 已上线；用户明确批准生产数据库更新后应用 6 张隔�
 
 真实变化的模型建议仍待独立回执。复用边界：共享 adapter / evidence / budget / workflow；CTS ID、网址、市场语境仅配置，无客户语义写入共享运行时代码，无行业/全局学习晋升。详细记录见 [rollout receipt](../specs/2026-09-09-web-intelligence-v01.md)。
 
+### 2026-09-08（新服务线：出海客户落地澳新 SOP + skill，首个客户 East International）
+
+PR [#1495](https://github.com/bigbigraydeng-maker/magic-engine/pull/1495) 已合并。新增操作手册 `docs/sops/overseas-client-anz-market-entry-onboarding.md` 和可挂载 skill `.claude/skills/me-anz-landing-onboarding/SKILL.md`（别名"袋鼠"），把"用 Magic Lab 澳洲公司帮海外（主要是中国）客户落地澳洲/新西兰市场"这件事沉淀成可复用流程：域名/商号注册路径（澳洲要求域名持有人跟商号/公司名一致，新西兰无此门槛，两地规则完全相反）、英文站、WhatsApp/Facebook/广告户开通、商标查重、红线（营销资产挂我方名下 vs 实际经营主体必须是客户自己）、做不了就下发人工任务。
+
+首个客户东际国际物流（East International）走这条流程：合作协议已由我方签字（含真实签名图片）等客户签回，网站已按客户提供的 Figma 设计稿（用 Figma 官方连接器取真实文案/配色/图片，非手工拼凑）重建并部署到临时链接，正式域名等客户注册后切换。
+
+**Reuse Statement**：L2 场景手册，复用现有平台能力（`src/lib/abr/`、DataForSEO 封装、`src/lib/geo-module/`、`src/lib/cms/`、`src/lib/meta/`、`src/lib/whatsapp/send.ts`、`src/lib/platform-oauth/`、`src/lib/pm-todo/manual-items.ts`），未新增能力线。客户专属事实（合同条款、网站内容、East International 具体信息）只存在私有记忆和 Dropbox 客户档案，未写入共享 runtime。此客户不经过 ME 平台客户表（无 `client_id`），走合同+交付物模式，不适用 `fde_work_logs` 工作日志。
+
 ### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
 
 **问题**：`ads-health` 看板给 CTS 显示的每条线索成本比 Meta 官方数字便宜近一倍（看板 $3.9-4.7，Meta 官方 $7.6-11.8）。核对发现 `src/lib/meta/client.ts` 的 `results = leads + messaging_conversations` 违反了同文件 `objective-metrics.ts` 自己写的「NEVER sum across action types」规则：CTS 的 Lead Form 广告开了 Messenger 自动回复，同一个人提交表单会被 Meta 同时计入 `lead` 和 `onsite_conversion.messaging_conversation_started_7d` 两个 action_type，简单相加造成 2× 双算。2026-08-31 实测：CTS Reborn 广告当天 leads=10、messaging=9，是同一批人，不是 19 个人举手。
