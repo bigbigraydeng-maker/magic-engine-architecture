@@ -32,7 +32,17 @@ export const dynamic = 'force-dynamic'
 
 /** New Asian Logistics（跨境集运物流代理）。 */
 const NAL_CLIENT_ID = '4ae76381-cd45-43bd-85cd-98cfd7604007'
-/** NAL 工作台里"已成交"那一档——今天配置阶段时定的 stage_key。 */
+/**
+ * NAL 工作台里"已成交"那一档——今天配置阶段时定的 stage_key。
+ *
+ * 🔴 魏征评审：这里写死的 stage_key 跟前端触发条件（`crm/all/page.tsx` 只看
+ * `marketingAction === 'won'`，不看 stageKey）是两套各自独立的判断。Settings
+ * 页面（`PipelineStagesPanel.tsx`）目前允许任意编辑哪个阶段带 `marketing_action:
+ * 'won'`，且没有唯一性约束——如果以后 NAL 的阶段配置改了（例如把 'won' 这个
+ * marketing_action 挪到另一个 stage_key，或同时出现两个"已成交"档），前端弹窗和
+ * 这里推进的阶段会对不上，要么这个金额面板不再弹出，要么弹出了但推进的是错的
+ * 阶段——没有任何代码层面的报错。改 NAL 的阶段配置前，先确认这两处还对得上。
+ */
 const WON_STAGE_KEY = 'won'
 
 interface Body {
@@ -70,23 +80,12 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!occurredAt) return NextResponse.json({ error: '缺少 occurredAt（钱到账的日期）' }, { status: 400 })
   if (!idempotencyKey) return NextResponse.json({ error: '缺少 idempotencyKey' }, { status: 400 })
 
-  // ── 1. 推进阶段（复用既有逻辑，不重新发明）────────────────────────────────
-  // changed:false 只代表"这个人已经在 won 档，阶段这一步没有新东西要记"——
-  // 不代表这次点击无效，照常往下走去写 CAPI 记录（同一人的第二笔成交场景）。
-  const stageResult = await advanceContactStage(
-    supabaseAdmin,
-    NAL_CLIENT_ID,
-    contactId,
-    WON_STAGE_KEY,
-    note,
-    g.ctx.actor,
-  )
-  if (!stageResult.ok) {
-    return NextResponse.json({ error: stageResult.error }, { status: stageResult.status })
-  }
-
-  // ── 2. 取匹配键：私信身份优先，邮箱/电话兜底（子牙评审：只认 PSID 会让非私信
-  //    进线的真实成交静默拒收）────────────────────────────────────────────
+  // ── 1. 先取匹配键、先做校验——都通过了才去动阶段（魏征复审揪出的坑：阶段一旦
+  //    推进就是"已成交"的既成事实，如果反过来先推阶段、后面 buildIntakeRow 才
+  //    发现这个人邮箱/电话/私信身份一个都没有而拒收，会留下一个永久标记"已成交"
+  //    但压根没有成交记录、也没人知道要去修的联系人）──────────────────────
+  // 私信身份优先，邮箱/电话兜底（子牙评审：只认 PSID 会让非私信进线的真实成交
+  // 静默拒收）。
   const [{ data: contact, error: contactErr }, { data: conversation, error: convErr }] = await Promise.all([
     supabaseAdmin
       .from('contacts')
@@ -135,6 +134,21 @@ export async function POST(request: Request): Promise<NextResponse> {
   const built = buildIntakeRow(input, { defaultPhoneCountry: '64', now: new Date() })
   if (!built.ok) {
     return NextResponse.json({ error: built.errors.join('; ') }, { status: 400 })
+  }
+
+  // ── 2. 校验都通过了，这时候才推进阶段（复用既有逻辑，不重新发明）─────────
+  // changed:false 只代表"这个人已经在 won 档，阶段这一步没有新东西要记"——
+  // 不代表这次点击无效，照常往下走去写 CAPI 记录（同一人的第二笔成交场景）。
+  const stageResult = await advanceContactStage(
+    supabaseAdmin,
+    NAL_CLIENT_ID,
+    contactId,
+    WON_STAGE_KEY,
+    note,
+    g.ctx.actor,
+  )
+  if (!stageResult.ok) {
+    return NextResponse.json({ error: stageResult.error }, { status: stageResult.status })
   }
 
   // ── 3. 写库（幂等键命中就说明这次点击已经处理过，不是错误）──────────────

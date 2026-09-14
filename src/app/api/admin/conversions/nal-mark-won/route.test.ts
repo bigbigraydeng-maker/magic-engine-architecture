@@ -6,6 +6,10 @@
  *   · 只有邮箱/电话没有 PSID 的联系人也要能成功（子牙评审的匹配键兜底）
  *   · 拒联客户被标成交——记录照写，但响应要如实告知"不会发给广告平台"
  *   · 同一个 idempotencyKey 重复提交——不重复插入
+ *   · 三个匹配键（邮箱/电话/私信身份）一个都没有——不能推进阶段（魏征最终评审揪出的
+ *     BLOCKER：如果反过来先推阶段再校验，会把人永久标成"已成交"但一条 CAPI 记录都没有）
+ *   · 写库遇到非重复的真实错误——照样报错，不能吞掉
+ *   · 拒联检查这一步本身查询失败——降级返回 contacts.do_not_contact，不能让整个接口炸掉
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -35,6 +39,10 @@ let touchpoints: Row[]
 let outcomes: Row[]
 let stageEvents: Row[]
 let audits: Row[]
+/** 下一次 me_sale_outcomes 插入是否要模拟一个非重复键的真实数据库错误。 */
+let forceInsertError = false
+/** 下一次读 contact_touchpoints 是否要模拟查询失败（拒联检查降级路径）。 */
+let forceTouchError = false
 
 /**
  * 实测核实：`route.ts` 对每张表的调用链都逐一核实过（见各分支注释），假件只按
@@ -96,6 +104,13 @@ function fakeDb(table: string) {
     },
     insert: (row: Row) => {
       if (table === 'me_sale_outcomes') {
+        if (forceInsertError) {
+          return {
+            select: () => ({
+              single: async () => ({ data: null, error: { code: '500', message: '模拟的数据库故障' } }),
+            }),
+          }
+        }
         const dup = outcomes.some((r) => r.source_kind === row.source_kind && r.source_ref === row.source_ref)
         if (dup) {
           return {
@@ -121,7 +136,12 @@ function fakeDb(table: string) {
       }
       return Promise.resolve({ data: null, error: null })
     },
-    then: (resolve: (v: { data: Row[]; error: null }) => unknown) => resolve({ data: rowsOf(), error: null }),
+    then: (resolve: (v: { data: Row[] | null; error: { message: string } | null }) => unknown) => {
+      if (table === 'contact_touchpoints' && forceTouchError) {
+        return resolve({ data: null, error: { message: '模拟的拒联检查查询失败' } })
+      }
+      return resolve({ data: rowsOf(), error: null })
+    },
   }
   return builder
 }
@@ -142,6 +162,7 @@ beforeEach(() => {
     { id: '22222222-2222-2222-2222-222222222222', client_id: NAL, stage: 'won', primary_email: null, primary_phone: null, do_not_contact: false },
     { id: '33333333-3333-3333-3333-333333333333', client_id: NAL, stage: 'new', primary_email: 'jordan@example.com', primary_phone: null, do_not_contact: false },
     { id: '44444444-4444-4444-4444-444444444444', client_id: NAL, stage: 'new', primary_email: null, primary_phone: null, do_not_contact: true },
+    { id: '55555555-5555-5555-5555-555555555555', client_id: NAL, stage: 'new', primary_email: null, primary_phone: null, do_not_contact: false },
   ]
   stages = [{ client_id: NAL, stage_key: 'won' }]
   conversations = [
@@ -153,6 +174,8 @@ beforeEach(() => {
   outcomes = []
   stageEvents = []
   audits = []
+  forceInsertError = false
+  forceTouchError = false
   ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation(fakeDb)
   vi.mocked(guardAdmin).mockClear()
   vi.mocked(guardConversionRoute).mockClear()
@@ -242,5 +265,47 @@ describe('POST nal-mark-won', () => {
   it('缺 idempotencyKey → 400', async () => {
     const { status } = await markWon({ contactId: '11111111-1111-1111-1111-111111111111', amountMajor: 100, occurredAt: '2026-09-14T00:00:00Z' })
     expect(status).toBe(400)
+  })
+
+  it('邮箱/电话/私信身份一个都没有 → 400，阶段不能被推进（顺序 bug 回归测试）', async () => {
+    const { status, body } = await markWon({
+      contactId: '55555555-5555-5555-5555-555555555555',
+      amountMajor: 500,
+      occurredAt: '2026-09-14T00:00:00Z',
+      idempotencyKey: 'req-g',
+    })
+    expect(status).toBe(400)
+    expect(body.error).toContain('私信身份')
+    // 这才是这条测试真正要锁的事：校验失败时，联系人的阶段必须原封不动——
+    // 不能出现"标了已成交、但一条 CAPI 记录都没有"的孤儿状态。
+    expect(stageEvents).toHaveLength(0)
+    const contact5 = contacts.find((c) => c.id === '55555555-5555-5555-5555-555555555555')
+    expect(contact5?.stage).toBe('new')
+    expect(outcomes).toHaveLength(0)
+  })
+
+  it('写库遇到非重复键的真实错误 → 500，如实报错', async () => {
+    forceInsertError = true
+    const { status, body } = await markWon({
+      contactId: '11111111-1111-1111-1111-111111111111',
+      amountMajor: 500,
+      occurredAt: '2026-09-14T00:00:00Z',
+      idempotencyKey: 'req-h',
+    })
+    expect(status).toBe(500)
+    expect(body.error).toContain('模拟的数据库故障')
+  })
+
+  it('拒联检查本身查询失败 → 降级用 contacts.do_not_contact，不整段炸掉', async () => {
+    forceTouchError = true
+    const { status, body } = await markWon({
+      contactId: '11111111-1111-1111-1111-111111111111',
+      amountMajor: 500,
+      occurredAt: '2026-09-14T00:00:00Z',
+      idempotencyKey: 'req-i',
+    })
+    expect(status).toBe(200)
+    expect(body.doNotContact).toBe(false)
+    expect(outcomes).toHaveLength(1)
   })
 })
