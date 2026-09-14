@@ -810,3 +810,25 @@ v1 工单事件一字不改。只在 `state='published'` 且 `publish_confirmati
 | 8 | 三张新表额外 `REVOKE ALL … FROM PUBLIC, anon, authenticated`；审计表与副本表、发布记录表不可删、不可改已定稿行 | 纵深防御，审计证据 |
 | 9 | `content_reel_abandon_post` 签名为 `(p_client_id, p_content_post_id)`，未带操作人 | 操作人记录由 PR-C 路由写运行记录；RPC 只做状态判定 |
 | 10 | 回滚脚本放 `scripts/content-reel-publish-rollback.sql`（不进 migrations 目录），有数据时保留表并只删 RPC；此时客户级开关的触发器仍在，开关将无法再改（回滚第 1 步已置 false） | 仓库没有回滚目录惯例；放 migrations 会被当成正向变更自动执行 |
+| 11 | 交付的是 `src/lib/factory/content-reel/contract.ts` 类型与常量词表（状态、合法迁移、补丁键、跟进键、拒绝码、时间下限），**不是** §14 写的 `rpc.ts` 类型化封装 + zod 返回校验 | PR-A 零调用方；RPC 封装与返回值校验随第一个调用方（PR-C）一起写，避免无人调用的封装与真实返回形状漂移。`contract.test.ts` 从 migration 文本回读，保证词表与数据库一致 |
+
+### 15.1 PR-A 实施后第一轮两审（子牙 + 魏征）修正（2026-09-15）
+
+| 复审项 | 修正 | 探针 / mutation |
+|---|---|---|
+| 子牙 B1 = 魏征 M2：证据时间戳可被 service_role 直接 UPDATE 伪造 | INSERT 强制 `created_at/updated_at := now()`，六个证据列必须为 NULL；UPDATE 时六个证据列一旦变化必须恰好等于 `now()`（仅缺席证据允许清回 NULL），否则 `evidence_timestamp_db_clock_only`；外部删除下限不再用调用方传入的 `published_at`，改为 `GREATEST(last_step_started_at, publish_verified_at, finished_at, created_at)`（取最晚的库时钟时刻，最保守） | K09–K14、E09b；N1/N1b/N1c/N15/N22 |
+| 子牙 B2 = 魏征 M3：已公开期间同状态写可抹掉回执 | 已公开状态每次写都校验完整回执；`video_state / published_at / publish_confirmed_by_user_id` 不可改；`publish_confirmation` 只允许 human_confirmed→graph_get 且同时有 verified_at；进入已公开 / 草稿已发时缺席证据必须为空（RPC 自动清）；外部删除要求缺席晚于发布标记 | K17–K24b、E09a；N2/N2b/N2c/N2d/N2e/N16 |
+| 魏征 M1 = 子牙 S1：记账类更新在 authorized / 终态被迁移表拒绝 | 只动 `followup / trigger_event_ids / restart_seq / updated_at` 的同状态更新任何状态都放行（`to_jsonb` 差集判断） | K01–K04；N3 |
+| 魏征 M4 = 子牙 S4：同哈希并发授权两边都成功 | 查哈希前 `pg_advisory_xact_lock(hashtextextended('content_reel_hash:'||client||':'||sha256, 0))` | 并发脚本「同哈希两个帖子」；N4 |
+| 子牙 S2：service_role 默认有 DELETE/TRUNCATE | 三表 `REVOKE ALL … FROM PUBLIC, anon, authenticated, service_role` 后只回授 SELECT/INSERT(/UPDATE)；三表加 `BEFORE TRUNCATE` 语句级触发器。沙盘重放桩同步还原 Supabase 给 service_role 的默认 ALL（否则这条断言在沙盘上永远假通过） | K32–K35；N5/N5b |
+| 子牙 S3 / 魏征建议 6：客户开关 INSERT 绕过、GUC 可被应用自设 | `clients` BEFORE INSERT 拒绝带 `content_reel_live_enabled=true`；UPDATE 需 GUC 标记 **且** `current_user` 为开关函数所有者；锁降为 `FOR NO KEY UPDATE`。**这是防误操作，不是安全边界**：所有者 / 超级用户仍可手动设标记 | K36–K39、H06；N6/N7/N23 |
+| 魏征建议 1、2：transition 入参与唯一冲突 | `p_from` 为 NULL / 空数组 / 含 NULL、`p_to` 为空一律报错；唯一冲突翻译为 `video_id_conflict` / `active_attempt_exists` | K06–K08、K29、K30；N8/N9 |
+| 魏征建议 3 / 子牙 S8：标记帖子已发布兜底 | 读记录加锁；要求 `publish_confirmation='graph_get' OR publish_verified_at IS NOT NULL`，否则 `publication_not_verified`。**人工确认未证实时不把帖子标为已发布**（与 §4.5 一致） | K16、K22、K24；N10/N21 |
+| 子牙 S5 | `not_on_facebook → published` 必须带 `alert_code` | K25/K26；N11 |
+| 子牙 S6 | 草稿请求不能进入已公开，公开请求不能进入草稿已发；读回不一致走 in_doubt | K27/K28；N12 |
+| 子牙 S7 | 渲染进行中改白名单：`status NOT IN ('ready_for_review','failed')` 之外全算进行中 | K31；N13 |
+| 魏征建议 5 | 删除与缺席同一时刻不算（`<` → `<=`），草稿删除同理 | K15、F06b；N14/N19 |
+| 魏征建议 9：变异盲区 | 补：草稿删除缺席早于删除、外部删除 30 分钟下限、标记已发布须已公开、外部删除挡再次授权、退回卡片时另有进行中记录不退回、放弃内容有进行中记录拒绝 | F06b、E09b、K16、E10b、K40/K41、K05；N17/N18/N20 |
+| 魏征建议 7、8 / 子牙 S12：执行与回滚安全 | migration 首行 `SET LOCAL lock_timeout = '5s'`，两处 ADD COLUMN 挪到最前；必须整体原子执行；回滚脚本前置检查（有进行中记录或任一客户开关为真即报错不动任何东西）、判断前 `LOCK TABLE … ACCESS EXCLUSIVE`、注明账本行保留 | db-check 第 5 步三条 |
+
+**外键 RESTRICT 的完整影响**（此前只写了一半）：①准备过视频副本的帖子删不掉（副本表也 RESTRICT）；②改过公开开关的客户删不掉（审计表 RESTRICT）；③有发布记录的帖子 / 客户删不掉；④PR-B 上线前，`/api/posts/batch` 删除这类帖子会返回 500 并在错误信息里暴露表名（PR-B 改为 409）。

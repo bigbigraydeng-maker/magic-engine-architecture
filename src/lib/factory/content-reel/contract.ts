@@ -59,8 +59,21 @@ export function isContentReelTransitionAllowed(from: ContentReelState, to: Conte
 /**
  * Keys accepted by content_reel_transition(p_patch). Marker keys (touch_* / mark_* /
  * clear_*) take `true` and are stamped with the database clock — callers can never
- * supply the timestamps that gate absence-based transitions.
+ * supply the timestamps that gate absence-based transitions (the row trigger rejects any
+ * evidence timestamp that is not exactly now(), even on a direct service_role UPDATE).
  */
+export const CONTENT_REEL_EVIDENCE_TIMESTAMP_COLUMNS = [
+  'last_step_started_at',
+  'video_deleted_at',
+  'absence_first_confirmed_at',
+  'publish_verified_at',
+  'first_comment_verified_at',
+  'finished_at',
+] as const
+
+/** Columns an update may touch in ANY state without going through the transition table. */
+export const CONTENT_REEL_BOOKKEEPING_COLUMNS = ['followup', 'trigger_event_ids', 'restart_seq', 'updated_at'] as const
+
 export const CONTENT_REEL_PATCH_VALUE_KEYS = [
   'video_id',
   'video_state',
@@ -120,8 +133,11 @@ export const CONTENT_REEL_RPC_REFUSAL_CODES = [
   'absence_not_confirmed_twice',
   'last_write_too_recent',
   'draft_deleted_requires_deletion',
+  // content_reel_transition (unique violations translated)
+  'video_id_conflict',
   // content_reel_mark_post_published / abandon_post
   'attempt_not_published',
+  'publication_not_verified',
   'drafts_not_deleted',
   // set_content_reel_live_enabled
   'client_not_found',

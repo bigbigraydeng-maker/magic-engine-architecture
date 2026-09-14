@@ -8,18 +8,41 @@
 --   2. every in-flight attempt driven to a terminal state through the normal flow
 --   3. application code rolled back (routes, Inngest functions, measurement
 --      trigger, entry-point guards) and Inngest re-synced
--- Then run this file in ONE transaction:
+-- Then run this file as ONE transaction (never statement by statement):
 --   psql -v ON_ERROR_STOP=1 -1 -f scripts/content-reel-publish-rollback.sql
 --
 -- Behaviour:
---   * RPCs are always dropped (nothing can write through them any more).
---   * If any of the three tables holds rows, tables, their guard triggers and
---     the two added columns are KEPT as audit evidence (service_role keeps read
---     access). ON DELETE RESTRICT stays: deleting a client/post that has publish
---     records keeps failing on purpose; relaxing that needs a separate PM go.
---   * If all three tables are empty, everything this migration created is dropped
---     (columns only when they carry no non-default value).
+--   * Pre-check: refuses (raises, nothing changes) while any attempt is in flight or
+--     any client still has content_reel_live_enabled = true. Steps 1–2 come first.
+--   * The three tables are locked ACCESS EXCLUSIVE before deciding, so no writer can
+--     slip a row in between the "is it empty?" check and the DROP.
+--   * RPCs are always dropped.
+--   * Rows present -> tables, guard triggers and the two added columns are KEPT as audit
+--     evidence (service_role keeps read access). ON DELETE RESTRICT stays: deleting a
+--     client/post that has publish records keeps failing on purpose; relaxing it needs a
+--     separate PM go.
+--   * All three tables empty -> everything this migration created is dropped (columns
+--     only when they carry no non-default value).
+--   * Either way the supabase_migrations.schema_migrations row for 20260915140000 stays.
+--     Removing that ledger row is a separate PM go.
 -- =============================================================================
+
+SET LOCAL lock_timeout = '5s';
+
+LOCK TABLE public.content_reel_publish_attempts,
+           public.content_reel_video_copies,
+           public.content_reel_live_switch_events IN ACCESS EXCLUSIVE MODE;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.content_reel_publish_attempts
+              WHERE state IN ('authorized','claimed','uploading','in_doubt')) THEN
+    RAISE EXCEPTION 'content-reel rollback refused: attempts still in flight — drive them to a terminal state first';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.clients WHERE content_reel_live_enabled) THEN
+    RAISE EXCEPTION 'content-reel rollback refused: a client still has content_reel_live_enabled=true — switch it off via the RPC first';
+  END IF;
+END $$;
 
 DROP FUNCTION IF EXISTS public.content_reel_video_copy_start(uuid, uuid, uuid, text, text, uuid, text);
 DROP FUNCTION IF EXISTS public.content_reel_video_copy_finish(uuid, text, text, bigint, text);
@@ -55,6 +78,7 @@ BEGIN
   DROP FUNCTION IF EXISTS public.content_reel_attempts_guard();
   DROP FUNCTION IF EXISTS public.content_reel_video_copies_guard();
   DROP FUNCTION IF EXISTS public.content_reel_live_switch_events_guard();
+  DROP FUNCTION IF EXISTS public.content_reel_block_truncate();
   DROP FUNCTION IF EXISTS public.content_reel_transition_allowed(text, text);
 
   IF NOT EXISTS (SELECT 1 FROM public.clients WHERE content_reel_live_enabled) THEN
@@ -70,5 +94,5 @@ BEGIN
     RAISE NOTICE 'content-reel rollback: content_posts.import_source_url has values -> column kept (index dropped)';
   END IF;
 
-  RAISE NOTICE 'content-reel rollback: all objects removed';
+  RAISE NOTICE 'content-reel rollback: all objects removed (schema_migrations ledger row kept)';
 END $$;

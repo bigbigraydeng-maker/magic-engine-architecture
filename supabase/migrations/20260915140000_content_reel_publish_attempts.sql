@@ -1,41 +1,56 @@
 -- =============================================================================
 -- Content Reel publish — data layer (PR-A of spec
--- docs/specs/2026-09-15-creatomate-reel-publish-spec-v2.md, v2.1 §3 / §14)
+-- docs/specs/2026-09-15-creatomate-reel-publish-spec-v2.md, v2.1 §3 / §14 / §15)
+--
+-- ⚠️ Apply as ONE transaction (Supabase MCP apply_migration, or `psql -1 -f`).
+--    Never paste statements one by one: the guards below only make sense together.
 --
 -- What this adds (no application code calls any of it yet):
---   1. content_reel_video_copies        immutable, hash-bound copy of the video a
---                                       human authorised (prepare stage)
---   2. content_reel_publish_attempts    one row per publish authorisation; this row
---                                       IS the receipt. The DB video_id is the only
---                                       trusted identity (Facebook strips zero-width
---                                       idempotency tags, spec §1.3 X1)
---   3. content_reel_live_switch_events  audit rows for the per-client live switch
---   4. clients.content_reel_live_enabled  per-client live switch (RPC-only writes)
---   5. content_posts.import_source_url    idempotency key for "import existing video"
+--   1. clients.content_reel_live_enabled  per-client live switch (RPC-only writes)
+--   2. content_posts.import_source_url    idempotency key for "import existing video"
+--   3. content_reel_video_copies          immutable, hash-bound copy of the authorised video
+--   4. content_reel_publish_attempts      one row per publish authorisation; the row IS the
+--                                         receipt. The DB video_id is the only trusted
+--                                         identity (Facebook strips zero-width tags, spec §1.3 X1)
+--   5. content_reel_live_switch_events    audit rows for the per-client live switch
 --   6. Guard triggers + SECURITY DEFINER RPCs that own every state transition
 --
--- Why guards live in triggers as well as RPCs: service_role bypasses RLS, so a
--- future direct UPDATE from app code would otherwise skip every rule. The trigger
--- is the single source of truth for "which transition is legal and under which
--- evidence"; the RPCs add row locking, side effects on content_posts, and map the
--- expected (soft) refusals to machine-readable codes.
+-- Why guards live in triggers as well as RPCs: service_role bypasses RLS, so a direct
+-- UPDATE from app code would otherwise skip every rule. The row trigger is the single
+-- source of truth for legal transitions and their evidence; the RPCs add row locking,
+-- side effects on content_posts, and translate expected refusals to codes.
 --
--- Security template (repo invariants, scripts/db-invariants.sql):
---   * RLS on every new table, policy FOR ALL TO service_role USING (true)
---   * table privileges revoked from anon/authenticated as well
---   * SECURITY DEFINER functions: SET search_path = pg_catalog, pg_temp,
---     fully qualified public.* names, REVOKE ALL FROM PUBLIC, anon, authenticated,
---     GRANT EXECUTE TO service_role only
+-- Evidence timestamps (last_step_started_at, video_deleted_at, absence_first_confirmed_at,
+-- publish_verified_at, first_comment_verified_at, finished_at, created_at) may only carry
+-- the database clock: NULL on insert, and on update either unchanged or exactly now().
+-- A caller can therefore never backdate its way past a time floor.
 --
--- Timing constants (spec v2.1 §3.2): the Graph writes in strict mode are bounded
--- by start 60s + rupload 15min + finish 60s = 17min. A video-bearing attempt may
--- only be declared "not on Facebook" / "removed externally" when the last write
--- started >= 30 minutes ago (17min + 13min margin), and the absence evidence is at
--- least 10 minutes old. A claimed attempt without a video_id needs only 5 minutes
--- (start timeout 60s + margin).
+-- Timing floors (spec v2.1 §3.2): Graph writes in strict mode are bounded by start 60s +
+-- rupload 15min + finish 60s = 17min. A video-bearing attempt may only be declared
+-- "not on Facebook" / "removed externally" when the last DB-recorded activity is >= 30
+-- minutes old (17min + 13min margin) and the first absence evidence is >= 10 minutes old.
+-- A claimed attempt without a video_id needs 5 minutes (start timeout 60s + margin).
+--
+-- Security template (scripts/db-invariants.sql): RLS FOR ALL TO service_role; table
+-- privileges revoked from PUBLIC/anon/authenticated/service_role and re-granted to
+-- service_role without DELETE/TRUNCATE; SECURITY DEFINER functions pin
+-- search_path = pg_catalog, pg_temp and are executable by service_role only.
 --
 -- Apply requires explicit PM go. Rollback: scripts/content-reel-publish-rollback.sql
 -- =============================================================================
+
+SET LOCAL lock_timeout = '5s';
+
+-- ── 0. Columns on existing tables first (short locks, fail fast) ─────────────
+
+ALTER TABLE public.clients
+  ADD COLUMN IF NOT EXISTS content_reel_live_enabled boolean NOT NULL DEFAULT false;
+
+ALTER TABLE public.content_posts
+  ADD COLUMN IF NOT EXISTS import_source_url text NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS content_posts_import_source_url
+  ON public.content_posts (client_id, import_source_url)
+  WHERE import_source_url IS NOT NULL;
 
 -- ── 1. Tables ────────────────────────────────────────────────────────────────
 
@@ -132,15 +147,6 @@ CREATE TABLE public.content_reel_live_switch_events (
 CREATE INDEX content_reel_live_switch_events_client
   ON public.content_reel_live_switch_events (client_id, created_at DESC);
 
-ALTER TABLE public.clients
-  ADD COLUMN IF NOT EXISTS content_reel_live_enabled boolean NOT NULL DEFAULT false;
-
-ALTER TABLE public.content_posts
-  ADD COLUMN IF NOT EXISTS import_source_url text NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS content_posts_import_source_url
-  ON public.content_posts (client_id, import_source_url)
-  WHERE import_source_url IS NOT NULL;
-
 -- ── 2. RLS + privileges ──────────────────────────────────────────────────────
 
 ALTER TABLE public.content_reel_video_copies       ENABLE ROW LEVEL SECURITY;
@@ -155,9 +161,11 @@ CREATE POLICY "service_role_full" ON public.content_reel_publish_attempts
 CREATE POLICY "service_role_full" ON public.content_reel_live_switch_events
   FOR ALL TO service_role USING (true) WITH CHECK (true);
 
-REVOKE ALL ON TABLE public.content_reel_video_copies       FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.content_reel_publish_attempts   FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.content_reel_live_switch_events FROM PUBLIC, anon, authenticated;
+-- Supabase default privileges hand ALL (incl. DELETE/TRUNCATE) to service_role too.
+-- Revoke everything, then grant back only what the pipeline needs: rows are never deleted.
+REVOKE ALL ON TABLE public.content_reel_video_copies       FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.content_reel_publish_attempts   FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON TABLE public.content_reel_live_switch_events FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.content_reel_video_copies       TO service_role;
 GRANT SELECT, INSERT, UPDATE ON TABLE public.content_reel_publish_attempts   TO service_role;
 GRANT SELECT, INSERT         ON TABLE public.content_reel_live_switch_events TO service_role;
@@ -169,7 +177,7 @@ CREATE TRIGGER content_reel_publish_attempts_updated_at
   BEFORE UPDATE ON public.content_reel_publish_attempts
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
--- ── 3. Transition table (single source of truth, used by trigger and RPC) ───
+-- ── 3. Transition table (single source of truth, used by trigger and contract) ──
 
 CREATE OR REPLACE FUNCTION public.content_reel_transition_allowed(p_from text, p_to text)
 RETURNS boolean
@@ -196,6 +204,9 @@ RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $fn$
+DECLARE
+  v_bookkeeping constant text[] := ARRAY['followup','trigger_event_ids','restart_seq','updated_at'];
+  v_published_mark timestamptz;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'content_reel_guard:attempts_are_append_only';
@@ -203,13 +214,24 @@ BEGIN
 
   IF TG_OP = 'INSERT' THEN
     IF NEW.state <> 'authorized' OR NEW.video_id IS NOT NULL OR NEW.video_state IS NOT NULL
-       OR NEW.published_at IS NOT NULL OR NEW.publish_confirmation IS NOT NULL THEN
+       OR NEW.published_at IS NOT NULL OR NEW.publish_confirmation IS NOT NULL
+       OR NEW.last_step_started_at IS NOT NULL OR NEW.video_deleted_at IS NOT NULL
+       OR NEW.absence_first_confirmed_at IS NOT NULL OR NEW.publish_verified_at IS NOT NULL
+       OR NEW.first_comment_verified_at IS NOT NULL OR NEW.finished_at IS NOT NULL THEN
       RAISE EXCEPTION 'content_reel_guard:insert_must_be_clean_authorized';
     END IF;
+    NEW.created_at := now();
+    NEW.updated_at := now();
     RETURN NEW;
   END IF;
 
-  -- UPDATE: identity columns never change.
+  -- Pure bookkeeping (followup / event ids / restart counter) is legal in every state.
+  IF OLD.state = NEW.state
+     AND (to_jsonb(NEW) - v_bookkeeping) = (to_jsonb(OLD) - v_bookkeeping) THEN
+    RETURN NEW;
+  END IF;
+
+  -- Identity columns never change.
   IF NEW.id IS DISTINCT FROM OLD.id
      OR NEW.client_id IS DISTINCT FROM OLD.client_id
      OR NEW.content_post_id IS DISTINCT FROM OLD.content_post_id
@@ -226,6 +248,23 @@ BEGIN
      OR NEW.page_id IS DISTINCT FROM OLD.page_id
      OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
     RAISE EXCEPTION 'content_reel_guard:immutable_column';
+  END IF;
+
+  -- Evidence timestamps: database clock only. A changed value must be exactly now();
+  -- only the absence marker may be cleared back to NULL.
+  IF (NEW.last_step_started_at IS DISTINCT FROM OLD.last_step_started_at
+        AND (NEW.last_step_started_at IS NULL OR NEW.last_step_started_at <> now()))
+     OR (NEW.video_deleted_at IS DISTINCT FROM OLD.video_deleted_at
+        AND (NEW.video_deleted_at IS NULL OR NEW.video_deleted_at <> now()))
+     OR (NEW.absence_first_confirmed_at IS DISTINCT FROM OLD.absence_first_confirmed_at
+        AND NEW.absence_first_confirmed_at IS NOT NULL AND NEW.absence_first_confirmed_at <> now())
+     OR (NEW.publish_verified_at IS DISTINCT FROM OLD.publish_verified_at
+        AND (NEW.publish_verified_at IS NULL OR NEW.publish_verified_at <> now()))
+     OR (NEW.first_comment_verified_at IS DISTINCT FROM OLD.first_comment_verified_at
+        AND (NEW.first_comment_verified_at IS NULL OR NEW.first_comment_verified_at <> now()))
+     OR (NEW.finished_at IS DISTINCT FROM OLD.finished_at
+        AND (NEW.finished_at IS NULL OR NEW.finished_at <> now())) THEN
+    RAISE EXCEPTION 'content_reel_guard:evidence_timestamp_db_clock_only';
   END IF;
 
   -- video_id: written once, only when a claimed attempt starts uploading.
@@ -245,7 +284,11 @@ BEGIN
     RAISE EXCEPTION 'content_reel_guard:uploading_requires_video_id';
   END IF;
 
-  IF NEW.state = 'published' AND OLD.state <> 'published' THEN
+  -- A published row carries a complete receipt on EVERY write, not only on entry.
+  IF NEW.state = 'published' THEN
+    IF NEW.mode_requested <> 'live' THEN
+      RAISE EXCEPTION 'content_reel_guard:mode_state_mismatch';
+    END IF;
     IF NEW.video_id IS NULL OR NEW.video_state IS DISTINCT FROM 'PUBLISHED'
        OR NEW.published_at IS NULL OR NEW.publish_confirmation IS NULL THEN
       RAISE EXCEPTION 'content_reel_guard:published_requires_receipt';
@@ -256,11 +299,37 @@ BEGIN
     IF NEW.publish_confirmation = 'human_confirmed' AND NEW.publish_confirmed_by_user_id IS NULL THEN
       RAISE EXCEPTION 'content_reel_guard:human_confirmed_requires_confirmer';
     END IF;
+    IF OLD.state = 'published' THEN
+      IF NEW.video_state IS DISTINCT FROM OLD.video_state
+         OR NEW.published_at IS DISTINCT FROM OLD.published_at
+         OR NEW.publish_confirmed_by_user_id IS DISTINCT FROM OLD.publish_confirmed_by_user_id THEN
+        RAISE EXCEPTION 'content_reel_guard:published_receipt_immutable';
+      END IF;
+      IF NEW.publish_confirmation IS DISTINCT FROM OLD.publish_confirmation
+         AND NOT (OLD.publish_confirmation = 'human_confirmed' AND NEW.publish_confirmation = 'graph_get'
+                  AND NEW.publish_verified_at IS NOT NULL) THEN
+        RAISE EXCEPTION 'content_reel_guard:published_receipt_immutable';
+      END IF;
+    ELSE
+      IF NEW.absence_first_confirmed_at IS NOT NULL THEN
+        RAISE EXCEPTION 'content_reel_guard:stale_absence_on_publish';
+      END IF;
+      IF OLD.state = 'not_on_facebook' AND COALESCE(NEW.alert_code, '') = '' THEN
+        RAISE EXCEPTION 'content_reel_guard:alert_required';
+      END IF;
+    END IF;
   END IF;
 
-  IF NEW.state = 'draft_published' AND OLD.state <> 'draft_published'
-     AND (NEW.video_id IS NULL OR NEW.video_state IS DISTINCT FROM 'DRAFT') THEN
-    RAISE EXCEPTION 'content_reel_guard:draft_requires_video';
+  IF NEW.state = 'draft_published' THEN
+    IF NEW.mode_requested <> 'draft' THEN
+      RAISE EXCEPTION 'content_reel_guard:mode_state_mismatch';
+    END IF;
+    IF NEW.video_id IS NULL OR NEW.video_state IS DISTINCT FROM 'DRAFT' THEN
+      RAISE EXCEPTION 'content_reel_guard:draft_requires_video';
+    END IF;
+    IF OLD.state <> 'draft_published' AND NEW.absence_first_confirmed_at IS NOT NULL THEN
+      RAISE EXCEPTION 'content_reel_guard:stale_absence_on_publish';
+    END IF;
   END IF;
 
   IF OLD.state = 'published' AND NEW.state = 'in_doubt'
@@ -268,8 +337,9 @@ BEGIN
     RAISE EXCEPTION 'content_reel_guard:only_unverified_human_confirmation_can_reopen';
   END IF;
 
-  -- Absence-based terminal states: evidence is read from OLD so a single call can
-  -- never both record the evidence and consume it.
+  -- Absence-based terminal states: evidence is read from OLD so one call can never both
+  -- record the evidence and consume it. Evidence recorded at the same instant as (or
+  -- before) the deletion does not count.
   IF NEW.state = 'not_on_facebook' AND OLD.state <> 'not_on_facebook' THEN
     IF OLD.video_id IS NULL THEN
       IF OLD.state <> 'claimed' THEN
@@ -283,7 +353,7 @@ BEGIN
         RAISE EXCEPTION 'content_reel_guard:not_on_facebook_requires_deletion';
       END IF;
       IF OLD.absence_first_confirmed_at IS NULL
-         OR OLD.absence_first_confirmed_at < OLD.video_deleted_at
+         OR OLD.absence_first_confirmed_at <= OLD.video_deleted_at
          OR OLD.absence_first_confirmed_at > now() - interval '10 minutes' THEN
         RAISE EXCEPTION 'content_reel_guard:absence_not_confirmed_twice';
       END IF;
@@ -294,11 +364,19 @@ BEGIN
   END IF;
 
   IF NEW.state = 'removed_externally' AND OLD.state <> 'removed_externally' THEN
+    -- The latest DB-clock moment we know the Reel was live: entering published
+    -- (finished_at) or the latest verification. Absence must come after it.
+    v_published_mark := GREATEST(OLD.publish_verified_at, OLD.finished_at, OLD.created_at);
     IF OLD.absence_first_confirmed_at IS NULL
+       OR OLD.absence_first_confirmed_at <= v_published_mark
        OR OLD.absence_first_confirmed_at > now() - interval '10 minutes' THEN
       RAISE EXCEPTION 'content_reel_guard:absence_not_confirmed_twice';
     END IF;
-    IF COALESCE(OLD.last_step_started_at, OLD.published_at, OLD.created_at) > now() - interval '30 minutes' THEN
+    -- Floor: the latest DB-recorded activity (last Graph write, verification, entry into
+    -- published) must be 30+ minutes old. GREATEST, not COALESCE: the most recent of the
+    -- clock-stamped columns is the conservative anchor; published_at is caller-supplied
+    -- and deliberately not used.
+    IF GREATEST(OLD.last_step_started_at, v_published_mark) > now() - interval '30 minutes' THEN
       RAISE EXCEPTION 'content_reel_guard:last_write_too_recent';
     END IF;
   END IF;
@@ -308,7 +386,7 @@ BEGIN
       RAISE EXCEPTION 'content_reel_guard:draft_deleted_requires_deletion';
     END IF;
     IF OLD.absence_first_confirmed_at IS NULL
-       OR OLD.absence_first_confirmed_at < OLD.video_deleted_at
+       OR OLD.absence_first_confirmed_at <= OLD.video_deleted_at
        OR OLD.absence_first_confirmed_at > now() - interval '10 minutes' THEN
       RAISE EXCEPTION 'content_reel_guard:absence_not_confirmed_twice';
     END IF;
@@ -336,6 +414,8 @@ BEGIN
     IF NEW.status <> 'preparing' OR NEW.sha256 IS NOT NULL THEN
       RAISE EXCEPTION 'content_reel_guard:copy_insert_must_be_preparing';
     END IF;
+    NEW.created_at := now();
+    NEW.updated_at := now();
     RETURN NEW;
   END IF;
   IF OLD.status <> 'preparing' THEN
@@ -374,17 +454,54 @@ CREATE TRIGGER content_reel_live_switch_events_guard
   BEFORE UPDATE OR DELETE ON public.content_reel_live_switch_events
   FOR EACH ROW EXECUTE FUNCTION public.content_reel_live_switch_events_guard();
 
--- The per-client live switch may only change inside set_content_reel_live_enabled
--- (expected-old-value CAS + audit row). A direct UPDATE is refused.
-CREATE OR REPLACE FUNCTION public.clients_content_reel_live_guard()
+-- TRUNCATE bypasses row triggers; block it at statement level on all three tables.
+CREATE OR REPLACE FUNCTION public.content_reel_block_truncate()
 RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $fn$
 BEGIN
-  IF NEW.content_reel_live_enabled IS DISTINCT FROM OLD.content_reel_live_enabled
-     AND COALESCE(current_setting('content_reel.live_switch_rpc', true), '') <> 'on' THEN
-    RAISE EXCEPTION 'content_reel_guard:live_switch_rpc_only';
+  RAISE EXCEPTION 'content_reel_guard:truncate_forbidden:%', TG_TABLE_NAME;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.content_reel_block_truncate() FROM PUBLIC, anon, authenticated;
+
+CREATE TRIGGER content_reel_publish_attempts_no_truncate
+  BEFORE TRUNCATE ON public.content_reel_publish_attempts
+  FOR EACH STATEMENT EXECUTE FUNCTION public.content_reel_block_truncate();
+CREATE TRIGGER content_reel_video_copies_no_truncate
+  BEFORE TRUNCATE ON public.content_reel_video_copies
+  FOR EACH STATEMENT EXECUTE FUNCTION public.content_reel_block_truncate();
+CREATE TRIGGER content_reel_live_switch_events_no_truncate
+  BEFORE TRUNCATE ON public.content_reel_live_switch_events
+  FOR EACH STATEMENT EXECUTE FUNCTION public.content_reel_block_truncate();
+
+-- The per-client live switch may only change inside set_content_reel_live_enabled
+-- (expected-old-value CAS + audit row), and a client can never be created switched on.
+-- The GUC marker plus "current_user is the RPC owner" stops accidental direct writes
+-- from app code (service_role). It is a guard against mistakes, NOT a security
+-- boundary: the owner / a superuser can still set the marker by hand.
+CREATE OR REPLACE FUNCTION public.clients_content_reel_live_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE v_owner name;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.content_reel_live_enabled THEN
+      RAISE EXCEPTION 'content_reel_guard:live_switch_insert_must_be_false';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.content_reel_live_enabled IS DISTINCT FROM OLD.content_reel_live_enabled THEN
+    SELECT pg_get_userbyid(p.proowner) INTO v_owner
+      FROM pg_proc p
+     WHERE p.oid = to_regprocedure('public.set_content_reel_live_enabled(uuid,boolean,boolean,uuid,text,text)');
+    IF COALESCE(current_setting('content_reel.live_switch_rpc', true), '') <> 'on'
+       OR v_owner IS NULL OR current_user IS DISTINCT FROM v_owner THEN
+      RAISE EXCEPTION 'content_reel_guard:live_switch_rpc_only';
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -392,7 +509,7 @@ $fn$;
 REVOKE ALL ON FUNCTION public.clients_content_reel_live_guard() FROM PUBLIC, anon, authenticated;
 
 CREATE TRIGGER clients_content_reel_live_guard
-  BEFORE UPDATE OF content_reel_live_enabled ON public.clients
+  BEFORE INSERT OR UPDATE OF content_reel_live_enabled ON public.clients
   FOR EACH ROW EXECUTE FUNCTION public.clients_content_reel_live_guard();
 
 -- ── 5. RPCs ──────────────────────────────────────────────────────────────────
@@ -438,7 +555,7 @@ SET search_path = pg_catalog, pg_temp
 AS $fn$
 DECLARE v_row public.content_reel_video_copies%ROWTYPE;
 BEGIN
-  IF p_status NOT IN ('ready','failed') THEN
+  IF p_status IS NULL OR p_status NOT IN ('ready','failed') THEN
     RAISE EXCEPTION 'content_reel_rpc:invalid_copy_status:%', p_status;
   END IF;
   SELECT * INTO v_row FROM public.content_reel_video_copies WHERE id = p_id FOR UPDATE;
@@ -510,9 +627,11 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'code', 'video_changed_since_prepare');
   END IF;
 
+  -- Allow-list: only jobs known to be finished let the post through; any other or
+  -- future status counts as still rendering.
   PERFORM 1 FROM public.content_factory_render_jobs
    WHERE content_post_id = p_content_post_id
-     AND status IN ('queued','planning','rendering','assembling');
+     AND status NOT IN ('ready_for_review','failed');
   IF FOUND THEN
     RETURN jsonb_build_object('ok', false, 'code', 'render_in_progress');
   END IF;
@@ -530,6 +649,11 @@ BEGIN
   IF FOUND THEN
     RETURN jsonb_build_object('ok', false, 'code', 'post_already_published');
   END IF;
+
+  -- Serialise same-content authorisations for one client across different posts, so two
+  -- concurrent calls cannot both miss each other's uncommitted attempt.
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('content_reel_hash:' || p_client_id::text || ':' || COALESCE(p_video_sha256, ''), 0));
 
   -- Same video content for the same client inside 30 days (PM business window, spec §9).
   -- Unverified human confirmations do not count.
@@ -565,9 +689,8 @@ END;
 $fn$;
 
 -- 5.4 State transition with optional patch (spec v2.1 §3.2 ②).
--- Timestamps that gate absence-based transitions are set by the database clock
--- via markers (touch_last_step / mark_absence / mark_video_deleted …), never by
--- caller-supplied values, so a caller cannot backdate its way past the guard.
+-- Evidence timestamps are set only through marker keys (touch_last_step / mark_absence /
+-- mark_video_deleted …) and always carry now(); the trigger rejects anything else.
 CREATE OR REPLACE FUNCTION public.content_reel_transition(
   p_id uuid, p_from text[], p_to text, p_patch jsonb DEFAULT '{}'::jsonb
 ) RETURNS jsonb
@@ -575,13 +698,19 @@ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $fn$
 DECLARE
-  v_row  public.content_reel_publish_attempts%ROWTYPE;
-  v_key  text;
-  v_msg  text;
+  v_row        public.content_reel_publish_attempts%ROWTYPE;
+  v_key        text;
+  v_msg        text;
+  v_constraint text;
   v_soft constant text[] := ARRAY[
     'claimed_too_recent','not_on_facebook_requires_deletion','absence_not_confirmed_twice',
     'last_write_too_recent','draft_deleted_requires_deletion'];
 BEGIN
+  IF p_id IS NULL OR p_from IS NULL OR cardinality(p_from) = 0
+     OR array_position(p_from, NULL) IS NOT NULL OR p_to IS NULL OR length(p_to) = 0 THEN
+    RAISE EXCEPTION 'content_reel_rpc:invalid_transition_arguments';
+  END IF;
+
   p_patch := COALESCE(p_patch, '{}'::jsonb);
   FOR v_key IN SELECT jsonb_object_keys(p_patch) LOOP
     IF v_key NOT IN ('video_id','video_state','permalink','published_at','publish_confirmation',
@@ -621,6 +750,8 @@ BEGIN
       provider_impact = CASE WHEN p_patch ? 'provider_impact' THEN p_patch->'provider_impact' ELSE provider_impact END,
       last_step_started_at = CASE WHEN (p_patch->>'touch_last_step')::boolean IS TRUE THEN now() ELSE last_step_started_at END,
       absence_first_confirmed_at = CASE
+        -- entering a live/draft state wipes any stale absence evidence
+        WHEN p_to <> v_row.state AND p_to IN ('published','draft_published') THEN NULL
         WHEN (p_patch->>'clear_absence')::boolean IS TRUE THEN NULL
         WHEN (p_patch->>'mark_absence')::boolean IS TRUE THEN COALESCE(absence_first_confirmed_at, now())
         ELSE absence_first_confirmed_at END,
@@ -633,15 +764,25 @@ BEGIN
           THEN now()
         ELSE finished_at END
     WHERE id = p_id;
-  EXCEPTION WHEN raise_exception THEN
-    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
-    IF v_msg LIKE 'content_reel_guard:%' AND split_part(v_msg, ':', 2) = ANY (v_soft) THEN
-      RETURN jsonb_build_object('ok', false, 'code', split_part(v_msg, ':', 2), 'current_state', v_row.state);
-    END IF;
-    RAISE;
+  EXCEPTION
+    WHEN raise_exception THEN
+      GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+      IF v_msg LIKE 'content_reel_guard:%' AND split_part(v_msg, ':', 2) = ANY (v_soft) THEN
+        RETURN jsonb_build_object('ok', false, 'code', split_part(v_msg, ':', 2), 'current_state', v_row.state);
+      END IF;
+      RAISE;
+    WHEN unique_violation THEN
+      GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+      IF v_constraint = 'content_reel_publish_attempts_video' THEN
+        RETURN jsonb_build_object('ok', false, 'code', 'video_id_conflict', 'current_state', v_row.state);
+      ELSIF v_constraint = 'content_reel_publish_attempts_one_active' THEN
+        RETURN jsonb_build_object('ok', false, 'code', 'active_attempt_exists', 'current_state', v_row.state);
+      END IF;
+      RAISE;
   END;
 
-  -- Card goes back to the "rendered" column so the video can be replaced and re-authorised.
+  -- Card goes back to the "rendered" column so the video can be replaced and re-authorised,
+  -- unless some other attempt on the same post is still in flight.
   IF p_to <> v_row.state AND p_to IN ('cancelled','preflight_failed','not_on_facebook','draft_published') THEN
     UPDATE public.content_posts cp SET status = 'approved'
      WHERE cp.id = v_row.content_post_id
@@ -657,6 +798,7 @@ END;
 $fn$;
 
 -- 5.5 Mark the content post published (separate call from the receipt write, spec D10).
+-- An unverified human confirmation never marks the post published (spec §4.5).
 CREATE OR REPLACE FUNCTION public.content_reel_mark_post_published(p_id uuid)
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER
@@ -664,12 +806,15 @@ SET search_path = pg_catalog, pg_temp
 AS $fn$
 DECLARE v_row public.content_reel_publish_attempts%ROWTYPE; v_changed integer;
 BEGIN
-  SELECT * INTO v_row FROM public.content_reel_publish_attempts WHERE id = p_id;
+  SELECT * INTO v_row FROM public.content_reel_publish_attempts WHERE id = p_id FOR UPDATE;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'code', 'attempt_not_found');
   END IF;
   IF v_row.state <> 'published' THEN
     RETURN jsonb_build_object('ok', false, 'code', 'attempt_not_published', 'current_state', v_row.state);
+  END IF;
+  IF NOT (v_row.publish_confirmation = 'graph_get' OR v_row.publish_verified_at IS NOT NULL) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'publication_not_verified');
   END IF;
   UPDATE public.content_posts SET status = 'published', published_at = v_row.published_at
    WHERE id = v_row.content_post_id AND status IN ('scheduled','approved');
@@ -678,7 +823,7 @@ BEGIN
 END;
 $fn$;
 
--- 5.6 Atomic followup bookkeeping.
+-- 5.6 Atomic followup bookkeeping (allowed in every state by the guard's bookkeeping path).
 CREATE OR REPLACE FUNCTION public.content_reel_followup_patch(p_id uuid, p_key text, p_value jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER
@@ -686,7 +831,7 @@ SET search_path = pg_catalog, pg_temp
 AS $fn$
 DECLARE v_followup jsonb;
 BEGIN
-  IF p_key NOT IN ('books_written','published_event_ids','measurement_registered',
+  IF p_key IS NULL OR p_key NOT IN ('books_written','published_event_ids','measurement_registered',
                    'draft_delete_results','last_error') THEN
     RAISE EXCEPTION 'content_reel_rpc:unknown_followup_key:%', p_key;
   END IF;
@@ -784,11 +929,12 @@ SET search_path = pg_catalog, pg_temp
 AS $fn$
 DECLARE v_current boolean;
 BEGIN
-  IF p_expected_old IS NULL OR p_new IS NULL OR p_user_id IS NULL
+  IF p_client_id IS NULL OR p_expected_old IS NULL OR p_new IS NULL OR p_user_id IS NULL
      OR p_email IS NULL OR length(p_email) = 0 THEN
     RAISE EXCEPTION 'content_reel_rpc:live_switch_missing_argument';
   END IF;
-  SELECT content_reel_live_enabled INTO v_current FROM public.clients WHERE id = p_client_id FOR UPDATE;
+  SELECT content_reel_live_enabled INTO v_current FROM public.clients
+   WHERE id = p_client_id FOR NO KEY UPDATE;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'code', 'client_not_found');
   END IF;

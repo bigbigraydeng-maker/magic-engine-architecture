@@ -12,6 +12,8 @@ import { join } from 'path'
 import { describe, expect, it } from 'vitest'
 import {
   CONTENT_REEL_ACTIVE_STATES,
+  CONTENT_REEL_BOOKKEEPING_COLUMNS,
+  CONTENT_REEL_EVIDENCE_TIMESTAMP_COLUMNS,
   CONTENT_REEL_DUPLICATE_HASH_WINDOW_DAYS,
   CONTENT_REEL_FOLLOWUP_KEYS,
   CONTENT_REEL_PATCH_MARKER_KEYS,
@@ -75,7 +77,7 @@ describe('content reel contract matches the migration', () => {
   })
 
   it('followup keys equal content_reel_followup_patch whitelist', () => {
-    const block = between('IF p_key NOT IN (', ') THEN')
+    const block = between('IF p_key IS NULL OR p_key NOT IN (', ') THEN')
     expect(new Set(quoted(block))).toEqual(new Set(CONTENT_REEL_FOLLOWUP_KEYS))
   })
 
@@ -86,6 +88,15 @@ describe('content reel contract matches the migration', () => {
     const soft = between('v_soft constant text[] := ARRAY[', '];')
     for (const code of quoted(soft)) returned.add(code)
     expect(returned).toEqual(new Set(CONTENT_REEL_RPC_REFUSAL_CODES))
+  })
+
+  it('bookkeeping columns equal the guard fast path, and every evidence timestamp is DB-clock guarded', () => {
+    const block = between("v_bookkeeping constant text[] := ARRAY[", '];')
+    expect(new Set(quoted(block))).toEqual(new Set(CONTENT_REEL_BOOKKEEPING_COLUMNS))
+    const guard = between('-- Evidence timestamps: database clock only.', "content_reel_guard:evidence_timestamp_db_clock_only")
+    for (const col of CONTENT_REEL_EVIDENCE_TIMESTAMP_COLUMNS) {
+      expect(guard, col).toContain(`NEW.${col} IS DISTINCT FROM OLD.${col}`)
+    }
   })
 
   it('timing floors and duplicate window match the SQL intervals', () => {

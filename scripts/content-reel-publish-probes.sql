@@ -74,6 +74,42 @@ EXCEPTION WHEN others THEN
 END;
 $fn$;
 
+-- run a statement as another role (e.g. service_role); must raise with fragment
+CREATE OR REPLACE FUNCTION pg_temp.expect_raise_as(p_role text, p_name text, p_stmt text, p_fragment text)
+RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE v_err text;
+BEGIN
+  BEGIN
+    EXECUTE format('SET LOCAL ROLE %I', p_role);
+    EXECUTE p_stmt;
+  EXCEPTION WHEN others THEN
+    v_err := SQLERRM;
+  END;
+  RESET ROLE;
+  IF v_err IS NULL THEN
+    PERFORM pg_temp.record(p_name, false, 'expected an error containing "' || p_fragment || '", statement succeeded as ' || p_role);
+  ELSE
+    PERFORM pg_temp.record(p_name, position(p_fragment in v_err) > 0, left(v_err, 120));
+  END IF;
+END;
+$fn$;
+
+-- run a jsonb-returning statement as another role; expect ok=true
+CREATE OR REPLACE FUNCTION pg_temp.expect_ok_as(p_role text, p_name text, p_stmt text)
+RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE r jsonb; v_err text;
+BEGIN
+  BEGIN
+    EXECUTE format('SET LOCAL ROLE %I', p_role);
+    EXECUTE p_stmt INTO r;
+  EXCEPTION WHEN others THEN
+    v_err := SQLERRM;
+  END;
+  RESET ROLE;
+  PERFORM pg_temp.record(p_name, v_err IS NULL AND (r->>'ok')::boolean IS TRUE, COALESCE('raised: ' || left(v_err, 110), left(r::text, 120)));
+END;
+$fn$;
+
 -- Backdate evidence timestamps (simulates time passing). Guard trigger is
 -- disabled only for this statement; every probe that consumes the evidence
 -- runs with the guard enabled.
@@ -290,8 +326,22 @@ SELECT pg_temp.expect_code('E09 removed_externally with fresh absence refused',
   format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'removed_externally', '{}')$$, :A5), 'absence_not_confirmed_twice');
 SELECT pg_temp.backdate(:A5::uuid, 'absence_first_confirmed_at', 11);
 SELECT pg_temp.backdate(:A5::uuid, 'last_step_started_at', 31);
+SELECT pg_temp.expect_code('E09a removed_externally: absence recorded before the publication mark does not count',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'removed_externally', '{}')$$, :A5), 'absence_not_confirmed_twice');
+SELECT pg_temp.backdate(:A5::uuid, 'created_at', 60);
+SELECT pg_temp.backdate(:A5::uuid, 'finished_at', 20);
+SELECT pg_temp.backdate(:A5::uuid, 'publish_verified_at', 20);
+SELECT pg_temp.expect_code('E09b removed_externally 30-minute floor counts the latest verification, not only the last Graph write',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'removed_externally', '{}')$$, :A5), 'last_write_too_recent');
+SELECT pg_temp.backdate(:A5::uuid, 'finished_at', 35);
+SELECT pg_temp.backdate(:A5::uuid, 'publish_verified_at', 35);
 SELECT pg_temp.expect_ok('E10 published -> removed_externally after double absence',
   format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'removed_externally', '{}')$$, :A5));
+UPDATE public.content_posts SET status='approved' WHERE id='a1000000-0000-0000-0000-000000000005';
+SELECT public.content_reel_video_copy_start('b1000000-0000-0000-0000-000000000056','c1000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000005','https://x/p5.mp4','content-factory/c1/authorized/k56.mp4','e1000000-0000-0000-0000-000000000001','agent');
+SELECT public.content_reel_video_copy_finish('b1000000-0000-0000-0000-000000000056','ready','5555555555555555555555555555555555555555555555555555555555555557',1000,NULL);
+SELECT pg_temp.expect_code('E10b removed_externally still blocks re-authorising the same card',
+  pg_temp.auth_stmt('d1000000-0000-0000-0000-0000000000e7','a1000000-0000-0000-0000-000000000005','b1000000-0000-0000-0000-000000000056','5555555555555555555555555555555555555555555555555555555555555557',:F2), 'post_already_published');
 SELECT pg_temp.expect_raise('E11 removed_externally is terminal',
   format($$SELECT public.content_reel_transition(%L, ARRAY['removed_externally'], 'published', '{}')$$, :A5), 'illegal_transition:removed_externally->published');
 
@@ -333,8 +383,13 @@ SELECT pg_temp.expect_code('F05 abandon post refused while a draft is not delete
   $$SELECT public.content_reel_abandon_post('c1000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000007')$$, 'drafts_not_deleted');
 SELECT pg_temp.expect_code('F06 draft_deleted without deletion refused',
   format($$SELECT public.content_reel_transition(%L, ARRAY['draft_published'], 'draft_deleted', '{}')$$, :A7), 'draft_deleted_requires_deletion');
+SELECT public.content_reel_transition(:A7, ARRAY['draft_published'], 'draft_published', '{"mark_absence":true}');
+SELECT pg_temp.backdate(:A7::uuid, 'absence_first_confirmed_at', 20);
 SELECT public.content_reel_transition(:A7, ARRAY['draft_published'], 'draft_published', '{"mark_video_deleted":true}');
 SELECT pg_temp.backdate(:A7::uuid, 'video_deleted_at', 15);
+SELECT pg_temp.expect_code('F06b draft_deleted: absence recorded before the deletion does not count',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['draft_published'], 'draft_deleted', '{}')$$, :A7), 'absence_not_confirmed_twice');
+SELECT public.content_reel_transition(:A7, ARRAY['draft_published'], 'draft_published', '{"clear_absence":true}');
 SELECT public.content_reel_transition(:A7, ARRAY['draft_published'], 'draft_published', '{"mark_absence":true}');
 SELECT pg_temp.expect_code('F07 draft_deleted with fresh absence refused',
   format($$SELECT public.content_reel_transition(%L, ARRAY['draft_published'], 'draft_deleted', '{}')$$, :A7), 'absence_not_confirmed_twice');
@@ -388,6 +443,185 @@ SELECT pg_temp.expect_true('I02 ON CONFLICT on the partial unique index resolves
     SELECT (SELECT count(*) FROM ins) = 0
        AND (SELECT count(*) FROM public.content_posts WHERE import_source_url='https://x/import.mp4') = 1$$);
 
+-- ── K. Review round 1 fixes (子牙 B1/B2/S2–S8, 魏征 M1–M4 + suggestions) ─────
+CREATE OR REPLACE FUNCTION pg_temp.post_copy(p_n int, p_hash_char text)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO public.content_posts (id, client_id, title, route, platforms, status, source_video_url)
+  VALUES (('a1000000-0000-0000-0000-000000000' || (100 + p_n))::uuid, 'c1000000-0000-0000-0000-000000000001', 'K' || p_n, 'route_a', '{}', 'approved', 'https://x/k' || p_n || '.mp4');
+  PERFORM pg_temp.copy_ready('b1000000-0000-0000-0000-000000000' || (100 + p_n), 'a1000000-0000-0000-0000-000000000' || (100 + p_n), 'https://x/k' || p_n || '.mp4', repeat(p_hash_char, 64));
+END $$;
+CREATE OR REPLACE FUNCTION pg_temp.k_id(p_n int) RETURNS uuid LANGUAGE sql AS $$ SELECT ('d1000000-0000-0000-0000-000000000' || (100 + p_n))::uuid $$;
+CREATE OR REPLACE FUNCTION pg_temp.k_auth(p_n int, p_hash_char text, p_mode text DEFAULT 'live')
+RETURNS jsonb LANGUAGE plpgsql AS $$
+DECLARE r jsonb;
+BEGIN
+  EXECUTE pg_temp.auth_stmt('d1000000-0000-0000-0000-000000000' || (100 + p_n), 'a1000000-0000-0000-0000-000000000' || (100 + p_n),
+                            'b1000000-0000-0000-0000-000000000' || (100 + p_n), repeat(p_hash_char, 64), repeat('e', 64), p_mode) INTO r;
+  RETURN r;
+END $$;
+CREATE OR REPLACE FUNCTION pg_temp.k_upload(p_n int, p_video text) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM public.content_reel_transition(pg_temp.k_id(p_n), ARRAY['authorized'], 'claimed', '{"touch_last_step":true}');
+  PERFORM public.content_reel_transition(pg_temp.k_id(p_n), ARRAY['claimed'], 'uploading', jsonb_build_object('video_id', p_video, 'touch_last_step', true));
+END $$;
+
+SELECT pg_temp.post_copy(1, 'a');
+SELECT pg_temp.post_copy(2, 'b');
+SELECT pg_temp.post_copy(3, 'c');
+SELECT pg_temp.post_copy(4, '8');
+SELECT pg_temp.post_copy(5, '9');
+SELECT pg_temp.post_copy(6, '0');
+SELECT pg_temp.post_copy(7, 'd');
+SELECT pg_temp.post_copy(8, '3');
+SELECT pg_temp.k_auth(1, 'a');
+
+-- M1: bookkeeping is legal in every state
+SELECT pg_temp.expect_ok('K01 followup patch on an authorized attempt (M1)',
+  format($$SELECT public.content_reel_followup_patch(%L, 'last_error', '"x"')$$, pg_temp.k_id(1)));
+SELECT pg_temp.expect_ok('K02 append event id on an authorized attempt (M1)',
+  format($$SELECT public.content_reel_append_event_id(%L, 'content-reel-publish:k1:r1')$$, pg_temp.k_id(1)));
+SELECT pg_temp.expect_true('K03 restart seq on an authorized attempt (M1)',
+  format($$SELECT public.content_reel_next_restart_seq(%L) = 1$$, pg_temp.k_id(1)));
+SELECT pg_temp.expect_ok('K04 followup patch on a cancelled (terminal) attempt (M1)',
+  $$SELECT public.content_reel_followup_patch('d1000000-0000-0000-0000-000000000076', 'last_error', '"late"')$$);
+SELECT pg_temp.expect_code('K05 abandon post refused while an attempt is in flight',
+  $$SELECT public.content_reel_abandon_post('c1000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000101')$$, 'active_attempt_exists');
+
+-- suggestion 1: transition arguments
+SELECT pg_temp.expect_raise('K06 p_from NULL raises (would otherwise skip the CAS)',
+  format($$SELECT public.content_reel_transition(%L, NULL, 'claimed', '{}')$$, pg_temp.k_id(1)), 'invalid_transition_arguments');
+SELECT pg_temp.expect_raise('K07 p_from empty array raises',
+  format($$SELECT public.content_reel_transition(%L, ARRAY[]::text[], 'claimed', '{}')$$, pg_temp.k_id(1)), 'invalid_transition_arguments');
+SELECT pg_temp.expect_raise('K08 p_to NULL raises',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['authorized'], NULL, '{}')$$, pg_temp.k_id(1)), 'invalid_transition_arguments');
+
+-- B1 / M2: evidence timestamps only from the DB clock, even for service_role direct UPDATEs
+SELECT pg_temp.k_upload(1, '3000000001');
+SELECT public.content_reel_transition(pg_temp.k_id(1), ARRAY['uploading'], 'in_doubt', '{}');
+SELECT pg_temp.expect_raise_as('service_role', 'K09 service_role cannot backdate last_step_started_at (B1/M2)',
+  format($$UPDATE public.content_reel_publish_attempts SET last_step_started_at='2020-01-01' WHERE id=%L$$, pg_temp.k_id(1)), 'evidence_timestamp_db_clock_only');
+SELECT pg_temp.expect_raise_as('service_role', 'K10 service_role cannot forge deletion + absence timestamps (B1/M2)',
+  format($$UPDATE public.content_reel_publish_attempts SET video_deleted_at='2020-01-01 00:00', absence_first_confirmed_at='2020-01-01 00:01' WHERE id=%L$$, pg_temp.k_id(1)), 'evidence_timestamp_db_clock_only');
+SELECT pg_temp.expect_raise_as('service_role', 'K11 service_role cannot set a future absence timestamp',
+  format($$UPDATE public.content_reel_publish_attempts SET absence_first_confirmed_at='2030-01-01' WHERE id=%L$$, pg_temp.k_id(1)), 'evidence_timestamp_db_clock_only');
+SELECT public.content_reel_transition(pg_temp.k_id(1), ARRAY['in_doubt'], 'in_doubt', '{"mark_video_deleted":true}');
+SELECT pg_temp.expect_raise('K12 deletion record cannot be cleared',
+  format($$UPDATE public.content_reel_publish_attempts SET video_deleted_at=NULL WHERE id=%L$$, pg_temp.k_id(1)), 'evidence_timestamp_db_clock_only');
+SELECT pg_temp.expect_raise('K13 insert with a pre-set evidence timestamp refused',
+  format($$INSERT INTO public.content_reel_publish_attempts (id, client_id, content_post_id, video_copy_id, mode_requested, state, form_sha256, authorized_via, authorized_by_user_id, authorized_by_email, prepared_by, authorization_record, video_sha256, page_id, last_step_started_at)
+           VALUES ('d1000000-0000-0000-0000-0000000000f1','c1000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000102','b1000000-0000-0000-0000-000000000102','live','authorized',%L,'ui_click',%L,'s@e.com','human','{}',%L,'1616575215312482','2020-01-01')$$, :F2, :U, repeat('b',64)),
+  'insert_must_be_clean_authorized');
+SELECT pg_temp.expect_true('K14 insert stamps created_at with the DB clock even if a caller supplies one',
+  $$WITH ins AS (INSERT INTO public.content_reel_publish_attempts (id, client_id, content_post_id, video_copy_id, mode_requested, state, form_sha256, authorized_via, authorized_by_user_id, authorized_by_email, prepared_by, authorization_record, video_sha256, page_id, created_at)
+                 VALUES ('d1000000-0000-0000-0000-0000000000f2','c1000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000102','b1000000-0000-0000-0000-000000000102','live','authorized',repeat('f',64),'ui_click','e1000000-0000-0000-0000-000000000001','s@e.com','human','{}',repeat('b',64),'1616575215312482','2000-01-01')
+                 RETURNING created_at)
+    SELECT created_at = now() FROM ins$$);
+SELECT public.content_reel_transition('d1000000-0000-0000-0000-0000000000f2', ARRAY['authorized'], 'cancelled', '{}');
+
+-- suggestion 5: deletion and absence at the same instant do not count
+SELECT public.content_reel_transition(pg_temp.k_id(1), ARRAY['in_doubt'], 'in_doubt', '{"mark_absence":true}');
+SELECT pg_temp.backdate(pg_temp.k_id(1), 'video_deleted_at', 15);
+SELECT pg_temp.backdate(pg_temp.k_id(1), 'absence_first_confirmed_at', 15);
+SELECT pg_temp.backdate(pg_temp.k_id(1), 'last_step_started_at', 31);
+SELECT pg_temp.expect_code('K15 deletion and absence stamped at the same instant do not count',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['in_doubt'], 'not_on_facebook', '{}')$$, pg_temp.k_id(1)), 'absence_not_confirmed_twice');
+SELECT pg_temp.expect_code('K16 mark_post_published requires a published attempt',
+  format($$SELECT public.content_reel_mark_post_published(%L)$$, pg_temp.k_id(1)), 'attempt_not_published');
+
+-- B2 / M3: a published row keeps a complete, immutable receipt on every write
+SELECT pg_temp.k_auth(2, 'b');
+SELECT pg_temp.k_upload(2, '3000000002');
+SELECT public.content_reel_transition(pg_temp.k_id(2), ARRAY['uploading'], 'published',
+  '{"video_state":"PUBLISHED","published_at":"2026-09-15T00:00:00Z","publish_confirmation":"graph_get","mark_publish_verified":true}');
+SELECT pg_temp.expect_raise('K17 published -> published cannot erase the receipt (B2/M3, W4)',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'published', '{"video_state":"DRAFT","published_at":null,"publish_confirmation":null}')$$, pg_temp.k_id(2)), 'published_requires_receipt');
+SELECT pg_temp.expect_raise('K18 published -> published cannot change published_at',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'published', '{"published_at":"2026-01-01T00:00:00Z"}')$$, pg_temp.k_id(2)), 'published_receipt_immutable');
+SELECT pg_temp.expect_raise('K19 graph_get cannot be downgraded to human_confirmed',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'published', '{"publish_confirmation":"human_confirmed","publish_confirmed_by_user_id":"e1000000-0000-0000-0000-000000000001"}')$$, pg_temp.k_id(2)), 'published_receipt_immutable');
+
+-- human_confirmed path: stale absence, verification upgrade, mark_post_published gate
+SELECT pg_temp.k_auth(3, 'c');
+SELECT pg_temp.k_upload(3, '3000000003');
+SELECT public.content_reel_transition(pg_temp.k_id(3), ARRAY['uploading'], 'in_doubt', '{"mark_absence":true}');
+SELECT pg_temp.expect_raise('K20 entering published with stale absence evidence refused (direct UPDATE)',
+  format($$UPDATE public.content_reel_publish_attempts SET state='published', video_state='PUBLISHED', published_at=now(), publish_confirmation='human_confirmed', publish_confirmed_by_user_id='e1000000-0000-0000-0000-000000000001', finished_at=now() WHERE id=%L$$, pg_temp.k_id(3)), 'stale_absence_on_publish');
+SELECT pg_temp.expect_ok('K21 RPC entering published clears stale absence automatically',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['in_doubt'], 'published', '{"video_state":"PUBLISHED","published_at":"2026-09-15T00:00:00Z","publish_confirmation":"human_confirmed","publish_confirmed_by_user_id":"e1000000-0000-0000-0000-000000000001"}')$$, pg_temp.k_id(3)));
+SELECT pg_temp.expect_code('K22 mark_post_published refuses an unverified human confirmation (W9)',
+  format($$SELECT public.content_reel_mark_post_published(%L)$$, pg_temp.k_id(3)), 'publication_not_verified');
+SELECT pg_temp.expect_ok('K23 human_confirmed -> graph_get with verification allowed',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'published', '{"publish_confirmation":"graph_get","mark_publish_verified":true}')$$, pg_temp.k_id(3)));
+SELECT pg_temp.expect_ok('K24 mark_post_published after verification',
+  format($$SELECT public.content_reel_mark_post_published(%L)$$, pg_temp.k_id(3)));
+SELECT pg_temp.expect_raise('K24b graph_get cannot flip back to human_confirmed even with the same confirmer',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'published', '{"publish_confirmation":"human_confirmed"}')$$, pg_temp.k_id(3)), 'published_receipt_immutable');
+
+-- S5: not_on_facebook -> published needs an alert code (A1 is not_on_facebook since C19)
+SELECT pg_temp.expect_raise('K25 not_on_facebook -> published without alert_code refused (S5)',
+  $$SELECT public.content_reel_transition('d1000000-0000-0000-0000-000000000001', ARRAY['not_on_facebook'], 'published', '{"video_state":"PUBLISHED","published_at":"2026-09-15T00:00:00Z","publish_confirmation":"graph_get","mark_publish_verified":true}')$$,
+  'alert_required');
+SELECT pg_temp.expect_ok('K26 not_on_facebook -> published with alert_code',
+  $$SELECT public.content_reel_transition('d1000000-0000-0000-0000-000000000001', ARRAY['not_on_facebook'], 'published', '{"video_state":"PUBLISHED","published_at":"2026-09-15T00:00:00Z","publish_confirmation":"graph_get","mark_publish_verified":true,"alert_code":"not_on_facebook_found_public"}')$$);
+
+-- S6: requested mode must match the terminal state
+SELECT pg_temp.k_auth(4, '8', 'draft');
+SELECT pg_temp.k_upload(4, '3000000004');
+SELECT pg_temp.expect_raise('K27 draft request cannot become published (S6)',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['uploading'], 'published', '{"video_state":"PUBLISHED","published_at":"2026-09-15T00:00:00Z","publish_confirmation":"graph_get","mark_publish_verified":true}')$$, pg_temp.k_id(4)), 'mode_state_mismatch');
+SELECT pg_temp.k_auth(5, '9');
+SELECT pg_temp.k_upload(5, '3000000005');
+SELECT pg_temp.expect_raise('K28 live request cannot become draft_published (S6)',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['uploading'], 'draft_published', '{"video_state":"DRAFT"}')$$, pg_temp.k_id(5)), 'mode_state_mismatch');
+
+-- suggestion 2: unique violations are translated
+SELECT pg_temp.k_auth(6, '0');
+SELECT public.content_reel_transition(pg_temp.k_id(6), ARRAY['authorized'], 'claimed', '{}');
+SELECT pg_temp.expect_code('K29 re-used video_id returns video_id_conflict (W11)',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['claimed'], 'uploading', '{"video_id":"3000000005"}')$$, pg_temp.k_id(6)), 'video_id_conflict');
+SELECT pg_temp.k_auth(8, '3');
+SELECT pg_temp.k_upload(8, '3000000008');
+SELECT public.content_reel_transition(pg_temp.k_id(8), ARRAY['uploading'], 'in_doubt', '{}');
+SELECT public.content_reel_transition(pg_temp.k_id(8), ARRAY['in_doubt'], 'published',
+  '{"video_state":"PUBLISHED","published_at":"2026-09-15T00:00:00Z","publish_confirmation":"human_confirmed","publish_confirmed_by_user_id":"e1000000-0000-0000-0000-000000000001"}');
+INSERT INTO public.content_reel_publish_attempts (id, client_id, content_post_id, video_copy_id, mode_requested, state, form_sha256, authorized_via, authorized_by_user_id, authorized_by_email, prepared_by, authorization_record, video_sha256, page_id)
+VALUES ('d1000000-0000-0000-0000-0000000000f8','c1000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000108','b1000000-0000-0000-0000-000000000108','live','authorized',repeat('f',64),'ui_click','e1000000-0000-0000-0000-000000000001','s@e.com','human','{}',repeat('3',64),'1616575215312482');
+SELECT pg_temp.expect_code('K30 reopening a publication while another attempt is in flight returns active_attempt_exists (W16)',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'in_doubt', '{}')$$, pg_temp.k_id(8)), 'active_attempt_exists');
+
+-- S7: unknown render statuses count as in progress
+INSERT INTO public.content_factory_render_jobs (client_id, content_post_id, status)
+VALUES ('c1000000-0000-0000-0000-000000000001', 'a1000000-0000-0000-0000-000000000107', 'some_future_status');
+SELECT pg_temp.expect_code('K31 unknown render status blocks authorisation (S7 allow-list)',
+  pg_temp.auth_stmt('d1000000-0000-0000-0000-000000000107','a1000000-0000-0000-0000-000000000107','b1000000-0000-0000-0000-000000000107',repeat('d',64),repeat('e',64)), 'render_in_progress');
+
+-- S2: service_role cannot delete or truncate
+SELECT pg_temp.expect_true('K32 service_role has no DELETE / TRUNCATE on the new tables (S2)',
+  $$SELECT bool_and(NOT has_table_privilege('service_role', t, 'DELETE') AND NOT has_table_privilege('service_role', t, 'TRUNCATE'))
+      FROM unnest(ARRAY['public.content_reel_video_copies','public.content_reel_publish_attempts','public.content_reel_live_switch_events']) t$$);
+SELECT pg_temp.expect_raise_as('service_role', 'K33 service_role DELETE is denied (S2)',
+  $$DELETE FROM public.content_reel_publish_attempts WHERE id='d1000000-0000-0000-0000-000000000001'$$, 'permission denied');
+SELECT pg_temp.expect_raise('K34 TRUNCATE is blocked even for the owner (S2)',
+  $$TRUNCATE public.content_reel_live_switch_events$$, 'truncate_forbidden');
+SELECT pg_temp.expect_true('K35 service_role keeps SELECT/INSERT/UPDATE on attempts and can reach clients (sandbox models Supabase defaults)',
+  $$SELECT has_table_privilege('service_role','public.content_reel_publish_attempts','SELECT')
+       AND has_table_privilege('service_role','public.content_reel_publish_attempts','INSERT')
+       AND has_table_privilege('service_role','public.content_reel_publish_attempts','UPDATE')
+       AND has_table_privilege('service_role','public.clients','UPDATE')$$);
+
+-- S3 / W5 / W6: live switch cannot be flipped outside the RPC by app roles
+SELECT set_config('content_reel.live_switch_rpc', 'on', true);
+SELECT pg_temp.expect_raise_as('service_role', 'K36 service_role with the GUC marker set still cannot flip the switch (W5)',
+  $$UPDATE public.clients SET content_reel_live_enabled = false WHERE id='c1000000-0000-0000-0000-000000000001'$$, 'live_switch_rpc_only');
+SELECT set_config('content_reel.live_switch_rpc', 'off', true);
+SELECT pg_temp.expect_raise_as('service_role', 'K37 a client cannot be inserted with the switch on (W6)',
+  $$INSERT INTO public.clients (id, name, content_reel_live_enabled) VALUES ('c1000000-0000-0000-0000-0000000000ff', 'Live insert', true)$$, 'live_switch_insert_must_be_false');
+SELECT pg_temp.expect_ok_as('service_role', 'K38 service_role can flip the switch through the RPC',
+  $$SELECT public.set_content_reel_live_enabled('c1000000-0000-0000-0000-000000000001', true, false, 'e1000000-0000-0000-0000-000000000001', 'staff@example.com', 'probe')$$);
+SELECT pg_temp.expect_true('K39 RPC flip wrote a second audit row',
+  $$SELECT count(*) = 2 FROM public.content_reel_live_switch_events WHERE client_id='c1000000-0000-0000-0000-000000000001'$$);
+
 -- ── J. Privileges and function config ───────────────────────────────────────
 SELECT pg_temp.expect_true('J01 anon cannot execute any content_reel RPC',
   $$SELECT bool_and(NOT has_function_privilege('anon', p.oid, 'EXECUTE'))
@@ -415,6 +649,19 @@ SELECT pg_temp.expect_true('J06 every policy on the new tables is TO service_rol
 SELECT pg_temp.expect_true('J07 partial unique index covers exactly the four active states',
   $$SELECT pg_get_indexdef('public.content_reel_publish_attempts_one_active'::regclass) LIKE '%authorized%claimed%uploading%in_doubt%'
        AND pg_get_indexdef('public.content_reel_publish_attempts_one_active'::regclass) NOT LIKE '%published%'$$);
+
+-- ── K-end. Card reset must not happen while another attempt is still in flight ──
+-- The partial unique index normally makes this state unreachable; it is dropped here
+-- (inside the probe transaction, rolled back) to prove the NOT EXISTS guard on its own.
+DROP INDEX public.content_reel_publish_attempts_one_active;
+SELECT pg_temp.post_copy(9, '2');
+SELECT pg_temp.k_auth(9, '2');
+INSERT INTO public.content_reel_publish_attempts (id, client_id, content_post_id, video_copy_id, mode_requested, state, form_sha256, authorized_via, authorized_by_user_id, authorized_by_email, prepared_by, authorization_record, video_sha256, page_id)
+VALUES ('d1000000-0000-0000-0000-0000000000f9','c1000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000109','b1000000-0000-0000-0000-000000000109','live','authorized',repeat('f',64),'ui_click','e1000000-0000-0000-0000-000000000001','s@e.com','human','{}',repeat('2',64),'1616575215312482');
+SELECT pg_temp.expect_ok('K40 cancel one of two in-flight attempts',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['authorized'], 'cancelled', '{}')$$, pg_temp.k_id(9)));
+SELECT pg_temp.expect_true('K41 card stays scheduled while another attempt is still in flight',
+  $$SELECT status='scheduled' FROM public.content_posts WHERE id='a1000000-0000-0000-0000-000000000109'$$);
 
 -- ── Report ──────────────────────────────────────────────────────────────────
 \o
