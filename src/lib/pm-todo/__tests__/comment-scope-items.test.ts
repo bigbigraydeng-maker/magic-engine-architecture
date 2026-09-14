@@ -61,6 +61,50 @@ describe('buildCommentScopeTodo', () => {
     expect(buildCommentScopeTodo(result())).toBeNull()
   })
 
+  it('🔴 这一轮没扫完要报 —— 带上原话，how 指向客户设置页的检查按钮', () => {
+    const t = buildCommentScopeTodo(
+      result({
+        ok: false,
+        scan_error: 'published_posts 1616575215312482: 500 code=1 Please reduce the amount of data',
+        error: 'comment scan incomplete: published_posts 1616575215312482: 500 code=1',
+      }),
+    )!
+    expect(t.kind).toBe('comment_scan_failed')
+    expect(t.what).toContain('没扫完')
+    expect(t.what).toContain('code=1')
+    expect(t.how).toContain('检查 Meta 权限')
+    expect(t.href).toBe('https://app.magicengine.com.au/dashboard/clients/cts/settings')
+  })
+
+  it('没令牌这类没有 scan_error 的失败，也用 error 原话报出来', () => {
+    const t = buildCommentScopeTodo({ client_id: 'cts', ok: false, error: 'no Meta token configured' })!
+    expect(t.kind).toBe('comment_scan_failed')
+    expect(t.what).toContain('no Meta token configured')
+  })
+
+  it('🔴 没扫完时不再报缺读权限 —— 数是残缺的，先把扫描修好', () => {
+    const t = buildCommentScopeTodo(result({ ok: false, error: 'x', permission_denied_count: 5, engagement_scope_missing: true }))!
+    expect(t.kind).toBe('comment_scan_failed')
+  })
+
+  it('🔴 缺回评论权限要报：说清自动回复已暂停、几条在等人回、审核这步找开发', () => {
+    const t = buildCommentScopeTodo(result({ ok: true, engagement_scope_missing: true, new_comments: 4 }))!
+    expect(t.kind).toBe('comment_engagement_scope_missing')
+    expect(t.what).toContain('自动回复已经暂停')
+    expect(t.what).toContain('pages_manage_engagement')
+    expect(t.what).toContain('4 条新评论在等回复')
+    expect(t.how).toContain('勾上 pages_manage_engagement')
+    expect(t.how).toContain('应用审核')
+    expect(t.href).toBe('https://developers.facebook.com/tools/explorer/')
+  })
+
+  it('两个权限都缺时合成一条待办，一次授权两项都勾上', () => {
+    const t = buildCommentScopeTodo(result({ permission_denied_count: 2, engagement_scope_missing: true }))!
+    expect(t.kind).toBe('comment_scope_missing')
+    expect(t.how).toContain('勾上 pages_read_user_content、pages_manage_engagement')
+    expect(t.what).toContain('另外，评论自动回复已经暂停')
+  })
+
   it('缺 posts_scanned 时也说得出话（只是不带分母）', () => {
     const t = buildCommentScopeTodo({ client_id: 'cts', permission_denied_count: 3 })!
     expect(t.what).toContain('3 个帖子')

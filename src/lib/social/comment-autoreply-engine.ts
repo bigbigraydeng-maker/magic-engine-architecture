@@ -19,7 +19,8 @@
 
 import { supabaseAdmin } from '@/lib/supabase'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
-import { getPageAccessToken, fetchPagePosts, fetchPageReels } from '@/lib/meta/page-posts'
+import { getPageAccessToken, listPageObjectIds } from '@/lib/meta/page-posts'
+import { listGrantedScopes } from '@/lib/meta-oauth/client'
 import { fetchAdStoryIds } from '@/lib/meta/ads-posts'
 import { fetchPostCommentsResult, replyToComment, sendPrivateReply, hideComment, PageComment } from '@/lib/meta/comments'
 import {
@@ -74,7 +75,24 @@ export interface ClientRunResult {
   permission_denied_sample?: string[]
   /** Set when the token itself was rejected — the scan stops, nothing else works. */
   token_invalid?: string
+  /**
+   * Why this run did not see the whole Page (post / Reel list failed, or the
+   * granted-permission check could not be read). Always paired with ok=false:
+   * a partial scan must never read as a healthy run.
+   */
+  scan_error?: string
+  /**
+   * The token lacks pages_manage_engagement, so public replies and hiding
+   * cannot work. Nothing was sent this run; comments stay unclaimed so they
+   * are handled once the permission is granted.
+   */
+  engagement_scope_missing?: boolean
 }
+
+/** Newest posts / Reels scanned per run, per edge. */
+const MAX_OBJECTS_PER_EDGE = 100
+/** Meta permission required to reply publicly to, or hide, a Page comment. */
+export const ENGAGEMENT_SCOPE = 'pages_manage_engagement'
 
 /** Max send attempts before a 'failed' row stops being retried. */
 export const MAX_ATTEMPTS = 3
@@ -84,6 +102,18 @@ const TERMINAL_OR_INFLIGHT = ['processing', 'replied', 'dm_sent', 'hidden', 'ski
 /** Global kill switch — set SOCIAL_COMMENT_AUTOREPLY_KILL=1 in env to stop all runs. */
 export function isKilled(): boolean {
   return process.env.SOCIAL_COMMENT_AUTOREPLY_KILL === '1'
+}
+
+/**
+ * Run-level error text for cron_run_logs, or undefined when every client ran
+ * clean. Setting it is what makes the run `failed` for cron health — per-client
+ * `ok:false` buried in the summary is invisible there.
+ */
+export function describeFailedClients(results: ClientRunResult[]): string | undefined {
+  const failed = results.filter(r => !r.ok)
+  if (failed.length === 0) return undefined
+  const detail = failed.map(r => `${r.client_id}: ${r.error ?? 'unknown'}`).join(' ; ')
+  return `${failed.length}/${results.length} clients failed — ${detail}`.slice(0, 1000)
 }
 
 /** Process one client's recent comments end-to-end. Never throws — returns a result. */
@@ -101,31 +131,9 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
     const ctxBase = await loadClientContext(clientId)
 
     // lookback_days bounds COMMENT freshness, NOT post age — an evergreen post
-    // from months ago that still gets fresh comments must be handled. Scan the
-    // page's recent posts (up to 100) regardless of when they were published,
-    // then reply only to comments newer than the cutoff.
+    // from months ago that still gets fresh comments must be handled.
     const cutoff = Date.now() - config.lookback_days * 86_400_000
-    // Scan recent feed posts + Reels (whose comments live on the video object,
-    // not the /published_posts representation) + any pinned evergreen posts.
-    const [recent, reels] = await Promise.all([
-      fetchPagePosts(config.fb_page_id, pageToken, 100),
-      fetchPageReels(config.fb_page_id, pageToken, 100),
-    ])
-    // 🔴 用 fullId（`<page_id>_<post_id>`），不是拆过的 postId。
-    //    /comments 边上给裸 id，Graph 会把它当成老式 singular status 对象，
-    //    直接回 #12「该端点自 v2.4 起已下线」—— 2026-08-15 生产日志里那批
-    //    每半小时重复一次的 400 就是这么来的。Reels 的 fullId 就是视频 id，
-    //    两边可以一视同仁。
-    const postIds = new Set([...recent.map(p => p.fullId), ...reels.map(r => r.fullId)])
-    for (const pid of config.pinned_post_ids ?? []) if (pid) postIds.add(pid)
-    // Boosted posts/Reels carry paid-delivery comments on the ad's story object,
-    // which the organic endpoints undercount. Pull those story ids via the Ads API.
-    if (ctxBase.adAccountId) {
-      const storyIds = await fetchAdStoryIds(ctxBase.adAccountId, userToken).catch(() => [])
-      // 广告账户里会混进**别人主页**的素材（老广告、合作方主页）。用本主页的
-      // token 去读它们，Meta 一律回 #10 —— 那不是我们缺权限，是根本不该问。
-      for (const sid of storyIds) if (belongsToPage(sid, config.fb_page_id)) postIds.add(sid)
-    }
+    const { postIds, listErrors } = await collectPostIds(config, pageToken, userToken, ctxBase.adAccountId)
 
     const now = new Date()
     const skips = new Map<string, PostSkip>()
@@ -165,8 +173,17 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
 
     const candidates = (await filterProcessable(comments)).slice(0, config.max_replies_per_run)
 
+    // 🔴 Fail closed on the send permission. Without pages_manage_engagement
+    //    every public reply / hide is refused by Meta (2026-09-15: no production
+    //    token has it), and the old path still claimed each comment and marked
+    //    it failed or skipped — so nobody saw the real cause and those comments
+    //    were never revisited. Now: send nothing, claim nothing, raise a to-do.
+    const granted = await listGrantedScopes(userToken)
+    const canEngage = granted?.includes(ENGAGEMENT_SCOPE) ?? false
+    const scanErrors = granted === null ? [...listErrors, 'could not read granted permissions (/me/permissions)'] : listErrors
+
     const tally = { public_replies: 0, private_replies: 0, hidden: 0, needs_human: 0, failed: 0 }
-    for (const comment of candidates) {
+    for (const comment of canEngage ? candidates : []) {
       const claim = await claimComment(comment, config)
       if (!claim) continue // another run/pass owns it, or not retryable
       const outcome = await processClaimedComment(comment, claim, config, ctxBase, pageToken)
@@ -177,11 +194,12 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
       tally.failed += outcome.failed ? 1 : 0
     }
 
+    const scanError = scanErrors.length > 0 ? scanErrors.join(' | ') : undefined
     return {
       client_id: clientId,
-      // 令牌被拒时这一轮并没有真的跑完 —— 记成 ok 就是那种「报告一切正常、
-      // 其实什么都没读到」的静默失败
-      ok: !tokenInvalid,
+      // 令牌被拒 / 帖子列表没读全时这一轮并没有真的跑完 —— 记成 ok 就是那种
+      // 「报告一切正常、其实什么都没读到」的静默失败
+      ok: !tokenInvalid && !scanError,
       page_id: config.fb_page_id,
       posts_scanned: postIds.size,
       posts_skipped: scan.skipped,
@@ -190,11 +208,49 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
       permission_denied_sample: scan.permissionDenied.slice(0, 5),
       new_comments: candidates.length,
       ...tally,
+      ...(granted !== null && !canEngage ? { engagement_scope_missing: true } : {}),
+      ...(scanError ? { scan_error: scanError, error: `comment scan incomplete: ${scanError}` } : {}),
       ...(tokenInvalid ? { token_invalid: tokenInvalid, error: `Meta token rejected: ${tokenInvalid}` } : {}),
     }
   } catch (err) {
     return { client_id: clientId, ok: false, error: err instanceof Error ? err.message : 'unknown' }
   }
+}
+
+/**
+ * Which posts to read comments from: recent feed posts + Reels (whose comments
+ * live on the video object, not the /published_posts representation) + pinned
+ * evergreen posts + boosted story ids from the ad account.
+ *
+ * A list that fails part-way still returns what it got — the caller replies on
+ * those and reports the scan as incomplete via `listErrors`.
+ */
+async function collectPostIds(
+  config: CommentConfig,
+  pageToken: string,
+  userToken: string,
+  adAccountId: string | null,
+): Promise<{ postIds: Set<string>; listErrors: string[] }> {
+  const list = (edge: 'published_posts' | 'video_reels') =>
+    listPageObjectIds({ pageId: config.fb_page_id, pageAccessToken: pageToken, edge, maxItems: MAX_OBJECTS_PER_EDGE })
+  const [posts, reels] = await Promise.all([list('published_posts'), list('video_reels')])
+  // 🔴 用 fullId（`<page_id>_<post_id>`），不是拆过的 postId。
+  //    /comments 边上给裸 id，Graph 会把它当成老式 singular status 对象，
+  //    直接回 #12「该端点自 v2.4 起已下线」—— 2026-08-15 生产日志里那批
+  //    每半小时重复一次的 400 就是这么来的。/published_posts 返回的 id 本来就是
+  //    fullId；Reels 的 id 就是视频 id，两边可以一视同仁。
+  const postIds = new Set([...posts.ids, ...reels.ids])
+  const listErrors = [posts, reels].flatMap(r => (r.ok ? [] : [r.error]))
+  for (const pid of config.pinned_post_ids ?? []) if (pid) postIds.add(pid)
+  // Boosted posts/Reels carry paid-delivery comments on the ad's story object,
+  // which the organic endpoints undercount. Pull those story ids via the Ads API.
+  if (adAccountId) {
+    const storyIds = await fetchAdStoryIds(adAccountId, userToken).catch(() => [])
+    // 广告账户里会混进**别人主页**的素材（老广告、合作方主页）。用本主页的
+    // token 去读它们，Meta 一律回 #10 —— 那不是我们缺权限，是根本不该问。
+    for (const sid of storyIds) if (belongsToPage(sid, config.fb_page_id)) postIds.add(sid)
+  }
+  return { postIds, listErrors }
 }
 
 /**
