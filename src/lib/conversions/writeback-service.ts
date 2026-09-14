@@ -24,6 +24,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+import { actionSourceForSourceKind, type SourceKind } from './intake'
 import type {
   ClientSendConfig,
   DestinationWriter,
@@ -77,6 +78,8 @@ type OutcomeRow = {
   occurred_at: string
   review_status: string
   redacted_at: string | null
+  page_scoped_user_id: string | null
+  source_kind: SourceKind
 }
 
 function toOutcomeForSend(row: OutcomeRow): OutcomeForSend {
@@ -93,6 +96,8 @@ function toOutcomeForSend(row: OutcomeRow): OutcomeForSend {
     amountMinor: row.amount_minor,
     currency: row.currency,
     occurredAt: row.occurred_at,
+    pageScopedUserId: row.page_scoped_user_id,
+    actionSource: actionSourceForSourceKind(row.source_kind),
   }
 }
 
@@ -124,7 +129,7 @@ export async function sendApprovedOutcome(
     .select(
       'id, client_id, contact_id, outcome_kind, customer_email, customer_phone, ' +
         'customer_first, customer_last, order_ref, amount_minor, currency, ' +
-        'occurred_at, review_status, redacted_at',
+        'occurred_at, review_status, redacted_at, page_scoped_user_id, source_kind',
     )
     .eq('id', outcomeId)
     .maybeSingle()
@@ -187,7 +192,7 @@ export async function sendApprovedOutcome(
   // ── 3. 读客户配置 ──────────────────────────────────────────────────
   const { data: clientData, error: clientErr } = await supabase
     .from('clients')
-    .select('id, default_phone_country, conversion_stage')
+    .select('id, default_phone_country, conversion_stage, facebook_page_id')
     .eq('id', outcome.client_id)
     .maybeSingle()
 
@@ -197,10 +202,12 @@ export async function sendApprovedOutcome(
   const client = clientData as {
     default_phone_country: string | null
     conversion_stage: string | null
+    facebook_page_id: string | null
   }
   const config: ClientSendConfig = {
     clientId: outcome.client_id,
     defaultPhoneCountry: client.default_phone_country,
+    facebookPageId: client.facebook_page_id,
   }
 
   // ── 4. 抢发送记录（数据库唯一约束是第一道闸）────────────────────────

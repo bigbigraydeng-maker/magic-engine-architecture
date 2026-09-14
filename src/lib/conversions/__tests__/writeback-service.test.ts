@@ -138,6 +138,7 @@ function seed(
     id: CLIENT,
     default_phone_country: '64',
     conversion_stage: 'live',
+    facebook_page_id: null,
     ...over.client,
   })
   db.tables.me_sale_outcomes.push({
@@ -155,6 +156,8 @@ function seed(
     occurred_at: new Date(Date.now() - 2 * 86_400_000).toISOString(),
     review_status: 'approved',
     redacted_at: null,
+    page_scoped_user_id: null,
+    source_kind: 'manual_seed',
     ...over.outcome,
   })
   if (over.contact) db.tables.contacts.push(over.contact)
@@ -417,6 +420,43 @@ describe('不该发的都不发', () => {
     expect(w.sendSpy).not.toHaveBeenCalled()
     expect(r.status).toBe('failed_permanent')
     expect(r.message).toContain('JPY')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+describe('Facebook 私信身份（PSID）匹配键 —— NAL 数据源', () => {
+  it('DB 里的 page_scoped_user_id / facebook_page_id 原样递给 writer.build()，actionSource 按 source_kind 算', async () => {
+    seed(db, {
+      client: { facebook_page_id: '1177479655430100' },
+      outcome: {
+        contact_id: 'ct-1',
+        customer_email: null,
+        customer_phone: null,
+        page_scoped_user_id: '28681838868174032',
+        source_kind: 'messenger_conversation',
+      },
+      contact: { id: 'ct-1', do_not_contact: false },
+    })
+    const buildSpy = vi.fn().mockReturnValue({ data: [] })
+    const w = makeWriter({ build: buildSpy })
+    await sendApprovedOutcome(OUTCOME, deps(db, w))
+
+    expect(buildSpy).toHaveBeenCalledTimes(1)
+    const [outcomeArg, configArg] = buildSpy.mock.calls[0]
+    expect(outcomeArg.pageScopedUserId).toBe('28681838868174032')
+    expect(outcomeArg.actionSource).toBe('business_messaging')
+    expect(configArg.facebookPageId).toBe('1177479655430100')
+  })
+
+  it('CTS 这类走邮箱/电话的记录，actionSource 仍是 email，PSID 恒为 null', async () => {
+    seed(db) // 默认 source_kind: 'manual_seed'，走邮箱
+    const buildSpy = vi.fn().mockReturnValue({ data: [] })
+    const w = makeWriter({ build: buildSpy })
+    await sendApprovedOutcome(OUTCOME, deps(db, w))
+
+    const [outcomeArg] = buildSpy.mock.calls[0]
+    expect(outcomeArg.actionSource).toBe('email')
+    expect(outcomeArg.pageScopedUserId).toBeNull()
   })
 })
 
