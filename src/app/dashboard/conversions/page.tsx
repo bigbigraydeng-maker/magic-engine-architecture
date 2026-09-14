@@ -47,7 +47,15 @@ type Outcome = {
   created_at: string
   /** contact_id 本身不是 PII（一个内部 UUID），用来跳转去客户管理页看这个人是谁。 */
   contact_id: string | null
+  /** 存的是规范化过的小写形式（给 Meta 哈希用），显示前要转成首字母大写。 */
+  customer_first: string | null
   me_conversion_writebacks?: Writeback[]
+}
+
+/** customer_first 存库时全小写（给 Meta 哈希用），这里只管显示好看，不改数据。 */
+function displayName(name: string | null): string | null {
+  if (!name) return null
+  return name.replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 /** 这条记录当前的发送状态（一个事实目前只发一个平台，取第一条即可）。 */
@@ -412,6 +420,12 @@ export default function ConversionsPage() {
     setAudienceLoading(false)
   }, [clientId])
 
+  // PM 反馈：要点一下"先看人数"才有东西看，多余的一步——名单统计是只读查询，
+  // 跟主列表一样，客户 ID 一到手就该自动跑，不用等人点。按钮留着当"重新统计"用。
+  useEffect(() => {
+    void checkAudience()
+  }, [checkAudience])
+
   const summary = useMemo(() => {
     const purchases = rows.filter((r) => r.outcome_kind !== 'lead' && r.amount_minor != null)
     const currencies = new Set(purchases.map((r) => r.currency))
@@ -459,7 +473,7 @@ export default function ConversionsPage() {
           disabled={!clientId || audienceLoading}
           className={`mt-3 ${btnNeutral()} disabled:cursor-not-allowed disabled:opacity-50`}
         >
-          {audienceLoading ? '统计中…' : '① 先看人数'}
+          {audienceLoading ? '统计中…' : '重新统计人数'}
         </button>
 
         {(['fbleads'] as const).map((source) => {
@@ -591,7 +605,10 @@ export default function ConversionsPage() {
             >
               <div className="flex justify-between gap-3">
                 <div>
-                  <div className="text-[15px] font-semibold text-me-charcoal">
+                  {displayName(o.customer_first) && (
+                    <div className="text-base font-bold text-me-charcoal">{displayName(o.customer_first)}</div>
+                  )}
+                  <div className={`text-[15px] font-semibold ${displayName(o.customer_first) ? 'mt-0.5 text-me-charcoal/70' : 'text-me-charcoal'}`}>
                     {kindLabel(o.outcome_kind)}
                     {o.outcome_kind !== 'lead' && <span className="tabular-nums"> · {money(o)}</span>}
                     {o.order_ref && <span className="font-normal text-me-charcoal/50"> · 单号 {o.order_ref}</span>}
