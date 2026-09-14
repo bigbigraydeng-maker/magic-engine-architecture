@@ -53,7 +53,14 @@
 
 - [x] 客户方那一半（把资产 Partner-share 给 Magic Engine）已有自助页面 `src/app/authorisation/page.tsx`，文案和步骤已经和 SOP 对齐（`META_BUSINESS_ID` 常量一致）
 - [ ] ME 操作侧那一半（确认资产到账 → 建员工系统用户 → 分配资产 → 生成令牌 → 令牌写进 Render → 广告户写进 `clients.meta_ad_account_id`）目前全靠 SOP 文档人工按步骤点，还没有任何后台 UI/脚本辅助——评估要不要做成一个"新客户接入"向导页（读 `client_meta_ad_accounts` + `clients.meta_ad_account_id` 状态，缺哪步提示哪步），或者至少先把「客户已共享资产但 ME 还没确认」这个等待态接进 `src/lib/pm-todo/client-doc-manual-tasks.ts`（SOP 里已经要求这么做，但目前是"要求 ME 操作人手动记得加"，没有代码强制）
-- [ ] Magic Picks 是第一个用这条新路径接入的客户，目前只做到「客户资产已共享 + 广告户已登记 `clients.meta_ad_account_id`」，还没建专属员工系统用户/生成令牌（当前没有自动化发广告的需求，先手动在 Ads Manager 里操作即可；哪天要接 API 自动化再回头做「三～六」）
+- [x] Magic Picks 是第一个用这条新路径接入的客户；2026-09-13 完成 ME 操作侧全部步骤——但走的是**「复用共享系统用户」**这条备选路径，不是 SOP 原本设计的「专属系统用户」路径：
+  - 广告户 `act_2120170612255462` 分配给 Magic Engine 现有的共享系统用户 **MagicEngine**（Admin 权限，Facebook 用户编号 61590843864555），权限"完全访问权限"——没有新建 Magic Picks 专属系统用户，原因见下面新增的风险项
+  - 用 Magic Engine App（App ID 1752513682785923）为 MagicEngine 系统用户生成一个"永不过期"令牌，含 8 项权限（`ads_management` `ads_read` `business_management` `pages_read_engagement` `pages_show_list` `read_insights` `leads_retrieval` `pages_manage_ads`）
+  - 令牌已写入 Render crazycontent 服务的环境变量 `META_SYSTEM_USER_TOKEN_MAGICPICKS_CO_NZ`，并已触发重新部署
+  - 用 Graph API Explorer 验证过两项：`/me` 返回 MagicEngine 系统用户信息（健康检查通过）；`/act_2120170612255462/insights` 无权限报错（返回空数据是因为广告刚发布还没花费，不是权限问题）
+  - `clients` 表 Magic Picks（`client_id` = `71b5ec11-3abc-4ae8-9ea2-563219228f3a`）的 `domain` 已补成 `magicpicks.co.nz`（令牌环境变量命名规则要求），`meta_ad_account_id` 确认为 `act_2120170612255462`
+  - 这是"新客户接入 Meta 广告数据到 ME 后台"这条路径第二次实际跑通（第一次是 CTS/Oztop，走的是更早/不同的路径）
+- [ ] 🔴 新增风险点：Magic Engine 的 Meta 企业账户目前"未验证"（业务验证状态），导致给 Magic Picks 建专属系统用户时被 Meta 拦截，报错提示"名字无效"具有误导性——实际原因是企业未认证时可建的系统用户数量受限，不是命名问题。PM 拍板跳过企业认证、改走"复用共享系统用户 MagicEngine"这条路完成了 Magic Picks 接入，但只要企业账户一直不认证，**未来所有新客户都只能走这条共享路径**，做不到 SOP 原本要求的"每客户独立系统用户/令牌"隔离——需要决定是否要推进 Meta 企业验证，还是把"复用共享系统用户"正式定为默认路径并更新 SOP 文档
 
 ## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
 
