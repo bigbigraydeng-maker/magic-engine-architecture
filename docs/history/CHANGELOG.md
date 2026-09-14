@@ -5,6 +5,30 @@
 
 ---
 
+### 2026-09-15（CTS 私信客服的"AI 该说什么"校验代码改接客户知识库，替代 offerings.yaml）
+
+PR [#1638](https://github.com/bigbigraydeng-maker/magic-engine/pull/1638)（Verifier 框架 + CTS 七道校验闸）
+和 [#1639](https://github.com/bigbigraydeng-maker/magic-engine/pull/1639)（Agent 推理层 prompt 组装 + 只读工具）
+已合并。这两个 PR 此前用的是已作废的 `config/clients/cts/offerings.yaml` 团清单文件方案，PM 2026-09-13
+拍板改建客户知识库平台能力（`getClientKnowledge`，issue #1644，6 步已全部合并）后一直挂着没人接手改接——
+本次把两个 PR 从 offerings.yaml 全面改接到新的知识库读取入口。
+
+代码本身还只是"判断该不该说 / AI 能查什么"这两层的静态逻辑，不是可以直接上线的功能——真正让 CTS
+私信客服跑起来还需要 Inngest 编排、Meta webhook 接入等后续步骤（见 ROADMAP "CTS Messenger+WhatsApp
+治理式客服"节），客户目前无感知。
+
+子牙+魏征两轮独立复审，第一轮各自发现真实问题并打回：①`sensitivity` 标签打错会绕过客户确认闸门，
+未经确认的价格有可能被 AI 说出去；②"判断是否提到下架产品"的算法在 CTS 真实产品命名上会误判（两句话
+拼接、产品名字首段重叠）会把合法回复错当成提到下架团挡下来。修复后第二轮两位复审各自核实确认已解决。
+唯一非阻塞跟进项（fact_key 命名约定在写入侧无强制校验）开了 issue [#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726)（P3）跟踪。
+
+**Reuse Statement**：唯一事实源改为已有 L1 平台能力 `getClientKnowledge`，未新建事实存储；只读工具从
+"在售/下架"两个业务概念改成按 `sensitivity`（价格/时效/承诺/政策 vs 一般）分类，工具本身不含任何
+CTS/tour 词汇，换客户/行业复用不需要改代码；`tour.active.`/`tour.retired.` fact_key 命名约定和七道
+校验闸的具体判据保持 CTS 专属（L4），未下沉进共享 runtime。
+
+---
+
 ### 2026-09-15（CRM 抽屉里能直接回邮件了，Leads 营销中心 M4 部分完成）
 
 PR [#1719](https://github.com/bigbigraydeng-maker/magic-engine/pull/1719) 已合并。同一天早些时候合并的 #1716 加了"从系统里回一封邮件"这个后端能力，但当时没有任何界面调用它——CRM 抽屉里唯一的回复框（`MessengerReply.tsx`）硬编码只认私信，就算客人邮箱连上了、邮件读进来了，销售在系统里也没地方回。

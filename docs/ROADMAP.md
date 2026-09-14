@@ -172,21 +172,26 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 六处已改接 `getClientKnowledge`，`config/clients/cts/offerings.yaml` 及其加载器整条路线
 已作废（详见方案文末"§9.14 C 同步修改"章节）。
 
-**此前 Held 的 PR，依赖已解除，改接 + 两轮复审已完成（2026-09-15）**：等的是 `getClientKnowledge`
-全部 6 步真正合并完，2026-09-15 步骤 6（#1648）合并后 6 步已全部到位。改接工作完成后子牙+魏征各
-跑了两轮（第一轮各自独立发现真实问题、打回；修复后第二轮各自核实确认已解决），**两位都给
-PASS/CONDITIONAL PASS，等 PM 一句"可以合并"即可进入合并流程**：
-- [ ] #1638 Verifier 框架 + CTS policy —— 已改接 `forbiddenFactKeys`/数字核实闸设计（新定义
+**此前 Held 的 PR，依赖已解除，改接 + 两轮复审 + 合并全部完成（2026-09-15）**：等的是
+`getClientKnowledge` 全部 6 步真正合并完，2026-09-15 步骤 6（#1648）合并后 6 步已全部到位。
+改接工作完成后子牙+魏征各跑了两轮（第一轮各自独立发现真实问题、打回；修复后第二轮各自核实
+确认已解决），PM 拍板后两个 PR 均已合并到 main：
+- [x] #1638 Verifier 框架 + CTS policy —— 已改接 `forbiddenFactKeys`/数字核实闸设计（新定义
       `tour.active.<code>`/`tour.retired.<code>[.alias.<slug>]` fact_key 命名约定供 gate 2 用）。
       复审中发现并修复两个真实漏洞：① 事实标签打错一类（`sensitivity` 标成 `general`）会绕过客户
       确认闸门，AI 有可能说出没经过客户确认的价格——已加二次校验；② 判断"是不是提到了下架产品"的
       算法在 CTS 真实产品数据上会误伤合法回复（两句话拼接 / 产品名字首字重叠）——已改成按句子
       分开判断。42 条测试通过，`npm run build` 通过。子牙 CONDITIONAL PASS（条件：把"命名约定没人
-      强制遵守"这条已知风险开一个正式跟踪单——已开 [#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726)，P3，不阻塞合并）；魏征 ✅ 通过
-- [ ] #1639 agent-core prompt.ts + tools.ts —— 已改接（4 工具收敛为 3 个：
+      强制遵守"这条已知风险开一个正式跟踪单——已开 [#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726)，P3，不阻塞合并）；魏征 ✅ 通过。
+      **已合并**（merge commit `65efbfa0`）
+- [x] #1639 agent-core prompt.ts + tools.ts —— 已改接（4 工具收敛为 3 个：
       `query_customer_facing_facts`/`query_conversation_history`/`query_client_brand_facts`，按
       purpose+sensitivity 模型）。复审中发现两处文档描述跟代码实际行为对不上（不影响功能，但会
-      误导以后维护的人），已改正。158 条测试通过，`npm run build` 通过。子牙 ✅ 两项都已解决
+      误导以后维护的人），已改正。158 条测试通过，`npm run build` 通过。子牙 ✅ 两项都已解决。
+      **已合并**（merge commit `2c05d77f`）
+
+代码本身还只是静态校验/推理逻辑，**尚未上线**——CTS 私信客服真正跑起来还需要 Inngest 编排、
+Meta webhook 接入等剩余步骤（见本节下方"剩余 issue"）。
 
 **审查过程发现并已修复的关键问题**（wave-1，不是走过场，逐条真实验证）：数据库外键漏写级联
 删除；退订判断第一版设计换渠道即失效（已改用现成的 `contacts.do_not_contact` 机制）；CTS
