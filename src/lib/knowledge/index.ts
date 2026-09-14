@@ -57,3 +57,30 @@ export type {
   FactChoice,
 } from './confirmation-requests'
 export { stopAiRepliesForClient, KnowledgeKillSwitchError } from './kill-switch'
+
+// Step 6/6 (Issue #1648): rollout stage machine + dual-signature advance link.
+export {
+  consumeRolloutAdvanceRequest,
+  createRolloutAdvanceRequest,
+  getCurrentRolloutStage,
+  INITIAL_STAGE,
+  isKnowledgeLiveForCustomerReply,
+  KnowledgeRolloutError,
+  LIVE_STAGE,
+  loadRolloutAdvanceRequest,
+  meetsSampleCheckFloor,
+  rollbackKnowledgeRolloutStage,
+  ROLLOUT_ADVANCE_LINK_DEFAULT_TTL_HOURS,
+  ROLLOUT_SAMPLE_CHECK_FLOOR,
+} from './rollout'
+export type {
+  ConsumeRolloutAdvanceOutcome,
+  ConsumeRolloutAdvanceResult,
+  CreateRolloutAdvanceRequestResult,
+  KnowledgeRolloutStage,
+  RollbackResult,
+  RolloutAdvanceLinkProblem,
+  RolloutAdvanceLinkResult,
+  RolloutAdvanceLinkView,
+  RolloutSampleCheck,
+} from './rollout'
