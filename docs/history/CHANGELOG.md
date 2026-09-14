@@ -5,6 +5,117 @@
 
 ---
 
+### 2026-09-15（CRM 抽屉里能直接回邮件了，Leads 营销中心 M4 部分完成）
+
+PR [#1719](https://github.com/bigbigraydeng-maker/magic-engine/pull/1719) 已合并。同一天早些时候合并的 #1716 加了"从系统里回一封邮件"这个后端能力，但当时没有任何界面调用它——CRM 抽屉里唯一的回复框（`MessengerReply.tsx`）硬编码只认私信，就算客人邮箱连上了、邮件读进来了，销售在系统里也没地方回。
+
+排查过程中确认 ROADMAP 原来那条"私信页面靠 `channel='messenger'` 把邮件挡在外面"的说法已经过期——联系人时间线/往来记录那部分早在 PR #1038 就修成不挑渠道了，真正缺的只是回复这一个入口。把共享发送框 `ReplyBox.tsx` 从只认私信改成认 `channel: 'messenger' | 'email'` 参数（默认值仍是 `'messenger'`，不影响任何现有调用方，逐字节比对过改动前后的私信路径一致），照 `MessengerReply.tsx` 的样板加了 `EmailReply.tsx` + 对应的邮件线查询接口，两个回复框现在在抽屉里并排显示。
+
+子牙 + 魏征两轮独立复审，结论均为可合并（子牙：COMMENT，魏征：⚠️警告可跟进），留了三条不阻塞的后续优化：邮件回复框目前要点了发送才会因为"这个人没来过信"被服务端拒绝，不像私信那样能提前判断禁用；两个回复框组件之间约九成状态管理代码重复，值得抽成共享逻辑；`humanError()` 的邮件分支理论上可能把 `wrong_channel` 误报成"没有邮件往来"，但当前抽屉这条路径拿到的会话已经过渠道过滤，不会真的触发。
+
+**范围内明确没做**：没有逐一审计其他列表/看板页面还有没有类似的隐藏 messenger 硬编码，这次只补了 PR #1716 实际用得上的那一个入口。
+
+**Reuse Statement**：完全复用已验证过的发送框组件和隔离/错误映射形状，新增的是渠道参数化，不是第二套实现；`GET .../email` 路由是 `.../messenger` 路由的渠道镜像，两者结构对称，复审已确认隔离查询条件一致。平台通用改动，无客户专属逻辑。
+
+---
+
+### 2026-09-15（NAL 客户管理工作台"标已成交" → 自动写一条 Meta CAPI 成交记录）
+
+PR [#1715](https://github.com/bigbigraydeng-maker/magic-engine/pull/1715) 已合并并部署生产，配套的数据库改动（新增 `crm_stage_manual` 来源分类）已 apply。New Asian Logistics（NAL）的员工在客户管理工作台（今天新开通的临时 CRM）里把一个联系人手动推进到"已成交"档位、填上金额后，现在会直接生成一条走 Meta 广告转化 API（CAPI）回写通道的成交记录——复用今天已经跑通的同一条 `me_sale_outcomes` → 审核 → 发送通道，仍然是 dry_run 演习模式，不会真发给广告平台。只对 NAL 生效，不影响 CTS 现有的成交回传通道（表格同步）。
+
+设计过两轮子牙（架构）+ 魏征（挑刺）复审，实现完成后又过两轮实际代码复审——第一轮揪出一个真实 BLOCKER：原代码先把联系人阶段推进到"已成交"、再校验能不能生成合格的成交记录，如果这个人没有邮箱/电话/私信身份三个匹配键中的任何一个，校验会失败拒收，但阶段已经被永久改了——会出现"人被标成已成交、但一条成交记录都没有"的孤儿状态，且没人知道要去修。第一次修复把顺序换成了"先校验、通过了再推阶段"，第二轮复审又抓到同一类问题换了个触发条件重新出现（如果写库这一步本身失败，比如数据库偶发故障，阶段依然会先被推进）——最终把顺序理顺为"成交记录先真的写进数据库（或确认此前已经写过），成功了才推进阶段"，任何一步失败都不会让联系人的阶段被误改。全程 24 条自动化测试覆盖（含本次两轮复审各自新增的回归测试），构建通过。
+
+**Reuse Statement**：复用今天已上线的 `buildIntakeRow`/`me_sale_outcomes`/CAPI 回写这整条平台通道（L1），未另起一套；复用共享的联系人阶段推进逻辑（从 `crm/contacts/[cid]/stage` 路由抽成 `advanceContactStage()` 共享函数，CTS 也在用同一套阶段配置，未受影响）。新增的"根据 CRM 工作台标记已成交自动记账"这个入口是 NAL 的客户配置（L4），未写入跨客户共享逻辑；`crm_stage_manual` 这个来源分类标签是复用既有枚举扩展模式（跟 `crm_sheet_sync`/`messenger_conversation` 同一族）新增一个值，不是新表新逻辑。
+
+---
+
+### 2026-09-15（客户知识库 6 步全部合并 · 广告结果阶梯上线 CTS）
+
+PR [#1693](https://github.com/bigbigraydeng-maker/magic-engine/pull/1693) 已合并。客户知识库
+（Client Knowledge Base，L1 平台能力）6 步建设全部完成——步骤 6（issue #1648，rollout stage
++ 双签一次性确认链接）合并后，`getClientKnowledge(purpose:'customer_reply')` 补齐了最后一道
+闸：客户必须走完"ME 发起 + 客户自己确认"两次签名才算"正式上线"，上线前默认对客户不放行知识库
+事实（fail-closed）。合并前过子牙（架构）+ 魏征（挑刺）两轮独立复审：过程中发现并修复两处真
+问题——①合并冲突解决时两个既有测试的 fixture 修复一度只落在工作区没有真正提交，被复审用干净
+代码复核时抓到，重新提交并用直接读远端 commit 对象的方式验证；②另一并发会话在复审期间修了
+`consume_knowledge_rollout_advance_request` 一处真实竞态漏洞（客户点开一条已经被 ME 单方回退
+过的旧确认链接，本应拒绝却会把客户重新拉回已回退的阶段）。这一步合并后，此前被它挡住的
+Governed Reply Agent 两个 PR（#1638 verifier 框架、#1639 agent-core prompt/tools）确认跟主线
+无冲突，可以进入各自复审排期。
+
+同一会话把 CTS 接入了新上线的"广告结果阶梯"体检（issue ADS-IMPACT-P1）：留资（lead）定为主
+结果、私信开聊为领先信号、目标成本 $11/留资（按 CTS 最近 11 天真实均价 $9.78/留资定的目标线）。
+`ad_strategy_configs` 新增一行，走的是既有设置接口同款的字段/校验规则（顺序不能颠倒、成本区间
+0-100000）。
+
+**Reuse Statement**：#1693 是纯平台能力收尾，无新增独立能力线；`client_knowledge_rollout_advance_
+requests` 复用 issue #1646 已验证过的一次性签名链接安全姿态（GET 只读/POST 才消费/CSRF nonce），
+双签身份判据复用 `dual-sign.ts`，未另起第二套。CTS 结果阶梯是纯客户配置（L4），未写入 shared
+runtime；换成 Oztop/Roman 需要各自另填一行，逻辑代码不需要改。
+
+---
+
+### 2026-09-15（CRM 里能回邮件了，Leads 营销中心 M3）
+
+PR [#1716](https://github.com/bigbigraydeng-maker/magic-engine/pull/1716)（原 #1714，因单个 PR 改动超过自动修车道 800 行上限换分支重开）已合并。客户邮箱的读信同步（`mail-ingest.ts`）挂在 `messenger-sync-hourly` 里已经跑了一个多月，但从 CRM 里回一封邮件出去这件事此前完全不存在——授权时早就要过 `Mail.Send`，一直没人用。现在补上：`sendMailReply()` + `POST /api/clients/[id]/email/conversations/[conversationId]/reply`，形状照抄已上线的 Messenger 回复路由，走 Microsoft Graph 的 `createReply`+`send` 两步（不是一步到位的 `/reply`，因为后者拿不到消息 id，没法跟下一次每小时同步对上号）。
+
+三轮独立复审共抓出 6 个真会导致"发不出去"或"发错人"的问题，全部修好：① 建草稿这个动作需要 `Mail.ReadWrite` 权限，光有 `Mail.Send` 会在第一步就被拒（已扩展 `MICROSOFT_MAIL_SCOPES`）；② 客户连了不止一个邮箱时会拿错授权，改成按 `conversations.page_id` 精确匹配连接；③ 线程最后一条如果是我们自己发的，回复会把收件人变成自己、客人收不到，改成只认客人最后一次开口的那一封；④ Graph 消息 id 在草稿变已发送时会漂移，两端都加了 `Prefer: IdType="ImmutableId"`；⑤ 401 会强制刷新令牌重试一次；⑥ 那段处理"id 漂移导致重复"的兜底逻辑原本没有失效期，会永久误判同一秒内两封不同邮件为重复并静默丢弃，已加上只对切换时刻之前的历史信生效的时间闸（用变异测试验证过：临时关掉这道闸，相关测试会真的报错）。
+
+**范围内明确没做**：审计沿用 `conversation_outbound_log` 的自由文本列（`meta_message_id`/`messaging_type` 存字面量），不是给邮件另开一张 schema；没有接入 AI 自动回复（`messenger-agent/channel-dispatch.ts` 目前只认 `messenger`/`whatsapp` 两个渠道，接入邮件是 M7 的范围，需要单独设计+复审）；没有接进 `lib/messaging/channels.ts` 那套通用发送总线——那套总线目前零生产调用方，连 Messenger 自己都没注册进去，往上加只会多一层没人用的架子。
+
+**待办（不卡这次上线，但影响能不能真用）**：`Mail.ReadWrite` 是新申请的权限，CTS 现有邮箱连接刷新令牌时换不来一个从没同意过的权限，需要重新走一次登录同意才能用上这个新功能（读信本身不受影响，且 CTS 从没用过回信这个功能，不算回退）；本轮选定的首个真实测试客户 NAL 尚未连接邮箱（`platform_oauth_connections` 里还没有它的 `microsoft_mail` 记录），这个功能目前只有 145 个自动化测试验证过，还没有真实邮箱跑通过一次。
+
+**Reuse Statement**：完全复用既有平台能力——`conversations`/`conversation_messages`/`contact_touchpoints` 三张表、`platform_oauth_connections` + `token-manager` 的令牌管理、Messenger 回复路由已经验证过的隔离/错误映射形状。新增的发送半边（`mail-send.ts` + 路由）是平台通用能力，不含任何客户专属逻辑，NAL/CTS 用的是同一份代码。唯一的平台层改动是 `MICROSOFT_MAIL_SCOPES` 扩展一个权限，影响所有走这条授权的客户（目前只有 CTS），已在 PR 里说明其对现有连接的影响面。
+
+---
+
+### 2026-09-15（NAL 私信 → Meta CAPI 有效咨询同步，dry_run）
+
+PR [#1675](https://github.com/bigbigraydeng-maker/magic-engine/pull/1675)、[#1684](https://github.com/bigbigraydeng-maker/magic-engine/pull/1684)、[#1689](https://github.com/bigbigraydeng-maker/magic-engine/pull/1689) 已合并并部署生产，migration 已 apply。New Asian Logistics（NAL，跨境集运物流代理）的 Facebook Messenger 私信对话现在能被自动判定为"有效咨询"并写入 `me_sale_outcomes`，复用 CTS 那条线已上线的 Meta 广告转化 API（CAPI）回写通道。判据用 21 个真实对话人工标注 + 模拟跑规则验证过（0 假阳性，约 69% 召回）；生产库真实跑通：186 段对话，判出 20 条有效咨询全部正确写入 `pending_review`，重跑确认幂等键生效。
+
+顺带修了一个跟 NAL 无关、影响 CTS 现有真实发送的漏洞：发送前的拒联检查原来只查 `contacts.do_not_contact` 一列，客人刚说"别再联系我"、这一列还没来得及被人工确认更新的窗口期内可能仍会发送，改成跟受众导出/今日名单同一套真相源（`contact_touchpoints`）判断。
+
+`me_sale_outcomes` 扩展支持 Facebook 私信身份（page-scoped user id）当第三种客户匹配键（原来只认邮箱/电话，NAL 182 个联系人几乎全无），已过 Meta 官方文档核实、两轮子牙+魏征设计评审 + 每次实现完再复审实际代码。客人要求删除个人信息的接口/约束同步扩展覆盖新字段。
+
+**范围内明确没做**：本轮不做"已成交"判定（NAL 184 个联系人的 CRM 阶段字段全空、集运报价无团价表可查金额，拼不出合法记录）；不接 WhatsApp（NAL 现有对话 100% 是 Messenger 渠道）；不接 cron/Inngest（人工手动触发 `POST /api/admin/conversions/nal-messenger-sync`）；不切换到真发送（`conversion_stage` 仍是 `dry_run`）。
+
+**Reuse Statement**：完整复用既有共享能力（CAPI 回写通道 `writeback-service.ts`/`me_sale_outcomes`/审核 UI、`qualified-buyer.ts` 抽出的否定窗口检测现独立成 `src/lib/crm/negation.ts` 共享模块）。NAL 专属的判断规则（关键词表、批次边界启发式）封在 `nal-messenger-lead-classify.ts` 一个文件里，按 `docs/registry/platform-candidates.md` 已登记的 L4 客户专属实现路线，未下沉进 shared runtime。`page_scoped_user_id`/`action_source` 是本次新增的跨客户共享字段/契约扩展（CTS 现有记录不受影响，行为原样不变）。
+
+---
+
+### 2026-09-14（CTS 行程路线地图 8 团上线 + ME 旅游版立版 + Tour 管理模块规划）
+
+PM 从「给 CTS 也做一张 Golden China 那样的路线图」起步，最终沉淀成 ME 旅游版的第一个共享能力候选 + 一条产品线立版。
+
+1. **8 个 CTS 在售团的「行程路线地图」上线正式站**（`chinatravel` 仓 `ctstours.co.nz`，PR #184/#185）：Golden China + 双城记 / 上海周边 / Best of China / 丝路 / 27 天全景 / 圣诞团（奥克兰 + 基督城）。每张按各团**真实行程**（城市顺序 / 每城住几晚 / 交通方式 / 活动，全部取自官网行程数据或 `tours.ts`，未编造）自动生成，PC 宽版 + 手机竖版随屏切换，挂在各团行程页「Itinerary」标签顶部。地图用真实中国边界数据（非手画）、台湾按中国惯例标注、CTS 品牌 + logo、无价格无固定出发日期（通用图）。
+2. **统一为 Golden China 风格**（PM 复审后返工）：卡片按到达顺序排（第一站在最上、国际进出/中转城市排到它实际停留的最后位置）、城市名紧贴圆点无引导线、城市铺开、箭头顺行程走，一眼读出第 1 站→第 2 站。
+3. **ME 旅游版正式立版**（PM 2026-09-14 拍板，`docs/registry/product-versions.md`）：Customer Zero = CTS；首个 L2 能力候选 = 行程转路线地图生成器（`candidate · 1/2`，未晋升共享能力）。
+4. **ME Tour 管理模块规划成文**（`docs/specs/2026-09-14-me-tour-management-module-plan.md`，未授权实施）：一个团推广前统一备好内容/定价/行程/地图；经 Codex 复审修正为「连接现有事实源（`offerings.yaml`/`FirstPartyTour`）+ 最小营销快照」，遵守 `ME_PRODUCT_DEFINITION.md` §3.2/§3.3——**ME 不自建旅游库存/报价系统**。生成器原型存进受跟踪路径 `docs/specs/prototypes/tour-route-map/`。
+
+**Reuse Statement**：地图生成器逻辑不含写死的客户名/城市/价格（全来自输入 specs）；但视觉资产（CTS 品牌色/logo、中国底图、台湾标注）当前**硬编码**，故严格范围 = 「中国线路 · CTS 首例」，未取得旅游版共享资格。产品化前置：品牌/底图/地理规则参数化 + 团事实走 Connector。晋升门槛 = 第 2 个旅游客户事实复制（L2，非 L1 跨行业）。
+
+---
+
+### 2026-09-13（Park Homes：Forrest Hill 效果图上线）
+
+PR [#1609](https://github.com/bigbigraydeng-maker/magic-engine/pull/1609) 已合并并部署生产。客户邮件发来的 4 张 Forrest Hill 楼盘效果图（artist's impression）已接入官网 `parkhomes.nz/forrest-hill` 项目页图集，"Register Interest" 询盘表单同页可用。生产验证：网页实际打开确认 4 张图全部正常加载、无 404/占位图。
+
+**Reuse Statement**：纯客户私有素材（Park Homes 自己的楼盘渲染图）接入既有 Park Homes 官网项目页模板，无新增平台能力，不涉及 shared runtime 改动。
+
+---
+
+### 2026-09-13（视频工厂：资料包自助管理界面 + 视频归属选择 + CTS 真实 7 团接入）
+
+同一天会话继续：PM 追问"这个能力在 Magic Engine 里是不是真的做完了"，倒逼出两块此前一直靠工程手改数据库的界面。
+
+1. **资料包管理界面**（客户设置页 → 内容 tab → 视频工厂配置）：FDE/PM 现在能自己增删"团/档位"及其真实字段（团名/路线/价格/出发日期，或任何客户/行业需要的字段），不用再找工程改 JSON。顺手修复一个真实存在的老 bug：Settings 页的保存接口（`mergeFactoryConfig`）此前完全没有回写 `offers`/`post_field_sources`/`static_overrides`/`required_post_fields` 这四个字段——新界面加了也会保存到空气里，现已修正为"没带就沿用、带 null 就清空、带合法值就覆盖"的正确合并语义。
+2. **视频归属选择框**（内容工厂看板"确认做"这一步）：客户配了 ≥2 个资料包时，必须先选这条视频对应哪个团才能确认，选不了就直接拦下，不让系统瞎猜——这条红线延续自 PR #1632 的设计。
+3. **对抗性复审抓出并修复两个真洞**：①`offer_key` 写入前此前不校验是否真的存在于客户当前配置里，选错/选到刚被删掉的档位，视频会先"确认成功"、几十秒后才在 Inngest 渲染任务里默默失败——已改成确认这一刻同步查库校验，不存在直接 400 拦下（顺带把这次查询和后面判断出片引擎的查询合并成一次，没多打库）。②资料包表单里如果手滑建了两个同名档位，后一个会静默覆盖前一个、保存显示成功但内容悄悄丢了——已改成检测到重复直接报错挡住保存。
+4. **CTS 真实 7 个在售团接入**：没有凭空编数据——发现另一个并行会话已经为"私信自动回复"功能做过一遍"CTS 现在卖哪些团"的真实调研（`config/clients/cts/offerings.yaml`，PM 已核实），直接复用这份数据导入视频工厂的资料包配置（Golden China / 圣诞团奥克兰+基督城两个出发城市 / Best of China / 丝路 / 双城记 / 上海周边），没有重新造一遍轮子。在生产环境用真实数据完整跑通一次闭环：看板选团 → 系统核对团存在 → 自动填对片尾信息（团名/路线/价格/日期）→ Creatomate 渲染成功。
+5. **顺带记录一个待还的技术债**：CTS 现在有两套"卖哪些团"的真实数据（视频工厂一套、私信回复 Agent 一套），语义重叠，以后团有变动要改两个地方——记入 ROADMAP，不在这轮解决。
+
+**Reuse Statement**：两块新界面都是共享连接器/看板代码的自然扩展（跟 `staticOverrides`/`requiredPostFields` 同级别的字段，不是 CTS 专属新能力），换客户/换行业都不用改代码，只是配置的资料包内容不同。CTS 的 7 团真实事实是客户私有数据，来自另一个已完成的调研工作，本轮只做了导入和格式转换，没有重新研究或编造。
+
 ### 2026-09-13（视频工厂：字幕不再写死 + 片尾信息真正自动化 + 模板风格探索）
 
 同一天会话继续：PM 反馈"看不出 CTS 视频区别、NAL 视频就是发过的那条"，追问"视频里的文字该由 AI 统一想清楚存起来，不该 Creatomate 自己每次现设计"，推动了两处真正的架构修复。
@@ -115,6 +226,18 @@ PR #1500 已上线；用户明确批准生产数据库更新后应用 6 张隔�
 实际验收：生产 run `e7b5e805-e56f-45b5-9814-7ca9708f1f00` 经后台提交完成，Apify `X60junDpOkJqCAOig` SUCCEEDED，快照 `efb3fd1d-5cab-4b01-9acd-fcdec05ef3f6` 含 19,393 字符，基准跳过模型。供应商 US$0.0009246626，含间接成本记账 NZ$0.0215774744。启用暴露的既有客户 GUID / Actor 必需代理兼容问题已通过最小补丁 #1506/#1507 修复；后者 88 项相关测试、lint、远端构建及双人复审通过。
 
 真实变化的模型建议仍待独立回执。复用边界：共享 adapter / evidence / budget / workflow；CTS ID、网址、市场语境仅配置，无客户语义写入共享运行时代码，无行业/全局学习晋升。详细记录见 [rollout receipt](../specs/2026-09-09-web-intelligence-v01.md)。
+
+### 2026-09-08（Park Homes：网站搭了一条自动上线的通道，以前每次改动都要人手动推）
+
+PR [#1501](https://github.com/bigbigraydeng-maker/magic-engine/pull/1501) 已合并并实测跑通。发现 `parkhomes-site` 这个 Cloudflare Pages 项目从建站起就没接过任何自动部署——每次改动都是靠人手动在本机敲命令推上线，合并代码本身完全不会让网站更新。新增一条自动化：以后代码一合并到 `main` 且改动了 Park Homes 网站目录，会自动打包、自动推上线，不用再手动操作。用来推送的这把钥匙权限锁到最小（只能碰这一个网站的部署，碰不了这个账号下任何别的东西）。已实测：手动触发过一次，确认真的能从零到上线全程自动跑完。
+
+**Reuse Statement**：纯 Park Homes 专属的部署管线搭建（该网站独立托管在 Cloudflare Pages），不涉及平台共享代码，换客户不影响。
+
+### 2026-09-08（Park Homes：修复 Google 收录被拆成两份的问题）
+
+PR [#1496](https://github.com/bigbigraydeng-maker/magic-engine/pull/1496) 已合并并部署生产。排查网站数据时发现 `www.parkhomes.nz` 和 `parkhomes.nz` 两个网址一直没有互相跳转，导致 Google 把同一个网页当成两个不同页面分别计数，搜索数据被拆散。已在 Cloudflare 加了跳转规则把 www 版本统一跳到不带 www 的正式版本；顺手把一个查无来源的历史死链接也改成跳转到项目列表页，不再是 404。生产实测：两条跳转都返回正确的 301，网站首页、各项目页确认没有被误改。
+
+**Reuse Statement**：纯 Park Homes 网站配置修复（该客户独立域名/独立 Cloudflare 账号），不涉及平台共享代码。
 
 ### 2026-09-08（修复：Meta 广告「结果数」把表单和私信同一个人算两次）
 

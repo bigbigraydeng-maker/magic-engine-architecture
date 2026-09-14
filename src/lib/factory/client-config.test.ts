@@ -403,6 +403,97 @@ describe('render — 子对象合并，不整体替换（子牙复审 B5：voice
     expect((r.config.render as { engine: string }).engine).toBe('creatomate')
   })
 
+  // 2026-09-13 修复：static_overrides/required_post_fields/offers/post_field_sources
+  // 此前在这段合并逻辑里完全没接（复审 ad68ebde 发现——资料包管理 UI 加了也白加，
+  // 保存路径根本不认这几个字段，见 client-config.ts 365-408 行附近注释）。
+  it('PATCH 带全部四个新字段 → 全部原样存下（跟 template_id/scene_field_map 同一次写入）', () => {
+    const r = mergeFactoryConfig({}, {
+      render: {
+        engine: 'creatomate',
+        creatomate: {
+          template_id: 't1',
+          scene_field_map: [{ visual: 'V-1' }],
+          static_overrides: { EndLogo: 'https://x/logo.png' },
+          required_post_fields: ['EndTour', 'EndDate'],
+          offers: { default: { tour: 'Best of China', price_line: 'From NZD $4,080 pp' } },
+          post_field_sources: { EndTour: 'tour', EndMeta: 'price_line' },
+        },
+      },
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.config.render).toEqual({
+      engine: 'creatomate',
+      creatomate: {
+        template_id: 't1',
+        scene_field_map: [{ visual: 'V-1' }],
+        static_overrides: { EndLogo: 'https://x/logo.png' },
+        required_post_fields: ['EndTour', 'EndDate'],
+        offers: { default: { tour: 'Best of China', price_line: 'From NZD $4,080 pp' } },
+        post_field_sources: { EndTour: 'tour', EndMeta: 'price_line' },
+      },
+    })
+  })
+
+  it('🔴 这次 PATCH 只想改 template_id，没带 offers → 已存的 offers 原样保留，不会被清空', () => {
+    const r = mergeFactoryConfig(
+      {
+        render: {
+          engine: 'creatomate',
+          creatomate: {
+            template_id: 't1',
+            scene_field_map: [{ visual: 'V-1' }],
+            offers: { default: { tour: 'Best of China' } },
+            post_field_sources: { EndTour: 'tour' },
+          },
+        },
+      },
+      { render: { creatomate: { template_id: 't2', scene_field_map: [{ visual: 'V-1' }] } } },
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const creatomate = (r.config.render as { creatomate: Record<string, unknown> }).creatomate
+    expect(creatomate.template_id).toBe('t2')
+    expect(creatomate.offers).toEqual({ default: { tour: 'Best of China' } })
+    expect(creatomate.post_field_sources).toEqual({ EndTour: 'tour' })
+  })
+
+  it('显式传 offers: null → 清空已存的 offers（跟 verified_cta 等字段同一套"null=删除"惯例）', () => {
+    const r = mergeFactoryConfig(
+      {
+        render: {
+          engine: 'creatomate',
+          creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1' }], offers: { default: { tour: 'x' } } },
+        },
+      },
+      { render: { creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1' }], offers: null } } },
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect('offers' in (r.config.render as { creatomate: Record<string, unknown> }).creatomate).toBe(false)
+  })
+
+  it('offers 形状不对（值不是字符串）→ 拒，报出人能看懂的错误', () => {
+    const r = mergeFactoryConfig({}, {
+      render: {
+        engine: 'creatomate',
+        creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1' }], offers: { default: { tour: 123 } } },
+      },
+    })
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error).toContain('offers')
+  })
+
+  it('required_post_fields 形状不对（混了非字符串）→ 拒', () => {
+    const r = mergeFactoryConfig({}, {
+      render: {
+        engine: 'creatomate',
+        creatomate: { template_id: 't1', scene_field_map: [{ visual: 'V-1' }], required_post_fields: ['EndTour', 123] },
+      },
+    })
+    expect(r.ok).toBe(false)
+  })
+
   it('body 未提及 recipe → 现有配置原样保留(合并语义)', () => {
     const r = mergeFactoryConfig(
       { creative_recipe: { id: 'single_image_i2v_pullback_12s', version: 1 } },
