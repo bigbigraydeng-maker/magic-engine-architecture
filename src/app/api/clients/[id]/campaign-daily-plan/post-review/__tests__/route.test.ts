@@ -453,7 +453,7 @@ function socialPlansTable(rows: SocialPlanRow[], opts: { beforeUpdate?: (rows: S
 }
 
 const QUEUE_REQUEST_ID = '30000000-0000-0000-0000-000000000001'
-const PAGE_ID = '1616575215312482'
+const PAGE_ID = '900000000000001'
 
 function passedReviewMeta() {
   return reviewMeta({
@@ -552,6 +552,7 @@ describe('campaign daily Post review — frozen once queued or published', () =>
     ['published: flip to NEEDS_REVISION', { publish_queue_meta: storedQueueMeta(), publish_meta: storedPublishMeta() }, needsRevision, 'PLAN_ALREADY_PUBLISHED', 'PUBLISHED'],
     ['publish receipt without queue receipt', { publish_meta: storedPublishMeta() }, needsRevision, 'PLAN_ALREADY_PUBLISHED', 'PUBLISHED'],
     ['malformed queue receipt still locks', { publish_queue_meta: { junk: true } }, needsRevision, 'PLAN_PUBLISH_QUEUED', null],
+    ['queue receipt stored as JSON null still locks', { publish_queue_meta: null }, needsRevision, 'PLAN_PUBLISH_QUEUED', null],
   ])('%s → 409 and the stored plan is untouched', async (_label, extras, body, code, publishStatus) => {
     allow()
     const row = storedRow(extras)

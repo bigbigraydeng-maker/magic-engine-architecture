@@ -43,9 +43,9 @@ function conflict(error: string) {
 function reviewLockedResponse(
   reason: CampaignDailyPlanReceiptLock,
   planId: string,
-  planData: Partial<CampaignDailyPlanData>
+  planData: Partial<CampaignDailyPlanData> | null
 ) {
-  const publishStatus = (planData.publish_meta as { status?: unknown } | undefined)?.status
+  const publishStatus = (planData?.publish_meta as { status?: unknown } | undefined)?.status
   return NextResponse.json(
     {
       success: false,
@@ -112,7 +112,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     const storedPlanData = row.plan_data as Partial<CampaignDailyPlanData> | null
     const receiptLock = campaignDailyPlanReceiptLock(storedPlanData)
-    if (receiptLock && storedPlanData) return reviewLockedResponse(receiptLock, row.id, storedPlanData)
+    if (receiptLock) return reviewLockedResponse(receiptLock, row.id, storedPlanData)
 
     const planData = row.plan_data as unknown as CampaignDailyPlanData
     if (

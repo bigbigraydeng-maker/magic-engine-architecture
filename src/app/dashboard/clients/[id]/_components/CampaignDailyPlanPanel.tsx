@@ -76,6 +76,7 @@ interface DailyPlanResponse {
     posts: Array<{ date: string; image_asset_id: string; cta_url: string; review_verdict: 'PASS' }>
   } | null
   publish_receipt: PublishReceipt | null
+  review_lock: 'PLAN_PUBLISH_QUEUED' | 'PLAN_ALREADY_PUBLISHED' | null
   facebook_page_id: string | null
 }
 
@@ -330,8 +331,8 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   const publishQueueReadyCount = publishQueueItems.filter(item => item.status === 'READY').length
   const publishQueueReady = publishQueueItems.length > 0 && publishQueueReadyCount === publishQueueItems.length
   const publishQueueReceipt = data.publish_queue_receipt
-  // Mirrors the post-review route lock; the server stays the authority.
-  const reviewLocked = Boolean(publishQueueReceipt || data.publish_receipt)
+  // Same lock the post-review route enforces; the server stays the authority.
+  const reviewLocked = Boolean(data.review_lock)
 
   return (
     <div className="border border-black/[.06] rounded-xl overflow-hidden">
