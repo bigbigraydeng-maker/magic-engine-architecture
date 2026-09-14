@@ -1005,6 +1005,22 @@ services:
     envVars:
       - fromGroup: me-shared-cron-secret
 
+  # 广告设置快照（ads IMPACT 阶段 1，设计 §2.1 / §14 M1）—— 每 3 小时只读抓一次 Meta
+  # 账户/系列/广告组/广告/受众设置，只在设置变化时记一行、另每天一次。
+  # 只读 Meta，不花钱（Graph 读接口免费，只占 API 配额）。共用账户只记账户级。
+  # 依赖 migration 20260914000001（ad_entity_snapshots 表）先 apply；表不在时每轮写入失败、
+  # 运行记录里会报错，不影响其它任务。
+  - type: cron
+    name: ad-entity-snapshot
+    env: node
+    schedule: "30 */3 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/ad-entity-snapshot
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
   # 🔴 2026-09-02 退役：content-factory-render-worker(旧 Render 云端拼片管线)。
   #    content_factory_render_jobs 表最后一条记录 2026-08-19，两周零产出，讲课式确认
   #    当前无客户在用(PM 口径)。CTS/Oztop 的广告成片(Winner Intake)确实已转到本机
