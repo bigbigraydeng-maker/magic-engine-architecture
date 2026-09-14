@@ -61,11 +61,12 @@ create or replace function auth.uid()  returns uuid  language sql stable as $$ s
 create or replace function auth.jwt()  returns jsonb language sql stable as $$ select '{}'::jsonb $$;
 create or replace function auth.role() returns text  language sql stable as $$ select null::text $$;
 
--- 忠实还原 Supabase 的默认授权
-grant usage on schema public to anon, authenticated;
-alter default privileges in schema public grant all     on tables    to anon, authenticated;
-alter default privileges in schema public grant all     on sequences to anon, authenticated;
-alter default privileges in schema public grant execute on functions to anon, authenticated;
+-- 忠实还原 Supabase 的默认授权（service_role 也一样拿默认表授权，
+-- 它靠的是「授权 + RLS policy TO service_role USING(true)」而不是 bypassrls）
+grant usage on schema public to anon, authenticated, service_role;
+alter default privileges in schema public grant all     on tables    to anon, authenticated, service_role;
+alter default privileges in schema public grant all     on sequences to anon, authenticated, service_role;
+alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
 SQL
 
 echo "==> 2/3 按时间序重放 migration"
