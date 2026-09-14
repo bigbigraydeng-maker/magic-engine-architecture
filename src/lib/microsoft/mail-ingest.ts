@@ -352,7 +352,8 @@ interface StoredThread {
 }
 
 /**
- * 「同一封信」的兜底指纹——方向 + 发送时间，精确到毫秒。
+ * 「同一封信」的兜底指纹——方向 + 发送时间，精确到秒（Graph 给的时间戳本身
+ * 就是秒级精度，取毫秒只是白多一层假精确）。
  *
  * PR #1714 把 `mail-graph.ts` 读信时用的消息 id 从 Graph 默认的 REST id 换成了
  * `ImmutableId`。这个同步在那之前已经长期把 REST id 存进 `message_id` /
@@ -361,9 +362,25 @@ interface StoredThread {
  * `(conversation_id, message_id)` / `(client_id, source, source_ref)` 两个唯一键
  * 都认不出是同一封，会被当成新信重复插入。同一封信不管用哪种 id 格式，方向和
  * 发送时间不会变，拿它兜底再认一次（2026-09-15 Codex 复审 PR #1714 指出）。
+ *
+ * 🔴 **只在切换那一刻之前收到的信上生效，不是永久规则**（2026-09-15 子牙架构
+ * 复审同一个 PR 指出）。真实邮件时间戳只有秒级精度——同一条线程 / 同一个人
+ * 名下，只要同一秒内来了两封方向相同的不同邮件（客户连发两条、或历史批量
+ * 回填时的巧合），指纹会撞上，第二封会被**永久静默丢弃**，违反这个同步自己
+ * 「一封都不能丢」的铁律。这个兜底存在的理由只是「换 id 格式那一刻，库里
+ * 已经躺着一批用旧格式存的信」——`IMMUTABLE_ID_CUTOVER_AT` 之后收到的信，
+ * 从第一次读到最后一次读用的都是同一种（`ImmutableId`）格式，根本不会撞上
+ * 这个问题，也就不该承担这份「误判成重复」的风险。
  */
+const IMMUTABLE_ID_CUTOVER_AT = new Date('2026-09-15T20:00:00Z').getTime()
+
 function messageSignature(direction: string, at: string): string {
-  return `${direction}|${new Date(at).getTime()}`
+  return `${direction}|${Math.floor(new Date(at).getTime() / 1000)}`
+}
+
+/** 这封信收到时，`mail-graph.ts` 是不是已经在用稳定 id 了——是的话直接信 id，不用指纹兜底。 */
+function receivedBeforeIdFormatCutover(at: string): boolean {
+  return new Date(at).getTime() < IMMUTABLE_ID_CUTOVER_AT
 }
 
 /** 存一条邮件线程和它的信。抛异常一路上抛 —— 调用方要靠它决定停不停。 */
@@ -414,11 +431,14 @@ async function storeThread(
       messageSignature(r.direction as string, r.sent_at as string),
     ),
   )
-  const toStore = thread.messages.filter(
-    (m) =>
-      existingIds.has(m.id) ||
-      !existingSignatures.has(messageSignature(m.direction, m.receivedAt)),
-  )
+  const toStore = thread.messages.filter((m) => {
+    if (existingIds.has(m.id)) return true
+    // 换过 id 格式那一刻之后收到的信，从第一次读到之后每一次都是同一种格式，
+    // 不会撞上「同一封信、两种 id」这个问题——不用指纹兜底，直接当新信存，
+    // 免得把同一秒内两封方向相同的不同邮件误判成重复、悄悄丢掉一封。
+    if (!receivedBeforeIdFormatCutover(m.receivedAt)) return true
+    return !existingSignatures.has(messageSignature(m.direction, m.receivedAt))
+  })
 
   let inserted: { id: string }[] | null = []
   if (toStore.length > 0) {
@@ -489,11 +509,14 @@ async function writeTouchpoints(
       messageSignature(r.direction as string, r.occurred_at as string),
     ),
   )
-  const toWrite = thread.messages.filter(
-    (m) =>
-      existingRefs.has(m.id) ||
-      !existingSignatures.has(messageSignature(m.direction, m.receivedAt)),
-  )
+  const toWrite = thread.messages.filter((m) => {
+    if (existingRefs.has(m.id)) return true
+    // 同上（见 storeThread）：只在换 id 格式那一刻之前收到的信上信这份指纹，
+    // 这份兜底比消息去重更宽——按人比对，不按单条线程——过了切换时刻还
+    // 继续按指纹判重复，撞车概率会比消息去重更高。
+    if (!receivedBeforeIdFormatCutover(m.receivedAt)) return true
+    return !existingSignatures.has(messageSignature(m.direction, m.receivedAt))
+  })
 
   if (toWrite.length === 0) return 0
 
