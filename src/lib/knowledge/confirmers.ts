@@ -18,6 +18,11 @@ interface ConfirmerRow {
   confirmer_email: string
 }
 
+/** Case/whitespace-insensitive equality — the one true comparison standard for every email field in this module, aligned with read.ts and whitelist.ts. */
+function sameEmail(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
+}
+
 /**
  * Registered, non-revoked confirmer emails for `clientId`, lower-cased.
  *
@@ -58,20 +63,35 @@ export async function getRegisteredConfirmerEmails(
 // 任何调用方（API 路由）必须把真实登录邮箱传进 actorEmail，不能自己旁路
 // 直接操作这张表。
 
-type ConfirmerQueryResult = PromiseLike<{ data: unknown; error: { message?: string } | null }>
+type ConfirmerQueryResult = PromiseLike<{ data: unknown; error: { message?: string; code?: string } | null }>
 
-/** `eq`/`is` 可以链多次，`ilike` 收尾执行——用递归类型而不是固定深度，实际调用点链的段数不一样。 */
-export interface KnowledgeConfirmerFilterBuilder {
+/**
+ * `eq`/`is` 可以链多次，构建器本身随时可以直接 await（真实 supabase-js
+ * 的查询构建器在每一步都是 thenable，不是只有终点方法才能 await）。
+ *
+ * 🔴 子牙+魏征联合复审（2026-09-14）实测发现并已修：原来这里收尾用的是
+ * `.ilike(column, value)` 当"精确匹配（只是忽略大小写）"用——但 Postgres
+ * 的 ILIKE 是通配符匹配，`_` 匹配任意单个字符、`%` 匹配任意长度，而邮箱
+ * 本名部分带下划线（如 `john_doe@x.com`）是完全合法的真实格式，不是刁钻
+ * 输入。魏征实测跑通 `registerConfirmer()` 证明：客户名下真实账号是
+ * `johnadoe@ctstours.co.nz`，管理员想登记的是完全不同的人
+ * `john_doe@ctstours.co.nz`，`ilike` 的通配符语义让后者的账号核实"误判
+ * 通过"——这条本该卡死"确认人必须是客户名下真实账号"（issue #1646）的
+ * 检查被实质性架空。修法：不再用 ilike 做匹配，改成整表取回该
+ * client_id 范围内的行，在应用层用 `sameEmail()`（trim+lower-case 精确
+ * 比较）过滤——跟 `getRegisteredConfirmerEmails` 已经验证过的做法完全
+ * 一致，不再各写一套。
+ */
+export interface KnowledgeConfirmerFilterBuilder extends ConfirmerQueryResult {
   eq(column: string, value: unknown): KnowledgeConfirmerFilterBuilder
   is(column: string, value: null): KnowledgeConfirmerFilterBuilder
-  ilike(column: string, value: string): ConfirmerQueryResult
 }
 
-/** 真实 supabase-js 客户端的最小写入面（insert/update + 精确匹配查询），跟 read.ts 的窄接口分开——那个接口是只读面，服务读侧测试。 */
+/** 真实 supabase-js 客户端的最小写入面，跟 read.ts 的窄只读接口（db-client.ts）分开——那个接口被大量只读调用方共用，直接加 insert/update 会让它们在类型层面被动获得写权限，违反最小权限。 */
 export interface KnowledgeConfirmerWriteClient {
   from(table: string): {
     select(columns: string): KnowledgeConfirmerFilterBuilder
-    insert(row: Record<string, unknown>): ConfirmerQueryResult
+    insert(row: Record<string, unknown>): { select(columns: string): ConfirmerQueryResult }
     update(fields: Record<string, unknown>): {
       eq(column: string, value: unknown): ConfirmerQueryResult
     }
@@ -85,6 +105,7 @@ export class KnowledgeConfirmerAuthorizationError extends Error {
   }
 }
 
+/** DB/infra 故障——网络、权限、字段类型等"我们这边坏了"的信号。跟下面的纯校验性 Error（邮箱不合法/不是客户账号）分开成不同的类，好让路由层能分别映射到 500 vs 400，不把真故障误判成调用方传参错误（子牙复审 2026-09-14）。 */
 export class KnowledgeConfirmerWriteError extends Error {
   constructor(op: string, cause: { message?: string } | null) {
     super(`[knowledge] ${op} 失败：${cause?.message ?? '未知错误'}`)
@@ -100,14 +121,26 @@ export interface RegisterConfirmerResult {
 /**
  * 桥接 unknown 说明（本文件多处用到，集中写在这里）：register/revoke 两个
  * 函数的查询结果都是 `Record<string, unknown>` 的列表，tsc 结构比对拒绝
- * 直接转成 `{ id: string }[]`。实测：本机 PG 沙盘对着真实
- * client_knowledge_confirmers / client_portal_users 两张表跑过同样形状的
- * select，列名 `id` 在两张表里都存在且是 uuid 转字符串，跟这里的用法
- * 逐一核对一致，不是凭空猜的形状。
+ * 直接转成具体行类型。实测：本机 PG 沙盘对着真实 client_knowledge_
+ * confirmers / client_portal_users 两张表跑过同样形状的 select，列名在
+ * 两张表里都存在且类型对得上，跟这里的用法逐一核对一致，不是凭空猜的
+ * 形状。
  */
-function asIdRows(data: unknown): Array<{ id: string }> {
-  return (data ?? []) as unknown as Array<{ id: string }>
+function asRows<T>(data: unknown): T[] {
+  return (data ?? []) as unknown as T[]
 }
+
+interface AccountRow {
+  id: string
+  email: string
+}
+interface ConfirmerIdRow {
+  id: string
+  confirmer_email: string
+}
+
+/** Postgres 唯一约束冲突（`uq_client_knowledge_confirmers_active`）的标准错误码。 */
+const POSTGRES_UNIQUE_VIOLATION = '23505'
 
 /**
  * 登记一个客户确认人。只有全局管理员（`isGlobalAdminEmail(actorEmail)`）能
@@ -126,6 +159,13 @@ function asIdRows(data: unknown): Array<{ id: string }> {
  * `client_portal_users`（不是 `client_knowledge_confirmers` 自己）核实这
  * 一点——两张表故意分开：一张管"谁是这个客户的真实联系人"（既有账号表），
  * 一张管"这个真实联系人有没有被明确授权确认知识库条目"（本表）。
+ *
+ * 🔴 并发登记（子牙+魏征联合复审 2026-09-14）：两个并发请求都可能在"查
+ * 当前有效登记"这一步都看到"还没有"，都往下 insert——数据库的局部唯一
+ * 索引会拦住其中一个，但不能让调用方直接吃一个 Postgres 内部报错字符串
+ * （之前的实现会）。命中 23505（唯一约束冲突）时，视同"对方刚刚抢先登记
+ * 成功了"，回查一次返回 alreadyActive:true，而不是抛错——这才是"幂等"
+ * 这个词该有的行为，不止串行调用时成立，并发调用时也成立。
  */
 export async function registerConfirmer(
   sb: KnowledgeConfirmerWriteClient,
@@ -137,55 +177,67 @@ export async function registerConfirmer(
   if (!isGlobalAdminEmail(actorEmail)) {
     throw new KnowledgeConfirmerAuthorizationError(actorEmail, '登记')
   }
-  if (confirmerEmail.toLowerCase() === actorEmail.trim().toLowerCase()) {
+  if (sameEmail(confirmerEmail, actorEmail)) {
     throw new Error('[knowledge] 登记人不能把自己登记成客户确认人')
   }
   if (isGlobalAdminEmail(confirmerEmail)) {
     throw new Error('[knowledge] 全局管理员账号不能被登记为客户确认人（不能代客户确认）')
   }
 
-  const accountCheck = await sb
-    .from('client_portal_users')
-    .select('id')
-    .eq('client_id', clientId)
-    .eq('access_type', 'client')
-    .ilike('email', confirmerEmail)
+  const accountCheck = await sb.from('client_portal_users').select('id, email').eq('client_id', clientId).eq('access_type', 'client')
   if (accountCheck.error) {
     throw new KnowledgeConfirmerWriteError('核实客户账号（client_portal_users）', accountCheck.error)
   }
-  if (asIdRows(accountCheck.data).length === 0) {
+  const hasAccount = asRows<AccountRow>(accountCheck.data).some((row) => sameEmail(row.email, confirmerEmail))
+  if (!hasAccount) {
     throw new Error(
       `[knowledge] ${confirmerEmail} 不是客户 ${clientId} 名下的 access_type='client' 账号，不能登记为确认人`,
     )
   }
 
-  // 只查"当前有效"的登记（revoked_at IS NULL）——局部唯一索引
-  // uq_client_knowledge_confirmers_active 本身就只约束这个子集，查全量会
-  // 把已撤销的历史行也当成"已登记"，误报成"不用再登记一次"。
-  const activeCheck = await sb
-    .from('client_knowledge_confirmers')
-    .select('id')
-    .eq('client_id', clientId)
-    .is('revoked_at', null)
-    .ilike('confirmer_email', confirmerEmail)
-  if (activeCheck.error) {
-    throw new KnowledgeConfirmerWriteError('核对既有登记（client_knowledge_confirmers）', activeCheck.error)
+  const activeConfirmer = await findActiveConfirmer(sb, clientId, confirmerEmail)
+  if (activeConfirmer.error) {
+    throw new KnowledgeConfirmerWriteError('核对既有登记（client_knowledge_confirmers）', activeConfirmer.error)
   }
-  const existingActive = asIdRows(activeCheck.data)
-  if (existingActive.length > 0) {
-    return { id: existingActive[0].id, alreadyActive: true }
+  if (activeConfirmer.row) {
+    return { id: activeConfirmer.row.id, alreadyActive: true }
   }
 
-  const insertResult = await sb.from('client_knowledge_confirmers').insert({
-    client_id: clientId,
-    confirmer_email: confirmerEmail,
-    registered_by_email: actorEmail,
-  })
+  const insertResult = await sb
+    .from('client_knowledge_confirmers')
+    .insert({ client_id: clientId, confirmer_email: confirmerEmail, registered_by_email: actorEmail })
+    .select('id')
   if (insertResult.error) {
+    if (insertResult.error.code === POSTGRES_UNIQUE_VIOLATION) {
+      const raceLoser = await findActiveConfirmer(sb, clientId, confirmerEmail)
+      if (raceLoser.error) {
+        throw new KnowledgeConfirmerWriteError('登记客户确认人（竞态回查）（client_knowledge_confirmers）', raceLoser.error)
+      }
+      if (raceLoser.row) return { id: raceLoser.row.id, alreadyActive: true }
+    }
     throw new KnowledgeConfirmerWriteError('登记客户确认人（client_knowledge_confirmers）', insertResult.error)
   }
-  const inserted = asIdRows(insertResult.data)
+  const inserted = asRows<{ id: string }>(insertResult.data)
   return { id: inserted[0]?.id ?? '', alreadyActive: false }
+}
+
+/** 查这个客户当前（未撤销）针对这个邮箱的登记行，精确匹配（见文件头部说明为什么不用 ilike）。 */
+async function findActiveConfirmer(
+  sb: KnowledgeConfirmerWriteClient,
+  clientId: string,
+  confirmerEmail: string,
+): Promise<{ row: ConfirmerIdRow | null; error: { message?: string; code?: string } | null }> {
+  const result = await sb
+    .from('client_knowledge_confirmers')
+    .select('id, confirmer_email')
+    .eq('client_id', clientId)
+    .is('revoked_at', null)
+  if (result.error) return { row: null, error: result.error }
+  const matches = asRows<ConfirmerIdRow>(result.data).filter((row) => sameEmail(row.confirmer_email, confirmerEmail))
+  // 局部唯一索引保证同一时刻同一邮箱最多一条有效登记，理论上 matches 不
+  // 会超过一条；即便数据不干净出现多条，取第一条也不会误伤别的邮箱——
+  // 上面的 filter 已经是精确匹配，不是通配符碰撞。
+  return { row: matches[0] ?? null, error: null }
 }
 
 /**
@@ -204,24 +256,18 @@ export async function revokeConfirmer(
     throw new KnowledgeConfirmerAuthorizationError(actorEmail, '撤销')
   }
 
-  const activeCheck = await sb
-    .from('client_knowledge_confirmers')
-    .select('id')
-    .eq('client_id', clientId)
-    .is('revoked_at', null)
-    .ilike('confirmer_email', confirmerEmail)
-  if (activeCheck.error) {
-    throw new KnowledgeConfirmerWriteError('核对既有登记（client_knowledge_confirmers）', activeCheck.error)
+  const activeConfirmer = await findActiveConfirmer(sb, clientId, confirmerEmail)
+  if (activeConfirmer.error) {
+    throw new KnowledgeConfirmerWriteError('核对既有登记（client_knowledge_confirmers）', activeConfirmer.error)
   }
-  const existingActive = asIdRows(activeCheck.data)
-  if (existingActive.length === 0) {
+  if (!activeConfirmer.row) {
     throw new Error(`[knowledge] ${confirmerEmail} 目前不是客户 ${clientId} 的有效登记确认人，无需撤销`)
   }
 
   const updateResult = await sb
     .from('client_knowledge_confirmers')
     .update({ revoked_at: new Date().toISOString(), revoked_by_email: actorEmail })
-    .eq('id', existingActive[0].id)
+    .eq('id', activeConfirmer.row.id)
   if (updateResult.error) {
     throw new KnowledgeConfirmerWriteError('撤销客户确认人登记（client_knowledge_confirmers）', updateResult.error)
   }

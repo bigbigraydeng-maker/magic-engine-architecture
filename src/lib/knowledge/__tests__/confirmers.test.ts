@@ -3,6 +3,14 @@
  * registerConfirmer / revokeConfirmer. The read side
  * (getRegisteredConfirmerEmails) is already covered via read.test.ts's
  * dual-sign gate tests.
+ *
+ * The fake client here deliberately models REAL Postgres/PostgREST
+ * semantics that bit the first version of this file (子牙+魏征联合复审
+ * 2026-09-14): `.insert()` without `.select()` returns `data: null`, and a
+ * duplicate insert against the active-confirmer partial unique index
+ * surfaces as a `{ code: '23505' }` error — not a thrown "already exists"
+ * exception. A fake that's more lenient than the real database is exactly
+ * how the original ilike-as-exact-match bug slipped through unnoticed.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -23,45 +31,67 @@ interface Fixture {
   confirmers: Row[]
 }
 let fixture: Fixture
+/** Set by a test to force the NEXT insert to fail with a unique-violation, simulating a concurrent racer that won. */
+let forceNextInsertConflict = false
+
+function applyEq(rows: Row[], filters: Record<string, unknown>): Row[] {
+  return rows.filter((row) => Object.entries(filters).every(([k, v]) => row[k] === v))
+}
 
 function makeFakeClient(): KnowledgeConfirmerWriteClient {
   return {
     from(table: string) {
+      const rows = table === 'client_portal_users' ? fixture.portalUsers : fixture.confirmers
       const filters: Record<string, unknown> = {}
       let isNullFilter: string | null = null
 
-      const builder = {
-        eq(column: string, value: unknown) {
-          filters[column] = value
-          return builder
-        },
-        is(column: string, _value: null) {
-          isNullFilter = column
-          return builder
-        },
-        ilike(column: string, value: string) {
-          const rows = table === 'client_portal_users' ? fixture.portalUsers : fixture.confirmers
-          const matched = rows.filter((row) => {
-            const matchesFilters = Object.entries(filters).every(([k, v]) => row[k] === v)
-            const matchesNull = !isNullFilter || row[isNullFilter] === null || row[isNullFilter] === undefined
-            const matchesIlike = typeof row[column] === 'string' && (row[column] as string).toLowerCase() === value.toLowerCase()
-            return matchesFilters && matchesNull && matchesIlike
-          })
-          return Promise.resolve({ data: matched, error: null })
-        },
+      // 用真实 Promise 实例 + Object.assign 挂链式方法——这样 `.then()` 的
+      // 泛型签名天然满足 PromiseLike<T>，不用自己手写一份容易跟标准签名
+      // 对不上的 then。真实 supabase-js 的查询构建器也是这个套路（thenable
+      // 对象，不是手搓一个假 then）。
+      function buildFilterBuilder() {
+        const promise = Promise.resolve().then(() => {
+          const matched = applyEq(rows, filters).filter(
+            (row) => !isNullFilter || row[isNullFilter] === null || row[isNullFilter] === undefined,
+          )
+          return { data: matched.map((r) => ({ ...r })), error: null }
+        })
+        return Object.assign(promise, {
+          eq(column: string, value: unknown) {
+            filters[column] = value
+            return builder
+          },
+          is(column: string, _value: null) {
+            isNullFilter = column
+            return builder
+          },
+        })
       }
+      const builder = buildFilterBuilder()
 
       return {
         select: (_columns: string) => builder,
-        insert: (row: Record<string, unknown>) => {
-          const withId = { id: `confirmer-${fixture.confirmers.length + 1}`, revoked_at: null, revoked_by_email: null, ...row }
-          fixture.confirmers.push(withId)
-          return Promise.resolve({ data: [withId], error: null })
-        },
+        insert: (row: Record<string, unknown>) => ({
+          select: (_columns: string) => {
+            if (forceNextInsertConflict) {
+              forceNextInsertConflict = false
+              return Promise.resolve({
+                data: null,
+                error: { message: 'duplicate key value violates unique constraint "uq_client_knowledge_confirmers_active"', code: '23505' },
+              })
+            }
+            const withId = { id: `confirmer-${fixture.confirmers.length + 1}`, revoked_at: null, revoked_by_email: null, ...row }
+            fixture.confirmers.push(withId)
+            // 🔴 真实 supabase-js 行为：insert().select('id') 才会带回 data；
+            // 这条测试文件里所有断言"拿到真实 id"的用例都靠这一步验证
+            // registerConfirmer 真的调用了 .select()，不是像旧实现那样漏调。
+            return Promise.resolve({ data: [{ id: withId.id }], error: null })
+          },
+        }),
         update: (fields: Record<string, unknown>) => ({
           eq: (column: string, value: unknown) => {
-            const row = fixture.confirmers.find((r) => r[column] === value)
-            if (row) Object.assign(row, fields)
+            const target = fixture.confirmers.find((r) => r[column] === value)
+            if (target) Object.assign(target, fields)
             return Promise.resolve({ data: null, error: null })
           },
         }),
@@ -77,6 +107,7 @@ beforeEach(() => {
     portalUsers: [{ id: 'user-1', client_id: CLIENT_A, email: 'owner@ctstours.co.nz', access_type: 'client' }],
     confirmers: [],
   }
+  forceNextInsertConflict = false
   process.env.ADMIN_EMAILS = GLOBAL_ADMIN
 })
 
@@ -86,7 +117,7 @@ afterEach(() => {
 })
 
 describe('registerConfirmer', () => {
-  it('registers a confirmer who has a real access_type=client account for this client', async () => {
+  it('registers a confirmer who has a real access_type=client account for this client, and returns a real id', async () => {
     const sb = makeFakeClient()
     const result = await registerConfirmer(sb, {
       clientId: CLIENT_A,
@@ -94,6 +125,11 @@ describe('registerConfirmer', () => {
       actorEmail: GLOBAL_ADMIN,
     })
     expect(result.alreadyActive).toBe(false)
+    // 🔴 子牙复审（2026-09-14）实测发现的真 bug 的回归锁：原实现的
+    // insert() 没接 .select()，真实 supabase-js 在这种情况下 data 是
+    // null，id 永远是空字符串。
+    expect(result.id).toBeTruthy()
+    expect(result.id).not.toBe('')
     expect(fixture.confirmers).toHaveLength(1)
     expect(fixture.confirmers[0]).toMatchObject({
       client_id: CLIENT_A,
@@ -118,6 +154,20 @@ describe('registerConfirmer', () => {
     expect(fixture.confirmers).toHaveLength(0)
   })
 
+  // 🔴 魏征复审（2026-09-14）实测跑通的真漏洞的回归锁：ilike 的 `_` 通配
+  // 符曾经让"账号根本不存在"的邮箱被误判成"存在"，因为它恰好通配匹配上
+  // 了另一个真实账号。现在改成精确比较后，这条必须失败。
+  it('does NOT let a wildcard-adjacent email slip past the real-account check (regression: ilike-as-exact-match bug)', async () => {
+    // 真实账号是 johnadoe@ctstours.co.nz；尝试登记形似但不同的
+    // john_doe@ctstours.co.nz —— 旧版 ilike 会把 `_` 当通配符，误判命中。
+    fixture.portalUsers = [{ id: 'user-x', client_id: CLIENT_A, email: 'johnadoe@ctstours.co.nz', access_type: 'client' }]
+    const sb = makeFakeClient()
+    await expect(
+      registerConfirmer(sb, { clientId: CLIENT_A, confirmerEmail: 'john_doe@ctstours.co.nz', actorEmail: GLOBAL_ADMIN }),
+    ).rejects.toThrow(/access_type='client'/)
+    expect(fixture.confirmers).toHaveLength(0)
+  })
+
   it('rejects an actor registering themselves as the confirmer', async () => {
     fixture.portalUsers.push({ id: 'user-2', client_id: CLIENT_A, email: GLOBAL_ADMIN, access_type: 'client' })
     const sb = makeFakeClient()
@@ -133,7 +183,6 @@ describe('registerConfirmer', () => {
     await expect(
       registerConfirmer(sb, { clientId: CLIENT_A, confirmerEmail: 'other-admin@magicengine.cloud', actorEmail: GLOBAL_ADMIN }),
     ).rejects.toThrow(/全局管理员账号不能被登记/)
-    delete process.env.ADMIN_EMAILS
   })
 
   it('is idempotent — registering an already-active confirmer again returns alreadyActive:true without a duplicate row', async () => {
@@ -158,6 +207,26 @@ describe('registerConfirmer', () => {
     const result = await registerConfirmer(sb, { clientId: CLIENT_A, confirmerEmail: 'owner@ctstours.co.nz', actorEmail: GLOBAL_ADMIN })
     expect(result.alreadyActive).toBe(false)
     expect(fixture.confirmers).toHaveLength(2)
+  })
+
+  // 🔴 子牙+魏征联合复审（2026-09-14）：并发登记撞唯一约束时，必须被当成
+  // "对方抢先登记成功了"处理，而不是把 Postgres 报错字符串直接抛给调用方。
+  it('treats a concurrent unique-constraint conflict on insert as alreadyActive, not a thrown DB error', async () => {
+    const sb = makeFakeClient()
+    forceNextInsertConflict = true
+    // 模拟"竞态对手已经写进去了"——在强制冲突发生前，先在 fixture 里放一条
+    // 已生效的登记，回查时能找到它。
+    fixture.confirmers.push({
+      id: 'winner-row',
+      client_id: CLIENT_A,
+      confirmer_email: 'owner@ctstours.co.nz',
+      registered_by_email: GLOBAL_ADMIN,
+      revoked_at: null,
+      revoked_by_email: null,
+    })
+    const result = await registerConfirmer(sb, { clientId: CLIENT_A, confirmerEmail: 'owner@ctstours.co.nz', actorEmail: GLOBAL_ADMIN })
+    expect(result.alreadyActive).toBe(true)
+    expect(result.id).toBe('winner-row')
   })
 })
 
@@ -197,5 +266,22 @@ describe('revokeConfirmer', () => {
     await expect(
       revokeConfirmer(sb, { clientId: CLIENT_A, confirmerEmail: 'never-registered@example.com', actorEmail: GLOBAL_ADMIN }),
     ).rejects.toThrow(/无需撤销/)
+  })
+
+  // 🔴 魏征复审（2026-09-14）：撤销同样必须精确匹配，不能被通配符误伤到
+  // 一个形似但不同的邮箱（"撤销了不确定是谁的确认人"）。
+  it('does NOT revoke a wildcard-adjacent email it was not asked to revoke', async () => {
+    fixture.confirmers.push({
+      id: 'c-real',
+      client_id: CLIENT_A,
+      confirmer_email: 'johnadoe@ctstours.co.nz',
+      revoked_at: null,
+      revoked_by_email: null,
+    })
+    const sb = makeFakeClient()
+    await expect(
+      revokeConfirmer(sb, { clientId: CLIENT_A, confirmerEmail: 'john_doe@ctstours.co.nz', actorEmail: GLOBAL_ADMIN }),
+    ).rejects.toThrow(/无需撤销/)
+    expect(fixture.confirmers[0].revoked_at).toBeNull() // untouched
   })
 })
