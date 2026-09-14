@@ -43,8 +43,12 @@ export const META_PAGE_SCOPES = [
   // 都看不见(2026-08-15 生产日志实测)。已经连过的客户要重新点一次「连接 Meta」。
   'pages_read_user_content',
   // 以主页身份发/回复/隐藏评论必须有这一条 —— 读评论的两条只够「看」,不够「写」。
-  // 用途:Reel 发布后的第一条 CTA 评论;评论自动回复的公开回帖与隐藏垃圾评论
-  // (`src/lib/meta/comments.ts`)。应用对这条是标准访问权,无需再提交审核(2026-09-15 核实)。
+  // ⚠ 目前没有功能会用到这项权限(2026-09-15):加它只是先让「连接 Meta」申请到它。
+  //   - 评论自动回复读的是环境变量 token(`comment-autoreply-engine.ts:95-98` 与
+  //     `comment-autoreply-probe` 路由都走 getMetaTokenForClient),不读这里存下的
+  //     授权;要改成读已存授权(getStoredPageToken)才会受益。
+  //   - Reel 发布后的第一条 CTA 评论尚未实现(见 #1695)。
+  // 写评论的封装在 `src/lib/meta/comments.ts`。应用对这条是标准访问权,无需再提交审核(2026-09-15 核实)。
   // 用户在同意页不勾它也照常连接成功 —— callback 只存 Meta 实际授予的权限。
   // 已经连过的客户要重新点一次「连接 Meta」才能拿到它。
   'pages_manage_engagement',
