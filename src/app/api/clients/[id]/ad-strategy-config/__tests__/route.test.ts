@@ -3,7 +3,7 @@
  *
  * enabled=false 会让每日广告体检、摘要、广告快照 cron 全部跳过这个客户；
  * digest_recipients 决定内部摘要发给谁。所以测试盯的是「非内部员工改得动」这种静默出错：
- *   - 自助注册用户 / 客户查看者 / 受限演示管理员 PATCH → 403，且不写库
+ *   - 付费客户门户成员 / 客户查看者 / 受限演示管理员 PATCH → 403，且不写库
  *   - 内部员工 PATCH → 照常写库、读回新配置
  *   - 客户成员 GET 仍然能看
  *
@@ -31,11 +31,13 @@ const mockAccess = vi.mocked(requirePaidClientAccess)
 const mockSession = vi.mocked(requireSession)
 const mockFrom = vi.mocked(supabaseAdmin.from)
 
-const CLIENT = 'c0000000-0000-0000-0000-000000000000'
+const CLIENT = 'client-uuid-ad-strategy-config-test'
 const STAFF = 'fde@staff.test'
 const VIEWER = 'bdm@client.test'
 const DEMO = 'demo@staff.test'
-const SELF_SERVE = 'owner@selfserve.test'
+// A paid portal member passes requirePaidClientAccess but is on no env whitelist.
+// (Self-serve users are already stopped earlier by requirePaidClientAccess.)
+const PORTAL_MEMBER = 'owner@client.test'
 
 type Row = Record<string, unknown>
 
@@ -99,7 +101,7 @@ afterEach(() => {
 
 describe('ad-strategy-config — PATCH 非内部员工改不动', () => {
   it.each([
-    ['自助注册用户（不在任何白名单）', SELF_SERVE],
+    ['付费客户门户成员（不在任何白名单）', PORTAL_MEMBER],
     ['客户查看者', VIEWER],
     ['受限演示管理员（role=admin 但限定单客户）', DEMO],
   ])('%s 关掉监测 → 403，且不写库', async (_name, email) => {

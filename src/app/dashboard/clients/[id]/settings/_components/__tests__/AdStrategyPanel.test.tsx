@@ -45,6 +45,23 @@ describe('AdStrategyPanel', () => {
     expect(screen.getByRole('switch', { name: '开关广告健康监测' })).toHaveAttribute('aria-checked', 'true')
   })
 
+  it('403 on recipients save → unsaved edit is put back to the stored list', async () => {
+    mockFetchSequence([
+      { json: { success: true, config: CONFIG } },
+      { status: 403, json: { error: 'Forbidden' } },
+    ])
+    render(<AdStrategyPanel clientId={CLIENT_ID} />)
+
+    const box = await screen.findByPlaceholderText(/zhang@example.com/)
+    fireEvent.change(box, { target: { value: 'attacker@evil.test' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存收件人' }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/只有 Magic Engine 内部同事能改这项/)).toBeInTheDocument()
+    })
+    expect(box).toHaveValue('fde@staff.test')
+  })
+
   it('other save failures keep the generic retry message', async () => {
     mockFetchSequence([
       { json: { success: true, config: CONFIG } },

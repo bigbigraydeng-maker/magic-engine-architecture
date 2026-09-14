@@ -72,6 +72,8 @@ export function AdStrategyPanel({ clientId }: Props) {
       if (res.status === 403) {
         // Only ME staff may change monitoring / recipients (route guardGlobalAdmin).
         setBanner({ kind: 'err', text: '只有 Magic Engine 内部同事能改这项。原来的设置还在。' })
+        // Put the unsaved draft back so the box matches "原来的设置还在".
+        if (state.phase === 'ready') setRecipientsDraft(state.config.digest_recipients.join('\n'))
         return
       }
       const json = await res.json()
