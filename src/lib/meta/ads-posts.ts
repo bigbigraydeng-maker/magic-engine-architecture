@@ -78,7 +78,14 @@ export async function fetchAdStoryIdsResult(
       error = `ads ${acct}: ${res.status} code=${code ?? '?'}`
       break
     }
-    const json = (await res.json()) as { data?: RawAd[]; paging?: { next?: string }; error?: { message: string } }
+    let json: { data?: RawAd[]; paging?: { next?: string }; error?: { message: string } }
+    try {
+      json = await res.json()
+    } catch (err) {
+      console.error('[meta/ads-posts] fetchAdStoryIds body parse error:', err)
+      error = `ads ${acct}: response body was not valid JSON`
+      break
+    }
     if (json.error) {
       console.error('[meta/ads-posts] fetchAdStoryIds error:', json.error.message)
       error = `ads ${acct}: ${json.error.message.slice(0, 200)}`
