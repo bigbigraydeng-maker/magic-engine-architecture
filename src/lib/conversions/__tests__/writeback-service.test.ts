@@ -20,6 +20,7 @@ class FakeDb {
     me_conversion_writebacks: [],
     clients: [],
     contacts: [],
+    contact_touchpoints: [],
   }
 
   from(table: string) {
@@ -121,7 +122,10 @@ function makeWriter(over: Partial<DestinationWriter<unknown>> = {}) {
 const CLIENT = 'c0000000-0000-0000-0000-000000000000'
 const OUTCOME = '11111111-2222-3333-4444-555555555555'
 
-function seed(db: FakeDb, over: { outcome?: Row; client?: Row; contact?: Row } = {}) {
+function seed(
+  db: FakeDb,
+  over: { outcome?: Row; client?: Row; contact?: Row; touchpoints?: Row[] } = {},
+) {
   db.tables.clients.push({
     id: CLIENT,
     default_phone_country: '64',
@@ -146,6 +150,7 @@ function seed(db: FakeDb, over: { outcome?: Row; client?: Row; contact?: Row } =
     ...over.outcome,
   })
   if (over.contact) db.tables.contacts.push(over.contact)
+  if (over.touchpoints) db.tables.contact_touchpoints.push(...over.touchpoints)
 }
 
 function deps(db: FakeDb, writer = makeWriter()) {
@@ -298,6 +303,52 @@ describe('不该发的都不发', () => {
     const r = await sendApprovedOutcome(OUTCOME, deps(db, w))
     expect(w.sendSpy).not.toHaveBeenCalled()
     expect(r.message).toContain('别再联系')
+  })
+
+  it('私信里刚说过「别再联系」、contacts 那一列还没来得及更新的，也不发', async () => {
+    // 🔴 回归测试：修复前这里只查 contacts.do_not_contact（还是 false），
+    // 会把明确拒联的客人数据发出去。真相源是触点，不是那一列——
+    // 见 src/lib/crm/dnc.ts。
+    seed(db, {
+      outcome: { contact_id: 'ct-1' },
+      contact: { id: 'ct-1', do_not_contact: false },
+      touchpoints: [
+        {
+          contact_id: 'ct-1',
+          occurred_at: new Date().toISOString(),
+          metadata: { outcome: 'do_not_contact' },
+        },
+      ],
+    })
+    const w = makeWriter()
+    const r = await sendApprovedOutcome(OUTCOME, deps(db, w))
+    expect(w.sendSpy).not.toHaveBeenCalled()
+    expect(r.message).toContain('别再联系')
+  })
+
+  it('拒联触点后来被人明确纠正过的，照常发', async () => {
+    // 纠正（dnc_cleared）晚于那条拒联触点 → isDoNotContact 判否，
+    // 这条要确认走通用判据后没有反而把已纠正的人也拦住。
+    seed(db, {
+      outcome: { contact_id: 'ct-1' },
+      contact: { id: 'ct-1', do_not_contact: false },
+      touchpoints: [
+        {
+          contact_id: 'ct-1',
+          occurred_at: new Date(Date.now() - 60_000).toISOString(),
+          metadata: { outcome: 'do_not_contact' },
+        },
+        {
+          contact_id: 'ct-1',
+          occurred_at: new Date().toISOString(),
+          metadata: { outcome: 'dnc_cleared' },
+        },
+      ],
+    })
+    const w = makeWriter()
+    const r = await sendApprovedOutcome(OUTCOME, deps(db, w))
+    expect(w.sendSpy).toHaveBeenCalled()
+    expect(r.message).not.toContain('别再联系')
   })
 
   it('超过平台时间窗口的不发，并说清早了几天', async () => {
