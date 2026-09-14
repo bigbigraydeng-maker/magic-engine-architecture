@@ -192,6 +192,17 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 
 **后续跟踪**：issue #1669（确认人登记写入 API，P3）。
 
+## ME 旅游版 · Tour 管理模块（2026-09-14 立项，PM 已立版，未授权实施）
+
+规划见 [`specs/2026-09-14-me-tour-management-module-plan.md`](./specs/2026-09-14-me-tour-management-module-plan.md)。ME 旅游版已正式立版（`registry/product-versions.md`，Customer Zero = CTS）。**已上线的只有「行程路线地图」这一块**（8 个 CTS 团在正式站，见 CHANGELOG 2026-09-14）；下面是模块化的未完成项，每步走双审 + 五道 Build Gate：
+
+- [ ] **P1 · 统一/连接现有团事实源 + 最小营销快照**（A 级）：连接 `config/clients/cts/offerings.yaml` / `src/lib/web-intelligence/first-party-tours.ts`(`FirstPartyTour`) / 客户官网，**不新建第三份权威源**；价格/库存/出发日期按 `ME_PRODUCT_DEFINITION.md` §3.2 留外部源 Connector 读。先解决「多份源漂移、各渠道给客户不同答案」。
+- [ ] **P2 · 路线图生成器产品化**（B 级）：把原型 `docs/specs/prototypes/tour-route-map/` 搬成 ME 正式能力，输入 = P1 快照，输出 PC + 手机 SVG 落公开桶。**前置：品牌/logo、底图、地理标注规则参数化**（当前 CTS/中国硬编码）。晋升门槛 = 第 2 个旅游客户复制（L2）。
+- [ ] **P3 · Tour 管理后台 UI**（B 级）：ME 后台录入营销快照 + 一键生成地图；价格/出发日期只读展示。
+- [ ] **P4 · 内容 + 定价产出**（B 级）：接现有 AI 文案 / SEO writer / grounding，从快照产出各渠道文案；价格读统一事实源。
+- [ ] **P5 · 一键交付**（C 级）：地图 + 文案 + PDF brochure + 落地页片段打包。
+- **PM 待拍板**：优先级（P1+P2 何时排期）· 第一版范围（只做地图+行程 vs 四块一起）。
+
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
 - [ ] Latest-result follow-up: show newest signal per page/direction including ignore; collapse earlier records without implying they are resolved. Read-only presentation, risk C, based on main bd6d3c4e47ae4d02feccabc9dcb88aabb744c1c6 fetched 2026-09-09.

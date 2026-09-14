@@ -27,6 +27,17 @@ PR [#1609](https://github.com/bigbigraydeng-maker/magic-engine/pull/1609) 已合
 
 ---
 
+### 2026-09-14（CTS 行程路线地图 8 团上线 + ME 旅游版立版 + Tour 管理模块规划）
+
+PM 从「给 CTS 也做一张 Golden China 那样的路线图」起步，最终沉淀成 ME 旅游版的第一个共享能力候选 + 一条产品线立版。
+
+1. **8 个 CTS 在售团的「行程路线地图」上线正式站**（`chinatravel` 仓 `ctstours.co.nz`，PR #184/#185）：Golden China + 双城记 / 上海周边 / Best of China / 丝路 / 27 天全景 / 圣诞团（奥克兰 + 基督城）。每张按各团**真实行程**（城市顺序 / 每城住几晚 / 交通方式 / 活动，全部取自官网行程数据或 `tours.ts`，未编造）自动生成，PC 宽版 + 手机竖版随屏切换，挂在各团行程页「Itinerary」标签顶部。地图用真实中国边界数据（非手画）、台湾按中国惯例标注、CTS 品牌 + logo、无价格无固定出发日期（通用图）。
+2. **统一为 Golden China 风格**（PM 复审后返工）：卡片按到达顺序排（第一站在最上、国际进出/中转城市排到它实际停留的最后位置）、城市名紧贴圆点无引导线、城市铺开、箭头顺行程走，一眼读出第 1 站→第 2 站。
+3. **ME 旅游版正式立版**（PM 2026-09-14 拍板，`docs/registry/product-versions.md`）：Customer Zero = CTS；首个 L2 能力候选 = 行程转路线地图生成器（`candidate · 1/2`，未晋升共享能力）。
+4. **ME Tour 管理模块规划成文**（`docs/specs/2026-09-14-me-tour-management-module-plan.md`，未授权实施）：一个团推广前统一备好内容/定价/行程/地图；经 Codex 复审修正为「连接现有事实源（`offerings.yaml`/`FirstPartyTour`）+ 最小营销快照」，遵守 `ME_PRODUCT_DEFINITION.md` §3.2/§3.3——**ME 不自建旅游库存/报价系统**。生成器原型存进受跟踪路径 `docs/specs/prototypes/tour-route-map/`。
+
+**Reuse Statement**：地图生成器逻辑不含写死的客户名/城市/价格（全来自输入 specs）；但视觉资产（CTS 品牌色/logo、中国底图、台湾标注）当前**硬编码**，故严格范围 = 「中国线路 · CTS 首例」，未取得旅游版共享资格。产品化前置：品牌/底图/地理规则参数化 + 团事实走 Connector。晋升门槛 = 第 2 个旅游客户事实复制（L2，非 L1 跨行业）。
+
 ### 2026-09-13（视频工厂：资料包自助管理界面 + 视频归属选择 + CTS 真实 7 团接入）
 
 同一天会话继续：PM 追问"这个能力在 Magic Engine 里是不是真的做完了"，倒逼出两块此前一直靠工程手改数据库的界面。
