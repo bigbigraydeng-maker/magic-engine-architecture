@@ -68,8 +68,14 @@ ON CONFLICT (client_id, ad_account_id) DO NOTHING;
 -- ── CTS Tours 的第二个账户（本次修复的直接目标）─────────────────────────
 -- act_2202695063810470，CTStours 官方账户，跑 ThruPlay 顶层认知广告。
 -- 非主账户：不影响任何读 clients.meta_ad_account_id 的单账户调用点。
+-- WHERE EXISTS 而非裸 VALUES：这条客户行只存在于生产库的历史数据里，不是
+-- 由任何 migration 建的。从零重放全部 migration 的场景（本机沙盘/CI）里没有
+-- 这行，裸 INSERT 会撞外键约束报错退出。生产库上 CTS 这行本来就在，行为不变。
 INSERT INTO public.client_meta_ad_accounts (client_id, ad_account_id, label, is_primary)
-VALUES ('c0000000-0000-0000-0000-000000000000', 'act_2202695063810470', 'CTStours 官方账户（ThruPlay）', false)
+SELECT 'c0000000-0000-0000-0000-000000000000', 'act_2202695063810470', 'CTStours 官方账户（ThruPlay）', false
+WHERE EXISTS (
+  SELECT 1 FROM public.clients WHERE id = 'c0000000-0000-0000-0000-000000000000'
+)
 ON CONFLICT (client_id, ad_account_id) DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';
