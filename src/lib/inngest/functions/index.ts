@@ -4,6 +4,7 @@ import { CLOUD_FN_PREFIX } from '../client'
 import { probePing } from './probe'
 import { geoRemeasureOne } from './geo-remeasure'
 import { dailyPlanPostFanOut, dailyPlanPostMeasure } from './daily-plan-post-measurement'
+import { dailyPlanPostStoryResolve } from './daily-plan-post-story-resolve'
 import { factoryReelMeasurementAdapter } from './factory-reel-measurement-adapter'
 import { flywheelSeoWeeklyFanOut, flywheelSeoSnapshotOne } from './flywheel-seo-weekly'
 import { messengerBriefAfterSync } from './messenger-brief-after-sync'
@@ -18,6 +19,7 @@ export const cloudFunctions = [
   geoRemeasureOne,
   dailyPlanPostFanOut,
   dailyPlanPostMeasure,
+  dailyPlanPostStoryResolve,
   factoryReelMeasurementAdapter,
   flywheelSeoWeeklyFanOut,
   flywheelSeoSnapshotOne,
