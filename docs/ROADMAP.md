@@ -847,7 +847,7 @@ Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说�
       **仍是猜的**，Meta 没公开文档。现在靠「秒回 = 机器」兜住了，但拿一条 CTS 真实
       收件箱的 Graph 返回确认一次，判据会更硬。这台开发机连不上 facebook.com，做不了
 - [x] **M3 从 CRM 里回邮件** —— PR #1716（2026-09-15 合并）。没有接进 `lib/messaging/channels.ts` 那套总线——那套总线目前零生产调用方（连 Messenger 自己都没注册进去），照抄会议再造一层没人用的架子；改成照抄 `messenger` 那条真正在用的 reply 路由的形状（`src/lib/microsoft/mail-send.ts` + `POST /api/clients/[id]/email/conversations/[conversationId]/reply`）。三轮复审共同抓出：`Mail.ReadWrite` 权限漏申请（`Mail.Send` 只管发、不管建草稿）、多邮箱客户会拿错连接的令牌、回信可能把客人错发成自己（应只认 `direction=inbound` 的最后一封）、Graph 消息 id 在草稿变已发送时会漂移（需要 `Prefer: IdType="ImmutableId"`）。**已知未做**：审计沿用 `conversation_outbound_log` 的自由文本列，不是专用 schema；未接入 AI 自动回复（`messenger-agent/channel-dispatch.ts` 只认 `messenger`/`whatsapp`，是 M7 的范围）。**待办**：CTS 现有邮箱连接需要重新走一次登录同意才能拿到 `Mail.ReadWrite`（读信不受影响）；NAL（本轮选定的首个真实测试客户）尚未连接邮箱，功能未经真实邮箱验证
-- [ ] **M4 邮件线程接进多渠道读取路径** —— 现在私信页面靠 `channel = 'messenger'` 把邮件挡在外面（PR #781），挡住≠接好；需要一个不挑渠道的对话页
+- [x]/[ ] **M4 邮件线程接进多渠道读取路径**（部分完成，PR #1719，2026-09-15）—— 排查发现这条本身已经过期：联系人时间线/往来记录早就是不挑渠道的了（PR #1038 修的），真正缺的只是"CRM 抽屉里能不能直接回邮件"这一个入口——抽屉里唯一的回复框硬编码只认私信。已补上：共享发送框 `ReplyBox.tsx` 改认 `channel` 参数、新增 `EmailReply.tsx` + 对应查询接口，跟私信框并排显示。**未做**：没有逐一审计其他列表/看板页有没有类似的隐藏 messenger 硬编码；邮件回复框现在不会因为"这个人没来过信"提前禁用，要点了发送才由服务端拒绝（子牙审查已确认非安全问题，纯体验优化，可后续小 PR 补）
 - [ ] **M5 WhatsApp Business API（新号）** —— 申请清单已给 PM（`docs/sops/whatsapp-business-api-申请清单.md`）。⚠️ AU/NZ 单价未核实（这台开发机连不上 Meta 站点），拿到后台截图后补
 - [ ] **M6 客户员工账号 + 角色 + 归属 + 转派 + 推手机** —— PM：「ME 的登陆系统需要给到 client 的员工层级」。`conversations` 已有 `owner_email` / `snooze_until` 两列待用，不需要 migration
 - [ ] **M7 「谁来回」开关 + Meta AI 客服配置**（AI 先答 / 人工先答 / 分时段）
