@@ -91,7 +91,11 @@ function mockDb() {
     if (table === 'conversation_messages') {
       return {
         upsert: () => ({ select: async () => ({ data: [{ id: 'm1' }] }) }),
-        select: () => ({ eq: async () => ({ count: 7 }) }),
+        // 同一个 `.select().eq()` 形状服务两处调用：算总条数的 `{count:'exact',
+        // head:true}` 查询（取 `count`），和去重预检的「这条线程已经存了哪些信」
+        // 查询（取 `data`，见 mail-ingest.ts 的 `messageSignature` 那段）——两边
+        // 都不关心对方要的字段，所以两个字段都给，都不解构到 undefined。
+        select: () => ({ eq: async () => ({ data: [], count: 7 }) }),
       }
     }
     if (table === 'contact_identities') {
@@ -99,7 +103,14 @@ function mockDb() {
       return { select: () => chain }
     }
     if (table === 'contact_touchpoints') {
-      return { upsert: () => ({ select: async () => ({ data: [{ id: 't1' }] }) }) }
+      // `select()` 服务去重预检（「这个人身上已经有哪些同渠道触点」，见
+      // mail-ingest.ts 的 `writeTouchpoints`，三个 `.eq()` 分别过滤 client_id /
+      // contact_id / channel）——这批测试不关心去重本身，让它查回「什么都
+      // 没有」，行为等同于改动前（每条都当新的写）。
+      return {
+        upsert: () => ({ select: async () => ({ data: [{ id: 't1' }] }) }),
+        select: () => ({ eq: () => ({ eq: () => ({ eq: async () => ({ data: [] }) }) }) }),
+      }
     }
     throw new Error(`unexpected table ${table}`)
   })
