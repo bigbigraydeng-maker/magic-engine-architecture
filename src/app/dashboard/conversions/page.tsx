@@ -45,6 +45,8 @@ type Outcome = {
   redacted_at: string | null
   source_kind: string
   created_at: string
+  /** contact_id 本身不是 PII（一个内部 UUID），用来跳转去客户管理页看这个人是谁。 */
+  contact_id: string | null
   me_conversion_writebacks?: Writeback[]
 }
 
@@ -606,8 +608,22 @@ export default function ConversionsPage() {
                     web_form: '网站表单',
                     meta_lead_form: '广告表单',
                     api: '接口',
+                    crm_hubspot: 'HubSpot 同步',
+                    crm_sheet_sync: '表格同步',
+                    messenger_conversation: '私信判断',
                   }[o.source_kind] ?? o.source_kind}
                 </div>
+                {o.contact_id && (
+                  <a
+                    href={`/dashboard/clients/${clientId}/crm/all?contact=${o.contact_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ fontSize: 13, color: '#2563eb', display: 'inline-block', marginTop: 4 }}
+                  >
+                    查看这个客人 →
+                  </a>
+                )}
                 {expired && (
                   <div style={{ color: '#a15c00', fontSize: 13, marginTop: 6 }}>
                     ⚠️ 已过去 {Math.floor(age)} 天，广告平台只收 {MAX_AGE_DAYS} 天内的 —— 现在发也收不进去，选「不发送」即可。
