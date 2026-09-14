@@ -81,6 +81,12 @@ function fakeSupabase(opts: {
         }),
         update(patch: Record<string, unknown>) {
           opts.updates.push({ table, patch })
+          // 真实 DB 里 update 之后再 select 会看到新值——这里也让它有状态，不然
+          // ensurePostFieldsWritten 写完，ensureSubmitted 那次单独的读还是拿到写入前
+          // 的旧 fixture，测不出"自动写入真的接上了下游读取"这件事（只有一个 job/
+          // 一个 post，不用按 id 精确匹配，同表直接原地合并）。
+          if (table === 'content_posts' && opts.posts) Object.assign(opts.posts, patch)
+          if (table === 'content_factory_render_jobs' && opts.job) Object.assign(opts.job, patch)
           return { eq: async () => ({ error: null }) }
         },
       }
@@ -148,6 +154,44 @@ describe('factory-creatomate-render — 早期失败必须落 job.status=failed�
 
     const failedUpdate = updates.find((u) => u.table === 'content_factory_render_jobs' && (u.patch as { status?: string }).status === 'failed')
     expect(failedUpdate, 'job 必须被 patch 成 failed，否则这条失败对 manual-items.ts 永远不可见').toBeDefined()
+  })
+
+  // 2026-09-13 复审补测：这条校验（sceneFieldMap 的 caption 槽位和 requiredPostFields
+  // 撞了同一个元素名）是子牙设计复审要求加的安全网，加了却漏了测，这里补上。`.fn` 读法
+  // 是本文件第 145-147 行注释里已用真实 d.ts 实测确认过、并已用了 3 次的既有模式，不是
+  // 新的接口猜测。
+  it('模板配置里 sceneFieldMap 的 caption 和 requiredPostFields 撞了同一个元素名 → 抛错，job 标 failed', async () => {
+    const updates: Record<string, unknown>[] = []
+    const supabase = fakeSupabase({
+      job: { id: JOB_ID, client_id: CLIENT_ID, content_post_id: POST_ID, status: 'queued', scenes: null, creatomate_render_id: null },
+      clients: {
+        factory_config: {
+          render: {
+            engine: 'creatomate',
+            creatomate: {
+              template_id: 'tmpl-1',
+              scene_field_map: [{ visual: 'Still-1', caption: 'EndTour' }], // 跟下面 requiredPostFields 撞名
+              required_post_fields: ['EndTour'],
+            },
+          },
+        },
+      },
+      posts: { title: 'x', script: '口播稿' },
+      updates,
+    })
+    prepareSceneAssets.mockResolvedValue([
+      { index: 0, captionText: 'A', visualUrl: 'https://x/a.mp4', visualType: 'video', voUrl: 'https://x/a.mp3', costUsd: 0.3 },
+    ])
+
+    const fn = createFactoryCreatomateRender({ supabase: supabase as never })
+    const handler = (fn as unknown as { fn: (ctx: { event: { data: unknown }; step: ReturnType<typeof fakeStep> }) => Promise<unknown> }).fn
+
+    await expect(
+      handler({ event: { data: { job_id: JOB_ID, client_id: CLIENT_ID, post_id: POST_ID } }, step: fakeStep() }),
+    ).rejects.toThrow(/模板配置冲突/)
+
+    const failedUpdate = updates.find((u) => u.table === 'content_factory_render_jobs' && (u.patch as { status?: string }).status === 'failed')
+    expect(failedUpdate, 'job 必须被 patch 成 failed').toBeDefined()
   })
 })
 
@@ -227,7 +271,16 @@ describe('resolvePostEndcardOverrides — 单视频专属 EndCard 覆盖（2026-
 })
 
 describe('factory-creatomate-render — 提交时合并单视频 EndCard 覆盖', () => {
-  it('客户模板声明了 requiredPostFields，但这条视频的 content_posts 没有对应 endcard → 提交前拦下，job 标 failed', async () => {
+  // 2026-09-13 子牙+魏征二次设计复审后：requiredPostFields 的值现在由
+  // ensurePostFieldsWritten 在 prepare-assets 步骤自动算好、自动写入，不再要求人工
+  // 预先手填 content_posts.generation_context_snapshot.endcard——所以"没人填 endcard"
+  // 这个失败点不复存在，取而代之的是"客户模板配置里没配 offers 事实字典"这个更早、
+  // 更准确的失败点（同样在 prepare-assets 就会拦下，同样会把 job 标 failed）。
+  //
+  // 下面两个用例的 `.fn` 读法（`as unknown as { fn: ... }`）不是新写的类型强转——是本
+  // 文件第 139-141 行注释里已经用真实 d.ts（node_modules/inngest/components/
+  // InngestFunction.d.ts）实测确认过的同一个既有读法，本文件其余用例已经这么读了三次。
+  it('客户模板声明了 requiredPostFields，但没配 offers 事实字典 → prepare-assets 阶段就拦下，job 标 failed', async () => {
     const updates: Record<string, unknown>[] = []
     const supabase = fakeSupabase({
       job: { id: JOB_ID, client_id: CLIENT_ID, content_post_id: POST_ID, status: 'queued', scenes: null, creatomate_render_id: null },
@@ -235,11 +288,11 @@ describe('factory-creatomate-render — 提交时合并单视频 EndCard 覆盖'
         factory_config: {
           render: {
             engine: 'creatomate',
-            creatomate: { ...STORED_TEMPLATE_CONTRACT, required_post_fields: ['EndTour', 'EndDate'] },
+            creatomate: { ...STORED_TEMPLATE_CONTRACT, required_post_fields: ['EndTour', 'EndDate'] }, // 没配 offers
           },
         },
       },
-      posts: { title: 'x', script: '口播稿' }, // 没有 generation_context_snapshot
+      posts: { title: 'x', script: '口播稿' },
       updates,
     })
     prepareSceneAssets.mockResolvedValue([
@@ -251,14 +304,47 @@ describe('factory-creatomate-render — 提交时合并单视频 EndCard 覆盖'
 
     await expect(
       handler({ event: { data: { job_id: JOB_ID, client_id: CLIENT_ID, post_id: POST_ID } }, step: fakeStep() }),
-    ).rejects.toThrow(/缺少 EndCard 内容/)
+    ).rejects.toThrow(/一个团\/档位的事实字典都没配/)
 
     const failedUpdate = updates.find((u) => u.table === 'content_factory_render_jobs' && (u.patch as { status?: string }).status === 'failed')
     expect(failedUpdate, 'job 必须被 patch 成 failed，不能安静停在 queued/rendering').toBeDefined()
     expect(submitRender).not.toHaveBeenCalled()
   })
 
-  it('endcard 内容齐全 → 合并进 staticOverrides 传给 buildModifications，客户级 staticOverrides 也保留', async () => {
+  it('模板配了 offers 但这条视频指定的 offer_key 在事实字典里找不到 → 同样在 prepare-assets 拦下，不猜一份顶上', async () => {
+    const updates: Record<string, unknown>[] = []
+    const supabase = fakeSupabase({
+      job: { id: JOB_ID, client_id: CLIENT_ID, content_post_id: POST_ID, status: 'queued', scenes: null, creatomate_render_id: null },
+      clients: {
+        factory_config: {
+          render: {
+            engine: 'creatomate',
+            creatomate: {
+              ...STORED_TEMPLATE_CONTRACT,
+              required_post_fields: ['EndTour'],
+              offers: { best_of_china: { tour: 'Best of China' } },
+              post_field_sources: { EndTour: 'tour' },
+            },
+          },
+        },
+      },
+      posts: { title: 'x', script: '口播稿', generation_context_snapshot: { offer_key: 'christmas_tour' } },
+      updates,
+    })
+    prepareSceneAssets.mockResolvedValue([
+      { index: 0, captionText: 'A', visualUrl: 'https://x/a.mp4', visualType: 'video', voUrl: 'https://x/a.mp3', costUsd: 0.3 },
+    ])
+
+    const fn = createFactoryCreatomateRender({ supabase: supabase as never })
+    const handler = (fn as unknown as { fn: (ctx: { event: { data: unknown }; step: ReturnType<typeof fakeStep> }) => Promise<unknown> }).fn
+
+    await expect(
+      handler({ event: { data: { job_id: JOB_ID, client_id: CLIENT_ID, post_id: POST_ID } }, step: fakeStep() }),
+    ).rejects.toThrow(/christmas_tour/)
+    expect(submitRender).not.toHaveBeenCalled()
+  })
+
+  it('offers 配好、这条视频没标 offer_key（客户只配了一个档位）→ 自动算出 EndTour 写进 endcard，合并进 staticOverrides，其它子 key 和客户级 staticOverrides 都保留', async () => {
     const updates: Record<string, unknown>[] = []
     const supabase = fakeSupabase({
       job: { id: JOB_ID, client_id: CLIENT_ID, content_post_id: POST_ID, status: 'queued', scenes: null, creatomate_render_id: null },
@@ -270,6 +356,8 @@ describe('factory-creatomate-render — 提交时合并单视频 EndCard 覆盖'
               ...STORED_TEMPLATE_CONTRACT,
               static_overrides: { EndLogo: 'https://x/logo.png' },
               required_post_fields: ['EndTour'],
+              offers: { default: { tour: 'Best of China' } },
+              post_field_sources: { EndTour: 'tour' },
             },
           },
         },
@@ -277,7 +365,9 @@ describe('factory-creatomate-render — 提交时合并单视频 EndCard 覆盖'
       posts: {
         title: 'x',
         script: '口播稿',
-        generation_context_snapshot: { endcard: { EndTour: 'Best of China' }, unrelated_key: 'from-another-feature' },
+        // 没有 endcard 子 key——这次要验证的正是"不用人工预填，自动算出来写进去"，
+        // 只留一个不相关的兄弟 key 验证自动写入不会把它冲掉。
+        generation_context_snapshot: { unrelated_key: 'from-another-feature' },
       },
       updates,
     })

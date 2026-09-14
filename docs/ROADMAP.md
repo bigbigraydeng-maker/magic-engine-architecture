@@ -40,6 +40,11 @@
 - [x] 背景音乐——2026-09-13 发现模板其实自带一个通用的 `Music` 音频图层（此前的模板结构记录漏记了这个，只记了画面/文字元素），PM 上传了 3 首新曲目到 Dropbox（`MagicLab_Studio/Music/`），已全部转存到正式素材库，PM 选定 `Horizon's Call` 作为默认背景音乐，通过已有的 `static_overrides` 机制接入（不需要改代码），已用真实渲染验证音轨确实有声音且不是哑的
 - [x] 片尾信息（团名/路线/天数价格/出发日期）此前 100% 是模板作者写死的示例内容，从不随视频变化——新增 `CreatomateTemplateContract.requiredPostFields` + `content_posts.generation_context_snapshot.endcard`（PR #1613），每条视频可以有自己真实的片尾内容，缺字段直接拦渲染不许静默套用旧内容。已用两条真实渲染验证（"Best of China"/"China Awaits"两条视频片尾信息各自正确、互不相同）
 - [x] 🔴 早前记录"MUAPI_API_KEY 缺失是低频 P3"是错的判断——2026-09-13 当天晚些时候真正用全新脚本出片（不复用旧 scenes）才发现真正根因：`loadRankableClientAssets`（自动选真实照片）的数据库查询有 bug，把 47 张已核实真实照片里的 46 张误判成"视频"过滤掉了，池子实际只剩 1 张，几乎每次都会命中"配不到真实照片→AI 现画兜底"这条路，而不是低频边缘情况。已修复（PR #1615）：改成跟同文件另一处已经写对的逻辑一致的判断。修复后验证：真实照片池从 1 张恢复到 50 张，两条全新脚本各自正确匹配到长城/故宫/兵马俑/上海真实照片。`MUAPI_API_KEY` 本身仍未配置，但命中率修复后应显著下降，不再是当天最紧迫的事
+- [x] 上一条遗留的 `MUAPI_API_KEY` 缺失当天晚些时候真的命中了三次（全新脚本每次都触发一个镜头配不到真实照片、回退现画、卡在 Muapi 图生视频缺密钥）——2026-09-13 PM 直接在 Render 后台补上，已用真实渲染验证 Muapi 回退路径恢复正常
+- [x] 片尾信息此前虽然有 `requiredPostFields` 机制（PR #1613），但全仓库没有任何代码真的往 `content_posts.generation_context_snapshot.endcard` 写值——此前两次"验证通过"全靠人工手写数据库代填，等于每条视频出片前都要一次人工介入，撞了 CLAUDE.md「FDE/PM 要填的字段必须连 Settings UI 一起做完，不能进 Supabase 后台直填」这条红线。新增 `CreatomateTemplateContract.offers`（按团/出发城市变体分的真实事实字典）+ `postFieldSources`（元素名→事实字段映射）+ 自动写入机制（PR #1632，子牙+魏征两轮设计复审 + 实施后复审共抓出 3 处真问题都已修）：这几个字段现在是纯函数确定性映射（不走 LLM，杜绝幻觉/改写风险），且"没指定用哪个团 + 客户配了 ≥2 个团"时 fail-closed 抛错，不会猜一份不相关的事实套上去。已用真实渲染验证：`endcard` 自动写对（团名/路线/价格/出发日期全部正确且互不相同），零人工数据库写入
+- [x] 上两条遗留全部补完（PR #1642）：①`client-config.ts::mergeFactoryConfig` 的 Settings UI 写入路径此前确实没有回写 `static_overrides`/`required_post_fields`/`offers`/`post_field_sources`——已修，四个字段现在按"没带就沿用已存值、带 null 就清空、带合法值就覆盖"的语义正确合并。②新增结构化"资料包"管理界面（设置页 → 内容 tab → 视频工厂配置）：FDE/PM 自己就能增删团/档位及其真实字段，不用再找工程改代码；内容工厂看板"确认做"这一步新增归属下拉框（`content_posts.generation_context_snapshot.offer_key`），客户配了 ≥2 个资料包时必须先选。实施后复审（对抗性）额外抓出并修复两个真洞：offer_key 写入前不校验是否存在于客户配置里（会让选错/选到已删档位的视频混进渲染队列，等 Inngest 任务异步失败才发现——已改成确认那一刻同步 400 拦下）、资料包表单里档位名重复会静默互相覆盖（已改成阻塞报错）。CTS 真实的 7 个在售团（Golden China / 圣诞团奥克兰+基督城 / Best of China / 丝路 / 双城记 / 上海周边）已从 `config/clients/cts/offerings.yaml`（见下面"内容/私信"分组的说明）导入配置好，用真实产品数据在生产环境跑通完整闭环验证（UI 选团 → 自动核对 → 自动填对片尾信息 → 渲染成功）。
+- [ ] 上面这次发现：CTS 现在有**两套**"这个客户在卖哪些团"的真实事实存储——视频工厂这边（`factory_config.render.creatomate.offers`）和私信回复 Agent 那边（`config/clients/cts/offerings.yaml`，#1577）各存一份，语义高度重叠，以后团有变动要改两个地方，容易漏改。建议后续把其中一份定为唯一真相源，另一份改成读它、不再各自维护。
+- [ ] 真实照片排序（`rankAssetsByPrompt`）疑似没有匹配度门槛，会把明显文不对题的照片当"匹配成功"返回（如故宫文案配上长城照片、兵马俑文案配上梯田照片，`reason` 字段自己写的解释都文不对题）——2026-09-13 诊断发现，已建独立任务调查范围和优先级，不在这批改动里处理
 - [ ] NAL（New Asian Logistics，物流客户）首次接入视频工厂——PM 拍板"先用现有真实素材做1图1视频"，2026-09-13 已完成（真实素材取自 NAL 自己的 Facebook 主页，走 ffmpeg 本地合成，未走 Creatomate，NAL 没有专属模板）。素材偏薄（只有1张车队照+1条员工讲解视频），正式量产前建议向客户要更多真实素材
 
 ## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
@@ -60,6 +65,76 @@
       是表格填写现状不是代码问题；等 PM/FDE 开始真正使用这两列，成交同步会自动生效，不需要改代码
 - [ ] 若未来这条同步的记录量明显起量（不再是当前的 0-1 条成交/次），"查不到价格/缺日期"的搁置项要不要
       升级成正式的 `pm-todo` manual item（而不是只在同步响应里一次性返回），需要重新评估
+
+## CTS Messenger+WhatsApp 治理式客服 v3 —— 事实层改用客户知识库平台能力（2026-09-14）
+
+> 完整方案（v1/v2/v3 全在一份文件里，v3 = WhatsApp 双渠道扩容 + 9 条必补项 + §9.14 C 客户
+> 知识库同步修订）：`~/.claude/plans/cts-tours-messenger-dynamic-pearl.md`（不在仓库里，
+> 本地文件）。平台层级登记：[docs/registry/platform-candidates.md](./registry/platform-candidates.md)
+> 第 79 行（Governed Lead-Reply Agent）。跟踪 issue：
+> [#1290](https://github.com/bigbigraydeng-maker/magic-engine/issues/1290)。
+
+**进度**：方案已过子牙+魏征 2 轮复审 + 板桥客户视角复审，Build Gate 五关走完，拆成 18 个
+GitHub issue（#1574-#1592）。**wave-1/wave-2 共 7 个 issue 已合并到 main**：数据库表结构
+（#1628）、跨渠道退订检测（#1625）、对话分类逻辑（#1621）、CTS 团清单资料层（#1626，**已
+作废，见下**）、channel-dispatch 查表分发（#1636）、WhatsApp webhook 退订+事件接线
+（#1637）、Messenger webhook（#1640）。
+
+**2026-09-14 重大变更**：开发过程中发现 #1577/#1626 的 `offerings.yaml` 事实层方案跟一条
+更早的真实 PM 决策（`docs/DECISIONS.md` 2026-09-13 记录："客户知识库作为 Governed Lead-Reply
+Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步到位建客户知识库平台能力"
+（独立 L1 候选，见 [docs/registry/platform-candidates.md](./registry/platform-candidates.md)
+及本文档下一节"客户知识库"），6 步建设中前两步已合并：
+- [x] Issue #1643 敏感度检测器 —— PR #1650 已合并
+- [x] Issue #1644 表结构 + `getClientKnowledge` 读取入口 —— PR #1652 已合并（过子牙架构+
+      魏征挑刺+狄仁杰攻击验证三方复审，合并前修了邮箱比较缺 trim、身份唯一性设计跟冲突
+      检测需求冲突两处真问题；确认人登记写入 API 尚未建，见 issue #1669）
+
+本方案 Layer 1（事实层）/2（4 只读工具）/3（五闸）/4（F1 auto-ack）/5（daily-todo 复核栏）
+六处已改接 `getClientKnowledge`，`config/clients/cts/offerings.yaml` 及其加载器整条路线
+已作废（详见方案文末"§9.14 C 同步修改"章节）。
+
+**Held 待重做的 PR**（依赖 `getClientKnowledge`，等它合并后改接）：
+- [ ] #1638 Verifier 框架 + CTS policy —— 改接新的 `forbiddenFactKeys`/数字核实闸设计
+- [ ] #1639 agent-core prompt.ts + tools.ts —— 4 只读工具改用 purpose+visibility 模型
+
+**审查过程发现并已修复的关键问题**（wave-1，不是走过场，逐条真实验证）：数据库外键漏写级联
+删除；退订判断第一版设计换渠道即失效（已改用现成的 `contacts.do_not_contact` 机制）；CTS
+团清单目录名（`cts`）跟数据库客户 ID（UUID）对不上会导致整套功能在生产环境直接报错。
+
+**已知但不阻塞的后续项**：
+- `optout.ts` 的撤销入口/分页/写路径归属校验三项小缺口，详见 issue #1290 评论
+- 确认人登记写入 API（issue #1669，P3，随 #1645/#1646 排期）
+
+- [ ] 剩余 issue（Verifier 治理层重做、Inngest 编排 4 函数、Messenger/WhatsApp webhook 剩余
+      接入、门户 UI、dry-run 验证、Delivery day 灰度切换）——客户知识库剩余 4 步（#1645 萃取
+      工作流 / #1646 FDE审核+客户确认页 / #1647 brief.ts 去 CTS 化 / #1648 rollout）见下一节
+      "客户知识库"，进度共享同一个 ROADMAP
+- [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
+
+## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步建设中（2026-09-14）
+
+> 方案：`~/.claude/plans/client-knowledge-base-capability.md`（本地文件）。PM 2026-09-13
+> 拍板："长期来看 Magic Engine 后台一定要有自己的客户知识库这样的专门存储，一步到位按正确
+> 做法建"。让 AI 对客户说价格/时效/承诺/政策类事实前，必须先过"ME 内部批准+客户本人确认"
+> 双签闸——直接解决了 CTS "AI 报停售团价格"这类事故的根因（AI 靠训练数据背景知识乱编，不是
+> 靠受控事实源）。
+
+**6 步进度**：
+- [x] 步骤 1（issue #1643）敏感度检测器 —— PR #1650 已合并
+- [x] 步骤 2（issue #1644）表结构 + 读取入口 —— PR #1652 已合并
+- [x] 步骤 3（issue #1645）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）—— PR #1671
+      已合并。移植自另一窗口 PR #1616 已过魏征复审的核心算法，改接真实
+      `detectSensitivity()`/`checkBudget()`，并经过新一轮子牙+魏征复审又修了 6 处真问题
+      （PII 脱敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已
+      关闭并 credit。
+- [ ] 步骤 4（issue #1646）FDE 审核页 + 客户确认页（客户对外可见，需板桥复审）
+- [ ] 步骤 5（issue #1647）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— **已有两个重复实现**
+      （PR #1623 已关闭 credit 给下方 PR；PR #1629 已合并作为紧急修复主线，`brief-client-
+      facts.ts` 临时文件明确标注等本步骤替换）
+- [ ] 步骤 6（issue #1648）rollout 阶段
+
+**后续跟踪**：issue #1669（确认人登记写入 API，P3）。
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
