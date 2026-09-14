@@ -27,7 +27,7 @@ vi.mock('../writeback-service', () => ({
 import { judgeOutcome } from '../ai-auto-review'
 import { checkCircuitBreaker, isSingleRecordAmountAnomalous } from '../ai-auto-review-circuit-breaker'
 import { sendApprovedOutcome } from '../writeback-service'
-import { runAiAutoReviewForClient, MAX_UNCERTAIN_ATTEMPTS } from '../ai-auto-review-run'
+import { runAiAutoReviewForClient, MAX_UNCERTAIN_ATTEMPTS, BATCH_HARD_STOP_COUNT } from '../ai-auto-review-run'
 
 type Row = Record<string, unknown>
 
@@ -241,8 +241,13 @@ describe('runAiAutoReviewForClient', () => {
     expect((clients[0] as { ai_auto_review_enabled: boolean }).ai_auto_review_enabled).toBe(false)
   })
 
-  it('已经被人工页面抢先批准的记录 → CAS 检测到 0 行受影响，不重复走发送流程', async () => {
-    outcomes.push(pendingRow({ review_status: 'approved' }))
+  it('单次批处理内批准笔数达到硬顶 → 提前停止本轮剩余记录，客户开关被熔断关掉（魏征最终复审 MEDIUM 回归测试）', async () => {
+    // 铺比硬顶还多的记录，金额都很小（不会触发金额硬顶），专门验证"笔数"这一条硬顶
+    // 真的在处理下一条**之前**生效，不是等全部处理完才检查。
+    const extra = 5
+    for (let i = 0; i < BATCH_HARD_STOP_COUNT + extra; i++) {
+      outcomes.push(pendingRow({ id: `o${i}`, amount_minor: 100 }))
+    }
     vi.mocked(judgeOutcome).mockResolvedValue({
       verdict: 'approve',
       reason: '数据完整',
@@ -251,10 +256,64 @@ describe('runAiAutoReviewForClient', () => {
       inputSnapshot: {},
       rawOutput: '{}',
     })
-    // 这一条已经不是 pending_review，所以查询根本不会拉到它——用它验证
-    // "拉取条件是 review_status=pending_review" 这件事本身。
+    const summary = await run()
+    expect(summary).toMatchObject({ ran: true })
+    if (summary.ran) {
+      // 硬顶命中后应该提前停手，不会把 25 条全部判完。
+      expect(summary.approved).toBeLessThan(BATCH_HARD_STOP_COUNT + extra)
+      expect(summary.approved).toBeGreaterThanOrEqual(BATCH_HARD_STOP_COUNT)
+    }
+    expect((clients[0] as { ai_auto_review_enabled: boolean }).ai_auto_review_enabled).toBe(false)
+    expect(audits.some((a) => a.action === 'circuit_breaker_tripped')).toBe(true)
+  })
+
+  it('拉取查询条件本身：review_status 已经不是 pending_review 的记录不会被本轮拉到', async () => {
+    outcomes.push(pendingRow({ review_status: 'approved' }))
     const summary = await run()
     expect(summary).toMatchObject({ ran: true, processed: 0 })
+    expect(judgeOutcome).not.toHaveBeenCalled()
     expect(sendApprovedOutcome).not.toHaveBeenCalled()
+  })
+
+  it('AI 判 approve 期间被人工页面抢先批准（真实竞态）→ CAS 检测到 0 行受影响，不重复发送、不写虚假审计（魏征最终复审回归测试）', async () => {
+    outcomes.push(pendingRow())
+    vi.mocked(judgeOutcome).mockImplementation(async () => {
+      // 模拟"AI 正在判断的同时，人在审核页面上抢先点了确认"——SELECT 时这条
+      // 还是 pending_review，AI 判断完准备写回时状态已经被人改掉了。
+      ;(outcomes[0] as { review_status: string }).review_status = 'approved'
+      return {
+        verdict: 'approve',
+        reason: '数据完整',
+        model: 'claude-sonnet-4-6',
+        promptVersion: 'v1',
+        inputSnapshot: {},
+        rawOutput: '{}',
+      }
+    })
+    const summary = await run()
+    expect(summary).toMatchObject({ ran: true, approved: 0 })
+    expect(sendApprovedOutcome).not.toHaveBeenCalled()
+    expect(audits.some((a) => a.action === 'ai_auto_approved')).toBe(false)
+  })
+
+  it('AI 判 reject 期间被人工页面抢先批准（真实竞态）→ CAS 检测到 0 行受影响，不写一条跟事实不符的"AI 已拒绝"审计（魏征最终复审 MEDIUM 回归测试）', async () => {
+    outcomes.push(pendingRow())
+    vi.mocked(judgeOutcome).mockImplementation(async () => {
+      ;(outcomes[0] as { review_status: string }).review_status = 'approved'
+      return {
+        verdict: 'reject',
+        reason: '数据异常',
+        model: 'claude-sonnet-4-6',
+        promptVersion: 'v1',
+        inputSnapshot: {},
+        rawOutput: '{}',
+      }
+    })
+    const summary = await run()
+    expect(summary).toMatchObject({ ran: true, rejected: 0 })
+    // 这条记录实际是"已批准"，不能因为 AI 判断线程晚一步跑到 reject 分支
+    // 就被覆盖成 rejected，也不能留下一条声称"AI 已拒绝"的假审计记录。
+    expect((outcomes[0] as { review_status: string }).review_status).toBe('approved')
+    expect(audits.some((a) => a.action === 'ai_auto_rejected')).toBe(false)
   })
 })

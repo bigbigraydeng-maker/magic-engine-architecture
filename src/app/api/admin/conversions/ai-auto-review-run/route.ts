@@ -6,13 +6,22 @@
  * 这次风险比"只写 pending_review、人还要再点一次"的现有先例（NAL 私信同步/CTS 表格
  * 同步）更高，先跑几天观察判断质量和熔断阈值，再评估要不要接定时。
  *
- * 鉴权用 `guardAdmin`——这是全局管理员级别的操作入口（可以一次处理多个客户），
- * 不是某个客户自己能碰的东西。
+ * 🔴 鉴权分两种情况，不能都用 `guardAdmin`（魏征最终复审 BLOCKER：这一步会真实
+ * 触发对外发送，权限级别必须跟"审核/发送成交记录"那几个既有接口对齐，不能各自
+ * 决定——2026-08-04 的教训是受限管理员照样能通过 `guardAdmin`，middleware 不管
+ * `/api/*`）：
+ *   · 传了 `clientId`（只跑一个客户）—— 用 `guardConversionRoute`：受限管理员
+ *     只能碰自己被指定的那个客户，跟人工审核 `outcomes/[id]/review` 同一个级别。
+ *   · 没传 `clientId`（一次跑遍所有开了这个开关的客户）—— 这是"影响多个客户"的
+ *     操作，必须用 `guardGlobalAdmin`：受限管理员一律拒，不能靠"不传 clientId"
+ *     绕过 `assertClientScope` 的检查（`guardConversionRoute` 在 clientId 为
+ *     null 时本来就不会做客户级校验，这个入口不能依赖它兜底跨客户场景）。
  */
 
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { guardAdmin } from '@/lib/auth/require-admin'
+import { guardGlobalAdmin } from '@/lib/auth/require-admin'
+import { guardConversionRoute } from '@/lib/conversions/route-guard'
 import { runAiAutoReviewForClient, type RunSummary } from '@/lib/conversions/ai-auto-review-run'
 import { metaCapiWriter } from '@/lib/meta/capi/writer'
 
@@ -24,9 +33,6 @@ interface Body {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  const guard = await guardAdmin()
-  if (guard) return guard
-
   let body: Body
   try {
     body = (await request.json()) as Body
@@ -37,8 +43,13 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   let clientIds: string[]
   if (clientId) {
+    const g = await guardConversionRoute(request, clientId)
+    if (!g.ok) return g.response
     clientIds = [clientId]
   } else {
+    const guard = await guardGlobalAdmin()
+    if (guard) return guard
+
     const { data, error } = await supabaseAdmin
       .from('clients')
       .select('id')

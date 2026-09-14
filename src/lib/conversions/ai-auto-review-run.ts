@@ -35,6 +35,15 @@ export const MAX_UNCERTAIN_ATTEMPTS = 3
 const UNCERTAIN_RETRY_COOLDOWN_MS = 6 * 60 * 60 * 1000
 /** 广告平台只收这么多天内的事件——比这更老的直接判过期，省一次 AI 调用。 */
 const META_WINDOW_DAYS = 7
+/**
+ * 单次批处理内部的运行中止损硬顶——独立于历史基线的熔断（那个只在开工前查一次）。
+ * 防的是"这一次批处理本身，因为 AI 判断链路当场出了问题，在几十条之内就把大量
+ * 本该拒绝的记录批了"，命中就中止本轮剩下的记录（魏征复审：单次批处理内部也要
+ * 有自己的止损，不能只靠下一轮的熔断检查才发现）。导出常量方便测试直接驱动到位，
+ * 不需要在测试里手写魔法数字或者铺几十条假记录。
+ */
+export const BATCH_HARD_STOP_COUNT = 20
+export const BATCH_HARD_STOP_AMOUNT_MINOR = 30_000_00
 
 /**
  * 直接对应 `.select(...)` 里列出的那几列。这不是从任意 JSON 猜出来的形状——
@@ -134,14 +143,9 @@ export async function runAiAutoReviewForClient(
   let uncertain = 0
   let expired = 0
 
-  // 这一轮内部的运行中汇总——独立于历史基线的熔断（那个只在开工前查一次），
-  // 防的是"这一次批处理本身，因为 AI 判断链路当场出了问题，在几十条之内就
-  // 把大量本该拒绝的记录批了"。命中就中止本轮剩下的记录，不需要等下一轮
-  // 熔断检查才发现（魏征复审：单次批处理内部也要有自己的止损）。
+  // 这一轮内部的运行中汇总——见文件头 `BATCH_HARD_STOP_COUNT`/`_AMOUNT_MINOR` 的说明。
   let batchApprovedCount = 0
   let batchApprovedAmountMinor = 0
-  const BATCH_HARD_STOP_COUNT = 20
-  const BATCH_HARD_STOP_AMOUNT_MINOR = 30_000_00
 
   for (const row of rows) {
     if (batchApprovedCount >= BATCH_HARD_STOP_COUNT || batchApprovedAmountMinor >= BATCH_HARD_STOP_AMOUNT_MINOR) {
@@ -165,7 +169,18 @@ export async function runAiAutoReviewForClient(
 
     // 明显过期的不浪费一次 AI 调用，直接判过期不发送。
     if (ageDays > META_WINDOW_DAYS) {
-      await rejectOutcome(supabase, row.id, 'other', `已超过广告平台 ${META_WINDOW_DAYS} 天时间窗口，系统自动标记不发送`, now)
+      const didReject = await rejectOutcome(
+        supabase,
+        row.id,
+        'other',
+        `已超过广告平台 ${META_WINDOW_DAYS} 天时间窗口，系统自动标记不发送`,
+        now,
+      )
+      if (!didReject) {
+        // 已经被人工页面抢先处理过了，不写一条跟事实不符的"AI 已拒绝"审计。
+        items.push({ outcomeId: row.id, verdict: 'uncertain', message: '已被抢先处理，本轮跳过' })
+        continue
+      }
       await writeAudit(supabase, row.id, 'ai_auto_rejected', {
         reason: 'expired',
         ageDays,
@@ -241,7 +256,12 @@ export async function runAiAutoReviewForClient(
       batchApprovedAmountMinor += row.amount_minor ?? 0
       items.push({ outcomeId: row.id, verdict: 'approve', message: sendMessage })
     } else if (verdict.verdict === 'reject') {
-      await rejectOutcome(supabase, row.id, 'other', verdict.reason, now)
+      const didReject = await rejectOutcome(supabase, row.id, 'other', verdict.reason, now)
+      if (!didReject) {
+        // 已经被人工页面抢先处理过了，不写一条跟事实不符的"AI 已拒绝"审计。
+        items.push({ outcomeId: row.id, verdict: 'uncertain', message: '已被抢先处理，本轮跳过' })
+        continue
+      }
       await writeAudit(supabase, row.id, 'ai_auto_rejected', {
         reason: verdict.reason,
         model: verdict.model,
@@ -293,14 +313,20 @@ async function approveOutcome(supabase: SupabaseClient, outcomeId: string, now: 
   return (data?.length ?? 0) > 0
 }
 
+/**
+ * CAS：只在 pending_review 时才拒绝，返回是否真的改到了——跟 `approveOutcome()`
+ * 对称（魏征最终复审 MEDIUM：原来这里没判受影响行数，如果这条记录已经被人工
+ * 页面抢先批准并发送，这里的 UPDATE 会静默匹配 0 行，但调用方仍然会写一条
+ * "AI 已拒绝"的审计记录——审计说的和实际发生的对不上）。
+ */
 async function rejectOutcome(
   supabase: SupabaseClient,
   outcomeId: string,
   reason: string,
   note: string,
   now: Date,
-): Promise<void> {
-  const { error } = await supabase
+): Promise<boolean> {
+  const { data, error } = await supabase
     .from('me_sale_outcomes')
     .update({
       review_status: 'rejected',
@@ -315,8 +341,10 @@ async function rejectOutcome(
     })
     .eq('id', outcomeId)
     .eq('review_status', 'pending_review')
+    .select('id')
 
   if (error) throw new Error(`拒绝失败：${error.message}`)
+  return (data?.length ?? 0) > 0
 }
 
 async function writeAudit(
