@@ -111,19 +111,29 @@ vi.mock('@/lib/ads-strategy/config', () => ({
 }))
 const mockSyncAdDailyInsights = vi.fn().mockResolvedValue({ success: true, rows_written: 0 })
 const mockSyncCampaignDailyInsights = vi.fn().mockResolvedValue({ success: true, rows_written: 0 })
+const mockSyncAdsetDailyInsights = vi.fn().mockResolvedValue({ success: true, rows_written: 0 })
+const mockHasVideoColumns = vi.fn().mockResolvedValue(false)
 vi.mock('@/lib/ads-strategy/daily-insights', () => ({
   syncAdDailyInsights:       (...args: unknown[]) => mockSyncAdDailyInsights(...args),
   syncCampaignDailyInsights: (...args: unknown[]) => mockSyncCampaignDailyInsights(...args),
+  syncAdsetDailyInsights:    (...args: unknown[]) => mockSyncAdsetDailyInsights(...args),
+  hasVideoColumns:           () => mockHasVideoColumns(),
 }))
 vi.mock('@/lib/ads-strategy/evaluate', () => ({ evaluateClientAdHealth: vi.fn() }))
 vi.mock('@/lib/ads-strategy/digest', () => ({ sendAdHealthDigest: vi.fn() }))
+const mockSnapshotTablesExist = vi.fn().mockResolvedValue(false)
+const mockRunPortfolioDiagnostics = vi.fn().mockResolvedValue({ success: true, hits: 1, not_comparable: 0, excluded: 0, digest_decision: 'alert', digest_sent: true, recipients_dropped: 0 })
+vi.mock('@/lib/ads-strategy/portfolio/snapshot-sync', () => ({ snapshotTablesExist: () => mockSnapshotTablesExist() }))
+vi.mock('@/lib/ads-strategy/portfolio/run-daily', () => ({ runPortfolioDiagnostics: (...a: unknown[]) => mockRunPortfolioDiagnostics(...a) }))
 
 // ── Mock multi-account lookup (2026-09-13) ───────────────────────────────────
 // Defaults to just the primary account — every existing test above this line
 // keeps its original single-account behavior untouched.
 const mockGetClientAdAccountIds = vi.fn().mockResolvedValue([])
+const mockFindSharedAdAccounts = vi.fn().mockResolvedValue({ shared: new Set<string>() })
 vi.mock('@/lib/meta/client-ad-accounts', () => ({
   getClientAdAccountIds: (...args: unknown[]) => mockGetClientAdAccountIds(...args),
+  findSharedAdAccounts: (...args: unknown[]) => mockFindSharedAdAccounts(...args),
 }))
 
 // ── Mock MetaAdsAdapter (P22.A.5) ────────────────────────────────────────────
@@ -282,6 +292,9 @@ describe('GET /api/cron/google-data-pullback-daily — 多账户 ad_daily_insigh
     })
     mockSyncCampaignDailyInsights.mockResolvedValue({ success: true, rows_written: 5 })
     mockSyncAdDailyInsights.mockResolvedValue({ success: true, rows_written: 12 })
+    mockSyncAdsetDailyInsights.mockResolvedValue({ success: true, rows_written: 7 })
+    mockHasVideoColumns.mockResolvedValue(false)
+    mockFindSharedAdAccounts.mockResolvedValue({ shared: new Set<string>() })
   })
 
   it('client with only the primary account registered → no secondary sync calls', async () => {
@@ -295,7 +308,7 @@ describe('GET /api/cron/google-data-pullback-daily — 多账户 ad_daily_insigh
     expect(json.results[0].ad_daily_secondary).toBeUndefined()
     // primary sync still happens exactly once each
     expect(mockSyncCampaignDailyInsights).toHaveBeenCalledTimes(1)
-    expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, AD_ACCOUNT, META_TOKEN)
+    expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, AD_ACCOUNT, META_TOKEN, { withVideo: false })
   })
 
   it('client with a second registered account → also syncs it into ad_daily_insights, tagged separately', async () => {
@@ -307,10 +320,10 @@ describe('GET /api/cron/google-data-pullback-daily — 多账户 ad_daily_insigh
 
     expect(res.status).toBe(200)
     // primary account still synced exactly as before
-    expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, AD_ACCOUNT, META_TOKEN)
+    expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, AD_ACCOUNT, META_TOKEN, { withVideo: false })
     // secondary account gets both the campaign-level and ad-level daily syncs
-    expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, SECONDARY_ACCOUNT, META_TOKEN)
-    expect(mockSyncAdDailyInsights).toHaveBeenCalledWith(CLIENT_ID, SECONDARY_ACCOUNT, META_TOKEN)
+    expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, SECONDARY_ACCOUNT, META_TOKEN, { withVideo: false })
+    expect(mockSyncAdDailyInsights).toHaveBeenCalledWith(CLIENT_ID, SECONDARY_ACCOUNT, META_TOKEN, { withVideo: false })
     // result carries it as a tagged secondary entry, not merged into the
     // primary ad_daily/ad_level fields (existing tallying must stay untouched)
     expect(json.results[0].ad_daily_secondary).toEqual([
@@ -318,8 +331,115 @@ describe('GET /api/cron/google-data-pullback-daily — 多账户 ad_daily_insigh
         ad_account_id: SECONDARY_ACCOUNT,
         ad_daily: { success: true, rows_written: 5 },
         ad_level: { success: true, rows_written: 12 },
+        adset_level: { success: true, rows_written: 7 },
       },
     ])
+  })
+
+  // ads IMPACT 阶段 1 §2.2：广告组级日数据 + 视频列按 migration 是否 apply 决定写不写。
+  it('视频列已在库里 → 主/次账户的三级同步都带 withVideo:true，且广告组级也同步', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT, SECONDARY_ACCOUNT])
+    mockHasVideoColumns.mockResolvedValue(true)
+
+    const { GET } = await import('./route')
+    const res = await GET(makeRequest(CRON_SECRET))
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    for (const account of [AD_ACCOUNT, SECONDARY_ACCOUNT]) {
+      expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, account, META_TOKEN, { withVideo: true })
+      expect(mockSyncAdDailyInsights).toHaveBeenCalledWith(CLIENT_ID, account, META_TOKEN, { withVideo: true })
+      expect(mockSyncAdsetDailyInsights).toHaveBeenCalledWith(CLIENT_ID, account, META_TOKEN, { withVideo: true })
+    }
+    expect(json.results[0].adset_level).toEqual({ success: true, rows_written: 7 })
+  })
+
+  it('🔴 M9 共用账户：广告组级同步跳过（不把同一批广告组写进两家），系列/广告级老同步照旧', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT, SECONDARY_ACCOUNT])
+    const strip = (id: string) => (id.startsWith('act_') ? id.slice(4) : id)
+    mockFindSharedAdAccounts.mockResolvedValue({ shared: new Set([strip(SECONDARY_ACCOUNT)]) })
+
+    const { GET } = await import('./route')
+    const json = await (await GET(makeRequest(CRON_SECRET))).json()
+
+    expect(mockSyncAdsetDailyInsights).toHaveBeenCalledWith(CLIENT_ID, AD_ACCOUNT, META_TOKEN, { withVideo: false })
+    expect(mockSyncAdsetDailyInsights).not.toHaveBeenCalledWith(CLIENT_ID, SECONDARY_ACCOUNT, META_TOKEN, expect.anything())
+    expect(mockSyncCampaignDailyInsights).toHaveBeenCalledWith(CLIENT_ID, SECONDARY_ACCOUNT, META_TOKEN, { withVideo: false })
+    expect(json.results[0].ad_daily_secondary[0].adset_level.error).toContain('shared')
+  })
+
+  it('ads IMPACT 第 7 步：快照表已建 → 跑只读诊断发内部版日报，不再调原日报；表没建 → 照旧发原日报', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])
+    const { evaluateClientAdHealth } = await import('@/lib/ads-strategy/evaluate')
+    const { sendAdHealthDigest } = await import('@/lib/ads-strategy/digest')
+    vi.mocked(evaluateClientAdHealth).mockResolvedValue({ success: true, overall_verdict: 'healthy' } as never)
+    vi.mocked(sendAdHealthDigest).mockResolvedValue({ decision: 'skip', sent: false } as never)
+    const { GET } = await import('./route')
+
+    mockSnapshotTablesExist.mockResolvedValueOnce(true)
+    const ready = await (await GET(makeRequest(CRON_SECRET))).json()
+    expect(mockRunPortfolioDiagnostics).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sendAdHealthDigest)).not.toHaveBeenCalled()
+    expect(ready.results[0].ad_diagnostics).toMatchObject({ hits: 1, digest_sent: true })
+
+    mockRunPortfolioDiagnostics.mockClear()
+    mockSnapshotTablesExist.mockResolvedValueOnce(false)
+    await GET(makeRequest(CRON_SECRET))
+    expect(mockRunPortfolioDiagnostics).not.toHaveBeenCalled()
+    expect(vi.mocked(sendAdHealthDigest)).toHaveBeenCalledTimes(1)
+    vi.mocked(evaluateClientAdHealth).mockReset()
+    vi.mocked(sendAdHealthDigest).mockReset()
+  })
+
+  it('诊断出错 → 当天原体检成功就退回发原日报，错误进 errors（PM 当天仍收得到信）', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])
+    const { evaluateClientAdHealth } = await import('@/lib/ads-strategy/evaluate')
+    const { sendAdHealthDigest } = await import('@/lib/ads-strategy/digest')
+    vi.mocked(evaluateClientAdHealth).mockResolvedValue({ success: true, overall_verdict: 'watch' } as never)
+    vi.mocked(sendAdHealthDigest).mockResolvedValue({ decision: 'watch', sent: true } as never)
+    mockSnapshotTablesExist.mockResolvedValueOnce(true)
+    mockRunPortfolioDiagnostics.mockResolvedValueOnce({ success: false, hits: 0, not_comparable: 0, excluded: 0, error: 'load failed: relation missing' })
+    const { GET } = await import('./route')
+    const json = await (await GET(makeRequest(CRON_SECRET))).json()
+    expect(vi.mocked(sendAdHealthDigest)).toHaveBeenCalledTimes(1)
+    expect(json.results[0].ad_digest.decision).toBe('fallback:watch')
+    vi.mocked(evaluateClientAdHealth).mockReset()
+    vi.mocked(sendAdHealthDigest).mockReset()
+  })
+
+  it('当天拉数失败（授权断了）→ 诊断照样跑（D7 要报这件事）', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])
+    mockSyncCampaignDailyInsights.mockResolvedValue({ success: false, error: 'Meta returned no usable page' })
+    mockSnapshotTablesExist.mockResolvedValueOnce(true)
+    mockRunPortfolioDiagnostics.mockClear()
+    const { GET } = await import('./route')
+    await GET(makeRequest(CRON_SECRET))
+    expect(mockRunPortfolioDiagnostics).toHaveBeenCalledTimes(1)
+  })
+
+  it('失败邮件标题不拿广告组级错误当头条（它不触发 failed）', async () => {
+    // 顺序上 adset_level 的错误排在 ad_health 之前；真正触发 failed 的是 ad_health
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])
+    mockSyncAdsetDailyInsights.mockResolvedValue({ success: false, error: 'adset walk failed' })
+    const { evaluateClientAdHealth } = await import('@/lib/ads-strategy/evaluate')
+    vi.mocked(evaluateClientAdHealth).mockResolvedValueOnce({ success: false, error: 'judge failed' } as never)
+
+    const { GET } = await import('./route')
+    await GET(makeRequest(CRON_SECRET))
+
+    const finishArg = mockCronFinish.mock.calls.at(-1)?.[0] as { error?: string }
+    expect(finishArg.error?.startsWith('ad_health')).toBe(true)
+  })
+
+  it('广告组级同步失败不计入 failed（best-effort，同 ad_level）', async () => {
+    mockGetClientAdAccountIds.mockResolvedValue([AD_ACCOUNT])
+    mockSyncAdsetDailyInsights.mockResolvedValue({ success: false, error: 'adset walk failed' })
+
+    const { GET } = await import('./route')
+    const json = await (await GET(makeRequest(CRON_SECRET))).json()
+
+    expect(json.failed).toBe(0)
+    expect(json.results[0].adset_level.success).toBe(false)
   })
 
   it('one account failing to sync does not stop the other account from being synced', async () => {
