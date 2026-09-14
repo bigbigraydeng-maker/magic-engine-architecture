@@ -107,12 +107,11 @@
 - [x] 手动触发入口 `POST /api/admin/conversions/nal-messenger-sync`（`guardGlobalAdmin`）
 
 **范围内明确没做**（PM 待日后决定）：
-- 「已成交」判定本轮完全没做——NAL 184 个联系人的 CRM 阶段字段全是空的（员工从没标过阶段），
-  且集运报价没有团价表可查金额，`me_sale_outcomes` 的 purchase 类型要求金额非空，现在拼不出
-  合法记录。等 CRM 工作台（`/dashboard/clients/4ae76381-cd45-43bd-85cd-98cfd7604007/crm`，
-  已给 NAL 配置好阶段档位）被员工真正用起来、有金额来源了再补
 - WhatsApp 未接入——设计标题写"私信/WhatsApp"，但 NAL 现有 1913 段对话 100% 是 Messenger
   渠道，没有等价的稳定消息 id 来源可验证幂等设计，这次范围收窄到 Messenger
+
+> 「已成交」判定这一块，2026-09-15 已在下面单独一节（NAL 客户管理工作台标已成交 → CAPI）
+> 补上，见下方，不再是缺口。
 
 **待办**：
 - [ ] PM/FDE 决定要不要开始审核这 20 条 `pending_review` 记录、要不要切到真发送
@@ -121,6 +120,29 @@
       当前正确性
 - [ ] 对话没有关联联系人的情况目前生产库实测 0 个，代码已加 `skippedNoContact` 计数防呆，
       后续若这个数字非零需要去查联系人建档流程是不是有延迟/漏建档
+
+## NAL 客户管理工作台"标已成交" → 自动写一条 Meta CAPI 成交记录（PR #1715，dry_run，已合并，2026-09-15）
+
+> 背景：上一节留的缺口——NAL 员工在临时 CRM 工作台里把联系人标"已成交"时没有金额来源，
+> 拼不出合法的成交记录。这次直接给这个动作接上金额输入，标已成交时同时生成一条走
+> `me_sale_outcomes` → CAPI 审核发送通道的记录。只对 NAL 生效，不碰 CTS 现有的独立成交
+> 回传通道（表格同步）。两轮设计评审 + 实现完成后两轮实际代码复审，详见提交历史。
+
+**已完成**：
+- [x] `POST /api/admin/conversions/nal-mark-won`：推进阶段 + 写成交记录一次性完成，
+      鉴权跟"审核/发送成交记录"那几个既有接口同一级别
+- [x] 复审揪出并修复一个真实漏洞（两轮）：原代码先把联系人阶段改成"已成交"、再校验能
+      不能生成合格记录，任何一步校验/写库失败都会留下"人被标成已成交、但没有对应成交
+      记录"的孤儿状态。最终顺序理顺为"记录先真的写进数据库，成功了才推进阶段"
+- [x] 数据库新增 `crm_stage_manual` 来源分类标签，已 apply 到生产库
+- [x] 前端金额面板只对 NAL 生效，不影响 CTS 现有"改状态"交互（24 条自动化测试覆盖）
+
+**待办**：
+- [ ] PM/FDE 决定要不要开始审核这批新记录、要不要切到真发送
+- [ ] 技术债（不影响当前正确性）：`WON_STAGE_KEY` 目前写死对应 NAL 今天的阶段配置，跟
+      前端"是否弹出金额面板"的判断（只看 `marketingAction`）是两套独立逻辑，Settings 页面
+      没有唯一性约束防止未来配置出两个"已成交"档——目前 NAL 只有一档，可接受，但改 NAL
+      阶段配置前要注意这个耦合
 
 ## CTS Messenger+WhatsApp 治理式客服 v3 —— 事实层改用客户知识库平台能力（2026-09-14）
 
@@ -147,9 +169,11 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 六处已改接 `getClientKnowledge`，`config/clients/cts/offerings.yaml` 及其加载器整条路线
 已作废（详见方案文末"§9.14 C 同步修改"章节）。
 
-**Held 待重做的 PR**（依赖 `getClientKnowledge`——依赖已就位，可以开工改接了）：
-- [ ] #1638 Verifier 框架 + CTS policy —— 改接新的 `forbiddenFactKeys`/数字核实闸设计
-- [ ] #1639 agent-core prompt.ts + tools.ts —— 4 只读工具改用 purpose+visibility 模型
+**此前 Held 的 PR，依赖已解除（2026-09-15）**：等的是 `getClientKnowledge` 全部 6 步真正合并
+完，2026-09-15 步骤 6（#1648）合并后 6 步已全部到位——`gh pr view` 核实 #1638/#1639 现在
+`MERGEABLE`，跟主线没有冲突。**仍未做的是这两个 PR 自己的改接工作和复审**，不是被别的东西挡着：
+- [ ] #1638 Verifier 框架 + CTS policy —— 改接新的 `forbiddenFactKeys`/数字核实闸设计，0 复审
+- [ ] #1639 agent-core prompt.ts + tools.ts —— 4 只读工具改用 purpose+visibility 模型，0 复审
 
 **审查过程发现并已修复的关键问题**（wave-1，不是走过场，逐条真实验证）：数据库外键漏写级联
 删除；退订判断第一版设计换渠道即失效（已改用现成的 `contacts.do_not_contact` 机制）；CTS
@@ -198,9 +222,25 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
       回退阶段（发现报价说错）后，客户手上一条更早发出的"同意前进"旧链接仍能被点开，把
       回退悄悄抹掉——已修复（同一个数据库事务里重新核对当前阶段，对不上就拒绝且不留痕
       迹地保留成可重试状态，不是简单标记失败）；板桥复审同时指出这一步最初交付时完全没
-      有客户能打开的页面，已一并补上
+      有客户能打开的页面，已一并补上。合并过程中两个并发会话各自独立在同一个分支上处理
+      同一个问题，靠互相 SendMessage 核对收敛，没有产生冲突结果
 
-**跟踪单独走完的小 issue**：#1669（客户确认人登记写入 API，已关闭，PR #1674 已合并）。
+**6 步全部完成。** 遗留跟进（不阻塞，已知不阻塞合并）：
+- issue #1669（确认人登记写入 API）已关闭，PR #1674 已合并
+- `rollout.ts` 的 `hashesMatch` 跟 `confirmation-requests.ts` 几乎重复实现，未抽共享（魏征复审 ⚠️ 警告项，技术债不影响正确性）
+- PR #1693 的描述文字落后于最终合并代码状态，未回填更新（魏征复审 ⚠️ 警告项，不影响代码本身）
+- **操作陷阱已记入** [PITFALLS.md §D7](./PITFALLS.md)：给任何客户开 `client_knowledge.read` 授权前，必须确认同步走完 rollout stage 双签，否则 `customer_reply` 会静默读空知识库、不报错
+
+## ME 旅游版 · Tour 管理模块（2026-09-14 立项，PM 已立版，未授权实施）
+
+规划见 [`specs/2026-09-14-me-tour-management-module-plan.md`](./specs/2026-09-14-me-tour-management-module-plan.md)。ME 旅游版已正式立版（`registry/product-versions.md`，Customer Zero = CTS）。**已上线的只有「行程路线地图」这一块**（8 个 CTS 团在正式站，见 CHANGELOG 2026-09-14）；下面是模块化的未完成项，每步走双审 + 五道 Build Gate：
+
+- [ ] **P1 · 统一/连接现有团事实源 + 最小营销快照**（A 级）：连接 `config/clients/cts/offerings.yaml` / `src/lib/web-intelligence/first-party-tours.ts`(`FirstPartyTour`) / 客户官网，**不新建第三份权威源**；价格/库存/出发日期按 `ME_PRODUCT_DEFINITION.md` §3.2 留外部源 Connector 读。先解决「多份源漂移、各渠道给客户不同答案」。
+- [ ] **P2 · 路线图生成器产品化**（B 级）：把原型 `docs/specs/prototypes/tour-route-map/` 搬成 ME 正式能力，输入 = P1 快照，输出 PC + 手机 SVG 落公开桶。**前置：品牌/logo、底图、地理标注规则参数化**（当前 CTS/中国硬编码）。晋升门槛 = 第 2 个旅游客户复制（L2）。
+- [ ] **P3 · Tour 管理后台 UI**（B 级）：ME 后台录入营销快照 + 一键生成地图；价格/出发日期只读展示。
+- [ ] **P4 · 内容 + 定价产出**（B 级）：接现有 AI 文案 / SEO writer / grounding，从快照产出各渠道文案；价格读统一事实源。
+- [ ] **P5 · 一键交付**（C 级）：地图 + 文案 + PDF brochure + 落地页片段打包。
+- **PM 待拍板**：优先级（P1+P2 何时排期）· 第一版范围（只做地图+行程 vs 四块一起）。
 
 ## ME Web Intelligence v0.1 [ME-WI.0.1] — #1497
 
@@ -813,8 +853,8 @@ Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说�
       `AUTOMATED_MESSAGE_SOURCES` 那两个值（`subscription` / `business_ai`）到今天
       **仍是猜的**，Meta 没公开文档。现在靠「秒回 = 机器」兜住了，但拿一条 CTS 真实
       收件箱的 Graph 返回确认一次，判据会更硬。这台开发机连不上 facebook.com，做不了
-- [ ] **M3 从 CRM 里回邮件** —— 权限已经要了 `Mail.Send`，缺一个邮件适配器接进总线（`lib/messaging/adapters/mail.ts`）
-- [ ] **M4 邮件线程接进多渠道读取路径** —— 现在私信页面靠 `channel = 'messenger'` 把邮件挡在外面（PR #781），挡住≠接好；需要一个不挑渠道的对话页
+- [x] **M3 从 CRM 里回邮件** —— PR #1716（2026-09-15 合并）。没有接进 `lib/messaging/channels.ts` 那套总线——那套总线目前零生产调用方（连 Messenger 自己都没注册进去），照抄会议再造一层没人用的架子；改成照抄 `messenger` 那条真正在用的 reply 路由的形状（`src/lib/microsoft/mail-send.ts` + `POST /api/clients/[id]/email/conversations/[conversationId]/reply`）。三轮复审共同抓出：`Mail.ReadWrite` 权限漏申请（`Mail.Send` 只管发、不管建草稿）、多邮箱客户会拿错连接的令牌、回信可能把客人错发成自己（应只认 `direction=inbound` 的最后一封）、Graph 消息 id 在草稿变已发送时会漂移（需要 `Prefer: IdType="ImmutableId"`）。**已知未做**：审计沿用 `conversation_outbound_log` 的自由文本列，不是专用 schema；未接入 AI 自动回复（`messenger-agent/channel-dispatch.ts` 只认 `messenger`/`whatsapp`，是 M7 的范围）。**待办**：CTS 现有邮箱连接需要重新走一次登录同意才能拿到 `Mail.ReadWrite`（读信不受影响）；NAL（本轮选定的首个真实测试客户）尚未连接邮箱，功能未经真实邮箱验证
+- [x]/[ ] **M4 邮件线程接进多渠道读取路径**（部分完成，PR #1719，2026-09-15）—— 排查发现这条本身已经过期：联系人时间线/往来记录早就是不挑渠道的了（PR #1038 修的），真正缺的只是"CRM 抽屉里能不能直接回邮件"这一个入口——抽屉里唯一的回复框硬编码只认私信。已补上：共享发送框 `ReplyBox.tsx` 改认 `channel` 参数、新增 `EmailReply.tsx` + 对应查询接口，跟私信框并排显示。**未做**：没有逐一审计其他列表/看板页有没有类似的隐藏 messenger 硬编码；邮件回复框现在不会因为"这个人没来过信"提前禁用，要点了发送才由服务端拒绝（子牙审查已确认非安全问题，纯体验优化，可后续小 PR 补）
 - [ ] **M5 WhatsApp Business API（新号）** —— 申请清单已给 PM（`docs/sops/whatsapp-business-api-申请清单.md`）。⚠️ AU/NZ 单价未核实（这台开发机连不上 Meta 站点），拿到后台截图后补
 - [ ] **M6 客户员工账号 + 角色 + 归属 + 转派 + 推手机** —— PM：「ME 的登陆系统需要给到 client 的员工层级」。`conversations` 已有 `owner_email` / `snooze_until` 两列待用，不需要 migration
 - [ ] **M7 「谁来回」开关 + Meta AI 客服配置**（AI 先答 / 人工先答 / 分时段）
