@@ -40,6 +40,8 @@ export interface KnowledgeEntry {
   scope: Record<string, unknown>
   statement: string
   structuredValue: unknown
+  /** 萃取工作流（issue #1645）用它跨行/跨轮次把互相矛盾的候选串成同一个冲突组；已批准事实也可能带一个非空值（表示曾经跟某个候选冲突过）。 */
+  conflictGroupId: string | null
   status: FactStatus
   visibility: Visibility
   sensitivity: Sensitivity
