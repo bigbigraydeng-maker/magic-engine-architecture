@@ -61,6 +61,9 @@ export function isContentReelTransitionAllowed(from: ContentReelState, to: Conte
  * clear_*) take `true` and are stamped with the database clock — callers can never
  * supply the timestamps that gate absence-based transitions (the row trigger rejects any
  * evidence timestamp that is not exactly now(), even on a direct service_role UPDATE).
+ *
+ * 🔴 PR-C: evidence columns never accept application time. Do not write them with a JS
+ * `new Date()` / ISO string — always go through the marker keys of content_reel_transition.
  */
 export const CONTENT_REEL_EVIDENCE_TIMESTAMP_COLUMNS = [
   'last_step_started_at',
@@ -145,6 +148,50 @@ export const CONTENT_REEL_RPC_REFUSAL_CODES = [
 ] as const
 
 export type ContentReelRpcRefusalCode = (typeof CONTENT_REEL_RPC_REFUSAL_CODES)[number]
+
+/**
+ * Codes the guard triggers RAISE as `content_reel_guard:<code>` (thrown, not returned).
+ * The five soft ones above are caught by content_reel_transition and returned instead;
+ * everything else reaches the caller as a Postgres error and means "the caller asked for
+ * something the state machine forbids". PR-C must map them, notably `mode_state_mismatch`
+ * (a draft request read back as public, or a live request read back as a draft: do NOT
+ * retry into published/draft_published — move to in_doubt, spec §3.4 step 8).
+ */
+export const CONTENT_REEL_GUARD_ERROR_CODES = [
+  'absence_not_confirmed_twice',
+  'alert_required',
+  'attempts_are_append_only',
+  'bookkeeping_not_monotonic',
+  'claimed_too_recent',
+  'copy_already_finalized',
+  'copy_insert_must_be_preparing',
+  'draft_deleted_requires_deletion',
+  'draft_requires_video',
+  'evidence_timestamp_db_clock_only',
+  'graph_get_requires_verified_at',
+  'human_confirmed_requires_confirmer',
+  'illegal_transition',
+  'immutable_column',
+  'insert_must_be_clean_authorized',
+  'last_write_too_recent',
+  'live_switch_events_are_append_only',
+  'live_switch_insert_must_be_false',
+  'live_switch_rpc_only',
+  'mode_state_mismatch',
+  'not_on_facebook_requires_deletion',
+  'not_on_facebook_without_video_requires_claimed',
+  'only_unverified_human_confirmation_can_reopen',
+  'published_receipt_immutable',
+  'published_requires_receipt',
+  'stale_absence_on_publish',
+  'truncate_forbidden',
+  'uploading_requires_video_id',
+  'video_copies_are_append_only',
+  'video_id_immutable',
+  'video_id_only_on_upload_start',
+] as const
+
+export type ContentReelGuardErrorCode = (typeof CONTENT_REEL_GUARD_ERROR_CODES)[number]
 
 /** Timing floors enforced in SQL (minutes). Spec v2.1 §3.2. */
 export const CONTENT_REEL_TIMING_MINUTES = {

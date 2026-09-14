@@ -378,6 +378,7 @@ SELECT pg_temp.expect_raise('F02 draft_published requires DRAFT video_state',
   format($$SELECT public.content_reel_transition(%L, ARRAY['uploading'], 'draft_published', '{}')$$, :A7), 'draft_requires_video');
 SELECT pg_temp.expect_ok('F03 uploading -> draft_published',
   format($$SELECT public.content_reel_transition(%L, ARRAY['uploading'], 'draft_published', '{"video_state":"DRAFT"}')$$, :A7));
+SELECT pg_temp.backdate(:A7::uuid, 'finished_at', 30);
 SELECT pg_temp.expect_true('F04 draft leaves the post approved', $$SELECT status='approved' FROM public.content_posts WHERE id='a1000000-0000-0000-0000-000000000007'$$);
 SELECT pg_temp.expect_code('F05 abandon post refused while a draft is not deleted',
   $$SELECT public.content_reel_abandon_post('c1000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000007')$$, 'drafts_not_deleted');
@@ -621,6 +622,50 @@ SELECT pg_temp.expect_ok_as('service_role', 'K38 service_role can flip the switc
   $$SELECT public.set_content_reel_live_enabled('c1000000-0000-0000-0000-000000000001', true, false, 'e1000000-0000-0000-0000-000000000001', 'staff@example.com', 'probe')$$);
 SELECT pg_temp.expect_true('K39 RPC flip wrote a second audit row',
   $$SELECT count(*) = 2 FROM public.content_reel_live_switch_events WHERE client_id='c1000000-0000-0000-0000-000000000001'$$);
+
+-- ── L. Closing round (第二轮两审建议) ─────────────────────────────────────────
+-- 魏征 C: owner TRUNCATE refused on the other two tables as well
+SELECT pg_temp.expect_raise('L01 owner TRUNCATE of publish attempts refused',
+  $$TRUNCATE public.content_reel_publish_attempts$$, 'truncate_forbidden');
+SELECT pg_temp.expect_raise('L02 owner TRUNCATE of video copies refused (CASCADE)',
+  $$TRUNCATE public.content_reel_video_copies CASCADE$$, 'truncate_forbidden');
+
+-- 子牙建议 4 / 魏征 D: bookkeeping is monotonic
+SELECT pg_temp.expect_raise('L03 restart_seq cannot go down',
+  format($$UPDATE public.content_reel_publish_attempts SET restart_seq = 0 WHERE id=%L$$, pg_temp.k_id(1)), 'bookkeeping_not_monotonic');
+SELECT pg_temp.expect_raise('L04 recorded trigger event ids cannot be removed',
+  format($$UPDATE public.content_reel_publish_attempts SET trigger_event_ids = '{}' WHERE id=%L$$, pg_temp.k_id(1)), 'bookkeeping_not_monotonic');
+SELECT pg_temp.expect_raise('L05 restart_seq cannot go down on a terminal attempt either',
+  $$UPDATE public.content_reel_publish_attempts SET restart_seq = restart_seq - 1 WHERE id='d1000000-0000-0000-0000-000000000006' AND restart_seq > 0$$, 'bookkeeping_not_monotonic');
+
+-- 子牙建议 4 / 魏征 D: permalink is locked once written on a published attempt
+SELECT pg_temp.expect_ok('L06 permalink may be filled in once while published',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'published', '{"permalink":"https://www.facebook.com/reel/3000000002/"}')$$, pg_temp.k_id(2)));
+SELECT pg_temp.expect_raise('L07 permalink cannot be rewritten while published',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['published'], 'published', '{"permalink":"https://www.facebook.com/reel/9999999999/"}')$$, pg_temp.k_id(2)), 'published_receipt_immutable');
+
+-- 子牙建议 1: reading a deleted video back as public needs an alert code
+SELECT pg_temp.post_copy(10, 'e');
+SELECT pg_temp.k_auth(10, 'e');
+SELECT pg_temp.k_upload(10, '3000000010');
+SELECT public.content_reel_transition(pg_temp.k_id(10), ARRAY['uploading'], 'in_doubt', '{"mark_video_deleted":true}');
+SELECT pg_temp.expect_raise('L08 in_doubt with a deletion record -> published without alert_code refused',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['in_doubt'], 'published', '{"video_state":"PUBLISHED","published_at":"2026-09-15T00:00:00Z","publish_confirmation":"graph_get","mark_publish_verified":true}')$$, pg_temp.k_id(10)), 'alert_required');
+SELECT pg_temp.expect_ok('L09 in_doubt with a deletion record -> published with alert_code',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['in_doubt'], 'published', '{"video_state":"PUBLISHED","published_at":"2026-09-15T00:00:00Z","publish_confirmation":"graph_get","mark_publish_verified":true,"alert_code":"deleted_video_found_public"}')$$, pg_temp.k_id(10)));
+
+-- 子牙建议 2: a draft deletion must happen after the attempt became a draft
+SELECT pg_temp.post_copy(11, 'f');
+SELECT pg_temp.k_auth(11, 'f', 'draft');
+SELECT pg_temp.k_upload(11, '3000000011');
+SELECT public.content_reel_transition(pg_temp.k_id(11), ARRAY['uploading'], 'in_doubt', '{"mark_video_deleted":true}');
+SELECT pg_temp.backdate(pg_temp.k_id(11), 'video_deleted_at', 40);
+SELECT public.content_reel_transition(pg_temp.k_id(11), ARRAY['in_doubt'], 'draft_published', '{"video_state":"DRAFT"}');
+SELECT public.content_reel_transition(pg_temp.k_id(11), ARRAY['draft_published'], 'draft_published', '{"mark_absence":true}');
+SELECT pg_temp.backdate(pg_temp.k_id(11), 'finished_at', 30);
+SELECT pg_temp.backdate(pg_temp.k_id(11), 'absence_first_confirmed_at', 11);
+SELECT pg_temp.expect_code('L10 deletion recorded before the draft existed does not count for draft_deleted',
+  format($$SELECT public.content_reel_transition(%L, ARRAY['draft_published'], 'draft_deleted', '{}')$$, pg_temp.k_id(11)), 'draft_deleted_requires_deletion');
 
 -- ── J. Privileges and function config ───────────────────────────────────────
 SELECT pg_temp.expect_true('J01 anon cannot execute any content_reel RPC',

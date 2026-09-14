@@ -24,6 +24,9 @@
 -- publish_verified_at, first_comment_verified_at, finished_at, created_at) may only carry
 -- the database clock: NULL on insert, and on update either unchanged or exactly now().
 -- A caller can therefore never backdate its way past a time floor.
+-- now() is the transaction start time: a long-running transaction would stamp evidence
+-- earlier than wall clock. Calls through PostgREST RPC are one short transaction each, so
+-- this does not arise on the intended path; do not wrap these RPCs in long transactions.
 --
 -- Timing floors (spec v2.1 §3.2): Graph writes in strict mode are bounded by start 60s +
 -- rupload 15min + finish 60s = 17min. A video-bearing attempt may only be declared
@@ -225,6 +228,15 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Bookkeeping is monotonic: the restart counter never goes down and recorded event ids
+  -- are never removed (a lost id would let a stale event be mistaken for a fresh one).
+  IF NEW.restart_seq < OLD.restart_seq THEN
+    RAISE EXCEPTION 'content_reel_guard:bookkeeping_not_monotonic';
+  END IF;
+  IF NOT (OLD.trigger_event_ids <@ NEW.trigger_event_ids) THEN
+    RAISE EXCEPTION 'content_reel_guard:bookkeeping_not_monotonic';
+  END IF;
+
   -- Pure bookkeeping (followup / event ids / restart counter) is legal in every state.
   IF OLD.state = NEW.state
      AND (to_jsonb(NEW) - v_bookkeeping) = (to_jsonb(OLD) - v_bookkeeping) THEN
@@ -302,7 +314,8 @@ BEGIN
     IF OLD.state = 'published' THEN
       IF NEW.video_state IS DISTINCT FROM OLD.video_state
          OR NEW.published_at IS DISTINCT FROM OLD.published_at
-         OR NEW.publish_confirmed_by_user_id IS DISTINCT FROM OLD.publish_confirmed_by_user_id THEN
+         OR NEW.publish_confirmed_by_user_id IS DISTINCT FROM OLD.publish_confirmed_by_user_id
+         OR (OLD.permalink IS NOT NULL AND NEW.permalink IS DISTINCT FROM OLD.permalink) THEN
         RAISE EXCEPTION 'content_reel_guard:published_receipt_immutable';
       END IF;
       IF NEW.publish_confirmation IS DISTINCT FROM OLD.publish_confirmation
@@ -314,7 +327,10 @@ BEGIN
       IF NEW.absence_first_confirmed_at IS NOT NULL THEN
         RAISE EXCEPTION 'content_reel_guard:stale_absence_on_publish';
       END IF;
-      IF OLD.state = 'not_on_facebook' AND COALESCE(NEW.alert_code, '') = '' THEN
+      -- Reading a video back as public after we recorded it gone or deleted it is an
+      -- anomaly someone must look at.
+      IF (OLD.state = 'not_on_facebook' OR OLD.video_deleted_at IS NOT NULL)
+         AND COALESCE(NEW.alert_code, '') = '' THEN
         RAISE EXCEPTION 'content_reel_guard:alert_required';
       END IF;
     END IF;
@@ -382,7 +398,10 @@ BEGIN
   END IF;
 
   IF NEW.state = 'draft_deleted' AND OLD.state <> 'draft_deleted' THEN
-    IF OLD.video_deleted_at IS NULL THEN
+    -- The deletion must happen after the draft was recorded (finished_at is stamped on
+    -- entering draft_published); a deletion from an earlier in_doubt episode does not count.
+    IF OLD.video_deleted_at IS NULL OR OLD.finished_at IS NULL
+       OR OLD.video_deleted_at <= OLD.finished_at THEN
       RAISE EXCEPTION 'content_reel_guard:draft_deleted_requires_deletion';
     END IF;
     IF OLD.absence_first_confirmed_at IS NULL

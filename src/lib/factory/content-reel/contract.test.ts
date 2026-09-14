@@ -16,6 +16,7 @@ import {
   CONTENT_REEL_EVIDENCE_TIMESTAMP_COLUMNS,
   CONTENT_REEL_DUPLICATE_HASH_WINDOW_DAYS,
   CONTENT_REEL_FOLLOWUP_KEYS,
+  CONTENT_REEL_GUARD_ERROR_CODES,
   CONTENT_REEL_PATCH_MARKER_KEYS,
   CONTENT_REEL_PATCH_VALUE_KEYS,
   CONTENT_REEL_RPC_REFUSAL_CODES,
@@ -88,6 +89,30 @@ describe('content reel contract matches the migration', () => {
     const soft = between('v_soft constant text[] := ARRAY[', '];')
     for (const code of quoted(soft)) returned.add(code)
     expect(returned).toEqual(new Set(CONTENT_REEL_RPC_REFUSAL_CODES))
+  })
+
+  it('every guard error code raised by the migration is in the contract, and vice versa', () => {
+    const raised = new Set(Array.from(MIGRATION.matchAll(/content_reel_guard:([a-z_]+)/g), (m) => m[1]))
+    expect(raised).toEqual(new Set(CONTENT_REEL_GUARD_ERROR_CODES))
+  })
+
+  it('publish attempts column list snapshot (a new or renamed column must be a deliberate contract change)', () => {
+    const block = between('CREATE TABLE public.content_reel_publish_attempts (', '\n);')
+    const columns = block
+      .split('\n')
+      .slice(1)
+      .map((line) => line.trim().match(/^([a-z_0-9]+)\s/)?.[1])
+      .filter((c): c is string => Boolean(c))
+    expect(columns).toEqual([
+      'id', 'client_id', 'content_post_id', 'video_copy_id', 'render_job_id', 'mode_requested', 'state',
+      'form_sha256', 'authorized_via', 'authorized_by_user_id', 'authorized_by_email', 'prepared_by',
+      'authorization_record', 'video_sha256', 'page_id', 'video_id', 'video_state', 'permalink', 'published_at',
+      'publish_confirmation', 'publish_confirmed_by_user_id', 'publish_verified_at', 'env_live_at_publish',
+      'rules_live_at_publish', 'error_code', 'error_detail', 'alert_code', 'last_step_started_at',
+      'video_deleted_at', 'absence_first_confirmed_at', 'trigger_event_ids', 'restart_seq',
+      'first_comment_state', 'first_comment_verified_at', 'first_comment_verification_basis', 'followup',
+      'provider_impact', 'created_at', 'updated_at', 'finished_at',
+    ])
   })
 
   it('bookkeeping columns equal the guard fast path, and every evidence timestamp is DB-clock guarded', () => {

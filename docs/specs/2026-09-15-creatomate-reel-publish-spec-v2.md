@@ -273,7 +273,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS content_posts_import_source_url
 7. **catch 与迁移被抢**：catch 中调 `transition` 得到 `transition_lost` 时，重读该行，按真实状态处理（已是 `in_doubt`/`published`/终态 → 不再改，只写运行记录），不盲目覆盖。`onFailure` 同理。
 8. **确认与回执**：finish 返回后 `getReelObjectStatus`：
    - 公开上传：`published` → `published(graph_get)`，写 `publish_verified_at`；`processing` → `step.sleep` 2/5/10 分钟再查，仍 `processing` → `in_doubt(processing_timeout)`；`not_public`/`failed`/`unknown`/`absent`/`error` → `in_doubt`；
-   - 草稿上传：`not_public` 或 `processing` 或 `unknown` 且非公开 → `draft_published`；读到 `published` → `in_doubt` + `alert_code='draft_read_back_public'`（出高优先级待办）；`failed` → `in_doubt(video_failed)`；
+   - 草稿上传：`not_public` 或 `processing` 或 `unknown` 且非公开 → `draft_published`；**读到 `published` → `in_doubt` + `alert_code='draft_read_back_public'`（高优先级待办），随后按第 11 步删除该视频 + 两次缺席 → `not_on_facebook`，绝不进入 `published`**（数据库以 `mode_state_mismatch` 拒绝草稿请求进入 `published`）；`failed` → `in_doubt(video_failed)`；
+   - **PR-C 转 `published` 时**：先读出当前行的 `absence_first_confirmed_at`，把它与本次 GET 结果一起比对（缺席证据之后又读到公开 = 异常，写 `alert_code`），不要依赖 RPC 无条件清空缺席值来掩盖这个矛盾（RPC 本期仍自动清空，PR-C 在调用前做比对）；
    - 回执写入有界重试 5 次（1/2/4/8/16 秒），仍失败 → 尝试 `in_doubt(receipt_write_lost)`；再失败留在 `uploading`，由「卡住」待办兜住。
 9. **status→published**：回执成功后单独调 `content_reel_mark_post_published`，失败由跟进函数补做。
 10. **缺席证据**（`not_on_facebook` / `removed_externally` / `draft_deleted` 共用）：
@@ -283,7 +284,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS content_posts_import_source_url
     - 满足 §3.2 SQL 时间条件的第二次缺席才迁移；
     - 残余风险：对本 token 视频级不可读而主页可读时可能误判，已用「删除成功记录 + 两次间隔 + 30 分钟无在跑写入」压到最低（U3）。
 11. **放弃这次上传**（员工，仅 `in_doubt`）：`getReelObjectStatus`：
-    - `published` → 拒绝，并按 `published` 迁移；`processing`/`unknown`/`error` → 拒绝（不能确认未公开）；
+    - `published` → 拒绝，并按 `published` 迁移（**草稿请求读到公开时不迁移到 `published`**，而是继续本步骤：删除视频 + 两次缺席 → `not_on_facebook`）；`processing`/`unknown`/`error` → 拒绝（不能确认未公开）；已有删除记录的视频再读到公开，进入 `published` 必须带 `alert_code`（数据库强制）；
     - `not_public`（`published===false` 字段真实存在）或 `failed` 或 `absent_confirmed_once` → `transition(['in_doubt']→'in_doubt', {last_step_started_at})` → `deleteReelVideo` → 成功写 `video_deleted_at` → 提示「10 分钟后点重新核对」→ 第二次核对满足条件 → `not_on_facebook`（卡片回出片列，可再授权）。
     - 「容器未完成」按 `status.uploading_phase` 未完成识别，归入 `processing`；超过 30 分钟无写入的未完成容器视为 `failed` 允许放弃（X4′ 待首条样本证实，§12）。
 12. **放弃这条内容**（员工）：该帖每条 `draft_published` 走删除草稿流程（§4.5）；全部 `draft_deleted` 后 `content_reel_abandon_post` 把卡片改 `rejected`；有 `published`/进行中 attempt → 拒绝并说明原因。待办判据排除 `rejected` 帖子。
@@ -832,3 +833,16 @@ v1 工单事件一字不改。只在 `state='published'` 且 `publish_confirmati
 | 魏征建议 7、8 / 子牙 S12：执行与回滚安全 | migration 首行 `SET LOCAL lock_timeout = '5s'`，两处 ADD COLUMN 挪到最前；必须整体原子执行；回滚脚本前置检查（有进行中记录或任一客户开关为真即报错不动任何东西）、判断前 `LOCK TABLE … ACCESS EXCLUSIVE`、注明账本行保留 | db-check 第 5 步三条 |
 
 **外键 RESTRICT 的完整影响**（此前只写了一半）：①准备过视频副本的帖子删不掉（副本表也 RESTRICT）；②改过公开开关的客户删不掉（审计表 RESTRICT）；③有发布记录的帖子 / 客户删不掉；④PR-B 上线前，`/api/posts/batch` 删除这类帖子会返回 500 并在错误信息里暴露表名（PR-B 改为 409）。
+
+### 15.2 第二轮两审收尾（2026-09-15）
+
+| 建议 | 落地 | 探针 / mutation |
+|---|---|---|
+| 执行手册按 migration name 查账本；首选 `psql -1`；补失败后检查、列定义与开关函数所有者核对 | PR #1705 描述「执行手册」 | — |
+| 魏征 C：另两张表所有者 TRUNCATE 被拒 | 已有触发器，补探针 | L01、L02；N24 |
+| 子牙建议 4 / 魏征 D：记账列单调、已公开期间 permalink 写入后锁定 | 触发器：`restart_seq` 不减、`trigger_event_ids` 只增（任何状态都检查，比「只在记账放行路径检查」更严）；permalink 加入已公开不可改列 | L03–L07；N25/N26/N27 |
+| 子牙建议 1：删过的视频再读到公开要告警 | 进入 `published` 时 `OLD.video_deleted_at IS NOT NULL` 也要求 `alert_code` | L08/L09；N28 |
+| 子牙建议 2：草稿删除须晚于进入草稿 | `draft_deleted` 要求 `video_deleted_at > finished_at`（进入草稿的库时钟时刻） | L10；N29 |
+| 魏征 A：草稿请求读到公开的处理 | §3.4 第 8、11 步已改；`contract.ts` 新增 `CONTENT_REEL_GUARD_ERROR_CODES`（含 `mode_state_mismatch`，这些是抛出而非返回的码，所以不并入 `CONTENT_REEL_RPC_REFUSAL_CODES`） | contract.test |
+| 子牙建议 3：PR-C 转 published 时比对缺席值 | §3.4 第 8 步已写明；RPC 本期不改 | — |
+| 子牙建议 5、6：注释与列快照 | migration 头注释写明长事务 `now()` 偏早；`contract.ts` 写明 PR-C 不得用应用时钟写证据列；`contract.test.ts` 加发布记录表列清单快照 | contract.test |
