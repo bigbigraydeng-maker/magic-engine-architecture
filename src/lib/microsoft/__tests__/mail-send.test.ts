@@ -30,11 +30,15 @@ interface DbOpts {
 let inserted: Record<string, unknown>[]
 let touchpointUpserts: Record<string, unknown>[]
 let updatedConversation: Record<string, unknown> | null
+let auditInserted: Record<string, unknown>[]
+let auditUpdates: Record<string, unknown>[]
 
 function mockDb(opts: DbOpts) {
   inserted = []
   touchpointUpserts = []
   updatedConversation = null
+  auditInserted = []
+  auditUpdates = []
   ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
     if (table === 'conversations') {
       return {
@@ -76,6 +80,24 @@ function mockDb(opts: DbOpts) {
           touchpointUpserts.push(row)
           return { data: null, error: null }
         },
+      }
+    }
+    if (table === 'conversation_outbound_log') {
+      return {
+        insert: (row: Record<string, unknown>) => {
+          auditInserted.push(row)
+          return {
+            select: () => ({
+              single: async () => ({ data: { id: `audit-${auditInserted.length}` } }),
+            }),
+          }
+        },
+        update: (patch: Record<string, unknown>) => ({
+          eq: async () => {
+            auditUpdates.push(patch)
+            return { data: null, error: null }
+          },
+        }),
       }
     }
     throw new Error(`unexpected table ${table}`)
@@ -225,5 +247,43 @@ describe('发送', () => {
     const r = await sendMailReply(INPUT)
     expect(r).toMatchObject({ ok: false, status: 502, reason: 'graph_failed' })
     expect(inserted).toHaveLength(0)
+  })
+})
+
+describe('发送审计（跟私信同一张表、同一个原则）', () => {
+  const convo = { id: 'cv1', client_id: 'c1', channel: 'email', contact_id: 'p1' }
+
+  it('调 Graph 之前先插一行 pending —— 中途崩溃也查得出谁试过发', async () => {
+    mockDb({ conversation: convo, latestMessageId: 'm-parent' })
+    mockGraph({ createReply: { ok: true, id: 'g5' } })
+    await sendMailReply(INPUT)
+    expect(auditInserted[0]).toMatchObject({
+      conversation_id: 'cv1',
+      client_id: 'c1',
+      sent_by_email: INPUT.sentByEmail,
+      status: 'pending',
+      messaging_type: 'email',
+    })
+  })
+
+  it('发成功 → 审计回填成 sent，带上真实的 Graph 消息 id', async () => {
+    mockDb({ conversation: convo, latestMessageId: 'm-parent' })
+    mockGraph({ createReply: { ok: true, id: 'g6' } })
+    await sendMailReply(INPUT)
+    expect(auditUpdates[0]).toMatchObject({ status: 'sent', meta_message_id: 'g6' })
+  })
+
+  it('建草稿失败 → 审计回填成 failed，带上原因', async () => {
+    mockDb({ conversation: convo, latestMessageId: 'm-parent' })
+    mockGraph({ createReply: { ok: false, status: 400 } })
+    await sendMailReply(INPUT)
+    expect(auditUpdates[0]).toMatchObject({ status: 'failed' })
+  })
+
+  it('发送那一步失败 → 审计也回填成 failed，不是停在 pending 里', async () => {
+    mockDb({ conversation: convo, latestMessageId: 'm-parent' })
+    mockGraph({ createReply: { ok: true, id: 'g7' }, send: { ok: false, status: 500 } })
+    await sendMailReply(INPUT)
+    expect(auditUpdates[0]).toMatchObject({ status: 'failed' })
   })
 })

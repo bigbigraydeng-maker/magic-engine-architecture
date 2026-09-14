@@ -16,14 +16,16 @@
  * ——这个 id 就是这封信在「已发送」文件夹里最终的样子，跟下一次同步读到的
  * 是同一封，天然不会重复。
  *
- * ## 跟 `lib/messenger/send.ts` 的差别（刻意，不是漏做）
+ * ## 审计走的是 `lib/messenger/send.ts` 同一张表
  *
- * 那边多一层「先插一行 pending 审计、发完再回填」，防的是 Graph 调用中途
- * 崩溃时连"谁试过发"都查不到。这一版先不做——`conversation_outbound_log`
- * 表目前的列（`meta_message_id` / `messaging_type` 取值 standard|human_agent）
- * 是照 Meta 的窗口模型开的，邮件没有这个窗口概念，硬套等于把语义搞混。
- * 要补审计需要一次表结构改动，属于另一件事，不在今天的范围里。
- * 消息本身、触点都会照写，只是少了「发送尝试」这一层记录。
+ * 一开始以为 `conversation_outbound_log` 的 `meta_message_id` /
+ * `messaging_type` 两列是照 Meta 的窗口模型开的、邮件用不上，打算跳过这层
+ * 审计——2026-09-15 子牙架构复审 PR #1714 指出这个判断没查证：两列在表结构
+ * 里就是不限内容的自由文本列，没有 CHECK 约束卡死取值，今天就能直接塞邮件
+ * 的记录进去，不需要动表结构。已经改成跟私信同一套「先插一行 pending、
+ * 发完/发失败都回填」，`messaging_type` 存字面量 `'email'`——不是 Meta 的
+ * 窗口态，只是「这行审计是哪个渠道发的」，跟 `channel` 列语义相同，写重复
+ * 是因为这张表目前没有单独的 channel 列，加一列比新增审计表本身还大。
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
@@ -77,7 +79,15 @@ async function createReplyDraft(
   try {
     res = await fetch(`${GRAPH}/me/messages/${encodeURIComponent(parentMessageId)}/createReply`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        // 没有这个请求头，这封信从「草稿」变「已发送」时 id 会变——那正是
+        // send() 紧接着要做的事。id 一变，下次每小时同步读到的是另一个 id，
+        // 会把这封刚发的信当成新信插出重复的一行。跟 mail-graph.ts 用同一个
+        // 请求头，两边才认得出是同一封（见那边文件头「4」的说明）。
+        Prefer: 'IdType="ImmutableId"',
+      },
       body: JSON.stringify({ comment }),
     })
   } catch (err) {
@@ -92,13 +102,16 @@ async function createReplyDraft(
   return { ok: true, draftId: data.id }
 }
 
-/** 把草稿发出去。成功是 202，没有正文。 */
+/**
+ * 把草稿发出去。成功是 202，没有正文——这一步本身不返回 id，`Prefer` 请求头
+ * 加不加不影响这次调用，但留着跟另外两处一致，别让读代码的人以为漏掉了。
+ */
 async function sendDraft(token: string, draftId: string): Promise<{ ok: true } | { ok: false; error: string }> {
   let res: Response
   try {
     res = await fetch(`${GRAPH}/me/messages/${encodeURIComponent(draftId)}/send`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, Prefer: 'IdType="ImmutableId"' },
     })
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -170,36 +183,81 @@ export async function sendMailReply(input: SendMailReplyInput): Promise<SendMail
     return { ok: false, status: 424, error: '邮箱授权掉线了，请找 Magic Lab 团队重连', reason: 'no_token' }
   }
 
+  // 发之前先插一行——Graph 调用中途崩溃也要能查出「谁试过发、发了什么」，
+  // 跟私信那条路同一张表、同一个原则（见文件头）。
+  const { data: audit } = await supabaseAdmin
+    .from('conversation_outbound_log')
+    .insert({
+      conversation_id: convo.id,
+      client_id: convo.client_id,
+      sent_by_email: input.sentByEmail,
+      body,
+      used_ai_draft: false,
+      messaging_type: 'email',
+      status: 'pending',
+    })
+    .select('id')
+    .single()
+
+  const finishAudit = async (patch: Record<string, unknown>) => {
+    if (!audit?.id) return
+    try {
+      await supabaseAdmin.from('conversation_outbound_log').update(patch).eq('id', audit.id)
+    } catch (err) {
+      console.error('[mail-send] 回填发送审计失败:', audit.id, err)
+    }
+  }
+
   const draft = await createReplyDraft(token, parentMessageId, body)
   if (!draft.ok) {
+    await finishAudit({ status: 'failed', error_message: draft.error })
     return { ok: false, status: 502, error: `建回复草稿失败: ${draft.error}`, reason: 'graph_failed' }
   }
 
   const sent = await sendDraft(token, draft.draftId)
   if (!sent.ok) {
+    await finishAudit({ status: 'failed', error_message: sent.error })
     return { ok: false, status: 502, error: `发送失败: ${sent.error}`, reason: 'graph_failed' }
   }
 
-  // 立刻把这条消息写进线程，卡片当场更新，不用等下一次每小时同步。
-  // message_id 用 createReply 给的真实 id——下次同步读到同一封信时，
-  // conversation_messages 的 (conversation_id, message_id) 唯一键会认出
-  // 这是同一封,不会插出第二行。
-  await supabaseAdmin.from('conversation_messages').insert({
-    conversation_id: convo.id,
-    message_id: draft.draftId,
-    direction: 'outbound',
-    sender_name: input.sentByEmail,
-    body,
-    sent_at: new Date().toISOString(),
-  })
+  await finishAudit({ status: 'sent', meta_message_id: draft.draftId })
 
-  await supabaseAdmin
-    .from('conversations')
-    .update({ last_message_at: new Date().toISOString(), last_message_from: 'page' })
-    .eq('id', convo.id)
+  // 信已经真的发出去了——这之后的写库都是「让页面/CRM当场跟上事实」，
+  // 不是「这封信算不算发出去了」的判断。哪一步崩了都不能把 send() 判失败：
+  // 那会让人以为没发出去而重发一遍，客人收到两封一样的信。失败只打日志，
+  // 亏欠的是「卡片要等下一次每小时同步才更新」，不是「话被重复说一遍」。
+  try {
+    // 立刻把这条消息写进线程，卡片当场更新，不用等下一次每小时同步。
+    // message_id 用 createReply 给的真实 id——下次同步读到同一封信时，
+    // conversation_messages 的 (conversation_id, message_id) 唯一键会认出
+    // 这是同一封,不会插出第二行。
+    await supabaseAdmin.from('conversation_messages').insert({
+      conversation_id: convo.id,
+      message_id: draft.draftId,
+      direction: 'outbound',
+      sender_name: input.sentByEmail,
+      body,
+      sent_at: new Date().toISOString(),
+    })
+  } catch (err) {
+    console.error('[mail-send] 信发出去了，但写进时间线失败:', draft.draftId, err)
+  }
+
+  try {
+    await supabaseAdmin
+      .from('conversations')
+      .update({ last_message_at: new Date().toISOString(), last_message_from: 'page' })
+      .eq('id', convo.id)
+  } catch (err) {
+    console.error('[mail-send] 信发出去了，但更新会话最后消息时间失败:', convo.id, err)
+  }
 
   if (convo.contact_id) {
-    await writeTouchpoint(convo.client_id, convo.contact_id, draft.draftId, body)
+    try {
+      await writeTouchpoint(convo.client_id, convo.contact_id, draft.draftId, body)
+    } catch (err) {
+      console.error('[mail-send] 信发出去了，但补触点失败:', convo.contact_id, err)
+    }
   }
 
   return { ok: true, messageId: draft.draftId }
