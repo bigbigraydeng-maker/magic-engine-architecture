@@ -176,7 +176,7 @@ describe('runNalMessengerLeadSync', () => {
     expect(outcomes).toHaveLength(0)
   })
 
-  it('没有关联联系人的对话直接跳过，不硬凑一个 contactId', async () => {
+  it('没有关联联系人的对话直接跳过，不硬凑一个 contactId，并计进 skippedNoContact', async () => {
     const { client, outcomes } = fakeSupabase({
       conversations: [{ id: CONV, contact_id: null, participant_psid: PSID }],
       messages: qualifyingMessages(),
@@ -184,7 +184,51 @@ describe('runNalMessengerLeadSync', () => {
 
     const summary = await runNalMessengerLeadSync({ supabase: client })
     expect(summary.totalConversations).toBe(1)
+    expect(summary.skippedNoContact).toBe(1)
     expect(outcomes).toHaveLength(0)
+  })
+
+  it('同一个联系人两次独立商机 —— 都写进去，各自独立的幂等键（编排层多批次接线）', async () => {
+    const messages: MessageSeed[] = [
+      {
+        conversation_id: CONV,
+        message_id: 'mid.in1',
+        direction: 'inbound',
+        body: 'Shipping a steel garage, 36cbm',
+        sent_at: '2026-08-24T00:00:00Z',
+      },
+      {
+        conversation_id: CONV,
+        message_id: 'mid.out1',
+        direction: 'outbound',
+        body: 'Your warehouse code is TJJ11111',
+        sent_at: '2026-08-24T01:00:00Z',
+      },
+      {
+        conversation_id: CONV,
+        message_id: 'mid.in2',
+        direction: 'inbound',
+        body: 'New shipment — a tent, 1800kg this time',
+        sent_at: '2026-09-08T00:00:00Z',
+      },
+      {
+        conversation_id: CONV,
+        message_id: 'mid.out2',
+        direction: 'outbound',
+        body: 'Your warehouse code is TJJ22222',
+        sent_at: '2026-09-08T01:00:00Z',
+      },
+    ]
+    const { client, outcomes } = fakeSupabase({
+      conversations: [{ id: CONV, contact_id: CONTACT, participant_psid: PSID }],
+      messages,
+    })
+
+    const summary = await runNalMessengerLeadSync({ supabase: client })
+    expect(summary.qualifiedLeadsFound).toBe(2)
+    expect(summary.insertedLeads).toBe(2)
+    expect(outcomes).toHaveLength(2)
+    expect(new Set(outcomes.map((o) => o.source_ref)).size).toBe(2) // 各自独立，没有互相覆盖
   })
 
   it('判定出真商机但这段对话没有 PSID——记进 skippedNoPsid，不硬写一条匹配不上的记录', async () => {

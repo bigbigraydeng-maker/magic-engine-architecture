@@ -44,6 +44,12 @@ export interface NalMessengerSyncSummary {
   skippedAlreadySynced: number
   /** 判定出真商机，但这段对话没有 Facebook 私信身份可用——理论上不该出现，留痕以防万一。 */
   skippedNoPsid: number
+  /**
+   * 对话没有关联到联系人——理论上建档时就该有，目前生产库实测 0 个（2026-09-15）。
+   * 单独计数是为了防呆：以后联系人建档流程一旦有延迟或漏建档，不能让这类对话
+   * 悄悄跳过、汇总报告却看不出漏了多少（对照 CTS 那条线的 contactNotLinked）。
+   */
+  skippedNoContact: number
   insertErrors: Array<{ conversationId: string; error: string }>
   cappedAtMaxInserts: boolean
 }
@@ -54,6 +60,7 @@ function emptySummary(): NalMessengerSyncSummary {
     qualifiedLeadsFound: 0,
     insertedLeads: 0,
     skippedAlreadySynced: 0,
+    skippedNoContact: 0,
     skippedNoPsid: 0,
     insertErrors: [],
     cappedAtMaxInserts: false,
@@ -102,7 +109,10 @@ export async function runNalMessengerLeadSync(
     // 没关联到联系人的对话理论上不该出现（Messenger 联系人建档时就会挂上），
     // 但万一出现，跳过比硬凑一个 contactId 安全——buildIntakeRow 也会因为
     // 缺 contactId 而拒收纯 PSID 记录（拒联检查需要它）。
-    if (!conv.contact_id) continue
+    if (!conv.contact_id) {
+      summary.skippedNoContact++
+      continue
+    }
 
     const { data: messages, error: msgErr } = await supabase
       .from('conversation_messages')
