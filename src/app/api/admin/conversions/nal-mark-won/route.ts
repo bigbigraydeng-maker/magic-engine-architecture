@@ -136,9 +136,42 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: built.errors.join('; ') }, { status: 400 })
   }
 
-  // ── 2. 校验都通过了，这时候才推进阶段（复用既有逻辑，不重新发明）─────────
-  // changed:false 只代表"这个人已经在 won 档，阶段这一步没有新东西要记"——
-  // 不代表这次点击无效，照常往下走去写 CAPI 记录（同一人的第二笔成交场景）。
+  // ── 2. 写 CAPI 记录（先写这个，再推阶段——魏征第二轮复审揪出的坑：如果反过来
+  //    先推阶段、这一步才失败，会跟原 BLOCKER 一样留下"永久标成已成交、但一条
+  //    CAPI 记录都没有"的孤儿联系人，只是触发条件从"校验不过"换成了"写库失败"。
+  //    幂等键命中（23505）说明这次点击此前已经成功处理过一遍，money 记录本来就
+  //    在，不算错误；除此之外的写库失败必须在推阶段之前拦下来）──────────────
+  const { data: inserted, error: insertErr } = await supabaseAdmin
+    .from('me_sale_outcomes')
+    .insert(built.row)
+    .select('id')
+    .single()
+
+  let outcomeId: string | null = null
+  let alreadyRecorded = false
+
+  if (insertErr) {
+    if ((insertErr as { code?: string }).code === '23505') {
+      alreadyRecorded = true
+    } else {
+      return NextResponse.json({ error: `写入失败：${insertErr.message}` }, { status: 500 })
+    }
+  } else {
+    outcomeId = (inserted as { id: string }).id
+    await supabaseAdmin.from('me_conversion_audit').insert({
+      outcome_id: outcomeId,
+      action: 'created',
+      actor: g.ctx.actor,
+      ip: g.ctx.ip,
+      ua: g.ctx.ua,
+      request_id: g.ctx.requestId,
+      detail: { source_kind: input.sourceKind, source_ref: input.sourceRef, amount_minor: built.row.amount_minor },
+    })
+  }
+
+  // ── 3. CAPI 记录已经落库（或者确认此前已经落库过），这时候才推进阶段（复用
+  //    既有逻辑，不重新发明）。changed:false 只代表"这个人已经在 won 档，阶段
+  //    这一步没有新东西要记"——不代表这次点击无效，money 记录已经写完了。────
   const stageResult = await advanceContactStage(
     supabaseAdmin,
     NAL_CLIENT_ID,
@@ -148,38 +181,26 @@ export async function POST(request: Request): Promise<NextResponse> {
     g.ctx.actor,
   )
   if (!stageResult.ok) {
-    return NextResponse.json({ error: stageResult.error }, { status: stageResult.status })
+    // CAPI 记录已经是既成事实（钱不会丢），只是阶段没推——如实说清楚，别让人以为
+    // 这笔成交整个都没记上。
+    return NextResponse.json(
+      {
+        error: stageResult.error,
+        outcomeId,
+        alreadyRecorded,
+        message: `钱已经记下了，但联系人阶段没能推进到"已成交"：${stageResult.error}`,
+      },
+      { status: stageResult.status },
+    )
   }
 
-  // ── 3. 写库（幂等键命中就说明这次点击已经处理过，不是错误）──────────────
-  const { data: inserted, error: insertErr } = await supabaseAdmin
-    .from('me_sale_outcomes')
-    .insert(built.row)
-    .select('id')
-    .single()
-
-  if (insertErr) {
-    if ((insertErr as { code?: string }).code === '23505') {
-      return NextResponse.json({
-        stageChanged: stageResult.changed,
-        alreadyRecorded: true,
-        message: '这笔已经记过了（重复提交），没有再插入一条',
-      })
-    }
-    return NextResponse.json({ error: `写入失败：${insertErr.message}` }, { status: 500 })
+  if (alreadyRecorded) {
+    return NextResponse.json({
+      stageChanged: stageResult.changed,
+      alreadyRecorded: true,
+      message: '这笔已经记过了（重复提交），没有再插入一条',
+    })
   }
-
-  const outcomeId = (inserted as { id: string }).id
-
-  await supabaseAdmin.from('me_conversion_audit').insert({
-    outcome_id: outcomeId,
-    action: 'created',
-    actor: g.ctx.actor,
-    ip: g.ctx.ip,
-    ua: g.ctx.ua,
-    request_id: g.ctx.requestId,
-    detail: { source_kind: input.sourceKind, source_ref: input.sourceRef, amount_minor: built.row.amount_minor },
-  })
 
   // ── 4. 拒联检查（魏征评审：只回"标记成功"会让人以为整条链路都走完了）──────
   const { data: touchRows, error: touchErr } = await supabaseAdmin

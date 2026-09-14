@@ -284,7 +284,7 @@ describe('POST nal-mark-won', () => {
     expect(outcomes).toHaveLength(0)
   })
 
-  it('写库遇到非重复键的真实错误 → 500，如实报错', async () => {
+  it('写库遇到非重复键的真实错误 → 500 如实报错，且阶段不能被推进（跟没匹配键那条锁的是同一类坑）', async () => {
     forceInsertError = true
     const { status, body } = await markWon({
       contactId: '11111111-1111-1111-1111-111111111111',
@@ -294,6 +294,11 @@ describe('POST nal-mark-won', () => {
     })
     expect(status).toBe(500)
     expect(body.error).toContain('模拟的数据库故障')
+    // 魏征第二轮复审揪出的坑：如果先推阶段再写库，这里会变成"钱没记上，人却已经
+    // 被标成已成交"。CAPI 记录写库失败必须发生在阶段被推进之前。
+    expect(stageEvents).toHaveLength(0)
+    const contact1 = contacts.find((c) => c.id === '11111111-1111-1111-1111-111111111111')
+    expect(contact1?.stage).toBe('new')
   })
 
   it('拒联检查本身查询失败 → 降级用 contacts.do_not_contact，不整段炸掉', async () => {
