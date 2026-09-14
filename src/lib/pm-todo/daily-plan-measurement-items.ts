@@ -25,22 +25,29 @@ interface ResolveFailureSummary {
   date?: unknown
   idempotency_key?: unknown
   photo_id?: unknown
+  post_id?: unknown
 }
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function howFor(reason: string, clientId: string, photoId: string): { how: string; href: string } {
+/**
+ * 只写眼下真能做的动作。系统目前**没有**「补读成绩」的按钮（已登记 issue），
+ * 所以最后一步是把待办原样转给开发，并把开发要用的两个编号写全，不用再问人。
+ */
+function howFor(reason: string, clientId: string, key: string, objectId: string): { how: string; href: string } {
+  const facebookLink = `https://www.facebook.com/${objectId}`
+  const handoff = `把这条待办转给开发补读成绩，附上：编号 ${objectId}、防重复编号 ${key}`
   if (reason === 'token_unavailable') {
     return {
-      how: '这个客户的 Facebook 主页授权读不到了。打开链接 →「平台连接」→ 点一次「连接 Meta」重新授权。授权好了回我一句，我把这条的成绩补上',
+      how: `这个客户的 Facebook 主页授权读不到了。① 打开链接 →「平台连接」→ 点「连接 Meta」重新授权；② 打开 ${facebookLink} 确认这条帖子是公开状态；③ 重连之后成绩也不会自己补上，仍需${handoff}`,
       href: `${APP_BASE}/dashboard/clients/${clientId}/settings`,
     }
   }
   return {
-    how: `打开链接进这个客户页，在「发到 Facebook」里找到这一天的帖子，点「在 Facebook 上打开」看它是不是真的公开了（照片编号 ${photoId}）。公开了就回我一句「补测 ${photoId}」；已经被删了就不用管`,
-    href: `${APP_BASE}/dashboard/clients/${clientId}`,
+    how: `① 打开链接，确认这条帖子在 Facebook 上是公开状态；② 如果打不开或已被删，这条不用再管；③ 如果是公开的，${handoff}`,
+    href: facebookLink,
   }
 }
 
@@ -66,18 +73,20 @@ export async function pushDailyPlanMeasurementItems(
     const s = row.summary ?? {}
     const clientId = str(s.client_id)
     const key = str(s.idempotency_key)
-    if (!clientId || !key || seen.has(key)) continue
+    // Scheduled photos carry photo_id; immediate posts whose handoff failed carry post_id.
+    const objectId = str(s.photo_id) || str(s.post_id)
+    if (!clientId || !key || !objectId || seen.has(key)) continue
     seen.add(key)
     if (seen.size > MAX_ITEMS) break
 
     const clientName = clientNames.get(clientId)?.name ?? '未知客户'
     const date = str(s.date)
-    const { how, href } = howFor(str(s.reason), clientId, str(s.photo_id))
+    const { how, href } = howFor(str(s.reason), clientId, key, objectId)
     items.push({
       kind: 'daily_plan_post_unmeasured',
       client_id: clientId,
       client_name: clientName,
-      what: `${clientName} 计划在 ${date || '某天'} 发的 Facebook 帖子已经交给 Facebook 了，但系统一直拿不到它的帖子编号 —— 这条帖子的点赞、评论、转发不会被自动记下来，后面的「该不该照这个再发」建议也会缺这一条`,
+      what: `${clientName} 计划在 ${date || '某天'} 发的 Facebook 帖子已经交给 Facebook 了，但系统没能开始回收它的成绩 —— 这条帖子的点赞、评论、转发不会被自动记下来，后面的「该不该照这个再发」建议也会缺这一条`,
       how,
       href,
     })

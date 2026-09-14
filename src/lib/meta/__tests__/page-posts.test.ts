@@ -207,7 +207,9 @@ describe('readPageStoryId — read-back after the photo is public', () => {
     ['🔴 story id belongs to another Page', 200, { page_story_id: `999999999999_${PHOTO}` }, 'page_prefix_mismatch'],
     ['🔴 story id is not <page>_<digits>', 200, { page_story_id: `${PAGE}_abc` }, 'page_prefix_mismatch'],
     ['HTTP 200 but body carries an error', 200, { error: { message: 'boom', code: 2 } }, 'graph_error'],
-    ['photo deleted (code 100)', 400, { error: { message: 'does not exist', code: 100 } }, 'object_not_found'],
+    ['photo deleted (code 100 + subcode 33)', 400, { error: { message: 'does not exist', code: 100, error_subcode: 33 } }, 'object_not_found'],
+    ['🔴 code 100 without subcode 33 is NOT "deleted"', 400, { error: { message: 'Invalid parameter', code: 100 } }, 'graph_error'],
+    ['🔴 code 100 with another subcode is NOT "deleted"', 400, { error: { message: 'Unsupported get', code: 100, error_subcode: 2 } }, 'graph_error'],
     ['HTTP 500 without an error body', 500, 'nope', 'http_error'],
   ] as const)('%s → fixed reason code, no raw Graph text', async (_label, status, body, reason) => {
     const { fetcher } = graph(json(status, body))

@@ -247,8 +247,16 @@ export type PageStoryIdReadback =
 
 const STORY_ID_TIMEOUT_MS = 10_000
 
-function storyIdHttpFailure(res: Response, body: { error?: { code?: number } } | null): PageStoryIdReadback | null {
-  if (body?.error) return { ok: false, reason: body.error.code === 100 ? 'object_not_found' : 'graph_error' }
+function storyIdHttpFailure(
+  res: Response,
+  body: { error?: { code?: number; error_subcode?: number } } | null,
+): PageStoryIdReadback | null {
+  // Code 100 alone is "invalid parameter" and covers many things; only subcode
+  // 33 means the object does not exist (same rule as meta/post-engagement.ts).
+  if (body?.error) {
+    const gone = body.error.code === 100 && body.error.error_subcode === 33
+    return { ok: false, reason: gone ? 'object_not_found' : 'graph_error' }
+  }
   if (!res.ok) return { ok: false, reason: 'http_error' }
   return null
 }
@@ -261,7 +269,7 @@ function storyIdHttpFailure(res: Response, body: { error?: { code?: number } } |
  * until after `scheduled_publish_time` (see the story-resolve workflow).
  *
  * Only an id of the form `<pageId>_<digits>` is accepted: anything else is not
- * a story on this Page. Never throws; `object_not_found` (Graph code 100) means
+ * a story on this Page. Never throws; `object_not_found` (Graph code 100 + subcode 33) means
  * the photo is gone, e.g. recalled.
  */
 export async function readPageStoryId(input: {
@@ -281,7 +289,9 @@ export async function readPageStoryId(input: {
     const name = typeof error === 'object' && error !== null && 'name' in error ? String(error.name) : ''
     return { ok: false, reason: name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'network_error' }
   }
-  const body = (await res.json().catch(() => null)) as { page_story_id?: unknown; error?: { code?: number } } | null
+  const body = (await res.json().catch(() => null)) as
+    | { page_story_id?: unknown; error?: { code?: number; error_subcode?: number } }
+    | null
   const failure = storyIdHttpFailure(res, body)
   if (failure) return failure
 

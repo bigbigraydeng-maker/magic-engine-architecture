@@ -153,9 +153,12 @@ interface TableState {
   assets?: unknown[]
   facebookPageId?: string | null
   updateResult?: unknown
+  /** Error returned by the cron_run_logs insert (measurement failure record). */
+  recordInsertError?: { message: string } | null
 }
 
 let updateSpy: ReturnType<typeof vi.fn>
+let recordInsertSpy: ReturnType<typeof vi.fn>
 
 /** Fake Supabase modelled by TABLE, not by call order. */
 function stubTables(state: TableState = {}) {
@@ -168,8 +171,17 @@ function stubTables(state: TableState = {}) {
     archived_at: null,
   }))
   updateSpy = vi.fn()
+  recordInsertSpy = vi.fn()
 
   mockFrom.mockImplementation(((table: string) => {
+    if (table === 'cron_run_logs') {
+      return {
+        insert: vi.fn().mockImplementation(async (row: unknown) => {
+          recordInsertSpy(row)
+          return { error: state.recordInsertError ?? null }
+        }),
+      }
+    }
     if (table === 'client_assets') return chain({ data: assets, error: null }, 'in')
     if (table === 'clients') {
       return chain({ data: { facebook_page_id: state.facebookPageId ?? PAGE_ID }, error: null }, 'maybeSingle')
@@ -648,7 +660,7 @@ describe('publish bridge — live run records real provider ids', () => {
     expect(mockSendInngestEvent).toHaveBeenCalledTimes(1)
     const event = mockSendInngestEvent.mock.calls[0][0]
     expect(event.name).toBe('daily_plan.post.story_resolve_due')
-    expect(event.id).toBe(`${keyFor(DATES[0])}:resolve`)
+    expect(event.id).toBe(`${keyFor(DATES[0])}:resolve:1750835520181969`)
     expect(StoryResolveDueSchema.safeParse(event.data).success).toBe(true)
     expect(event.data).toMatchObject({
       client_id: CLIENT_ID,
@@ -694,13 +706,79 @@ describe('publish bridge — live run records real provider ids', () => {
     expect(json.status).toBe('PUBLISHED')
     expect(json.receipt.failed).toEqual([])
     const entry = json.receipt.published[0]
-    expect(entry.measurement_skipped_reason).toMatch(/photo_id/)
+    expect(entry.measurement_skipped_reason).toBe('event_contract_invalid')
     expect(mockSendInngestEvent).not.toHaveBeenCalled()
+    expect(recordInsertSpy).toHaveBeenCalledTimes(1)
+    expect(recordInsertSpy.mock.calls[0][0]).toMatchObject({
+      status: 'failed',
+      summary: { outcome: 'event_contract_invalid', client_id: CLIENT_ID, date: DATES[0], idempotency_key: keyFor(DATES[0]), photo_id: 'not-a-photo-id' },
+    })
     expect(json.receipt.event_ids).toEqual([])
     expect(json.measurement_skipped).toEqual([
       { date: DATES[0], post_id: 'not-a-photo-id', reason: entry.measurement_skipped_reason },
     ])
     expect(CampaignDailyPublishMetaSchema.safeParse(json.receipt).success).toBe(true)
+  })
+
+  it('🔴 scheduled photo: resolve event send fails → failed record for the to-do list, receipt PUBLISHED, posted once', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-02T00:00:00.000Z'))
+    stubTables()
+    armProvider()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockSendInngestEvent.mockRejectedValue(new Error('INNGEST_EVENT_KEY_MISSING'))
+    mockPublish.mockReset()
+    mockPublish.mockResolvedValueOnce({
+      postId: '1750835520181969',
+      postIdSource: 'id',
+      permalink: 'https://www.facebook.com/1750835520181969',
+      raw: { id: '1750835520181969' },
+    })
+
+    const response = await POST(request({ no_publish: false, dates: [DATES[0]] }), params)
+    const json = await response.json()
+
+    expect(mockPublish).toHaveBeenCalledTimes(1)
+    expect(response.status).toBe(200)
+    expect(json.status).toBe('PUBLISHED')
+    expect(json.receipt.failed).toEqual([])
+    expect(json.receipt.published[0].measurement_skipped_reason).toBe('event_send_failed')
+    expect(json.receipt.event_ids).toEqual([])
+    expect(recordInsertSpy).toHaveBeenCalledTimes(1)
+    expect(recordInsertSpy.mock.calls[0][0]).toMatchObject({
+      job_name: 'daily-plan-post-story-resolve',
+      status: 'failed',
+      summary: {
+        outcome: 'event_send_failed',
+        client_id: CLIENT_ID,
+        date: DATES[0],
+        idempotency_key: keyFor(DATES[0]),
+        photo_id: '1750835520181969',
+      },
+    })
+    expect(updateSpy).toHaveBeenCalledTimes(1)
+    expect(json.measurement_skipped).toEqual([
+      { date: DATES[0], post_id: '1750835520181969', reason: 'event_send_failed' },
+    ])
+  })
+
+  it('🔴 immediate post: event send fails and the failure record cannot be written → receipt still saved, not a failed batch', async () => {
+    stubTables({ recordInsertError: { message: 'cron_run_logs unavailable' } })
+    armProvider()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockSendInngestEvent.mockRejectedValue(new Error('network'))
+
+    const response = await POST(request({ no_publish: false, dates: [DATES[0]] }), params)
+    const json = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(json.status).toBe('PUBLISHED')
+    expect(json.success).toBe(true)
+    expect(mockPublish).toHaveBeenCalledTimes(1)
+    expect(recordInsertSpy).toHaveBeenCalledTimes(1)
+    expect(recordInsertSpy.mock.calls[0][0]).toMatchObject({ summary: { outcome: 'event_send_failed', post_id: `${PAGE_ID}_1750000091` } })
+    expect(json.receipt.published[0].measurement_skipped_reason).toBe('event_send_failed')
+    expect(updateSpy).toHaveBeenCalledTimes(1)
   })
 
   it('🔴 a re-run over a receipt holding a bare photo id does not publish that date again', async () => {

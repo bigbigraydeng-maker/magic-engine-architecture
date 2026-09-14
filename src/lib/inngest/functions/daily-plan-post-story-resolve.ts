@@ -16,10 +16,10 @@
  *              idempotency key (same id rule as the immediate path → one event
  *              per Post, replays dedupe)
  *
- * Outcomes that need no human: resolved + emitted; photo gone (Graph code 100,
- * e.g. recalled) → no measurement, completed record. Every other end state
- * writes a *failed* record to `cron_run_logs`, which the daily to-do list
- * reads (`pm-todo/daily-plan-measurement-items.ts`) — never only a log line.
+ * The only outcomes that need no human: resolved + emitted; photo gone AND the
+ * receipt says this Post was recalled. Every other end state — including a
+ * photo that vanished without a recall, and an isolation refusal — writes a
+ * *failed* record (`writeMeasurementRecord`), which the daily to-do list reads.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -33,9 +33,13 @@ import {
   StoryResolveDueSchema,
   publishedEventFromResolved,
   storyResolveAttempts,
-  STORY_RESOLVE_JOB_NAME,
   type StoryResolveDue,
 } from '@/lib/campaign/daily-plan-publish'
+import {
+  writeMeasurementRecord,
+  type MeasurementRecord,
+  type MeasurementRecordPost,
+} from '@/lib/campaign/daily-plan-measurement-record'
 import { getStoredPageToken } from '@/lib/meta/token-manager'
 import { readPageStoryId } from '@/lib/meta/page-posts'
 import { readRegisteredPageId } from './daily-plan-post-measurement'
@@ -52,16 +56,6 @@ export type StoryResolveResult =
   | { ok: true; outcome: 'photo_gone'; attempt: number }
   | { ok: false; reason: string }
 
-export interface StoryResolveRecord {
-  status: 'completed' | 'failed'
-  outcome: 'photo_gone' | 'unresolved' | 'event_contract_violation' | 'workflow_failed'
-  reason: string
-  attempts: number
-  due: Pick<StoryResolveDue, 'client_id' | 'campaign_id' | 'plan_id' | 'date' | 'idempotency_key' | 'photo_id' | 'page_id'> & {
-    scheduled_publish_time?: string
-  }
-}
-
 /** Minimal step surface this workflow uses — Inngest's step satisfies it. */
 export interface StoryResolveStep {
   run<T>(id: string, fn: () => Promise<T>): Promise<T>
@@ -71,8 +65,10 @@ export interface StoryResolveStep {
 export interface StoryResolveDeps {
   supabase: SupabaseClient
   readStory: (due: StoryResolveDue) => Promise<StoryReadOutcome>
+  /** Is this Post's idempotency key in the plan receipt's `recalled[]`? Throws on DB error. */
+  isRecalled: (due: StoryResolveDue) => Promise<boolean>
   send: (event: { id: string; name: string; data: Record<string, unknown> }) => Promise<InngestSendResult>
-  writeRecord: (record: StoryResolveRecord) => Promise<void>
+  writeRecord: (record: MeasurementRecord) => Promise<void>
 }
 
 /** One read with the Page token fetched at execution time (it may have rotated since publish). */
@@ -85,25 +81,26 @@ export async function readStoryOnce(due: StoryResolveDue, fetcher: typeof fetch 
   return { kind: 'not_yet', reason: read.reason }
 }
 
-/** Outcome record in `cron_run_logs`. Throws on write failure so the step retries. */
-export async function writeStoryResolveRecord(supabase: SupabaseClient, record: StoryResolveRecord): Promise<void> {
-  const now = new Date().toISOString()
-  const failed = record.status === 'failed'
-  const { error } = await supabase.from('cron_run_logs').insert({
-    job_name: STORY_RESOLVE_JOB_NAME,
-    status: record.status,
-    started_at: now,
-    finished_at: now,
-    processed: 1,
-    completed_count: failed ? 0 : 1,
-    failed_count: failed ? 1 : 0,
-    summary: { outcome: record.outcome, reason: record.reason, attempts: record.attempts, ...record.due },
-    error_message: failed ? `${record.outcome}: ${record.reason}` : null,
-  })
-  if (error) throw new Error(`writeStoryResolveRecord: ${error.message}`)
+/**
+ * A vanished photo is only a normal end if *we* recalled it. Anything else
+ * (deleted by hand in Business Suite, a Graph glitch) must reach a human.
+ */
+export async function readIsRecalled(supabase: SupabaseClient, due: StoryResolveDue): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('social_plans')
+    .select('plan_data')
+    .eq('id', due.plan_id)
+    .eq('client_id', due.client_id)
+    .maybeSingle()
+  if (error) throw new Error(`readIsRecalled: ${error.message}`)
+  const recalled = (data as { plan_data?: { publish_meta?: { recalled?: unknown } } } | null)?.plan_data?.publish_meta?.recalled
+  if (!Array.isArray(recalled)) return false
+  return recalled.some(entry =>
+    typeof entry === 'object' && entry !== null && 'idempotency_key' in entry && entry.idempotency_key === due.idempotency_key,
+  )
 }
 
-function recordDue(due: StoryResolveDue): StoryResolveRecord['due'] {
+function recordPost(due: StoryResolveDue): MeasurementRecordPost {
   return {
     client_id: due.client_id,
     campaign_id: due.campaign_id,
@@ -126,15 +123,39 @@ async function emitResolved(
   const parsed = DailyPlanPostPublishedEventSchema.safeParse(publishedEventFromResolved(due, postId))
   if (!parsed.success) {
     await step.run('record-contract-violation', () =>
-      deps.writeRecord({ status: 'failed', outcome: 'event_contract_violation', reason: 'published_event_schema', attempts: attempt, due: recordDue(due) }),
+      deps.writeRecord({ status: 'failed', outcome: 'event_contract_invalid', reason: 'event_contract_invalid', attempts: attempt, post: recordPost(due) }),
     )
-    return { ok: false, reason: 'event_contract_violation' }
+    return { ok: false, reason: 'event_contract_invalid' }
   }
   // Same event id as the immediate-publish path: one published event per Post.
   await step.run('emit-published-event', () =>
     deps.send({ id: due.idempotency_key, name: DAILY_PLAN_POST_PUBLISHED_EVENT, data: parsed.data }),
   )
   return { ok: true, outcome: 'emitted', post_id: postId, attempt }
+}
+
+async function handleGone(due: StoryResolveDue, attempt: number, step: StoryResolveStep, deps: StoryResolveDeps): Promise<StoryResolveResult> {
+  const recalled = await step.run('check-recalled', () => deps.isRecalled(due))
+  if (recalled) {
+    await step.run('record-photo-gone', () =>
+      deps.writeRecord({ status: 'completed', outcome: 'photo_gone', reason: 'recalled', attempts: attempt, post: recordPost(due) }),
+    )
+    return { ok: true, outcome: 'photo_gone', attempt }
+  }
+  await step.run('record-photo-gone-not-recalled', () =>
+    deps.writeRecord({ status: 'failed', outcome: 'photo_gone_not_recalled', reason: 'object_not_found', attempts: attempt, post: recordPost(due) }),
+  )
+  return { ok: false, reason: 'photo_gone_not_recalled' }
+}
+
+async function checkIsolation(due: StoryResolveDue, step: StoryResolveStep, deps: StoryResolveDeps): Promise<string | null> {
+  const registered = await step.run('isolation-check', () => readRegisteredPageId(deps.supabase, due.client_id))
+  const refusal = !registered ? 'client_page_unknown' : registered !== due.page_id ? 'page_mismatch' : null
+  if (!refusal) return null
+  await step.run('record-isolation-refused', () =>
+    deps.writeRecord({ status: 'failed', outcome: 'isolation_refused', reason: refusal, attempts: 0, post: recordPost(due) }),
+  )
+  return refusal
 }
 
 export async function runStoryResolve(
@@ -146,9 +167,8 @@ export async function runStoryResolve(
   if (!parsed.success) return { ok: false, reason: 'invalid_payload' }
   const due = parsed.data
 
-  const registered = await step.run('isolation-check', () => readRegisteredPageId(deps.supabase, due.client_id))
-  if (!registered) return { ok: false, reason: 'client_page_unknown' }
-  if (registered !== due.page_id) return { ok: false, reason: 'page_mismatch' }
+  const refusal = await checkIsolation(due, step, deps)
+  if (refusal) return { ok: false, reason: refusal }
 
   let lastReason = 'not_attempted'
   const attempts = storyResolveAttempts(due)
@@ -157,17 +177,12 @@ export async function runStoryResolve(
     await step.sleepUntil(`wait-resolve-${attempt}`, new Date(at))
     const read = await step.run(`read-story-id-${attempt}`, () => deps.readStory(due))
     if (read.kind === 'resolved') return emitResolved(due, read.postId, attempt, step, deps)
-    if (read.kind === 'gone') {
-      await step.run('record-photo-gone', () =>
-        deps.writeRecord({ status: 'completed', outcome: 'photo_gone', reason: 'object_not_found', attempts: attempt, due: recordDue(due) }),
-      )
-      return { ok: true, outcome: 'photo_gone', attempt }
-    }
+    if (read.kind === 'gone') return handleGone(due, attempt, step, deps)
     lastReason = read.reason
   }
 
   await step.run('record-unresolved', () =>
-    deps.writeRecord({ status: 'failed', outcome: 'unresolved', reason: lastReason, attempts: attempts.length, due: recordDue(due) }),
+    deps.writeRecord({ status: 'failed', outcome: 'unresolved', reason: lastReason, attempts: attempts.length, post: recordPost(due) }),
   )
   return { ok: false, reason: 'unresolved' }
 }
@@ -181,7 +196,7 @@ export async function recordWorkflowFailure(originalData: unknown, deps: Pick<St
     outcome: 'workflow_failed',
     reason: 'retries_exhausted',
     attempts: 0,
-    due: recordDue(parsed.data),
+    post: recordPost(parsed.data),
   })
 }
 
@@ -205,7 +220,7 @@ export function createStoryResolveFunction(deps: StoryResolveDeps) {
         {
           // Inngest types a memoized result as Jsonify<T>. Every step result in
           // this workflow is already plain JSON (StoryReadOutcome, string | null,
-          // InngestSendResult, void), so Jsonify<T> and T have the same shape.
+          // boolean, InngestSendResult, void), so Jsonify<T> and T have the same shape.
           run: (id, fn) => step.run(id, fn) as Promise<Awaited<ReturnType<typeof fn>>>,
           sleepUntil: async (id, at) => { await step.sleepUntil(id, at) },
         },
@@ -217,6 +232,7 @@ export function createStoryResolveFunction(deps: StoryResolveDeps) {
 export const dailyPlanPostStoryResolve = createStoryResolveFunction({
   supabase: supabaseAdmin,
   readStory: (due) => readStoryOnce(due),
+  isRecalled: (due) => readIsRecalled(supabaseAdmin, due),
   send: (event) => sendInngestEvent(event),
-  writeRecord: (record) => writeStoryResolveRecord(supabaseAdmin, record),
+  writeRecord: (record) => writeMeasurementRecord(supabaseAdmin, record),
 })

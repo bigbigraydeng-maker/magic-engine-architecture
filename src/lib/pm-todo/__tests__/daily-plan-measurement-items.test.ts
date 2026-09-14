@@ -55,8 +55,27 @@ describe('pushDailyPlanMeasurementItems', () => {
     expect(items[0]).toMatchObject({ kind: 'daily_plan_post_unmeasured', client_id: CLIENT, client_name: 'Acme Tours' })
     expect(items[0].what).toContain('2026-09-17')
     expect(items[0].what).toContain('不会被自动记下来')
+    // Direct link to the Post on Facebook — the first thing to check.
+    expect(items[0].href).toBe('https://www.facebook.com/1750835520181969')
+  })
+
+  it('🔴 how is doable today: no "reply to me" step; hands off to dev with both ids written out', async () => {
+    const { client } = fakeSupabase([failure()])
+    const items: ManualItem[] = []
+    await pushDailyPlanMeasurementItems(client as SupabaseClient, items, NOW, new Map())
+    expect(items[0].how).not.toMatch(/回我一句|补测/)
+    expect(items[0].how).toContain('确认这条帖子在 Facebook 上是公开状态')
+    expect(items[0].how).toContain('转给开发补读成绩')
     expect(items[0].how).toContain('1750835520181969')
-    expect(items[0].href).toBe(`https://app.magicengine.com.au/dashboard/clients/${CLIENT}`)
+    expect(items[0].how).toContain('fbpost_a')
+  })
+
+  it('an immediate post whose handoff failed (post_id, no photo_id) still becomes an item', async () => {
+    const { client } = fakeSupabase([failure({ photo_id: undefined, post_id: '1616575215312482_1750000091', reason: 'event_send_failed' })])
+    const items: ManualItem[] = []
+    await pushDailyPlanMeasurementItems(client as SupabaseClient, items, NOW, new Map())
+    expect(items).toHaveLength(1)
+    expect(items[0].href).toBe('https://www.facebook.com/1616575215312482_1750000091')
   })
 
   it('expired Page authorisation points at re-connecting Meta in settings', async () => {
@@ -64,6 +83,10 @@ describe('pushDailyPlanMeasurementItems', () => {
     const items: ManualItem[] = []
     await pushDailyPlanMeasurementItems(client as SupabaseClient, items, NOW, new Map())
     expect(items[0].how).toContain('连接 Meta')
+    expect(items[0].how).not.toMatch(/回我一句|补测/)
+    // Re-connecting alone does not backfill: the dev hand-off is still spelled out.
+    expect(items[0].how).toContain('仍需把这条待办转给开发补读成绩')
+    expect(items[0].how).toContain('https://www.facebook.com/1750835520181969')
     expect(items[0].href).toBe(`https://app.magicengine.com.au/dashboard/clients/${CLIENT}/settings`)
   })
 

@@ -445,8 +445,15 @@ export type StoryResolveDue = z.infer<typeof StoryResolveDueSchema>
 /** `cron_run_logs.job_name` for the story-resolve workflow's outcome records (read by the daily to-do list). */
 export const STORY_RESOLVE_JOB_NAME = 'daily-plan-post-story-resolve'
 
-export function storyResolveEventId(idempotencyKey: string): string {
-  return `${idempotencyKey}:resolve`
+/**
+ * Includes the photo id: recalling a Post and re-publishing the same content
+ * reuses the idempotency key but creates a *new* photo. Keying on the key alone
+ * would let Inngest's event dedupe swallow the re-publish's resolve event while
+ * the old run wakes up, finds its photo recalled and ends — leaving the live
+ * re-published Post unmeasured.
+ */
+export function storyResolveEventId(idempotencyKey: string, photoId: string): string {
+  return `${idempotencyKey}:resolve:${photoId}`
 }
 
 /**

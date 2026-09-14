@@ -8,6 +8,7 @@
  * waiting sees exactly what production would: no story id.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: {} }))
 vi.mock('@/lib/meta/token-manager', () => ({ getStoredPageToken: vi.fn() }))
@@ -18,17 +19,19 @@ import {
   STORY_RESOLVE_JOB_NAME,
   measurementSchedule,
   storyResolveAttempts,
+  storyResolveEventId,
   type StoryResolveDue,
 } from '@/lib/campaign/daily-plan-publish'
+import { writeMeasurementRecord, type MeasurementRecord } from '@/lib/campaign/daily-plan-measurement-record'
 import {
   STORY_RESOLVE_FUNCTION_ID,
   STORY_RESOLVE_RETRIES,
+  createStoryResolveFunction,
+  readIsRecalled,
   readStoryOnce,
   recordWorkflowFailure,
   runStoryResolve,
-  writeStoryResolveRecord,
   type StoryResolveDeps,
-  type StoryResolveRecord,
   type StoryResolveStep,
 } from '../daily-plan-post-story-resolve'
 import { cloudFunctions } from '../index'
@@ -89,7 +92,8 @@ function fakeGraph(clock: { now: number }, mode: GraphMode) {
   const fetcher: typeof fetch = async (input) => {
     urls.push(String(input))
     if (mode === 'deleted') {
-      return Response.json({ error: { message: 'Object does not exist', code: 100 } }, { status: 400 })
+      // Graph's "object does not exist": code 100 + subcode 33.
+      return Response.json({ error: { message: 'Object does not exist', code: 100, error_subcode: 33 } }, { status: 400 })
     }
     const isPublic = mode !== 'never_public' && clock.now >= Date.parse(SCHEDULED)
     if (!isPublic) return Response.json({ id: PHOTO })
@@ -99,28 +103,39 @@ function fakeGraph(clock: { now: number }, mode: GraphMode) {
   return { fetcher, urls }
 }
 
-function fakeSupabase(registeredPageId: string | null) {
+/** Fake Supabase by table: `clients` (registered Page) and `social_plans` (receipt `recalled[]`). */
+function fakeSupabase(registeredPageId: string | null, recalledKeys: string[] = [], planError: { message: string } | null = null) {
   return {
     from: (table: string) => {
-      if (table !== 'clients') throw new Error(`unexpected table ${table}`)
+      const data = table === 'clients'
+        ? (registeredPageId ? { facebook_page_id: registeredPageId } : null)
+        : table === 'social_plans'
+          ? { plan_data: { publish_meta: { recalled: recalledKeys.map(k => ({ idempotency_key: k, post_id: PHOTO })) } } }
+          : undefined
+      if (data === undefined) throw new Error(`unexpected table ${table}`)
       const chain = {
         select: () => chain,
         eq: () => chain,
-        maybeSingle: async () => ({ data: registeredPageId ? { facebook_page_id: registeredPageId } : null, error: null }),
+        maybeSingle: async () => (table === 'social_plans' && planError ? { data: null, error: planError } : { data, error: null }),
       }
       return chain
     },
   }
 }
 
-function harness(mode: GraphMode, over: { registered?: string | null; memo?: Map<string, unknown> } = {}) {
+function harness(
+  mode: GraphMode,
+  over: { registered?: string | null; memo?: Map<string, unknown>; recalledKeys?: string[] } = {},
+) {
   const { step, clock, log } = fakeStep({ memo: over.memo })
   const graph = fakeGraph(clock, mode)
-  const records: StoryResolveRecord[] = []
+  const records: MeasurementRecord[] = []
   const send = vi.fn(async (_event: { id: string; name: string; data: Record<string, unknown> }) => ({ event_ids: ['evt_1'] }))
+  const supabase = fakeSupabase(over.registered === undefined ? PAGE : over.registered, over.recalledKeys ?? [])
   const deps: StoryResolveDeps = {
-    supabase: fakeSupabase(over.registered === undefined ? PAGE : over.registered) as never,
+    supabase: supabase as never,
     readStory: (d) => readStoryOnce(d, graph.fetcher),
+    isRecalled: (d) => readIsRecalled(supabase as never, d),
     send,
     writeRecord: async (record) => { records.push(record) },
   }
@@ -138,6 +153,21 @@ describe('story-resolve — registration', () => {
     expect(cloudFunctions.map(fn => fn.id())).toContain(STORY_RESOLVE_FUNCTION_ID)
     expect((WORKER_OWNED_EVENTS as readonly string[]).includes('daily_plan.post.story_resolve_due')).toBe(false)
     expect(STORY_RESOLVE_RETRIES).toBeGreaterThan(0)
+  })
+
+  it('🔴 the registered function really carries retries: 3 and an onFailure handler', () => {
+    // Read the config Inngest actually stores (not the exported constant), so
+    // deleting `retries` or `onFailure` from createFunction turns this red.
+    const fn = createStoryResolveFunction(harness('scheduled_then_public').deps)
+    const opts = z.object({ retries: z.number(), onFailure: z.function() }).safeParse(Reflect.get(fn, 'opts'))
+    expect(opts.success).toBe(true)
+    expect(opts.success && opts.data.retries).toBe(3)
+  })
+
+  it('🔴 resolve event id includes the photo id: same key + new photo (recall then re-publish) → different id', () => {
+    expect(storyResolveEventId(KEY, PHOTO)).toBe(`${KEY}:resolve:${PHOTO}`)
+    expect(storyResolveEventId(KEY, PHOTO)).toBe(storyResolveEventId(KEY, PHOTO))
+    expect(storyResolveEventId(KEY, '1750835520999999')).not.toBe(storyResolveEventId(KEY, PHOTO))
   })
 
   it('attempts are bounded: +10 min, +1 h, +6 h after the scheduled time', () => {
@@ -216,7 +246,7 @@ describe('story-resolve — not resolved', () => {
       outcome: 'unresolved',
       reason: 'no_page_story_id',
       attempts: 3,
-      due: {
+      post: {
         client_id: CLIENT,
         campaign_id: '00000000-0000-4000-8000-000000000002',
         plan_id: '00000000-0000-4000-8000-000000000003',
@@ -236,13 +266,26 @@ describe('story-resolve — not resolved', () => {
     expect(h.records[0]).toMatchObject({ status: 'failed', outcome: 'unresolved', reason: 'page_prefix_mismatch' })
   })
 
-  it('photo deleted (recalled): no measurement event, completed record, stops after one read', async () => {
-    const h = harness('deleted')
+  it('🔴 photo gone and this Post is in the receipt\'s recalled[]: completed, no measurement event', async () => {
+    const h = harness('deleted', { recalledKeys: [KEY] })
     const result = await runStoryResolve(due(), h.step, h.deps)
     expect(result).toEqual({ ok: true, outcome: 'photo_gone', attempt: 1 })
     expect(h.graph.urls).toHaveLength(1)
     expect(h.send).not.toHaveBeenCalled()
-    expect(h.records).toEqual([expect.objectContaining({ status: 'completed', outcome: 'photo_gone', reason: 'object_not_found' })])
+    expect(h.records).toEqual([expect.objectContaining({ status: 'completed', outcome: 'photo_gone', reason: 'recalled' })])
+  })
+
+  it('🔴 photo gone but NOT recalled by us (deleted by hand / Graph glitch): failed record for a human, no event', async () => {
+    const h = harness('deleted', { recalledKeys: ['fbpost_some_other_post'] })
+    const result = await runStoryResolve(due(), h.step, h.deps)
+    expect(result).toEqual({ ok: false, reason: 'photo_gone_not_recalled' })
+    expect(h.send).not.toHaveBeenCalled()
+    expect(h.records).toEqual([expect.objectContaining({ status: 'failed', outcome: 'photo_gone_not_recalled' })])
+  })
+
+  it('recall check hits a DB error → throws so the step retries (never guesses "recalled")', async () => {
+    const supabase = fakeSupabase(PAGE, [KEY], { message: 'db timeout' })
+    await expect(readIsRecalled(supabase as never, due())).rejects.toThrow(/db timeout/)
   })
 
   it('no stored Page token: keeps retrying, then records token_unavailable', async () => {
@@ -261,6 +304,14 @@ describe('story-resolve — not resolved', () => {
     expect(mockToken).not.toHaveBeenCalled()
     expect(h.graph.urls).toHaveLength(0)
     expect(h.send).not.toHaveBeenCalled()
+    expect(h.records).toEqual([expect.objectContaining({ status: 'failed', outcome: 'isolation_refused', reason: 'page_mismatch' })])
+  })
+
+  it('client has no registered Page: refused with a failed record', async () => {
+    const h = harness('scheduled_then_public', { registered: null })
+    const result = await runStoryResolve(due(), h.step, h.deps)
+    expect(result).toEqual({ ok: false, reason: 'client_page_unknown' })
+    expect(h.records).toEqual([expect.objectContaining({ status: 'failed', outcome: 'isolation_refused', reason: 'client_page_unknown' })])
   })
 
   it('invalid payload: nothing runs', async () => {
@@ -271,7 +322,7 @@ describe('story-resolve — not resolved', () => {
   })
 
   it('retries exhausted on a thrown step → onFailure still leaves a failed record', async () => {
-    const records: StoryResolveRecord[] = []
+    const records: MeasurementRecord[] = []
     await recordWorkflowFailure(due(), { writeRecord: async (r) => { records.push(r) } })
     expect(records).toEqual([expect.objectContaining({ status: 'failed', outcome: 'workflow_failed', reason: 'retries_exhausted' })])
   })
@@ -290,11 +341,11 @@ describe('story-resolve — outcome record storage', () => {
         },
       }),
     }
-    const record: StoryResolveRecord = {
+    const record: MeasurementRecord = {
       status: 'failed', outcome: 'unresolved', reason: 'no_page_story_id', attempts: 3,
-      due: { client_id: CLIENT, campaign_id: 'c', plan_id: 'p', date: '2026-09-17', idempotency_key: KEY, photo_id: PHOTO, page_id: PAGE },
+      post: { client_id: CLIENT, campaign_id: 'c', plan_id: 'p', date: '2026-09-17', idempotency_key: KEY, photo_id: PHOTO, page_id: PAGE },
     }
-    await writeStoryResolveRecord(supabase as never, record)
+    await writeMeasurementRecord(supabase as never, record)
     expect(inserted[0]).toMatchObject({
       job_name: STORY_RESOLVE_JOB_NAME,
       status: 'failed',
@@ -304,6 +355,6 @@ describe('story-resolve — outcome record storage', () => {
     })
 
     error = { message: 'db down' }
-    await expect(writeStoryResolveRecord(supabase as never, record)).rejects.toThrow(/db down/)
+    await expect(writeMeasurementRecord(supabase as never, record)).rejects.toThrow(/db down/)
   })
 })
