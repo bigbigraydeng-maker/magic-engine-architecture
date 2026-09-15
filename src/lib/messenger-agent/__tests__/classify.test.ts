@@ -225,8 +225,10 @@ describe('classifyConversation', () => {
           { body: 'Which tour interests you most?: Tale of Two Cities', sent_at: iso(0) },
           { body: 'I would like a short tour but must include the warriors', sent_at: iso(5 * 60_000) },
           {
+            // 生产原文实测跨度是 61 天（2026-07-10 → 2026-09-09），不是凑整的 62——
+            // 精确复现，不是编一个"差不多"的相似案例。
             body: 'I’m interested but I travel alone how much is it for one person?',
-            sent_at: iso(62 * 24 * 60 * 60 * 1000),
+            sent_at: iso(61 * 24 * 60 * 60 * 1000),
           },
         ])
         await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('lead_intake')
@@ -239,6 +241,7 @@ describe('classifyConversation', () => {
       async () => {
         stubMessages([
           { body: 'Which tour interests you most?: Still deciding — show me all 4', sent_at: iso(0) },
+          // 生产原文实测跨度恰好是 62 天（2026-07-03 → 2026-09-03）。
           { body: 'Can you send me the itinerary?', sent_at: iso(62 * 24 * 60 * 60 * 1000) },
         ])
         await expect(classifyConversation(CONVO, TOURISM_POST_SALE_POLICY)).resolves.toBe('lead_intake')
