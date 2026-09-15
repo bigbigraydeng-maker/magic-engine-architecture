@@ -5,6 +5,18 @@
 
 ---
 
+### 2026-09-15（F2 主链路合并：AI 起草客服回复→7 道核对→存草稿→等人工批准→发送）
+
+PR [#1757](https://github.com/bigbigraydeng-maker/magic-engine/pull/1757) 已合并（原先在 `claude/*` 分支的 [#1756](https://github.com/bigbigraydeng-maker/magic-engine/pull/1756) 撞到仓库"自动修爆炸半径"闸门 800 行上限，同一批 commit 换到 `feat/*` 分支重开）。实现 issue #1585——CTS 私信 Governed Reply Agent 的核心编排：客户消息进来 → AI 起草回复 → 过 7 道 Verifier 核对关卡 → 存草稿 → 等人工在门户批准（最多 4 小时）→ 批准后才真正发送。跟已合并的 F1（#1584 安抚话术）/F3（#1586 人工审批回传）/F4（#1587 系统健康巡检）拼成完整的 4 函数编排链路。
+
+子牙（架构）+ 魏征（挑刺）两轮独立复审共发现 9 个真实问题，均已修复并各补了回归测试：忘记把新函数注册进 `cloudFunctions` 数组导致部署后不会跑；对话历史查询升序+limit 拿到的是最老 5 条而不是最近 5 条（客户刚发的触发消息反而进不了 agent 看到的历史，已用变异探针验证修复确实生效）；起草失败的 try/catch 包在 `step.run` 外面，会被 Inngest 函数级 retries 抢在 catch 生效前重试，最多让 Claude 被多调用 2 次；F2 超时判定跟 F3 人工批准之间的竞态，先前会无条件覆盖状态、静默吞掉刚做出的人工决定；发送前二次复查漏了客户中途拒联这一项。第二轮复审又指出一个非阻塞跟进项——超时竞态里如果人工恰好是"批准"而不是"拒绝"，先前会静默卡死没人发也没人知道，本次已修复为转成 `send_failed` 让草稿重新进人工待办可见范围。
+
+**已知未处理、写进代码头注释的残留风险**（需要 PM 政策决策，非本次范围）：人工"改后发送"会跳过 6/7 条内容校验关卡，只有产品名字/价格出处这一条仍生效；Messenger 的 `human_agent` 时间窗（24小时-7天）下发出的 AI 草稿可能带 `HUMAN_AGENT` 标签，届时约定的 30 分钟人工升级机制实际不会触发。**代码合并不等于已上线**——门户审批界面、拿真实会话跑一遍全链路、正式对 CTS 开放的灰度开关，都还没做，详见 ROADMAP。
+
+**Reuse Statement**：事件常量/售后分类判据下沉到已合并的共享文件（`conversations/events.ts`、`messenger-agent/classify.ts`），未在本地重复声明；Verifier 客户分发表新增独立文件 `verifier/policies/index.ts`（查表 fail-closed，查不到当作没有闸门），加下一个客户只改这一个文件，编排层保持客户无关；CTS 专属的 7 道校验规则本身（`verifier/policies/cts.ts`）未改动。文件按 CLAUDE.md 800 行上限拆成编排（`conversation-inbound-draft.ts`）和存储（`conversation-inbound-draft-store.ts`）两个文件。
+
+---
+
 ### 2026-09-15（门户新增"AI 草稿·待批准"页签，CTS 私信客服人工审核界面）
 
 PR [#1751](https://github.com/bigbigraydeng-maker/magic-engine/pull/1751) 已合并并部署。CTS 私信 Governed Reply Agent（AI 自动起草客服回复，人工审核后再发）的门户端落地——每条对话卡片新增第三个页签「AI 草稿·待批准」：客户原话在最上面，AI 写好的回复草稿、AI 的把握程度、核对过的产品名字、过了哪几道安全检查，都摆在同一屏里；下面三个按钮——批准直接发、改一下再发、或者拒绝改成人工手动回。PM 拍板：客户收到的回复不带任何"这是 AI 写的"标记，这个标签只在门户内部（FDE/PM 看的这一侧）显示。
