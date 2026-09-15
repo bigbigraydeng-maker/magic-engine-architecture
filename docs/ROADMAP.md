@@ -191,7 +191,7 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 及本文档下一节"客户知识库"）。**2026-09-15 更新：6 步已全部合并完成**，详见下一节
 "客户知识库"的完整清单——不在这里重复列。
 
-本方案 Layer 1（事实层）/2（4 只读工具）/3（五闸）/4（F1 auto-ack）/5（daily-todo 复核栏）
+本方案 Layer 1（事实层）/2（3 只读工具，#1639 已把原 4 个收敛为 3 个）/3（五闸）/4（F1 auto-ack）/5（daily-todo 复核栏）
 六处已改接 `getClientKnowledge`，`config/clients/cts/offerings.yaml` 及其加载器整条路线
 已作废（详见方案文末"§9.14 C 同步修改"章节）。
 
@@ -213,8 +213,9 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
       误导以后维护的人），已改正。158 条测试通过，`npm run build` 通过。子牙 ✅ 两项都已解决。
       **已合并**（merge commit `2c05d77f`）
 
-代码本身还只是静态校验/推理逻辑，**尚未上线**——CTS 私信客服真正跑起来还需要 Inngest 编排、
-Meta webhook 接入等剩余步骤（见本节下方"剩余 issue"）。
+代码本身还只是静态校验/推理逻辑，**尚未上线**——Messenger/WhatsApp webhook 接收本身已合并
+（#1637/#1640，见上），CTS 私信客服真正跑起来还需要 Inngest 编排把已接收的事件消费掉、门户
+UI、dry-run 验证等剩余步骤（见本节下方"剩余 issue"）。
 
 **审查过程发现并已修复的关键问题**（wave-1，不是走过场，逐条真实验证）：数据库外键漏写级联
 删除；退订判断第一版设计换渠道即失效（已改用现成的 `contacts.do_not_contact` 机制）；CTS
@@ -223,10 +224,11 @@ Meta webhook 接入等剩余步骤（见本节下方"剩余 issue"）。
 **已知但不阻塞的后续项**：
 - `optout.ts` 的撤销入口/分页/写路径归属校验三项小缺口，详见 issue #1290 评论
 
-- [ ] 剩余 issue（#1638/#1639 已合并，不再是剩余项，见上；剩 Inngest 编排 4 函数、
-      Messenger/WhatsApp webhook 剩余接入、门户 UI、dry-run 验证、Delivery day 灰度切换）
-      ——**客户知识库这个前置依赖已经全部做完**（见下一节，6 步全部合并），这些是
-      CTS Messenger+WhatsApp v3 自己剩下的、不属于客户知识库范围的收尾项
+- [ ] 剩余 issue（#1638/#1639 已合并，不再是剩余项，见上；Messenger/WhatsApp webhook**接收**
+      本身也已合并——#1637/#1640，不是剩余项；真正剩的是 Inngest 编排 4 函数消费这些已接收
+      事件的下游流程、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个前置
+      依赖已经全部做完**（见下一节，6 步全部合并），这些是 CTS Messenger+WhatsApp v3 自己
+      剩下的、不属于客户知识库范围的收尾项
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
 
 ## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步已全部完成（2026-09-15）
