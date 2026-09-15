@@ -67,23 +67,28 @@
 - [ ] 真实照片排序（`rankAssetsByPrompt`）疑似没有匹配度门槛，会把明显文不对题的照片当"匹配成功"返回（如故宫文案配上长城照片、兵马俑文案配上梯田照片，`reason` 字段自己写的解释都文不对题）——2026-09-13 诊断发现，已建独立任务调查范围和优先级，不在这批改动里处理
 - [ ] NAL（New Asian Logistics，物流客户）首次接入视频工厂——PM 拍板"先用现有真实素材做1图1视频"，2026-09-13 已完成（真实素材取自 NAL 自己的 Facebook 主页，走 ffmpeg 本地合成，未走 Creatomate，NAL 没有专属模板）。素材偏薄（只有1张车队照+1条员工讲解视频），正式量产前建议向客户要更多真实素材
 
-## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
+## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，已合并 2026-09-12，迁移已 apply）
 
-> 背景：`me_sale_outcomes`/`me_conversion_writebacks` 表结构（Issue #1397）2026-09-05 已定稿，
-> 本次会话（2026-09-13）apply 到生产库并跑完 5 项自验。这条待办是给它接第一个真实数据源：
-> CTS 人工维护的 Google Sheet（FB 即时表单留资 + 员工跟进记录）。设计经子牙+魏征两轮独立
-> 复审后实施，详见 PR #1597 描述。
+> 背景：`me_sale_outcomes`/`me_conversion_writebacks` 表结构（Issue #1397）2026-09-05 已定稿。
+> 这条给它接了第一个真实数据源：CTS 人工维护的 Google Sheet（FB 即时表单留资 + 员工跟进
+> 记录）。设计经子牙+魏征两轮独立复审后实施，详见 PR #1597 描述。
+>
+> **2026-09-15 更新**：下面这份清单原本停在"还没接生产"的状态，是过期快照——实际这条线
+> 早就跑起来了：`source_kind='crm_sheet_sync'` 的迁移已 apply（生产库确认约束里有这个值）、
+> Google Sheet 访问权限和 Sheets API 已经在跑（生产库有 513 条真实同步记录，不是理论上能跑）、
+> `POST /api/admin/conversions/cts-crm-sync` 已经跑过很多次并入了后续几轮工作（NAL 私信同步、
+> AI 全自动审核、`conversion-daily-pipeline` 每天自动调）。本节剩下的只是两条当初就没解决、
+> 现在依然没解决的真实缺口，不是"还没上线"。
 
-- [ ] PM 确认 `source_kind='crm_sheet_sync'` 命名（或改用别的名字）——迁移
-      `supabase/migrations/20260913000001_conversion_source_kind_crm_sheet_sync.sql` 已写好未 apply
-- [ ] PM/FDE 把 Google Sheet 分享给 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` 里的 `client_email`（查看者权限即可），
-      并把分享设置从"任何人可查看"改成限定名单（顺手修的安全问题，跟本任务本身无关）
-- [ ] 确认 GCP 项目里 Sheets API 已启用
-- [ ] 上面三条做完后，用 `POST /api/admin/conversions/cts-crm-sync` 真实跑一次，核对 `/dashboard/conversions`
-      审核页面上的记录是否看得懂、数字是否对得上（这一步之前代码从未接触过真实 Google Sheets API 响应）
-- [ ] 实测发现：`阶段Stage` 列 1599 行只填了 1 行，`阶段更新日` 列 100% 空白——"已成交"检测目前几乎找不到信号，
-      是表格填写现状不是代码问题；等 PM/FDE 开始真正使用这两列，成交同步会自动生效，不需要改代码
-- [ ] 若未来这条同步的记录量明显起量（不再是当前的 0-1 条成交/次），"查不到价格/缺日期"的搁置项要不要
+- [x] ~~PM 确认 `source_kind='crm_sheet_sync'` 命名~~——已定，已 apply
+- [x] ~~PM/FDE 把 Google Sheet 分享给 service account~~——已在跑，513 条真实记录为证
+- [x] ~~确认 GCP 项目里 Sheets API 已启用~~——同上
+- [x] ~~用 `POST /api/admin/conversions/cts-crm-sync` 真实跑一次~~——已经跑了很多次，现在
+      `conversion-daily-pipeline`（PR #1738）每天自动跑
+- [ ] **依然真实存在**：`阶段Stage` 列 1599 行只填了 1 行，`阶段更新日` 列 100% 空白——"已
+      成交"检测目前几乎找不到信号，是表格填写现状不是代码问题；等 PM/FDE 开始真正使用这两列，
+      成交同步会自动生效，不需要改代码（这条 2026-09-15 用当前生产数据重新核实过，情况没变）
+- [ ] 若未来这条同步的记录量明显起量（不再是当前的量级），"查不到价格/缺日期"的搁置项要不要
       升级成正式的 `pm-todo` manual item（而不是只在同步响应里一次性返回），需要重新评估
 
 ## NAL 私信 → Meta CAPI 有效咨询同步（PR #1675/#1684/#1689，dry_run，已合并，2026-09-14/15）
@@ -107,12 +112,11 @@
 - [x] 手动触发入口 `POST /api/admin/conversions/nal-messenger-sync`（`guardGlobalAdmin`）
 
 **范围内明确没做**（PM 待日后决定）：
-- 「已成交」判定本轮完全没做——NAL 184 个联系人的 CRM 阶段字段全是空的（员工从没标过阶段），
-  且集运报价没有团价表可查金额，`me_sale_outcomes` 的 purchase 类型要求金额非空，现在拼不出
-  合法记录。等 CRM 工作台（`/dashboard/clients/4ae76381-cd45-43bd-85cd-98cfd7604007/crm`，
-  已给 NAL 配置好阶段档位）被员工真正用起来、有金额来源了再补
 - WhatsApp 未接入——设计标题写"私信/WhatsApp"，但 NAL 现有 1913 段对话 100% 是 Messenger
   渠道，没有等价的稳定消息 id 来源可验证幂等设计，这次范围收窄到 Messenger
+
+> 「已成交」判定这一块，2026-09-15 已在下面单独一节（NAL 客户管理工作台标已成交 → CAPI）
+> 补上，见下方，不再是缺口。
 
 **待办**：
 - [ ] PM/FDE 决定要不要开始审核这 20 条 `pending_review` 记录、要不要切到真发送
@@ -121,6 +125,55 @@
       当前正确性
 - [ ] 对话没有关联联系人的情况目前生产库实测 0 个，代码已加 `skippedNoContact` 计数防呆，
       后续若这个数字非零需要去查联系人建档流程是不是有延迟/漏建档
+
+## NAL 客户管理工作台"标已成交" → 自动写一条 Meta CAPI 成交记录（PR #1715，dry_run，已合并，2026-09-15）
+
+> 背景：上一节留的缺口——NAL 员工在临时 CRM 工作台里把联系人标"已成交"时没有金额来源，
+> 拼不出合法的成交记录。这次直接给这个动作接上金额输入，标已成交时同时生成一条走
+> `me_sale_outcomes` → CAPI 审核发送通道的记录。只对 NAL 生效，不碰 CTS 现有的独立成交
+> 回传通道（表格同步）。两轮设计评审 + 实现完成后两轮实际代码复审，详见提交历史。
+
+**已完成**：
+- [x] `POST /api/admin/conversions/nal-mark-won`：推进阶段 + 写成交记录一次性完成，
+      鉴权跟"审核/发送成交记录"那几个既有接口同一级别
+- [x] 复审揪出并修复一个真实漏洞（两轮）：原代码先把联系人阶段改成"已成交"、再校验能
+      不能生成合格记录，任何一步校验/写库失败都会留下"人被标成已成交、但没有对应成交
+      记录"的孤儿状态。最终顺序理顺为"记录先真的写进数据库，成功了才推进阶段"
+- [x] 数据库新增 `crm_stage_manual` 来源分类标签，已 apply 到生产库
+- [x] 前端金额面板只对 NAL 生效，不影响 CTS 现有"改状态"交互（24 条自动化测试覆盖）
+
+**待办**：
+- [ ] PM/FDE 决定要不要开始审核这批新记录、要不要切到真发送
+- [ ] 技术债（不影响当前正确性）：`WON_STAGE_KEY` 目前写死对应 NAL 今天的阶段配置，跟
+      前端"是否弹出金额面板"的判断（只看 `marketingAction`）是两套独立逻辑，Settings 页面
+      没有唯一性约束防止未来配置出两个"已成交"档——目前 NAL 只有一档，可接受，但改 NAL
+      阶段配置前要注意这个耦合
+
+## 成交审核换成 AI 全自动判断+自动发送，带异常刹车（PR #1721，已合并，2026-09-15）
+
+> 背景：PM 拍板把审核页面"人工点确认才发给广告平台"这一步换成 AI 直接判断+自动发送，
+> 不要人再点一下；唯一让步是要有"异常刹车"（发送量/金额/批准占比异常时自动暂停+通知）。
+> 两轮设计复审 + 实现完成后两轮实际代码复审，详见提交历史与 CHANGELOG。
+
+**已完成**：
+- [x] `POST /api/admin/conversions/ai-auto-review-run`：AI 判断 + 熔断检查 + 复用既有
+      `sendApprovedOutcome` 发送通道，鉴权按 clientId 有无分别走 `guardConversionRoute`/
+      `guardGlobalAdmin`（最终代码复审揪出并修复了一个真实的权限漏洞——最初错用了
+      更松的 `guardAdmin`）
+- [x] 数据库新增 4 个字段（客户级开关+熔断暂停原因、记录级重判次数+时间戳），已 apply
+- [x] 姓名注入防护（客户可控文本白名单清洗 + 系统提示安全声明）
+- [x] 独立于熔断的客户级停止开关 `clients.ai_auto_review_enabled`（默认 false）
+- [x] 熔断触发后接入既有 PM 待办拉取管道，不新开通知通道
+- [x] 41 条自动化测试覆盖（含两轮复审各自新增的回归测试）
+
+**待办（PM 待拍板）**：
+- [ ] 数据库那两个新开关默认是关的——代码合并上线**不代表**已经对 CTS/NAL 生效，
+      要不要真的打开、先开哪个客户、什么时候开，需要 PM 另外一句话拍板
+- [ ] 这一版只有手动触发入口，没有接 Inngest 定时——先观察几天判断质量和熔断阈值，
+      校准过再决定要不要接定时（子牙复审建议：这次风险比现有手动先例更高，值得先看效果）
+- [ ] 熔断触发后目前只进 PM 每日待办（拉模式），不会主动推送邮件——如果这类"钱可能
+      发错"的异常，PM 觉得需要更及时知道（不等自己点开待办页面），需要另外决定要不要加
+      邮件/即时通知，这次范围内没做（魏征复审标记为非阻塞，留给 PM 判断优先级）
 
 ## CTS Messenger+WhatsApp 治理式客服 v3 —— 事实层改用客户知识库平台能力（2026-09-14）
 
@@ -140,21 +193,36 @@ GitHub issue（#1574-#1592）。**wave-1/wave-2 共 7 个 issue 已合并到 mai
 更早的真实 PM 决策（`docs/DECISIONS.md` 2026-09-13 记录："客户知识库作为 Governed Lead-Reply
 Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步到位建客户知识库平台能力"
 （独立 L1 候选，见 [docs/registry/platform-candidates.md](./registry/platform-candidates.md)
-及本文档下一节"客户知识库"），6 步建设中前两步已合并：
-- [x] Issue #1643 敏感度检测器 —— PR #1650 已合并
-- [x] Issue #1644 表结构 + `getClientKnowledge` 读取入口 —— PR #1652 已合并（过子牙架构+
-      魏征挑刺+狄仁杰攻击验证三方复审，合并前修了邮箱比较缺 trim、身份唯一性设计跟冲突
-      检测需求冲突两处真问题；确认人登记写入 API 尚未建，见 issue #1669）
+及本文档下一节"客户知识库"）。**2026-09-15 更新：6 步已全部合并完成**，详见下一节
+"客户知识库"的完整清单——不在这里重复列。
 
-本方案 Layer 1（事实层）/2（4 只读工具）/3（五闸）/4（F1 auto-ack）/5（daily-todo 复核栏）
+本方案 Layer 1（事实层）/2（3 只读工具，#1639 已把原 4 个收敛为 3 个）/3（五闸）/4（F1 auto-ack）/5（daily-todo 复核栏）
 六处已改接 `getClientKnowledge`，`config/clients/cts/offerings.yaml` 及其加载器整条路线
 已作废（详见方案文末"§9.14 C 同步修改"章节）。
 
-**此前 Held 的 PR，依赖已解除（2026-09-15）**：等的是 `getClientKnowledge` 全部 6 步真正合并
-完，2026-09-15 步骤 6（#1648）合并后 6 步已全部到位——`gh pr view` 核实 #1638/#1639 现在
-`MERGEABLE`，跟主线没有冲突。**仍未做的是这两个 PR 自己的改接工作和复审**，不是被别的东西挡着：
-- [ ] #1638 Verifier 框架 + CTS policy —— 改接新的 `forbiddenFactKeys`/数字核实闸设计，0 复审
-- [ ] #1639 agent-core prompt.ts + tools.ts —— 4 只读工具改用 purpose+visibility 模型，0 复审
+**此前 Held 的 PR，依赖已解除，改接 + 两轮复审 + 合并全部完成（2026-09-15）**：等的是
+`getClientKnowledge` 全部 6 步真正合并完，2026-09-15 步骤 6（#1648）合并后 6 步已全部到位。
+改接工作完成后子牙+魏征各跑了两轮（第一轮各自独立发现真实问题、打回；修复后第二轮各自核实
+确认已解决），PM 拍板后两个 PR 均已合并到 main：
+- [x] #1638 Verifier 框架 + CTS policy —— 已改接 `forbiddenFactKeys`/数字核实闸设计（新定义
+      `tour.active.<code>`/`tour.retired.<code>[.alias.<slug>]` fact_key 命名约定供 gate 2 用）。
+      复审中发现并修复两个真实漏洞：① 事实标签打错一类（`sensitivity` 标成 `general`）会绕过客户
+      确认闸门，AI 有可能说出没经过客户确认的价格——已加二次校验；② 判断"是不是提到了下架产品"的
+      算法在 CTS 真实产品数据上会误伤合法回复（两句话拼接 / 产品名字首字重叠）——已改成按句子
+      分开判断。42 条测试通过，`npm run build` 通过。子牙 CONDITIONAL PASS（条件：把"命名约定没人
+      强制遵守"这条已知风险开一个正式跟踪单——已开 [#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726)，P3，不阻塞合并）；魏征 ✅ 通过。
+      **已合并**（merge commit `65efbfa0`）
+- [x] #1639 agent-core prompt.ts + tools.ts —— 已改接（4 工具收敛为 3 个：
+      `query_customer_facing_facts`/`query_conversation_history`/`query_client_brand_facts`，按
+      purpose+sensitivity 模型）。复审中发现两处文档描述跟代码实际行为对不上（不影响功能，但会
+      误导以后维护的人），已改正。158 条测试通过，`npm run build` 通过。子牙 ✅ 两项都已解决。
+      **已合并**（merge commit `2c05d77f`）
+
+代码本身还只是静态校验/推理逻辑，**尚未上线**——Messenger/WhatsApp webhook 接收本身已合并
+（#1637/#1640，见上），CTS 私信客服真正跑起来还需要 Inngest 编排消费**已接收的 Messenger 事件**
+（范围已冻结只做 Messenger 一条路，见 [docs/roadmap/2026-09-15-crm-ai-agent-build-control.md](./roadmap/2026-09-15-crm-ai-agent-build-control.md)
+"范围问题已拍板"——WhatsApp 目前止于接收落库，不接入 AI 应答编排）、门户 UI、dry-run 验证等
+剩余步骤（见本节下方"剩余 issue"）。
 
 **审查过程发现并已修复的关键问题**（wave-1，不是走过场，逐条真实验证）：数据库外键漏写级联
 删除；退订判断第一版设计换渠道即失效（已改用现成的 `contacts.do_not_contact` 机制）；CTS
@@ -162,44 +230,63 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 
 **已知但不阻塞的后续项**：
 - `optout.ts` 的撤销入口/分页/写路径归属校验三项小缺口，详见 issue #1290 评论
-- 确认人登记写入 API（issue #1669，P3，随 #1645/#1646 排期）
 
-- [ ] 剩余 issue（Verifier 治理层重做、Inngest 编排 4 函数、Messenger/WhatsApp webhook 剩余
-      接入、门户 UI、dry-run 验证、Delivery day 灰度切换）——客户知识库剩余 4 步（#1645 萃取
-      工作流 / #1646 FDE审核+客户确认页 / #1647 brief.ts 去 CTS 化 / #1648 rollout）见下一节
-      "客户知识库"，进度共享同一个 ROADMAP
+- [x] F1（issue #1584，安抚话术自动发出）/ F2（issue #1585，AI起草→7道核对→存草稿→等
+      人工批准→发送主链路）/ F3（issue #1586，人工审批结果回传）/ F4（issue #1587，系统
+      健康巡检）**四个 Inngest 编排函数已全部合并到 main**（2026-09-15，F2 最后合并，
+      merge commit `8bb140f1`）。**代码合并 ≠ 已上线接真实客户**——下面这几项仍是剩余项：
+  - [ ] 门户 UI（PM/FDE 看草稿、点批准/改后发送/拒绝）还没做，F2 存的草稿目前没有人能在
+        界面上批准，只能直接改数据库测试
+  - [ ] dry-run 验证：还没有拿 CTS 真实会话数据把 F1→F2→F3→F4 整条链路跑一遍确认真的通
+        （F2 本地只跑了单元测试，见 PR #1757）
+  - [ ] Delivery day 灰度切换：真正对 CTS 客户开放前的开关计划还没定
+  - [ ] F4 系统健康巡检故意留的缺口——issue 原文要求的"4小时批准超时算事故"这一项**仍未
+        做**。当时没做是因为依赖 F2 发出的 `conversation/reply.timeout` 事件，F2 那时还没
+        写；**现在 F2 已经合并，事件已经有了，需要回来给 F4 补这一类检查**（代码里已有
+        注释标记位置：`src/lib/messenger-agent/health-heartbeat.ts` 文件头）
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
 
-## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步建设中（2026-09-14）
+## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步已全部完成（2026-09-15）
 
 > 方案：`~/.claude/plans/client-knowledge-base-capability.md`（本地文件）。PM 2026-09-13
 > 拍板："长期来看 Magic Engine 后台一定要有自己的客户知识库这样的专门存储，一步到位按正确
 > 做法建"。让 AI 对客户说价格/时效/承诺/政策类事实前，必须先过"ME 内部批准+客户本人确认"
 > 双签闸——直接解决了 CTS "AI 报停售团价格"这类事故的根因（AI 靠训练数据背景知识乱编，不是
-> 靠受控事实源）。
+> 靠受控事实源）。**2026-09-15：6 步全部合并到 main，issue 均已关闭。**
 
-**6 步进度**：
-- [x] 步骤 1（issue #1643）敏感度检测器 —— PR #1650 已合并
-- [x] 步骤 2（issue #1644）表结构 + 读取入口 —— PR #1652 已合并
-- [x] 步骤 3（issue #1645）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）—— PR #1671
-      已合并。移植自另一窗口 PR #1616 已过魏征复审的核心算法，改接真实
-      `detectSensitivity()`/`checkBudget()`，并经过新一轮子牙+魏征复审又修了 6 处真问题
-      （PII 脱敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已
-      关闭并 credit。
-- [x] 步骤 4（issue #1646）FDE 审核页 + 客户确认页 —— PR #1685 已合并（本条此前漏勾，2026-09-15
-      整理 ROADMAP 时发现并补上，不是本次新完成）
-- [x] 步骤 5（issue #1647）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— PR #1694 已合并（同上，
-      漏勾补上）
-- [x] 步骤 6（issue #1648）rollout 阶段（上线阶段机机 + 双签一次性确认链接）—— PR #1693
-      已合并（2026-09-15）。合并前子牙+魏征两轮复审，中间发现并修复：①合并冲突解决时
-      两个测试 fixture 的修复一度只改在工作区没真正提交，被复审用干净代码复核时抓到，
-      已重新提交验证；②`consume_knowledge_rollout_advance_request` 的一个真实竞态漏洞
-      （回退后旧确认链接仍可把客户拉回已回退的阶段）在复审期间被另一并发会话修复。
+**6 步进度（全部完成）**：
+- [x] 步骤 1（issue #1643，已关闭）敏感度检测器 —— PR #1650 已合并
+- [x] 步骤 2（issue #1644，已关闭）表结构 + 读取入口 —— PR #1652 已合并（过子牙架构+魏征
+      挑刺+狄仁杰攻击验证三方复审，合并前修了邮箱比较缺 trim、身份唯一性设计跟冲突检测
+      需求冲突两处真问题）
+- [x] 步骤 3（issue #1645，已关闭）萃取工作流（Inngest，从 Messenger 对话里提炼知识候选）
+      —— PR #1671 已合并，PR #1673 修了一处误依赖 budget-guard.ts 的设计违规。移植自另一
+      窗口 PR #1616 已过魏征复审的核心算法，又经新一轮子牙+魏征复审修了 6 处真问题（PII 脱
+      敏对英文地址完全无效、entitlement 检查顺序、进程崩溃恢复缺口等）。PR #1616 已关闭并
+      credit
+- [x] 步骤 4（issue #1646，已关闭）FDE 审核页 + 客户确认链接 —— PR #1685 已合并，PR #1690
+      补了一次迁移版本号冲突。子牙+魏征+板桥三方复审发现并修复：客户确认后想反悔叫停 AI
+      却找不到按钮、页面缺 §9.10 强制安心话、冲突事实被拆到不同批次、"确认了 0 条"文案
+      自相矛盾；另外把"claim 确认请求 + 写事实"两步分开写的半失败态改成一个数据库事务
+      （已用真实本机 Postgres 复现验证）。草稿输出检查（Verifier 层）明确不在本步骤范围，
+      归 #1638/#1639
+- [x] 步骤 5（issue #1647，已关闭）`brief.ts` 去 CTS 化 + CTS 历史事实迁移 —— PR #1694 已
+      合并，收尾了 PR #1629 当时只是把 CTS 事实从系统提示词搬到 `brief-client-facts.ts`
+      （同一条红线违规换了个文件）没有真正解决的问题；`brief-client-facts.ts` 已删除，CTS
+      的 4 条历史事实迁移进知识库，其中免签政策一条给了到 **2026-10-15** 的确认宽限期（日
+      历提醒已建：过期前一周提醒 FDE/PM 决定要不要走正式客户确认）
+- [x] 步骤 6（issue #1648，已关闭）rollout 三段式阶段切换 + 客户确认链接页面 —— PR #1693
+      已合并。子牙+魏征联合复审各自独立在真实本机 Postgres 上复现了一个真漏洞：ME 一键
+      回退阶段（发现报价说错）后，客户手上一条更早发出的"同意前进"旧链接仍能被点开，把
+      回退悄悄抹掉——已修复（同一个数据库事务里重新核对当前阶段，对不上就拒绝且不留痕
+      迹地保留成可重试状态，不是简单标记失败）；板桥复审同时指出这一步最初交付时完全没
+      有客户能打开的页面，已一并补上。合并过程中两个并发会话各自独立在同一个分支上处理
+      同一个问题，靠互相 SendMessage 核对收敛，没有产生冲突结果
 
 **6 步全部完成。** 遗留跟进（不阻塞，已知不阻塞合并）：
-- issue #1669（确认人登记写入 API，P3）
-- `rollout.ts` 的 `hashesMatch` 跟 `confirmation-requests.ts` 几乎重复实现，未抽共享（魏征复审 ⚠️ 警告项）
-- PR #1693 描述文字落后于最终代码状态，未回填更新（魏征复审 ⚠️ 警告项，不影响代码本身）
+- issue #1669（确认人登记写入 API）已关闭，PR #1674 已合并
+- `rollout.ts` 的 `hashesMatch` 跟 `confirmation-requests.ts` 几乎重复实现，未抽共享（魏征复审 ⚠️ 警告项，技术债不影响正确性）
+- PR #1693 的描述文字落后于最终合并代码状态，未回填更新（魏征复审 ⚠️ 警告项，不影响代码本身）
 - **操作陷阱已记入** [PITFALLS.md §D7](./PITFALLS.md)：给任何客户开 `client_knowledge.read` 授权前，必须确认同步走完 rollout stage 双签，否则 `customer_reply` 会静默读空知识库、不报错
 
 ## ME 旅游版 · Tour 管理模块（2026-09-14 立项，PM 已立版，未授权实施）
@@ -685,6 +772,10 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **TD.16** 未做月报端到端测试（CTS Tours 实际客户）
 - [ ] **TD.17** 聚合器架构文档缺失
 - [ ] **TD.18** 缺少聚合器性能 / 错误监控仪表板
+- [ ] **TD.19** 私信 AI 摘要的 `trip`（旅游行程专属字段）在 schema 层被建成"通用必填对象"——`src/lib/messenger/brief-schema.ts` 的 `TripDetailsSchema` 永远存在、永远带默认值，`MessengerBriefSchema.trip` 没有"这个客户要不要这个字段"的开关。**更新（2026-09-15）：[#1629](https://github.com/bigbigraydeng-maker/magic-engine/pull/1629) 已于 2026-09-13T15:00:42 合并（merge commit `593d8138`），私信 AI 摘要冒充 CTS 身份的事故已修复——`generateBrief`（`src/lib/messenger/brief.ts`）现在按 `clients.industry` 是否命中旅游关键词（复用 `hasIndustryFeature`）决定 `trip` 能不能非空，命中不了的客户一律强制清空成 `NULL_TRIP`；`brief-cycle.ts` 调用时也已传入 `clientId`。身份冒用问题在 main 上不再现行存在**，本条以下只描述剩下的 schema 技术债。这只是挡住"身份冒用 + 编造旅游需求"的最小止血，不是"行业专属字段该怎么建模"的长期方案——下一个需要专属结构化字段的行业（例如地产的"看房意向"）会重复同一种补丁思路。长期应随「客户知识库」项目（PM 已拍板，见 [docs/DECISIONS.md「2026-09-13 · 客户知识库作为 Governed Lead-Reply Agent 的事实层」](./DECISIONS.md)）把 `trip` 重新建模成客户可配置的行业专属结构化字段，而不是永远把旅游一个特例硬编码进通用 schema。#1629 范围内未动 schema：止血 PR 的任务范围是修复身份冒用 bug，重新设计 schema 牵连 `brief-cycle.ts` 调用链、数据库列形状和历史数据兼容，超出一次 A 级止血 PR 该做的事，子牙架构复审在设计阶段已指出这一点（见 #1629 PR 描述里的复审记录）。发现：Claude Code 会话，2026-09-13；2026-09-15 更新状态。
+- [ ] **TD.20** 私信 AI 客服门户「批准」按钮点击时不检查该客户/渠道的 AI 开关是否已被关闭——PM/FDE 可以在渠道已经被紧急停用之后，照常点批准一条草稿，系统照常接受，真正挡住发送的检查点在批准界面上完全看不到、也不提示。2026-09-15 issue #1590 回滚演练发现：`conversation-approval-emit.ts`（F3）是纯中继不做任何检查，`reply/route.ts` 批准分支同样没有调用 `isChannelEnabled`；唯一的把关点在 F2 Inngest 函数内部的 Step 9，人工操作界面上完全不可见。建议：批准接口在写入批准前先查一次 `isChannelEnabled`，渠道已关时直接拒绝并提示，而不是让草稿静默卡进一个 4 小时超时窗口。详见 [docs/sops/messenger-ai-rollback.md](./sops/messenger-ai-rollback.md) §三。
+- [ ] **TD.21** 私信 AI 客服没有"一键批量拒绝该客户所有待审批草稿"的入口——紧急停用 AI 后，已经生成、还没被人批准/拒绝的草稿只能逐条手动处理，客户草稿多时人工回滚会很慢，且容易漏掉。同一次 2026-09-15 演练发现，与 TD.20 同源。
+- [ ] **TD.22** 私信 AI 客服没有"中止正在跑的 Inngest 任务"机制——一个已经开始但还没生成草稿的处理流程，目前没有任何办法主动打断，只能等它自己跑到检查点（生成草稿进入待审批）或等 4 小时等待上限超时。2026-09-15 演练确认：关掉客户的 AI 开关后，这类"还在路上"的任务不会被自动感知或中止。是否值得为这个低概率场景建中止机制，留给后续按 §11 资源优先级判断。
 
 ## Phase 11 — Creative Intelligence Engine（未来重点开发方向）
 
@@ -828,8 +919,8 @@ Gate B 定的 `minSampleSize=3`，页面目前只会显示「数据还不够说�
       `AUTOMATED_MESSAGE_SOURCES` 那两个值（`subscription` / `business_ai`）到今天
       **仍是猜的**，Meta 没公开文档。现在靠「秒回 = 机器」兜住了，但拿一条 CTS 真实
       收件箱的 Graph 返回确认一次，判据会更硬。这台开发机连不上 facebook.com，做不了
-- [ ] **M3 从 CRM 里回邮件** —— 权限已经要了 `Mail.Send`，缺一个邮件适配器接进总线（`lib/messaging/adapters/mail.ts`）
-- [ ] **M4 邮件线程接进多渠道读取路径** —— 现在私信页面靠 `channel = 'messenger'` 把邮件挡在外面（PR #781），挡住≠接好；需要一个不挑渠道的对话页
+- [x] **M3 从 CRM 里回邮件** —— PR #1716（2026-09-15 合并）。没有接进 `lib/messaging/channels.ts` 那套总线——那套总线目前零生产调用方（连 Messenger 自己都没注册进去），照抄会议再造一层没人用的架子；改成照抄 `messenger` 那条真正在用的 reply 路由的形状（`src/lib/microsoft/mail-send.ts` + `POST /api/clients/[id]/email/conversations/[conversationId]/reply`）。三轮复审共同抓出：`Mail.ReadWrite` 权限漏申请（`Mail.Send` 只管发、不管建草稿）、多邮箱客户会拿错连接的令牌、回信可能把客人错发成自己（应只认 `direction=inbound` 的最后一封）、Graph 消息 id 在草稿变已发送时会漂移（需要 `Prefer: IdType="ImmutableId"`）。**已知未做**：审计沿用 `conversation_outbound_log` 的自由文本列，不是专用 schema；未接入 AI 自动回复（`messenger-agent/channel-dispatch.ts` 只认 `messenger`/`whatsapp`，是 M7 的范围）。**待办**：CTS 现有邮箱连接需要重新走一次登录同意才能拿到 `Mail.ReadWrite`（读信不受影响）；NAL（本轮选定的首个真实测试客户）尚未连接邮箱，功能未经真实邮箱验证
+- [x]/[ ] **M4 邮件线程接进多渠道读取路径**（部分完成，PR #1719，2026-09-15）—— 排查发现这条本身已经过期：联系人时间线/往来记录早就是不挑渠道的了（PR #1038 修的），真正缺的只是"CRM 抽屉里能不能直接回邮件"这一个入口——抽屉里唯一的回复框硬编码只认私信。已补上：共享发送框 `ReplyBox.tsx` 改认 `channel` 参数、新增 `EmailReply.tsx` + 对应查询接口，跟私信框并排显示。**未做**：没有逐一审计其他列表/看板页有没有类似的隐藏 messenger 硬编码；邮件回复框现在不会因为"这个人没来过信"提前禁用，要点了发送才由服务端拒绝（子牙审查已确认非安全问题，纯体验优化，可后续小 PR 补）
 - [ ] **M5 WhatsApp Business API（新号）** —— 申请清单已给 PM（`docs/sops/whatsapp-business-api-申请清单.md`）。⚠️ AU/NZ 单价未核实（这台开发机连不上 Meta 站点），拿到后台截图后补
 - [ ] **M6 客户员工账号 + 角色 + 归属 + 转派 + 推手机** —— PM：「ME 的登陆系统需要给到 client 的员工层级」。`conversations` 已有 `owner_email` / `snooze_until` 两列待用，不需要 migration
 - [ ] **M7 「谁来回」开关 + Meta AI 客服配置**（AI 先答 / 人工先答 / 分时段）

@@ -11,6 +11,7 @@ import { useCallback, useState } from 'react'
 import { ComposeNote, type StageOption } from './ComposeNote'
 import { ContactTimeline, type TimelineSummary } from './ContactTimeline'
 import { MessengerReply } from './MessengerReply'
+import { EmailReply } from './EmailReply'
 import { DncBanner } from './DncBanner'
 import { drawerActions, nextStageChoices, type Channel } from '@/lib/crm/drawer-actions'
 import type { Segment } from '@/lib/crm/segments'
@@ -333,7 +334,20 @@ export function PersonDrawer({
             }}
           />
 
-          {/* 往来记录：表单 / 电话 / 私信（以后是邮件、外呼），一条线倒序 */}
+          {/* 同一个人可能既有私信线又有邮件线（换过渠道联系）—— 两块各自判断
+              有没有对应的会话，都没有就都不渲染，不会显示空的入口。 */}
+          <EmailReply
+            clientId={clientId}
+            contactId={row.contactId}
+            customerName={row.name}
+            viewerEmail={viewerEmail}
+            onSent={() => {
+              setTimelineKey((k) => k + 1)
+              onSaved('✓ 邮件已发出', false)
+            }}
+          />
+
+          {/* 往来记录：表单 / 电话 / 私信 / 邮件（以后是外呼），一条线倒序 */}
           <div className="mt-5">
             <p className="mb-2 text-[11px] font-black uppercase tracking-[0.14em] text-me-ochre">
               往来记录

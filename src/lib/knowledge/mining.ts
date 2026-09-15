@@ -46,7 +46,7 @@ import { detectSensitivity, type Sensitivity } from './sensitivity'
  * update，每个调用点传入的列清单都跟对应表的真实列逐一核对一致（见本 PR 描述的
  * 探针记录）。
  */
-function asRows<T>(data: unknown): T[] {
+export function asRows<T>(data: unknown): T[] {
   return (data ?? []) as unknown as T[]
 }
 
@@ -457,7 +457,7 @@ export interface ExtractedCandidate {
 // from callClaudeChat's real usage).
 const SONNET_PRICE_INPUT_PER_M_USD = 3.0
 const SONNET_PRICE_OUTPUT_PER_M_USD = 15.0
-const EXTRACTION_MAX_OUTPUT_TOKENS = 800
+export const EXTRACTION_MAX_OUTPUT_TOKENS = 800
 
 /**
  * Conservative worst-case cost of ONE extraction call, computed from the
@@ -612,7 +612,7 @@ async function fetchExistingCandidateFacts(clientId: string): Promise<ExistingCa
  * request_id would always fail, so the only way to actually retry is to
  * reuse the existing row's id.
  */
-async function upsertRunRow(reclaimId: string | null, fields: Record<string, unknown>): Promise<string | null> {
+export async function upsertRunRow(reclaimId: string | null, fields: Record<string, unknown>): Promise<string | null> {
   if (reclaimId) {
     const { error } = await supabaseAdmin.from('client_knowledge_mining_runs').update(fields).eq('id', reclaimId)
     if (error) throw new Error(`upsertRunRow: reclaim update failed for run ${reclaimId}: ${error.message}`)
@@ -635,7 +635,7 @@ async function fetchWatermark(clientId: string): Promise<string | null> {
   return asRows<PriorRunRow>(data)[0]?.high_watermark_at ?? null
 }
 
-async function fetchConversationIds(clientId: string): Promise<string[]> {
+export async function fetchConversationIds(clientId: string): Promise<string[]> {
   const ids: string[] = []
   const pageSize = 1000
   for (let offset = 0; ; offset += pageSize) {
@@ -653,7 +653,7 @@ async function fetchConversationIds(clientId: string): Promise<string[]> {
 }
 
 /** Reads up to `maxMessages` messages (both directions, for pairing) since `sinceIso`, paginated past PostgREST's default row cap. */
-async function fetchMessagesSince(
+export async function fetchMessagesSince(
   conversationIds: string[],
   sinceIso: string | null,
   maxMessages: number,
@@ -691,9 +691,9 @@ async function fetchMessagesSince(
 // valid_until — only this write path's own convention), but every mined
 // candidate gets one regardless of sensitivity, matching the design intent
 // that nothing sits un-reviewed indefinitely.
-const DEFAULT_CANDIDATE_VALID_DAYS = 90
+export const DEFAULT_CANDIDATE_VALID_DAYS = 90
 
-interface NewFactRow {
+export interface NewFactRow {
   client_id: string
   fact_key: string
   scope: Record<string, unknown>
@@ -703,7 +703,10 @@ interface NewFactRow {
   visibility: 'internal_only'
   sensitivity: Sensitivity
   valid_until: string
-  source_kind: 'conversation_mining'
+  // `client_knowledge_facts.source_kind` has no CHECK enum on purpose (see
+  // its column comment) — `'conversation_mining_style'` (issue #1760) is a
+  // second, real value it accepts, not a typo of `'conversation_mining'`.
+  source_kind: 'conversation_mining' | 'conversation_mining_style'
   evidence: Record<string, unknown>
   conflict_group_id: string | null
   value_fingerprint: string
