@@ -51,26 +51,32 @@ Adapter。构建控制/任何窗口看到"要不要现在做 WhatsApp AI 客服"
 | NAL 私信 → CAPI 有效咨询同步（dry_run） | ✅ 已合并，未切真发送 | PR #1675/#1689，等 PM/FDE 决定要不要审这批 `pending_review` |
 | Verifier 框架 + CTS 七道闸（AI 说的话过最后一道数字核实） | ✅ 已合并（2026-09-15，merge commit `65efbfa0`） | issue #1579，PR #1638 —— 改接新 `getClientKnowledge` 完成，子牙 CONDITIONAL PASS（[#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726) 跟踪，P3 不阻塞）+ 魏征 ✅ 通过，PM 拍板后合并 |
 | Messenger AI 客服核心（prompt.ts + 3 只读工具） | ✅ 已合并（2026-09-15，merge commit `2c05d77f`） | issue #1580，PR #1639 —— 同上改接完成，子牙 ✅ 通过，PM 拍板后合并 |
+| Inngest 编排 F3 批准中继 + 门户批准/拒绝/改后发送端点 | ✅ 已合并（2026-09-15，merge commit `7e938eb6`） | issue #1586，PR #1741 —— 子牙+魏征各一轮，两边独立发现同一个真实并发漏洞（双人/双击可能导致"DB 说拒绝、批准通知却已经真发出"的不一致）已修复为数据库层原子条件更新，魏征用真实测试+变异测试核实通过，PM 拍板后合并。**依赖 #1585（F2）尚未实现，本身不会让 CTS 私信客服真正上线**——已把两条交接说明写进 #1585 的评论 |
 
-### 依赖已经解除，逐条 `gh issue view` + `gh pr list --search` 核实过（2026-09-15）
+### 依赖已经解除，逐条 `gh issue view` + `gh pr list --state all --search` 核实过（2026-09-15）
 
-> ⚠️ 上面两行刚合并的，代码只是"判断该不该说 / AI 能查什么"这两层静态逻辑，**还没能让 CTS
-> 私信客服真正跑起来**——下面这批 Inngest 编排/UI/dry-run 才是让它真正上线要做的事。已逐条核实，不是抄旧文档。
+> ⚠️ 上表中 Verifier 框架和 Messenger AI 客服核心这两行，代码只是"判断该不该说 / AI 能查什么"
+> 这两层静态逻辑，**单独不能让 CTS 私信客服真正跑起来**。F3（Inngest 编排批准中继）已经合并，
+> 属于编排层，不在"静态逻辑"之列——但 F3 依赖的 F2（生成草稿主函数，见下表 #1585）还没人做，
+> 所以整条私信客服链路仍然卡在 F2 这一环，还没打通。下面这批 Inngest 编排/UI/dry-run 才是让它
+> 真正上线要做的事。已逐条核实，不是抄旧文档。
 
 | 能力 | issue | PR | 现状 |
 |---|---|---|---|
-| Inngest 编排 F1 自动应答 | #1584 | [#1736](https://github.com/bigbigraydeng-maker/magic-engine/pull/1736)（open，`Closes #1584`） | 🔧 **已有窗口在做**，别重开 |
-| Inngest 编排 F2 生成草稿（主函数） | #1585 | 无 | 没人在动 |
-| Inngest 编排 F3 审批端点 | #1586 | 无 | 没人在动 |
+| ~~Inngest 编排 F1 自动应答~~ | #1584 | [#1739](https://github.com/bigbigraydeng-maker/magic-engine/pull/1739)（已合并，`Closes #1584`） | ✅ 已完成（PR #1736 是同名重复分支，已关闭未合并，别再当在做的窗口） |
+| Inngest 编排 F2 生成草稿（主函数） | #1585 | 无 | 没人在动——F3（上表）已经等着它，F2 是当前最卡关的一环 |
+| ~~Inngest 编排 F3 审批端点~~ | #1586 | [#1741](https://github.com/bigbigraydeng-maker/magic-engine/pull/1741)（已合并） | ✅ 已完成，见上表 |
 | Inngest 编排 F4 健康心跳 | #1587 | 无 | 没人在动 |
-| PM daily-todo UI + 紧急停按钮 | #1589 | 无 | 没人在动 |
-| 待批准草稿 UI（三按钮） | #1588 | 无 | 没人在动 |
+| ~~PM daily-todo UI + 紧急停按钮~~ | #1589 | [#1747](https://github.com/bigbigraydeng-maker/magic-engine/pull/1747)（已合并） | ✅ 已完成 |
+| ~~待批准草稿 UI（三按钮）~~ | #1588 | [#1751](https://github.com/bigbigraydeng-maker/magic-engine/pull/1751)（已合并，`Closes #1588`） | ✅ 已完成 |
 | T-14d 端到端 dry-run | #1591 | 无 | 没人在动 |
 | 回滚 SOP 演练 | #1590 | 无 | 没人在动 |
 | Delivery day 灰度切换 | #1592 | 无 | 没人在动 |
 
-> ⚠️ 核实方法：`gh issue view <号>` 确认 9 个都还是 `OPEN`；`gh pr list --search "<号>"` 逐个查有没有已开的 PR。
-> 只有 #1584 命中——PR #1736 是当场在做，进这条线前先去 #1736 看进度，不要重开。其余 8 个搜索无匹配 PR，
+> ⚠️ 核实方法：`gh issue view <号>` 查真实 state；`gh pr list --state all --search "<号>"` 逐个查有没有
+> 已开/已合并/已关闭的 PR（`gh pr list` 默认只列 open，漏了 `--state all` 会把已合并的 PR 也判成"没人在动"）。
+> 本次核实（2026-09-15）：9 个里 **4 个已 CLOSED**（#1584 经 PR #1739、#1586 经 PR #1741、#1589 经 PR #1747、
+> #1588 经 PR #1751，均已合并）；其余 5 个（#1585/#1587/#1590/#1591/#1592）仍是 `OPEN` 且搜索无匹配 PR，
 > 状态是真的"没人在动"，不是"没查"。**这份核实是这次改动时的快照，会过期**——下一个进这条线的窗口领活前
 > 仍要自己重跑一遍上面两条命令，不能直接信这张表。
 
@@ -86,7 +92,8 @@ Adapter。构建控制/任何窗口看到"要不要现在做 WhatsApp AI 客服"
 每次有人（PM 或另一个窗口）问"现在到底做到哪了"，按这个顺序回答，不许凭记忆：
 
 1. `gh issue view <相关 issue号>` 查真实 state（不信 ROADMAP.md 的文字，那是快照，会过期）
-2. `gh pr list --search "<关键词>"` 查有没有已经开着、可能重复的 PR
+2. `gh pr list --state all --search "<关键词>"` 查有没有已开/已合并/已关闭、可能重复的 PR
+   （不加 `--state all` 会漏掉已合并的 PR）
 3. 对答案里任何"已合并"的说法，补一句它有没有真的在生产 apply / 启用（合并 ≠ 上线，这条铁律本仓库反复踩过）
 4. 发现两个窗口在动同一个东西——立刻在两边 issue 上留言 @ 对方，不要等 PM 发现
 
