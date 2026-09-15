@@ -164,6 +164,15 @@ ME 名下没有现成的裸 Linux 服务器账号（现有站点都在 Render，
 
 **账号密码不写进这份文档**（安全规定：密码不进代码仓库），已经在对话里直接发给 PM，由 PM 转给对方。
 
+## 域名 + 加密证书已上线（2026-09-15）
+
+- 子域名定为 **`booking.ctstours.co.nz`**（PM 拍板，避开了跟现有 `/agents` 招商页面 + `chinaunlocked.ctstours.co.nz` 撞名的问题，见下方"命名排查"一节）
+- DNS 记录已加在 Cloudflare（`ctstours.co.nz` 这个域名的 DNS 在 `bigbigraydeng@gmail.com` 这个 Cloudflare 账号下，不是 hello@magicengine.cloud，注意别找错账号）：`booking.ctstours.co.nz` → `206.189.152.68`，未走 Cloudflare 代理（灰云朵/DNS only），直连服务器
+- HTTPS 证书已用 Let's Encrypt 装好，自动续期已设置好（到期日 2026-12-14，续期是自动的不用管）
+- 正式验收地址：**`https://booking.ctstours.co.nz/`**（已实测 200 正常，HTTP 自动跳转 HTTPS）
+
+**命名排查（供之后类似情况参考）**：查了 chinatravel 网站源码和线上 sitemap，发现 `ctstours.co.nz/agents` 已经是一个上线中的"代理商招商页"（Agent Hub，卖圣诞团 + 推 China Unlocked 培训），且该页链接到两个已在用的子域名 `chinaunlocked.ctstours.co.nz` / `os.ctstours.co.nz`（两个都是 GoHighLevel 白牌域名，CNAME 到 `ludicrous.cloud`）。如果这次的下单系统子域名也用"agent"，会跟这个招商页混淆，所以改用中性的"booking"。
+
 **还没做的**：
-- HTTPS 证书——要等 PM/对方定好子域名、把域名解析指过来这台服务器的 IP 之后才能装（域名解析没完成前，浏览器打开这个IP会提示"不安全"，属于正常，等域名接好就会解决）
-- 服务器验收测试网址：`http://206.189.152.68/`（目前显示"CTS Booking System server is ready. Deploy your app here.”），对方确认收到部署账号后可以直接试着传一个文件上去验证
+- 没有了，服务器 + 域名 + 证书全部就绪，等对方把代码部署上去即可
+- 服务器验收测试网址（临时用，正式建议直接用 `https://booking.ctstours.co.nz/`）：`http://206.189.152.68/`（目前显示"CTS Booking System server is ready. Deploy your app here.”）
