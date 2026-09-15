@@ -51,6 +51,15 @@ export interface FakeWriteOptions {
   rpcErrors?: ReadonlySet<string>
   /** Turn off constraint emulation for a test that deliberately seeds "impossible" data. */
   enforceConstraints?: boolean
+  /**
+   * Clock used to stamp `created_at` on rows inserted without one. Defaults to the
+   * real system clock. A test that also freezes `now()` for the module under test
+   * (e.g. `now: () => NOW`) must pass the same clock here — otherwise an expiry-style
+   * CHECK constraint compares a caller-supplied `expires_at` (relative to the frozen
+   * clock) against a `created_at` stamped from the real wall clock, which drifts out
+   * of sync as real time moves past the frozen date.
+   */
+  now?: () => Date
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/
@@ -250,7 +259,7 @@ class Builder implements KnowledgeSelectBuilder, KnowledgeUpdateBuilder, Knowled
     if (this.mode === 'insert') {
       const row: Row = {
         id: `${this.table}-${rows.length + 1}`,
-        created_at: new Date().toISOString(),
+        created_at: (this.db.options.now?.() ?? new Date()).toISOString(),
         ...(COLUMN_DEFAULTS[this.table] ?? {}),
         ...this.payload,
       }
