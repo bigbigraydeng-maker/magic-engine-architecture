@@ -52,10 +52,12 @@ Adapter。构建控制/任何窗口看到"要不要现在做 WhatsApp AI 客服"
 | Verifier 框架 + CTS 七道闸（AI 说的话过最后一道数字核实） | ✅ 已合并（2026-09-15，merge commit `65efbfa0`） | issue #1579，PR #1638 —— 改接新 `getClientKnowledge` 完成，子牙 CONDITIONAL PASS（[#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726) 跟踪，P3 不阻塞）+ 魏征 ✅ 通过，PM 拍板后合并 |
 | Messenger AI 客服核心（prompt.ts + 3 只读工具） | ✅ 已合并（2026-09-15，merge commit `2c05d77f`） | issue #1580，PR #1639 —— 同上改接完成，子牙 ✅ 通过，PM 拍板后合并 |
 
-### 卡着、依赖已经解除、但没人在动
+### 依赖已经解除、进度状态未知（别假设没人在动）
 
-> ⚠️ 这两个刚合并（见上表），代码只是"判断该不该说 / AI 能查什么"这两层静态逻辑，**还没能让 CTS
-> 私信客服真正跑起来**——下面这批 Inngest 编排/UI/dry-run 才是让它真正上线要做的事，仍未核实进度。
+> ⚠️ 上面两个刚合并，代码只是"判断该不该说 / AI 能查什么"这两层静态逻辑，**还没能让 CTS
+> 私信客服真正跑起来**——下面这批 Inngest 编排/UI/dry-run 才是让它真正上线要做的事。这份文档
+> 第一版没有逐个核实过这些 issue 的 PR/负责人状态，标题刻意不写"没人在动"——先按"状态未知"
+> 处理，下一个进这条线的窗口第一件事是逐条 `gh issue/pr view` 核实清楚，不要假设可以直接认领。
 
 | 能力 | issue | PR | 现状 |
 |---|---|---|---|

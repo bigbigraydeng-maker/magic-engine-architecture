@@ -214,8 +214,10 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
       **已合并**（merge commit `2c05d77f`）
 
 代码本身还只是静态校验/推理逻辑，**尚未上线**——Messenger/WhatsApp webhook 接收本身已合并
-（#1637/#1640，见上），CTS 私信客服真正跑起来还需要 Inngest 编排把已接收的事件消费掉、门户
-UI、dry-run 验证等剩余步骤（见本节下方"剩余 issue"）。
+（#1637/#1640，见上），CTS 私信客服真正跑起来还需要 Inngest 编排消费**已接收的 Messenger 事件**
+（范围已冻结只做 Messenger 一条路，见 [docs/roadmap/2026-09-15-crm-ai-agent-build-control.md](./roadmap/2026-09-15-crm-ai-agent-build-control.md)
+"范围问题已拍板"——WhatsApp 目前止于接收落库，不接入 AI 应答编排）、门户 UI、dry-run 验证等
+剩余步骤（见本节下方"剩余 issue"）。
 
 **审查过程发现并已修复的关键问题**（wave-1，不是走过场，逐条真实验证）：数据库外键漏写级联
 删除；退订判断第一版设计换渠道即失效（已改用现成的 `contacts.do_not_contact` 机制）；CTS
@@ -225,8 +227,9 @@ UI、dry-run 验证等剩余步骤（见本节下方"剩余 issue"）。
 - `optout.ts` 的撤销入口/分页/写路径归属校验三项小缺口，详见 issue #1290 评论
 
 - [ ] 剩余 issue（#1638/#1639 已合并，不再是剩余项，见上；Messenger/WhatsApp webhook**接收**
-      本身也已合并——#1637/#1640，不是剩余项；真正剩的是 Inngest 编排 4 函数消费这些已接收
-      事件的下游流程、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个前置
+      本身也已合并——#1637/#1640，不是剩余项；真正剩的是 Inngest 编排 4 函数消费**已接收的
+      Messenger 事件**的下游流程（范围已冻结只做 Messenger，WhatsApp 止于接收落库，不接入
+      AI 应答编排）、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个前置
       依赖已经全部做完**（见下一节，6 步全部合并），这些是 CTS Messenger+WhatsApp v3 自己
       剩下的、不属于客户知识库范围的收尾项
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
