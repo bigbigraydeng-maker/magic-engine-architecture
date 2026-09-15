@@ -243,7 +243,7 @@ function fakeStep(simulateApproval: boolean) {
       }
       await emitConversationApprovalEvent(
         { draftId: capturedDraftId, clientId: CLIENT_ID, conversationId: '', decidedByEmail: DRYRUN_APPROVER_EMAIL },
-        { send: async () => {} }, // 假 send：不打真实 Inngest 网络
+        { send: async (event) => ({ event_ids: [event.id] }) }, // 假 send：不打真实 Inngest 网络
       )
       return { data: { draft_id: capturedDraftId } }
     },
