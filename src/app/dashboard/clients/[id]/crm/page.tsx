@@ -1206,10 +1206,12 @@ type RowWithLayer = Row & { layer: Layer }
 const TD = 'px-3 py-2.5 text-[13px] align-top'
 
 function ListRowActive({ r, onOpen }: { r: RowWithLayer; onOpen: (r: RowWithLayer) => void }) {
-  // 坏号不给拨号链接 —— 跟 ReachAction 保持一致：已知打不通的号码不能继续展示为可拨。
-  const reachCell = r.phoneUnusable || !r.phone
-    ? <span className="text-me-charcoal/40">{REACH_LABEL[r.suggestedChannel] ?? '—'}</span>
-    : <a href={`tel:${r.phone}`} onClick={(e) => e.stopPropagation()} className="font-bold text-me-ochre hover:underline">{r.phone}</a>
+  // 按 suggestedChannel 决定展示方式，与看板 ReachAction 保持一致：
+  // 只有建议渠道是电话、号码存在且没有标坏时才给拨号链接，其余情况只显示渠道文字。
+  const showTelLink = r.suggestedChannel === 'phone' && !!r.phone && !r.phoneUnusable
+  const reachCell = showTelLink
+    ? <a href={`tel:${r.phone}`} onClick={(e) => e.stopPropagation()} className="font-bold text-me-ochre hover:underline">{r.phone}</a>
+    : <span className="text-me-charcoal/40">{REACH_LABEL[r.suggestedChannel] ?? '—'}</span>
 
   return (
     <tr
