@@ -115,6 +115,8 @@ interface Bucket {
 interface Payload {
   buckets: Bucket[]
   offList: OffRow[]
+  /** 名单外联系人超过 300 人时为 true，列表不完整。 */
+  offListTruncated?: boolean
   counts: Record<Segment, number>
   totalContacts: number
   todoTotal: number
@@ -1280,7 +1282,7 @@ function ContactListView({
     <div className="overflow-x-auto rounded-xl border border-me-charcoal/10 bg-white">
       {truncated && (
         <p className="border-b border-me-charcoal/8 bg-amber-50 px-4 py-2 text-[12px] font-bold text-amber-700">
-          ⚠ 今天名单超过 300 人，这里只显示了前 300 人 —— 如需联系其余客人，请在搜索框里按名字查找
+          ⚠ 联系人太多，这里只显示了部分记录，完整列表暂不支持，请让研发支持分页功能
         </p>
       )}
       <table className="w-full border-collapse">
@@ -1741,7 +1743,7 @@ export default function CrmTodayPage() {
             <ContactListView
               rows={shownWithLayer}
               offRows={(data.offList ?? []).filter((r) => keepKind(r.kind))}
-              truncated={buckets.some((b) => b.truncated)}
+              truncated={buckets.some((b) => b.truncated) || !!data.offListTruncated}
               onOpen={(r) => setPicked(r)}
               onOpenOff={(r) => setPicked(r)}
             />
