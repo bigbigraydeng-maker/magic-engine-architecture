@@ -268,13 +268,19 @@ export function createConversationInboundAutoAckFunction(deps: ConversationInbou
 
       // Step 2：emit 收尾事件。id 用事件本身的稳定 id（重放/重试不变）拼会话
       // id 保证幂等；本地直接触发等没有 event.id 的场景才退化成随机值。
-      await step.run('emit-autoack-sent', () =>
-        step.sendEvent('autoack-sent', {
-          id: `autoack:${conversation_id}:${event.id ?? randomUUID()}`,
-          name: CONVERSATION_AUTOACK_SENT_EVENT,
-          data: { client_id, conversation_id, channel },
-        }),
-      )
+      //
+      // 🔴 魏征复审（2026-09-15）实测发现：这里原来把 `step.sendEvent` 嵌套
+      // 在 `step.run` 里面——Inngest SDK 自己会检测这种嵌套并发
+      // `NESTING_STEPS` 警告（`components/execution/v2.js` 的
+      // `executingStep` 检查），而且嵌套之后这个 step 自己的幂等哈希在原始
+      // 执行和重试之间可能对不上，等于没有真的达到代码注释原来声称的"幂等"
+      // 效果。改成跟仓库其它 Inngest 函数（`web-intelligence.ts` 等）一致的
+      // 写法：`step.sendEvent` 直接顶层调用，不裹进 `step.run`。
+      await step.sendEvent('autoack-sent', {
+        id: `autoack:${conversation_id}:${event.id ?? randomUUID()}`,
+        name: CONVERSATION_AUTOACK_SENT_EVENT,
+        data: { client_id, conversation_id, channel },
+      })
 
       return { ...base, outcome: 'sent', detail: null }
     },

@@ -313,6 +313,18 @@ describe('关键路径', () => {
     ])
   })
 
+  it('🔴 魏征复审：step.sendEvent 是顶层调用，绝不嵌套在 step.run 里面（真实 Inngest SDK 会对嵌套发 NESTING_STEPS 警告，且破坏幂等哈希）——退回嵌套写法这条测试必须挂', async () => {
+    const deps = makeDeps()
+    const fn = createConversationInboundAutoAckFunction(deps)
+    const step = fakeStep()
+    await handlerOf(fn)({ event: { id: 'evt-1', data: messageReceived() }, step })
+    // 4 个真实副作用各自一个 step.run：opt-out / kill-switch / classify / send。
+    // emit 不算在内——它必须是 step.sendEvent 的顶层调用，不是包在第 5 个
+    // step.run 里面。
+    expect(step.run).toHaveBeenCalledTimes(4)
+    expect(step.sendEvent).toHaveBeenCalledTimes(1)
+  })
+
   it('whatsapp 渠道 → 走 send.whatsapp，不是 send.messenger', async () => {
     const deps = makeDeps()
     const fn = createConversationInboundAutoAckFunction(deps)
