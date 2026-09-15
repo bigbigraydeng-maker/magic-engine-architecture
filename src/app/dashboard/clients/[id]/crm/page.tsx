@@ -1257,7 +1257,7 @@ function ListRowOff({ r, onOpen }: { r: OffRow; onOpen: (r: OffRow) => void }) {
           {OFF_GROUP_LABEL[r.group]}
         </span>
       </td>
-      <td className={`${TD} text-me-charcoal/45`}>{r.phone ?? '—'}</td>
+      <td className={`${TD} text-me-charcoal/45`}>{r.phone ?? r.email ?? '—'}</td>
       <td className={`${TD} text-me-charcoal/45`}>{r.stageLabel ?? '—'}</td>
       <td className={`${TD} max-w-[240px] truncate text-me-charcoal/30`}>{r.lastNote ?? '—'}</td>
     </tr>
