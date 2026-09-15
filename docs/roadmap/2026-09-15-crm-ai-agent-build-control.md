@@ -51,34 +51,53 @@ Adapter。构建控制/任何窗口看到"要不要现在做 WhatsApp AI 客服"
 | NAL 私信 → CAPI 有效咨询同步（dry_run） | ✅ 已合并，未切真发送 | PR #1675/#1689，等 PM/FDE 决定要不要审这批 `pending_review` |
 | Verifier 框架 + CTS 七道闸（AI 说的话过最后一道数字核实） | ✅ 已合并（2026-09-15，merge commit `65efbfa0`） | issue #1579，PR #1638 —— 改接新 `getClientKnowledge` 完成，子牙 CONDITIONAL PASS（[#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726) 跟踪，P3 不阻塞）+ 魏征 ✅ 通过，PM 拍板后合并 |
 | Messenger AI 客服核心（prompt.ts + 3 只读工具） | ✅ 已合并（2026-09-15，merge commit `2c05d77f`） | issue #1580，PR #1639 —— 同上改接完成，子牙 ✅ 通过，PM 拍板后合并 |
-| Inngest 编排 F3 批准中继 + 门户批准/拒绝/改后发送端点 | ✅ 已合并（2026-09-15，merge commit `7e938eb6`） | issue #1586，PR #1741 —— 子牙+魏征各一轮，两边独立发现同一个真实并发漏洞（双人/双击可能导致"DB 说拒绝、批准通知却已经真发出"的不一致）已修复为数据库层原子条件更新，魏征用真实测试+变异测试核实通过，PM 拍板后合并。**依赖 #1585（F2）尚未实现，本身不会让 CTS 私信客服真正上线**——已把两条交接说明写进 #1585 的评论 |
+| Inngest 编排 F3 批准中继 + 门户批准/拒绝/改后发送端点 | ✅ 已合并（2026-09-15，merge commit `7e938eb6`） | issue #1586，PR #1741 —— 子牙+魏征各一轮，两边独立发现同一个真实并发漏洞（双人/双击可能导致"DB 说拒绝、批准通知却已经真发出"的不一致）已修复为数据库层原子条件更新，魏征用真实测试+变异测试核实通过，PM 拍板后合并。**依赖的 #1585（F2）当天稍晚也已合并**——F1-F4 全链路代码已完整，但见下方"数据库层今天才真正齐全"一节，代码合并不等于数据库能跑 |
 
-### 依赖已经解除，逐条 `gh issue view` + `gh pr list --state all --search` 核实过（2026-09-15）
+### 🔴 数据库层今天才真正齐全（2026-09-15 下午发现并修复，别再假设"合并 = 数据库有这张表"）
 
-> ⚠️ 上表中 Verifier 框架和 Messenger AI 客服核心这两行，代码只是"判断该不该说 / AI 能查什么"
-> 这两层静态逻辑，**单独不能让 CTS 私信客服真正跑起来**。F3（Inngest 编排批准中继）已经合并，
-> 属于编排层，不在"静态逻辑"之列——但 F3 依赖的 F2（生成草稿主函数，见下表 #1585）还没人做，
-> 所以整条私信客服链路仍然卡在 F2 这一环，还没打通。下面这批 Inngest 编排/UI/dry-run 才是让它
-> 真正上线要做的事。已逐条核实，不是抄旧文档。
+**代码全部合并 ≠ 数据库能用**——这条线依赖的 **8 个迁移在今天下午之前从未 apply 到生产库**：
+`conversation_reply_drafts`、`client_knowledge_facts` 全系列（含萃取水位/客户确认请求/rollout
+阶段机）、双 kill switch 列、F4 健康告警表全部不存在。也就是说，F1-F4、待批准草稿 UI、PM
+daily-todo、紧急停按钮这些"✅ 已合并"的功能，**在今天下午之前即使合并了代码，数据库层面也
+跑不起来**——这不是理论风险，是 issue #1590 回滚演练开工时实测发现的真实状态（8 张/列全部
+缺失）。PM 已授权，8 个迁移今天已全部 apply 到生产库（独立核对 `list_migrations` 确认：
+`20260913095601_conversation_reply_drafts` 等 8 个迁移的 apply 时间戳全部是今天）。**这行之前
+的任何"已上线"说法，都要带上这条前提——现在才是真的成立。**
+
+### 依赖状态一览（2026-09-15 全面核实，`gh issue view` + `gh pr list --state all --search` 逐条重查，不是抄旧文档）
 
 | 能力 | issue | PR | 现状 |
 |---|---|---|---|
-| ~~Inngest 编排 F1 自动应答~~ | #1584 | [#1739](https://github.com/bigbigraydeng-maker/magic-engine/pull/1739)（已合并，`Closes #1584`） | ✅ 已完成（PR #1736 是同名重复分支，已关闭未合并，别再当在做的窗口） |
-| Inngest 编排 F2 生成草稿（主函数） | #1585 | 无 | 没人在动——F3（上表）已经等着它，F2 是当前最卡关的一环 |
-| ~~Inngest 编排 F3 审批端点~~ | #1586 | [#1741](https://github.com/bigbigraydeng-maker/magic-engine/pull/1741)（已合并） | ✅ 已完成，见上表 |
-| Inngest 编排 F4 健康心跳 | #1587 | 无 | 没人在动 |
+| ~~Inngest 编排 F1 自动应答~~ | #1584 | [#1739](https://github.com/bigbigraydeng-maker/magic-engine/pull/1739)（已合并） | ✅ 已完成 |
+| ~~Inngest 编排 F2 生成草稿（主函数）~~ | #1585 | 已合并 | ✅ 已完成——F3 依赖的这一环已打通 |
+| ~~Inngest 编排 F3 批准中继~~ | #1586 | [#1741](https://github.com/bigbigraydeng-maker/magic-engine/pull/1741)（已合并） | ✅ 已完成，见上表 |
+| ~~Inngest 编排 F4 健康心跳~~ | #1587 | 已合并（`src/lib/messenger-agent/health-heartbeat.ts`） | ✅ 已完成 |
 | ~~PM daily-todo UI + 紧急停按钮~~ | #1589 | [#1747](https://github.com/bigbigraydeng-maker/magic-engine/pull/1747)（已合并） | ✅ 已完成 |
-| ~~待批准草稿 UI（三按钮）~~ | #1588 | [#1751](https://github.com/bigbigraydeng-maker/magic-engine/pull/1751)（已合并，`Closes #1588`） | ✅ 已完成 |
-| T-14d 端到端 dry-run | #1591 | 无 | 没人在动 |
-| 回滚 SOP 演练 | #1590 | 无 | 没人在动 |
-| Delivery day 灰度切换 | #1592 | 无 | 没人在动 |
+| ~~待批准草稿 UI（三按钮）~~ | #1588 | [#1751](https://github.com/bigbigraydeng-maker/magic-engine/pull/1751)（已合并） | ✅ 已完成 |
+| 回滚 SOP 真实演练 + 渠道级判断文档化 | [#1590](https://github.com/bigbigraydeng-maker/magic-engine/issues/1590) | [#1765](https://github.com/bigbigraydeng-maker/magic-engine/pull/1765)（已合并） | ⚠️ **大部分完成，保持 OPEN**——见下方专项说明，不是"没人在动" |
+| T-14d 端到端 dry-run + 长度阈值真实验证 | [#1591](https://github.com/bigbigraydeng-maker/magic-engine/issues/1591) | 无 | 🔧 **另一个窗口在做**，别重开——本次核实无匹配 PR、issue 无新评论，进度需直接问那个窗口 |
+| Delivery day 灰度切换（Messenger/WhatsApp 分开） | [#1592](https://github.com/bigbigraydeng-maker/magic-engine/issues/1592) | 无 | 没人在动，**且不该现在排期**——依赖 #1591 先做完 |
+
+**#1590 专项说明（保持 OPEN 的真实原因，不是漏关）**：这次演练发现代码本身没问题、但有三个
+真实技术债——TD.20（批准按钮不检查渠道 kill switch 状态）、TD.21（缺批量拒绝待审批草稿的
+入口）、TD.22（缺"中止在途 Inngest 任务"机制）。关键结论：**关开关本身秒级生效（实测
+<10s），但已经在"待审批"状态的草稿不会被自动处理**——回滚必须手动逐条拒绝，推翻了早前
+"5 分钟内可回滚"的说法。这次演练用数据库模拟"任务卡在待审批"的状态测试安全网，**不是**
+真正端到端触发过一次 Inngest 事件（开发环境没有触发密钥）——保持 OPEN，等一个能连生产
+Inngest 环境的窗口/人补一次真实端到端实测。
+
+**新增两块范围（原 9 项之外）**：
+- 邮件渠道 AI 客服（[issue #1745](https://github.com/bigbigraydeng-maker/magic-engine/issues/1745)，OPEN）——接入方案调研中，是本文档"范围问题已拍板"一节记录的唯一例外（详见下方）。
+- 从历史对话提炼接待风格/标准应对（issue #1760，已关闭）——[PR #1766](https://github.com/bigbigraydeng-maker/magic-engine/pull/1766) 已合并，扩展现有客户知识库萃取管道，只对 CTS 生效，尚未接自动触发器（手动/脚本调用）。
+
+**CAPI 每日同步现状（来自构建控制窗口报告，本窗口未独立核实细节）**：每日自动同步+人工审核
+已上线，今天发现一次因后台任务清单被覆盖导致没跑的问题，已重新登记，计划 2026-09-17 核实
+是否稳定——需要建日历提醒的应在那次报告的窗口里处理，这里只记录现状指针。
 
 > ⚠️ 核实方法：`gh issue view <号>` 查真实 state；`gh pr list --state all --search "<号>"` 逐个查有没有
 > 已开/已合并/已关闭的 PR（`gh pr list` 默认只列 open，漏了 `--state all` 会把已合并的 PR 也判成"没人在动"）。
-> 本次核实（2026-09-15）：9 个里 **4 个已 CLOSED**（#1584 经 PR #1739、#1586 经 PR #1741、#1589 经 PR #1747、
-> #1588 经 PR #1751，均已合并）；其余 5 个（#1585/#1587/#1590/#1591/#1592）仍是 `OPEN` 且搜索无匹配 PR，
-> 状态是真的"没人在动"，不是"没查"。**这份核实是这次改动时的快照，会过期**——下一个进这条线的窗口领活前
-> 仍要自己重跑一遍上面两条命令，不能直接信这张表。
+> **这份核实是这次改动时的快照，会过期**——下一个进这条线的窗口领活前仍要自己重跑一遍上面两条命令，
+> 不能直接信这张表；数据库层面也要核实（`list_migrations` 或直接查表存不存在），不能只信"issue 关了"。
 
 ### 已知的真实冲突/重复劳动（本 session 已实测抓到，别再踩一次）
 
