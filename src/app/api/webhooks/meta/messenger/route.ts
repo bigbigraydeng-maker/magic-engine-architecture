@@ -57,6 +57,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { sendInngestEvent } from '@/lib/workflows/inngest-event'
 import { CONVERSATION_MESSAGE_RECEIVED_EVENT } from '@/lib/conversations/events'
 import { isOptOutKeyword, recordOptOutKeywordTouch } from '@/lib/messenger-agent/optout'
+import { recordOptOutWriteFailure } from '@/lib/messenger-agent/optout-failures'
 
 export const dynamic = 'force-dynamic'
 
@@ -462,10 +463,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
                   `[webhooks/meta/messenger] 写 conversations.optout_unlinked 失败（会话 ${result.conversationId}）:`,
                   unlinkedErr.message,
                 )
+                // 心跳检查（issue #1587）要能看到这次失败——否则会被误判成
+                // 「没人退订、一切正常」。
+                await recordOptOutWriteFailure(
+                  {
+                    clientId: lookup.clientId,
+                    channel: 'messenger',
+                    conversationId: result.conversationId,
+                    contactId: null,
+                    errorMessage: unlinkedErr.message,
+                  },
+                  supabaseAdmin,
+                )
               }
             }
           } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
             console.error(`[webhooks/meta/messenger] 退订触点写入失败（消息已入库）:`, err)
+            await recordOptOutWriteFailure(
+              {
+                clientId: lookup.clientId,
+                channel: 'messenger',
+                conversationId: result.conversationId,
+                contactId: result.contactId,
+                errorMessage: message,
+              },
+              supabaseAdmin,
+            )
           }
         }
 

@@ -237,6 +237,11 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
       AI 应答编排）、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个前置
       依赖已经全部做完**（见下一节，6 步全部合并），这些是 CTS Messenger+WhatsApp v3 自己
       剩下的、不属于客户知识库范围的收尾项
+  - [ ] F4 系统健康巡检（issue #1587）已实现（4类检查：消息量骤降/AI回复拦截率过高/AI起草
+        出错率过高/退订登记写入失败），但故意留了一个缺口——issue 原文还要求的"4小时批准
+        超时算事故"这一项**没做**，因为它依赖 F2 主函数（issue #1585，状态仍 OPEN）发出的
+        事件，F2 还没写，事件发不出来。等 #1585 上线后需要回来给 F4 补这一类检查（代码里
+        已有注释标记位置：`src/lib/messenger-agent/health-heartbeat.ts` 文件头）
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
 
 ## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步已全部完成（2026-09-15）

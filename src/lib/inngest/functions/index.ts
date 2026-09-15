@@ -12,6 +12,7 @@ import { factoryCreatomateRender } from './factory-creatomate-render'
 import { knowledgeMiningRequested } from './knowledge-mining'
 import { conversationInboundAutoAck } from './conversation-inbound-autoack'
 import { conversionDailyPipeline } from './conversion-daily-pipeline'
+import { conversationHealthHeartbeat } from './conversation-health-heartbeat'
 
 export const cloudFunctions = [
   webIntelligenceCapture,
@@ -30,6 +31,7 @@ export const cloudFunctions = [
   knowledgeMiningRequested,
   conversationInboundAutoAck,
   conversionDailyPipeline,
+  conversationHealthHeartbeat,
 ]
 
 /** 命名空间自检：所有注册函数 id 必须以 cloud- 开头（契约测试 + 运行期双保险）。 */
