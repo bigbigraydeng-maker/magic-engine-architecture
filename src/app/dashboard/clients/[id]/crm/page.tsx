@@ -1280,7 +1280,7 @@ function ContactListView({
     <div className="overflow-x-auto rounded-xl border border-me-charcoal/10 bg-white">
       {truncated && (
         <p className="border-b border-me-charcoal/8 bg-amber-50 px-4 py-2 text-[12px] font-bold text-amber-700">
-          ⚠ 今天名单太大，只显示了前面一部分人 —— 切回看板可以看到全部
+          ⚠ 今天名单超过 300 人，这里只显示了前 300 人 —— 如需联系其余客人，请在搜索框里按名字查找
         </p>
       )}
       <table className="w-full border-collapse">
