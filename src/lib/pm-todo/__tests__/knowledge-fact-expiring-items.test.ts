@@ -16,7 +16,9 @@ function fakeSupabase(rows: Row[] | null, error: { message: string } | null = nu
         eq: () => ({
           not: () => ({
             lte: () => ({
-              limit: () => Promise.resolve({ data: rows, error }),
+              order: () => ({
+                range: () => Promise.resolve({ data: rows, error }),
+              }),
             }),
           }),
         }),
@@ -51,6 +53,13 @@ describe('pushKnowledgeFactExpiringItems', () => {
     const items: ManualItem[] = []
     await pushKnowledgeFactExpiringItems(supabase as never, items, CLIENTS, NOW)
     expect(items[0].what).toContain('已经过期')
+  })
+
+  it('客户不在服务名单里（已下线）→ 跳过，不下发「未知客户」噪音', async () => {
+    const supabase = fakeSupabase([{ client_id: 'retired-client', valid_until: '2026-09-20T00:00:00+13:00' }])
+    const items: ManualItem[] = []
+    await pushKnowledgeFactExpiringItems(supabase as never, items, CLIENTS, NOW)
+    expect(items).toHaveLength(0)
   })
 
   it('没有任何条目命中 14 天窗口 → 不生成待办', async () => {

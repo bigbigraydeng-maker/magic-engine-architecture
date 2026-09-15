@@ -1,8 +1,9 @@
 /**
- * 门户「紧急全渠道停」按钮（issue #1589）。
+ * 门户「紧急全渠道停」按钮（issue #1589）。双向：停用 + 重新打开。
  *
- * 核心行为：二次确认短语打错/取消一律不发请求（防手滑关掉正在跑的 AI 客服），
- * 打对了才真的调用后端，并把后端返回的结果（成功/审计告警/失败）如实显示。
+ * 核心行为：二次确认短语打错/取消一律不发请求（防手滑），打对了才真的
+ * 调用后端，并把后端返回的结果（成功/审计告警/失败）如实显示。两个方向
+ * 各自独立的短语，不能互相混用。
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest'
@@ -25,10 +26,11 @@ afterEach(() => {
 })
 
 describe('MessengerEmergencyStopPanel', () => {
-  it('打开面板就能看到紧急停按钮', () => {
+  it('打开面板就能看到停用和重新打开两个按钮', () => {
     mockFetch({})
     render(<MessengerEmergencyStopPanel clientId={CLIENT_ID} />)
     expect(screen.getByRole('button', { name: /紧急全渠道停/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /重新打开/ })).toBeInTheDocument()
   })
 
   it('确认框输入不对 → 不发任何请求', async () => {
@@ -51,7 +53,7 @@ describe('MessengerEmergencyStopPanel', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('确认框输入 STOP-ALL → 调后端，成功后显示"已经停了"', async () => {
+  it('停用：确认框输入 STOP-ALL → 调后端 action=stop，成功后显示"已经停了"', async () => {
     const fetchMock = mockFetch({ success: true, stopped: true, auditWarning: null })
     vi.stubGlobal('prompt', vi.fn().mockReturnValue('STOP-ALL'))
     render(<MessengerEmergencyStopPanel clientId={CLIENT_ID} />)
@@ -59,13 +61,40 @@ describe('MessengerEmergencyStopPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: /紧急全渠道停/ }))
 
     expect(fetchMock).toHaveBeenCalledWith(
-      `/api/clients/${CLIENT_ID}/messenger-agent/emergency-stop`,
+      `/api/clients/${CLIENT_ID}/messenger-agent/kill-switch`,
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ confirm: 'STOP-ALL' }),
+        body: JSON.stringify({ action: 'stop', confirm: 'STOP-ALL' }),
       }),
     )
     expect(await screen.findByText(/已经停了/)).toBeInTheDocument()
+  })
+
+  it('重新打开：确认框输入 RESUME-ALL → 调后端 action=resume，成功后显示"已经重新打开"', async () => {
+    const fetchMock = mockFetch({ success: true, resumed: true, auditWarning: null })
+    vi.stubGlobal('prompt', vi.fn().mockReturnValue('RESUME-ALL'))
+    render(<MessengerEmergencyStopPanel clientId={CLIENT_ID} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /重新打开/ }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/clients/${CLIENT_ID}/messenger-agent/kill-switch`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ action: 'resume', confirm: 'RESUME-ALL' }),
+      }),
+    )
+    expect(await screen.findByText(/已经重新打开/)).toBeInTheDocument()
+  })
+
+  it('停用按钮打的却是重新打开的短语 → 不发请求（短语跟按钮必须对应）', async () => {
+    const fetchMock = mockFetch({})
+    vi.stubGlobal('prompt', vi.fn().mockReturnValue('RESUME-ALL'))
+    render(<MessengerEmergencyStopPanel clientId={CLIENT_ID} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /紧急全渠道停/ }))
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('开关翻了但审计写入失败 → 如实告诉用户，不假装完全成功', async () => {

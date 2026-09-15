@@ -15,7 +15,9 @@ function fakeSupabase(rows: Row[] | null, error: { message: string } | null = nu
       select: () => ({
         in: () => ({
           is: () => ({
-            limit: () => Promise.resolve({ data: rows, error }),
+            order: () => ({
+              range: () => Promise.resolve({ data: rows, error }),
+            }),
           }),
         }),
       }),
@@ -38,7 +40,7 @@ describe('pushMessengerDraftItems', () => {
     await pushMessengerDraftItems(supabase as never, items, CLIENTS, NOW)
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ kind: 'messenger_draft_pending_approval', client_id: 'c1', client_name: 'CTS' })
-    expect(items[0].what).toContain('2 条')
+    expect(items[0].what).toContain('2 位')
     expect(items[0].what).toContain('4 小时')
     expect(items[0].href).toContain('c1')
   })
@@ -81,6 +83,15 @@ describe('pushMessengerDraftItems', () => {
 
   it('没有任何草稿命中三档状态 → 不生成待办', async () => {
     const supabase = fakeSupabase([])
+    const items: ManualItem[] = []
+    await pushMessengerDraftItems(supabase as never, items, CLIENTS, NOW)
+    expect(items).toHaveLength(0)
+  })
+
+  it('客户不在服务名单里（已下线）→ 跳过，不下发「未知客户」噪音', async () => {
+    const supabase = fakeSupabase([
+      { client_id: 'retired-client', verifier_status: 'pending', created_at: '2026-09-15T08:00:00+13:00' },
+    ])
     const items: ManualItem[] = []
     await pushMessengerDraftItems(supabase as never, items, CLIENTS, NOW)
     expect(items).toHaveLength(0)
