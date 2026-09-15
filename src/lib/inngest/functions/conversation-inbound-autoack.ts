@@ -214,18 +214,34 @@ export function createConversationInboundAutoAckFunction(deps: ConversationInbou
 
       // Step 0：opt-out 检查（fail-closed，见 optout.ts 文件头「出错时宁可拦
       // 一条，不放过一条」）。
+      //
+      // 🔴 判断记录（要不要额外挂一条 pm-todo）：一个已经标记拒联的联系人又
+      // 发消息进来，理论上是"可能想解除拒联"的信号，但这里刻意不新建一个
+      // pm-todo 条目——`pm-todo/manual-items.ts` 现有的 push*Items 都是"定时
+      // 任务扫已落库状态"的读时聚合模式，不是"事件到达就实时写一条"；这条对话
+      // 本身仍然正常出现在 CRM 收件箱里（拒联状态本来就在联系人资料上可见），
+      // 员工翻收件箱时天然会看到，不缺一个额外的提醒入口。真要做"拒联后又发
+      // 消息"专属提醒，应该是 `manual-items.ts` 里新增一种 `ManualItemKind`
+      // 的独立改动（有自己的 what/how/href 设计），不该顺手塞进这个函数——
+      // 留白，不是漏做。
       const optedOut = await step.run('check-opt-out', () => deps.isOptedOut(conversation_id))
       if (optedOut) {
         return { ...base, outcome: 'skipped_opted_out', detail: null }
       }
 
       // Step 0.5：渠道 kill switch（fail-closed，见 channel-dispatch.ts 文件头）。
+      // 这是 ME/PM 自己按下的开关，不是异常状态，不需要提醒任何人。
       const enabled = await step.run('check-channel-enabled', () => deps.isEnabled(client_id, channel))
       if (!enabled) {
         return { ...base, outcome: 'skipped_channel_disabled', detail: null }
       }
 
       // Step 0.8：售前/售后分类——判据按行业注入，本函数不写死任何客户/行业。
+      //
+      // 🔴 同上，不额外挂 pm-todo：售后对话本来就需要员工手动处理（这正是
+      // "不发自动安抚"的原因——不想让 AI 对一个已购客户随口说"我们的顾问会
+      // 联系您"这种对售后场景不成立的话），而售后对话跟售前一样会出现在同
+      // 一个 CRM 收件箱里，不缺一个专属提醒。
       const conversationClass = await step.run('classify-conversation', async () => {
         const industry = await deps.loadIndustry(client_id)
         const policy = resolvePostSaleClassificationPolicy(industry)
