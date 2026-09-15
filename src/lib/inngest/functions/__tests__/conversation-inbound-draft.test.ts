@@ -18,6 +18,10 @@
  *   7. `loadDraftContext` 生产实现——历史消息排序（子牙+魏征复审 B1/B3：先前
  *      升序+limit 取到的是对话**最老**的 N 条，不是"最近 N 条"，DI 版单测测
  *      不出来，这里直接测生产实现）
+ *   8. `parseAgentJson`——issue #1772（魏征复审 issue #1591 dry-run 实测发现）：
+ *      Claude 偶尔在纯 JSON 前面多包一层解释性文字，直接 `JSON.parse` 会炸，
+ *      落进 `draft_error`。真实数据 26.7% 概率触发，这里锁住"能容忍前缀多说
+ *      一句话"跟"真坏的输出仍然要抛错"两条行为
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -31,6 +35,7 @@ vi.mock('@/lib/knowledge', async (orig) => {
 import {
   createConversationInboundDraftFunction,
   parseMessageReceived,
+  parseAgentJson,
   DRAFT_SENT_BY_EMAIL,
   CONVERSATION_REPLY_BLOCKED_EVENT,
   CONVERSATION_REPLY_SEND_FAILED_EVENT,
@@ -693,4 +698,62 @@ describe('loadDraftContext（生产实现）', () => {
     })
     await expect(loadDraftContext(CLIENT_ID, CONVERSATION_ID)).rejects.toThrow(/会话不属于该客户/)
   })
+})
+
+describe('parseAgentJson（issue #1772）', () => {
+  const VALID_OUTPUT = { reply_text: '你好', confidence: 0.9, offerings: [] }
+  const VALID_JSON = JSON.stringify(VALID_OUTPUT)
+
+  it('纯 JSON，没有任何多余文字 → 照常解析', () => {
+    expect(parseAgentJson(VALID_JSON)).toEqual(VALID_OUTPUT)
+  })
+
+  it('整段被 ```json 代码块包住 → 照常解析（既有行为，不能因为这次改动退化）', () => {
+    expect(parseAgentJson('```json\n' + VALID_JSON + '\n```')).toEqual(VALID_OUTPUT)
+  })
+
+  it.each([
+    ['客户最新一条消息是问价，', VALID_JSON],
+    ['The facts provided support this reply. ', VALID_JSON],
+    ['The "Chris" booking referenced above is confirmed. ', VALID_JSON],
+    ['The latest customer message asks about pricing. ', VALID_JSON],
+    ['根据对话历史，最新一条消息如下分析：', VALID_JSON],
+    ["Joyce's last message needs a short reply. ", VALID_JSON],
+    ['这条消息是一个典型的问价场景，', VALID_JSON],
+  ])('真实故障复现 · 前缀"%s" → 仍能提取出被包住的 JSON', (prefix, json) => {
+    expect(parseAgentJson(prefix + json)).toEqual(VALID_OUTPUT)
+  })
+
+  it('JSON 后面也多了一句话（不只是前面）→ 一样能提取', () => {
+    expect(parseAgentJson(VALID_JSON + ' 以上是我的回复建议。')).toEqual(VALID_OUTPUT)
+  })
+
+  it('JSON 字符串字段内部含有花括号 → 括号计数不能被字符串内容干扰', () => {
+    const withBraces = { reply_text: '价格是 {约1999} 纽币起', confidence: 0.8, offerings: [] }
+    const text = '这是我的分析：' + JSON.stringify(withBraces)
+    expect(parseAgentJson(text)).toEqual(withBraces)
+  })
+
+  it('真的没有 JSON、纯胡言乱语 → 照原来的行为抛错，不能把胡话当成功', () => {
+    expect(() => parseAgentJson('抱歉，我无法起草这条回复。')).toThrow()
+  })
+
+  it('花括号没有配平（截断的输出）→ 照原来的行为抛错', () => {
+    expect(() => parseAgentJson('前情提要：{ "reply_text": "没写完')).toThrow()
+  })
+
+  it('前缀里有裸标识符花括号（不合法 JSON）→ 仍然抛错，不会被误当成功（子牙复审锁定）', () => {
+    expect(() => parseAgentJson('这是格式说明 {示例}，' + VALID_JSON)).toThrow()
+  })
+
+  it(
+    '前缀里恰好带一段语法合法但无关的 JSON 片段 → 提取到的是这段无关片段，不是真实输出' +
+      '（已知边界，靠下游 MessengerAgentOutputSchema.strict() 兜底成 draft_error，不在这个' +
+      '函数自己的职责范围内区分"哪段才是真答案"——子牙+魏征复审共同确认，锁定当前行为）',
+    () => {
+      // 故意只断言"取到的是前缀那个无关小对象"，不是"取到真实输出"——这就是这条边界
+      // 本身：本函数不做语义判断，多段合法 JSON 时永远拿第一段。
+      expect(parseAgentJson('举例说明 {"a": 1}，正式回复是：' + VALID_JSON)).toEqual({ a: 1 })
+    },
+  )
 })

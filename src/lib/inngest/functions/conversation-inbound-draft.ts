@@ -202,10 +202,70 @@ function isKnownDraftChannel(channel: string): channel is MessengerAgentChannel 
  * Claude 偶尔会无视"不要输出 JSON 之外的文字"这条硬性规则,包一层 ```json
  * 代码块——防御性剥掉,不是纵容它违反契约,失败了照样按 `draft_error` 处理。
  */
-function stripMarkdownFence(text: string): string {
+export function stripMarkdownFence(text: string): string {
   const trimmed = text.trim()
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
   return fenced ? fenced[1].trim() : trimmed
+}
+
+/**
+ * 魏征复审（issue #1591 dry-run，2026-09-16）实测：CTS 真实客户消息 30 条里有
+ * 8 条（26.7%）触发了这个真问题——Claude 偶尔会在纯 JSON 前面多包一层解释性
+ * 文字（"客户最新一条消息是…"/"The facts …"），`stripMarkdownFence` 只处理
+ * 整段被 ``` 包住的情况，处理不了"前面多一句话"这种——直接 `JSON.parse` 炸,
+ * 落进 `draft_error`。这里在直接解析失败后，从文本里找第一个 `{` 开始，用
+ * 感知字符串的括号计数扫到匹配的 `}`，把中间这段当 JSON 再试一次——不是纵容
+ * AI 不守契约，只是不让"多说了一句话"这种可恢复的输出白白变成需要人工介入
+ * 的 `error` 态。真的找不到平衡的 JSON 片段（或提取出来的东西也解析不了）,
+ * 原样把第一次 `JSON.parse` 的异常抛出去，跟改动前行为一致，不吞真的坏输出。
+ */
+function extractBalancedJsonObject(text: string): string | null {
+  const start = text.indexOf('{')
+  if (start === -1) return null
+
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (ch === '\\') {
+        escaped = true
+      } else if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+    } else if (ch === '{') {
+      depth += 1
+    } else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return null // 括号没配平——不是这类"多包一层文字"的可恢复情况
+}
+
+/** `JSON.parse` 失败时的兜底：容忍前后多余文字，提取出被包住的那段 JSON 对象再试一次。 */
+export function parseAgentJson(text: string): unknown {
+  const stripped = stripMarkdownFence(text)
+  try {
+    return JSON.parse(stripped)
+  } catch (originalError) {
+    const extracted = extractBalancedJsonObject(stripped)
+    if (extracted !== null) {
+      try {
+        return JSON.parse(extracted)
+      } catch {
+        // 提取出来的那段本身也不是合法 JSON——按原始错误处理，不吞真坏输出。
+      }
+    }
+    throw originalError
+  }
 }
 
 /** 生产实现：组装 prompt + 3 只读工具,起草一条回复,校验输出契约（issue #1580）。 */
@@ -239,7 +299,7 @@ async function runDraftAgent(
     toolHandlers: handlers,
   })
 
-  const rawJson = JSON.parse(stripMarkdownFence(result.text))
+  const rawJson = parseAgentJson(result.text)
   return MessengerAgentOutputSchema.parse(rawJson)
 }
 
