@@ -11,6 +11,7 @@ import { messengerBriefAfterSync } from './messenger-brief-after-sync'
 import { factoryCreatomateRender } from './factory-creatomate-render'
 import { knowledgeMiningRequested } from './knowledge-mining'
 import { conversionDailyPipeline } from './conversion-daily-pipeline'
+import { conversationInboundDraft } from './conversation-inbound-draft'
 
 export const cloudFunctions = [
   webIntelligenceCapture,
@@ -28,6 +29,7 @@ export const cloudFunctions = [
   factoryCreatomateRender,
   knowledgeMiningRequested,
   conversionDailyPipeline,
+  conversationInboundDraft,
 ]
 
 /** 命名空间自检：所有注册函数 id 必须以 cloud- 开头（契约测试 + 运行期双保险）。 */

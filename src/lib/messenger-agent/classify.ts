@@ -43,6 +43,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
+import { hasIndustryFeature } from '@/lib/clients/industry-features'
 
 export type ConversationClass = 'lead_intake' | 'post_sale'
 
@@ -63,6 +64,21 @@ export interface PostSaleClassificationPolicy {
 export const TOURISM_POST_SALE_POLICY: PostSaleClassificationPolicy = {
   postSaleKeywords: ['booking', '我订的', '我已付', 'receipt', '我下单了'],
   postSaleSpanMs: 30 * 24 * 60 * 60 * 1000,
+}
+
+/**
+ * 这个客户该用哪份售后判据——按行业关键词匹配（跟
+ * `industry-features.ts::hasIndustryFeature` 同一套判法），不是按 `clientId`
+ * 硬编码。F1（issue #1584）和 F2（issue #1585）各自独立调用同一份分类结果，
+ * 这个选择器是两边共用的"该用哪份 policy"决定，本来就该跟 `classifyConversation`
+ * 住在一起，不是各函数自己复制一份。目前只有旅游行业有具名 Playbook；认不出行业
+ * 时返回 `null`，调用方应按 `lead_intake` 处理（不猜、不套错行业的判据）。
+ */
+export function resolvePostSaleClassificationPolicy(
+  industry: string | null | undefined,
+): PostSaleClassificationPolicy | null {
+  if (hasIndustryFeature(industry, 'tailor_made')) return TOURISM_POST_SALE_POLICY
+  return null
 }
 
 interface EdgeMessageRow {
