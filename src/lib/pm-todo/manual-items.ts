@@ -23,6 +23,8 @@ import { pushAttributionItems, type AttributionItemKind } from './attribution-it
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { pushConversionReviewItems } from './conversion-review-items'
 import { pushAiAutoReviewCircuitBreakerItems } from './ai-auto-review-circuit-breaker-items'
+import { pushMessengerDraftItems } from './messenger-draft-items'
+import { pushKnowledgeFactExpiringItems } from './knowledge-fact-expiring-items'
 import { pushDailyPlanMeasurementItems, type DailyPlanMeasurementItemKind } from './daily-plan-measurement-items'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
@@ -96,6 +98,14 @@ export type ManualItemKind =
   | 'conversion_send_in_doubt'
   /** AI 全自动审核发现异常，已经自动暂停发送（PM 拍板 2026-09-15："要有异常刹车"） */
   | 'ai_auto_review_circuit_breaker'
+  /** AI 客服回复草稿写好了，等人批准发送（issue #1589） */
+  | 'messenger_draft_pending_approval'
+  /** AI 客服回复已批准但发送失败，客户没收到（issue #1589 · P0 · H16） */
+  | 'messenger_draft_send_failed'
+  /** AI 客服回复草稿超过 4 小时没人批准，next-day escalation（issue #1589） */
+  | 'messenger_draft_escalation'
+  /** 客户资料库里的信息（团期/价格等）快到期了，过期后 AI 客服不能再用（issue #1589） */
+  | 'knowledge_fact_expiring_soon'
   | AttributionItemKind
   | ClientRosterItemKind
   | 'linkedin_progress_needs_review'
@@ -373,6 +383,15 @@ export async function loadManualItems(
   // AI 全自动审核被异常刹车暂停了 —— 拉模式，事件送达失败也照样出得来
   await pushAiAutoReviewCircuitBreakerItems(supabase, items).catch((e) =>
     console.warn('[manual-items] AI 自动审核熔断状态读取失败（不阻塞其他待办）:', e),
+  )
+  // AI 客服回复：待批准 / 已批但发送失败 / 超时升级三档（#1589）——拉模式，
+  // 不依赖 Inngest 事件送达
+  await pushMessengerDraftItems(supabase, items, clients, now).catch((e) =>
+    console.warn('[manual-items] AI 客服草稿待办读取失败（不阻塞其他待办）:', e),
+  )
+  // 客户资料库信息快到期了，过期后 AI 客服不能再用这条信息回复客户（#1589）
+  await pushKnowledgeFactExpiringItems(supabase, items, clients, now).catch((e) =>
+    console.warn('[manual-items] 客户资料库到期检查失败（不阻塞其他待办）:', e),
   )
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)

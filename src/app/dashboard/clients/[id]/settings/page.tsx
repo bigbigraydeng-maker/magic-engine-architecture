@@ -58,6 +58,7 @@ import { LeadNotifyEmailsPanel } from './_components/LeadNotifyEmailsPanel'
 import { DomainRulesPanel } from './_components/DomainRulesPanel'
 import { PipelineStagesPanel } from './_components/PipelineStagesPanel'
 import { CommentAuditList } from './_components/CommentAuditList'
+import { MessengerEmergencyStopPanel } from './_components/MessengerEmergencyStopPanel'
 import {
   SettingsSection,
   SettingsTabBar,
@@ -217,9 +218,14 @@ function TabBody({
 
     case 'advanced':
       return (
-        <SettingsSection first icon="🔌" title="MCP API 访问">
-          <ApiKeysPanel clientId={clientId} />
-        </SettingsSection>
+        <>
+          <SettingsSection first icon="🔌" title="MCP API 访问">
+            <ApiKeysPanel clientId={clientId} />
+          </SettingsSection>
+          <SettingsSection icon="🚨" title="AI 客服自动回复 · 紧急全渠道停">
+            <MessengerEmergencyStopPanel clientId={clientId} />
+          </SettingsSection>
+        </>
       )
   }
 }
