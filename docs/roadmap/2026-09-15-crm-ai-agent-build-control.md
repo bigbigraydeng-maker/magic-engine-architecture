@@ -101,6 +101,8 @@ issue #1290（CTS Governed Lead-Reply Agent 主设计）此前拍板的 4 个岔
 （"接收 WhatsApp 对话信息进统一收件"跟"AI 主动用 WhatsApp Business 回复客户"是两件事——前者
 本来就在 #1637 里做完了，不受这条范围决定影响；受影响的只是"让 AI 客服本身去说话"这一层。）
 
+**唯一的例外（PM 2026-09-15 当场拍板）**：邮件渠道 AI 客服（[issue #1745](https://github.com/bigbigraydeng-maker/magic-engine/issues/1745)）是这条"Messenger-only"范围冻结的例外，只适用于邮件这一条——**WhatsApp 仍按上面的原冻结决定，不做**。这条例外不代表范围冻结整体松动，下一个窗口看到别的渠道（WhatsApp/短信等）想比照 #1745 扩范围，答案还是"不做，按老计划"。
+
 ## 不受范围决定影响的外部阻塞
 
 **Meta 企业验证仍未通过**（issue #1299，需要 PM 本人上传公司文件）——不管 Messenger 这条路
