@@ -456,7 +456,7 @@ export class FakeWriteSupabase implements KnowledgeWriteClient {
         confirmedAt: args.p_confirmed_at,
         requestId: request.id,
       },
-      created_at: new Date().toISOString(),
+      created_at: (this.options.now?.() ?? new Date()).toISOString(),
     })
 
     return { data: [{ claimed: true, event_id: eventId, stale: false }], error: null }
