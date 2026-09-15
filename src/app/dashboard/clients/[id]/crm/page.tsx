@@ -1193,28 +1193,96 @@ const REACH_LABEL: Record<string, string> = {
 }
 
 const LAYER_LABEL: Record<Layer, string> = {
-  waiting: '等回复',
+  // 「客人在等你」= 主动去联系，「等回复」让人误解成我们在等他回 —— 两个方向相反。
+  waiting: '客人在等你',
   acted: '有动作',
   queued: '放着',
 }
 
 type RowWithLayer = Row & { layer: Layer }
 
+const TD = 'px-3 py-2.5 text-[13px] align-top'
+
+function ListRowActive({ r, onOpen }: { r: RowWithLayer; onOpen: (r: RowWithLayer) => void }) {
+  // 坏号不给拨号链接 —— 跟 ReachAction 保持一致：已知打不通的号码不能继续展示为可拨。
+  const reachCell = r.phoneUnusable || !r.phone
+    ? <span className="text-me-charcoal/40">{REACH_LABEL[r.suggestedChannel] ?? '—'}</span>
+    : <a href={`tel:${r.phone}`} onClick={(e) => e.stopPropagation()} className="font-bold text-me-ochre hover:underline">{r.phone}</a>
+
+  return (
+    <tr
+      onClick={() => onOpen(r)}
+      className={`cursor-pointer border-b border-me-charcoal/5 transition hover:bg-me-ivory/50 ${r.doneToday ? 'opacity-50' : ''}`}
+    >
+      <td className={TD}>
+        {r.doneToday && <span className="mr-1 text-me-ochre">✓</span>}
+        <span className="font-bold text-me-charcoal">{r.name}</span>
+        {r.kind && r.kind !== 'retail' && (
+          <span className="ml-1.5 rounded-full bg-me-charcoal/8 px-1.5 py-0.5 text-[11px] text-me-charcoal/55">
+            {CONTACT_KIND_LABEL[r.kind]}
+          </span>
+        )}
+      </td>
+      <td className={TD}>
+        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-bold ${
+          r.layer === 'waiting' ? 'bg-[#C2453A]/10 text-[#C2453A]'
+          : r.layer === 'acted' ? 'bg-me-ochre/10 text-me-ochre'
+          : 'bg-me-charcoal/8 text-me-charcoal/55'
+        }`}>
+          {LAYER_LABEL[r.layer]}
+        </span>
+      </td>
+      <td className={`${TD} text-me-charcoal/60`}>{reachCell}</td>
+      <td className={`${TD} text-me-charcoal/55`}>{r.stageLabel ?? '—'}</td>
+      <td className={`${TD} max-w-[240px] truncate text-me-charcoal/45`}>
+        {r.lastNote ?? <span className="italic text-me-charcoal/25">有什么要记的…</span>}
+      </td>
+    </tr>
+  )
+}
+
+function ListRowOff({ r, onOpen }: { r: OffRow; onOpen: (r: OffRow) => void }) {
+  return (
+    <tr
+      onClick={() => onOpen(r)}
+      className="cursor-pointer border-b border-me-charcoal/5 opacity-40 transition hover:opacity-70"
+    >
+      <td className={TD}><span className="font-bold text-me-charcoal">{r.name}</span></td>
+      <td className={TD}>
+        <span className="rounded-full bg-me-charcoal/8 px-2 py-0.5 text-[11px] font-bold text-me-charcoal/45">
+          {OFF_GROUP_LABEL[r.group]}
+        </span>
+      </td>
+      <td className={`${TD} text-me-charcoal/45`}>{r.phone ?? '—'}</td>
+      <td className={`${TD} text-me-charcoal/45`}>{r.stageLabel ?? '—'}</td>
+      <td className={`${TD} max-w-[240px] truncate text-me-charcoal/30`}>{r.lastNote ?? '—'}</td>
+    </tr>
+  )
+}
+
 /** 所有人平铺成一张表 —— 看板的补充视图，看「这个客户的人都是谁」。 */
 function ContactListView({
   rows,
   offRows,
+  truncated,
   onOpen,
+  onOpenOff,
 }: {
   rows: RowWithLayer[]
   offRows: OffRow[]
+  /** 后端每批最多返回 300 人，超过时列表是不完整的 —— 必须说清楚。 */
+  truncated: boolean
   onOpen: (r: RowWithLayer) => void
+  onOpenOff: (r: OffRow) => void
 }) {
   const th = 'px-3 py-2 text-left text-[11px] font-bold text-me-charcoal/45 whitespace-nowrap'
-  const td = 'px-3 py-2.5 text-[13px] align-top'
-
   return (
     <div className="overflow-x-auto rounded-xl border border-me-charcoal/10 bg-white">
+      {truncated && (
+        <p className="border-b border-me-charcoal/8 bg-amber-50 px-4 py-2 text-[12px] font-bold text-amber-700">
+          ⚠ 今天名单太大，只显示了前面一部分人 —— 切回看板可以看到全部
+        </p>
+      )}
       <table className="w-full border-collapse">
         <thead className="border-b border-me-charcoal/8 bg-me-ivory/60">
           <tr>
@@ -1226,55 +1294,8 @@ function ContactListView({
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr
-              key={r.contactId}
-              onClick={() => onOpen(r)}
-              className={`cursor-pointer border-b border-me-charcoal/5 transition hover:bg-me-ivory/50 ${r.doneToday ? 'opacity-50' : ''}`}
-            >
-              <td className={td}>
-                <span className="font-bold text-me-charcoal">{r.doneToday && <span className="mr-1 text-me-ochre">✓</span>}{r.name}</span>
-                {r.kind && r.kind !== 'retail' && (
-                  <span className="ml-1.5 rounded-full bg-me-charcoal/8 px-1.5 py-0.5 text-[11px] text-me-charcoal/55">
-                    {CONTACT_KIND_LABEL[r.kind]}
-                  </span>
-                )}
-              </td>
-              <td className={td}>
-                <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                  r.layer === 'waiting' ? 'bg-[#C2453A]/10 text-[#C2453A]'
-                  : r.layer === 'acted' ? 'bg-me-ochre/10 text-me-ochre'
-                  : 'bg-me-charcoal/8 text-me-charcoal/55'
-                }`}>
-                  {LAYER_LABEL[r.layer as Layer] ?? r.layer}
-                </span>
-              </td>
-              <td className={`${td} text-me-charcoal/60`}>
-                {r.phone
-                  ? <a href={`tel:${r.phone}`} onClick={(e) => e.stopPropagation()} className="font-bold text-me-ochre hover:underline">{r.phone}</a>
-                  : REACH_LABEL[r.suggestedChannel] ?? '—'
-                }
-              </td>
-              <td className={`${td} text-me-charcoal/55`}>{r.stageLabel ?? '—'}</td>
-              <td className={`${td} max-w-[240px] truncate text-me-charcoal/45`}>{r.lastNote ?? <span className="italic text-me-charcoal/25">有什么要记的…</span>}</td>
-            </tr>
-          ))}
-          {offRows.map((r) => (
-            <tr
-              key={r.contactId}
-              className="cursor-pointer border-b border-me-charcoal/5 opacity-40 transition hover:opacity-70"
-            >
-              <td className={td}><span className="font-bold text-me-charcoal">{r.name}</span></td>
-              <td className={td}>
-                <span className="rounded-full bg-me-charcoal/8 px-2 py-0.5 text-[11px] font-bold text-me-charcoal/45">
-                  {OFF_GROUP_LABEL[r.group]}
-                </span>
-              </td>
-              <td className={`${td} text-me-charcoal/45`}>{r.phone ?? '—'}</td>
-              <td className={`${td} text-me-charcoal/45`}>{r.stageLabel ?? '—'}</td>
-              <td className={`${td} max-w-[240px] truncate text-me-charcoal/30`}>{r.lastNote ?? '—'}</td>
-            </tr>
-          ))}
+          {rows.map((r) => <ListRowActive key={r.contactId} r={r} onOpen={onOpen} />)}
+          {offRows.map((r) => <ListRowOff key={r.contactId} r={r} onOpen={onOpenOff} />)}
         </tbody>
       </table>
     </div>
@@ -1720,7 +1741,9 @@ export default function CrmTodayPage() {
             <ContactListView
               rows={shownWithLayer}
               offRows={(data.offList ?? []).filter((r) => keepKind(r.kind))}
+              truncated={buckets.some((b) => b.truncated)}
               onOpen={(r) => setPicked(r)}
+              onOpenOff={(r) => setPicked(r)}
             />
           ) : searching ? (
             <section>
