@@ -51,6 +51,7 @@ Adapter。构建控制/任何窗口看到"要不要现在做 WhatsApp AI 客服"
 | NAL 私信 → CAPI 有效咨询同步（dry_run） | ✅ 已合并，未切真发送 | PR #1675/#1689，等 PM/FDE 决定要不要审这批 `pending_review` |
 | Verifier 框架 + CTS 七道闸（AI 说的话过最后一道数字核实） | ✅ 已合并（2026-09-15，merge commit `65efbfa0`） | issue #1579，PR #1638 —— 改接新 `getClientKnowledge` 完成，子牙 CONDITIONAL PASS（[#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726) 跟踪，P3 不阻塞）+ 魏征 ✅ 通过，PM 拍板后合并 |
 | Messenger AI 客服核心（prompt.ts + 3 只读工具） | ✅ 已合并（2026-09-15，merge commit `2c05d77f`） | issue #1580，PR #1639 —— 同上改接完成，子牙 ✅ 通过，PM 拍板后合并 |
+| Inngest 编排 F3 批准中继 + 门户批准/拒绝/改后发送端点 | ✅ 已合并（2026-09-15，merge commit `7e938eb6`） | issue #1586，PR #1741 —— 子牙+魏征各一轮，两边独立发现同一个真实并发漏洞（双人/双击可能导致"DB 说拒绝、批准通知却已经真发出"的不一致）已修复为数据库层原子条件更新，魏征用真实测试+变异测试核实通过，PM 拍板后合并。**依赖 #1585（F2）尚未实现，本身不会让 CTS 私信客服真正上线**——已把两条交接说明写进 #1585 的评论 |
 
 ### 依赖已经解除，逐条 `gh issue view` + `gh pr list --search` 核实过（2026-09-15）
 
@@ -60,8 +61,8 @@ Adapter。构建控制/任何窗口看到"要不要现在做 WhatsApp AI 客服"
 | 能力 | issue | PR | 现状 |
 |---|---|---|---|
 | Inngest 编排 F1 自动应答 | #1584 | [#1736](https://github.com/bigbigraydeng-maker/magic-engine/pull/1736)（open，`Closes #1584`） | 🔧 **已有窗口在做**，别重开 |
-| Inngest 编排 F2 生成草稿（主函数） | #1585 | 无 | 没人在动 |
-| Inngest 编排 F3 审批端点 | #1586 | 无 | 没人在动 |
+| Inngest 编排 F2 生成草稿（主函数） | #1585 | 无 | 没人在动——F3（下方）已经等着它，F2 是当前最卡关的一环 |
+| ~~Inngest 编排 F3 审批端点~~ | #1586 | [#1741](https://github.com/bigbigraydeng-maker/magic-engine/pull/1741)（已合并） | ✅ 已完成，见上表 |
 | Inngest 编排 F4 健康心跳 | #1587 | 无 | 没人在动 |
 | PM daily-todo UI + 紧急停按钮 | #1589 | 无 | 没人在动 |
 | 待批准草稿 UI（三按钮） | #1588 | 无 | 没人在动 |
