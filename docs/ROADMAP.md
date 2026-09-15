@@ -67,23 +67,28 @@
 - [ ] 真实照片排序（`rankAssetsByPrompt`）疑似没有匹配度门槛，会把明显文不对题的照片当"匹配成功"返回（如故宫文案配上长城照片、兵马俑文案配上梯田照片，`reason` 字段自己写的解释都文不对题）——2026-09-13 诊断发现，已建独立任务调查范围和优先级，不在这批改动里处理
 - [ ] NAL（New Asian Logistics，物流客户）首次接入视频工厂——PM 拍板"先用现有真实素材做1图1视频"，2026-09-13 已完成（真实素材取自 NAL 自己的 Facebook 主页，走 ffmpeg 本地合成，未走 Creatomate，NAL 没有专属模板）。素材偏薄（只有1张车队照+1条员工讲解视频），正式量产前建议向客户要更多真实素材
 
-## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，dry_run，未 merge）
+## CTS Meta CAPI — CRM 表格数据源接入（PR #1597，已合并 2026-09-12，迁移已 apply）
 
-> 背景：`me_sale_outcomes`/`me_conversion_writebacks` 表结构（Issue #1397）2026-09-05 已定稿，
-> 本次会话（2026-09-13）apply 到生产库并跑完 5 项自验。这条待办是给它接第一个真实数据源：
-> CTS 人工维护的 Google Sheet（FB 即时表单留资 + 员工跟进记录）。设计经子牙+魏征两轮独立
-> 复审后实施，详见 PR #1597 描述。
+> 背景：`me_sale_outcomes`/`me_conversion_writebacks` 表结构（Issue #1397）2026-09-05 已定稿。
+> 这条给它接了第一个真实数据源：CTS 人工维护的 Google Sheet（FB 即时表单留资 + 员工跟进
+> 记录）。设计经子牙+魏征两轮独立复审后实施，详见 PR #1597 描述。
+>
+> **2026-09-15 更新**：下面这份清单原本停在"还没接生产"的状态，是过期快照——实际这条线
+> 早就跑起来了：`source_kind='crm_sheet_sync'` 的迁移已 apply（生产库确认约束里有这个值）、
+> Google Sheet 访问权限和 Sheets API 已经在跑（生产库有 513 条真实同步记录，不是理论上能跑）、
+> `POST /api/admin/conversions/cts-crm-sync` 已经跑过很多次并入了后续几轮工作（NAL 私信同步、
+> AI 全自动审核、`conversion-daily-pipeline` 每天自动调）。本节剩下的只是两条当初就没解决、
+> 现在依然没解决的真实缺口，不是"还没上线"。
 
-- [ ] PM 确认 `source_kind='crm_sheet_sync'` 命名（或改用别的名字）——迁移
-      `supabase/migrations/20260913000001_conversion_source_kind_crm_sheet_sync.sql` 已写好未 apply
-- [ ] PM/FDE 把 Google Sheet 分享给 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` 里的 `client_email`（查看者权限即可），
-      并把分享设置从"任何人可查看"改成限定名单（顺手修的安全问题，跟本任务本身无关）
-- [ ] 确认 GCP 项目里 Sheets API 已启用
-- [ ] 上面三条做完后，用 `POST /api/admin/conversions/cts-crm-sync` 真实跑一次，核对 `/dashboard/conversions`
-      审核页面上的记录是否看得懂、数字是否对得上（这一步之前代码从未接触过真实 Google Sheets API 响应）
-- [ ] 实测发现：`阶段Stage` 列 1599 行只填了 1 行，`阶段更新日` 列 100% 空白——"已成交"检测目前几乎找不到信号，
-      是表格填写现状不是代码问题；等 PM/FDE 开始真正使用这两列，成交同步会自动生效，不需要改代码
-- [ ] 若未来这条同步的记录量明显起量（不再是当前的 0-1 条成交/次），"查不到价格/缺日期"的搁置项要不要
+- [x] ~~PM 确认 `source_kind='crm_sheet_sync'` 命名~~——已定，已 apply
+- [x] ~~PM/FDE 把 Google Sheet 分享给 service account~~——已在跑，513 条真实记录为证
+- [x] ~~确认 GCP 项目里 Sheets API 已启用~~——同上
+- [x] ~~用 `POST /api/admin/conversions/cts-crm-sync` 真实跑一次~~——已经跑了很多次，现在
+      `conversion-daily-pipeline`（PR #1738）每天自动跑
+- [ ] **依然真实存在**：`阶段Stage` 列 1599 行只填了 1 行，`阶段更新日` 列 100% 空白——"已
+      成交"检测目前几乎找不到信号，是表格填写现状不是代码问题；等 PM/FDE 开始真正使用这两列，
+      成交同步会自动生效，不需要改代码（这条 2026-09-15 用当前生产数据重新核实过，情况没变）
+- [ ] 若未来这条同步的记录量明显起量（不再是当前的量级），"查不到价格/缺日期"的搁置项要不要
       升级成正式的 `pm-todo` manual item（而不是只在同步响应里一次性返回），需要重新评估
 
 ## NAL 私信 → Meta CAPI 有效咨询同步（PR #1675/#1684/#1689，dry_run，已合并，2026-09-14/15）
