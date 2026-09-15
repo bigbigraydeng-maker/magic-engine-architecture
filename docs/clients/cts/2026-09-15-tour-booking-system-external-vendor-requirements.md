@@ -1,0 +1,106 @@
+# CTS Tour 下单系统 —— 给外部程序员的技术需求（PM 已定稿，2026-09-15）
+
+> 背景：CTS 委托外部第三方程序员独立开发一套专属 Tour 下单系统（后台管理产品线路/订单/旅团/代理商 + 前台展示）。Magic Engine（ME）负责 CTS 除这套系统外的所有其他系统（官网、后台 CRM、对外广告），本文档站在 CTS 技术方（ME）视角，回复对方发来的三个问题。
+>
+> 状态：**PM 已拍板，可直接发给对方**。服务器由 ME 提供（PM 2026-09-15 明确）。
+>
+> 与既有方案的关系：ME 曾在 [`docs/specs/2026-09-08-cts-tour-inventory-and-agent-portal-spec.md`](../../specs/2026-09-08-cts-tour-inventory-and-agent-portal-spec.md) 自行设计过"Tour 库存 + Agent 门户"方案（未开发、未获批），现由外部程序员独立承接同一需求，**该内部方案作废，ME 不再自建，改为通过对方导出文件 + AI 识别的方式同步数据**（见下文第一节）。
+
+---
+
+## 关键事实（决定了这份需求的形状）
+
+- CTS 目前**没有真正的下单系统**：客人靠电话/邮件/网页表单询价，CTS 员工人工报价、人工收定金尾款，全程无库存/订单追踪。
+- 这套新系统的使用者是 **CTS 内部员工和代理商（旅行社中介）**，不是普通游客自己操作——游客还是走询价老路，由员工/代理商代客下单。
+- ME 与这套新系统**不做实时接口对接**（不用 API/webhook），而是通过**对方系统的导出功能 + AI 识别导出文件**这种半自动方式，把订单情况同步进 ME 自己的客户记录系统。
+- 代理商模块是**确定要做**的需求（非可选），PM 原话已在 2026-09-07 确认过"agent 怎么自主订 tour，能查看到 available seat"。
+- 服务器由 **ME 这边提供**（2026-09-15 PM 拍板），不需要对方自己找服务器商。
+
+---
+
+## 中文版（可直接发给对方）
+
+**主题：CTS Tour 下单系统——技术需求（来自 CTS 技术方 Magic Engine）**
+
+你好，
+
+谢谢你提的问题。Magic Engine 是 CTS 的技术方，负责 CTS 除这套下单系统以外的所有其他系统（官网、内部CRM/后台管理、广告投放）。这套新的下单系统完全是你们独立开发，跟我们不打通，但下面是一些要求，好让它跟CTS现有的东西对得上。
+
+**背景说明**：这套系统是给CTS内部员工和代理商（帮CTS卖团的中介）用的，用来代客户下单、录入客户信息，不是给普通游客自己上网下单结账用的。游客还是走电话/邮件/网页询价这条老路，由CTS员工或代理商在你们系统里帮他们下单。
+
+---
+
+**第一，后台（产品线路、订单、旅团、代理商）**
+
+- 系统界面全部用**英文**，代理商用的部分也一样。
+- CTS员工和代理商都要能：创建订单、填客户信息、选择产品和出发团期。下单成功后，系统要**自动扣减该团期的剩余名额**。
+- 不需要跟我们做实时的接口对接（不用API/webhook）。你们需要提供一个可靠的**导出功能**（导出成Excel/CSV这类常见表格格式就行），我们会定期拉取这份文件，用AI识别里面的内容来更新我们自己的记录。每次导出至少要包含：
+  - 订单编号
+  - 客户姓名和联系方式
+  - 这单是CTS员工直接下的，还是某个代理商下的——如果是代理商，要注明是哪一个
+  - 订的产品/线路和具体出发日期
+  - 定金状态/金额和付款日期；全款状态/金额和付款日期
+- **产品/团期信息要跟CTS官网、CTS后台保持一致。** 不需要做成实时自动同步，人工/半自动维护也可以，但只要是你们系统里能下单的团（比如"Golden China"），官网和CTS后台也要能看到同一批团、同样的价格和团期。
+- 代理商模块：这是确定要做的需求，不是可选项。代理商需要有自己的账号，能看到剩余名额，能自己下单。
+
+**第二，前台**
+
+- CTS官网（ctstours.co.nz）不需要为了支持"选团期→下单→付款"这种消费者结账流程而做改动，因为游客不会直接使用你们的系统——下单是由CTS员工或代理商代替游客操作的。
+- 唯一的要求是：官网上展示的产品、价格、团期信息要跟你们系统里保持一致（参考上面的同步要求）。
+- 品牌视觉：请使用CTS现有的品牌色和视觉规范，不要另配一套颜色。主色为正红`#B61E2E`，辅助色为金色`#D6A756`，背景用暖白色。logo文件和完整的品牌规范文档我们可以提供。
+- 如果需要视觉/交互参考，CTS现在的官网（www.ctstours.co.nz）在调性上是最好的参考——考虑到这是一个内部/代理商工具而不是消费者电商结账页面，更适合参考典型的B2B旅行代理下单系统那种简洁、高效的录入式界面，而不是零售电商的风格。
+
+**第三，域名、服务器、邮件**
+
+- 域名：建议用CTS现有域名底下的一个子域名（比如`agent.ctstours.co.nz`或`booking.ctstours.co.nz`），域名解析权限留在CTS/我们这边。
+- 服务器：**由我们这边提供**，你们只需要告诉我们系统用什么技术做的（编程语言/框架、需要什么数据库），我们把服务器环境准备好，你们把代码部署上去就行，不用自己找服务器商。
+- 邮件：系统自动发的邮件（账号邀请、密码重置、订单通知）建议用CTS现有的邮箱域名发送（比如`no-reply@ctstours.co.nz`），不要另起一个发信域名。
+
+有其他问题随时问。
+
+CTS / Magic Engine
+
+---
+
+## English version (ready to send)
+
+**Subject: CTS Tour Booking System — Technical Requirements from CTS's Technology Partner (Magic Engine)**
+
+Hi,
+
+Thanks for your questions. Magic Engine is CTS's technology partner responsible for all other CTS-facing systems (the public website, the internal CRM/back-office, and paid advertising). We're not involved in building the new Tour Booking System — that's fully your build — but below are the requirements so it fits cleanly alongside what CTS already has.
+
+**Context**: This new system will be used internally by CTS staff and by CTS's travel agents (resellers) to create bookings and record customer details on the customer's behalf. It is not a self-service checkout for the traveling public — travelers still enquire by phone/email/web form, and a CTS staff member or an agent then creates the order inside your system.
+
+---
+
+**1. Back-office (products/tours, orders, tour departures, agents)**
+
+- The system should be entirely in **English**, including the interface used by agents.
+- Both CTS staff and agents need to be able to: create an order, enter the customer's details, and select a tour + departure date. On successful order creation, the system should **automatically decrement the available seats** for that departure.
+- We do not need a real-time API/webhook connection between your system and ours. Instead, your system needs a reliable **export function** (CSV/Excel is fine) that we will periodically pull and parse (using an AI-based reader on our side) to keep our own records current. Please make sure each export includes, at minimum:
+  - Order ID
+  - Customer name and contact details
+  - Who created the order: direct (CTS staff) vs. agent — and if agent, which agent
+  - Tour/product and specific departure date
+  - Deposit status/amount and paid date; full-payment status/amount and paid date
+- **Products/tours and departures should stay consistent with CTS's public website and back-office.** This does not need to be a live automatic sync — a manual/semi-automatic process is fine — but whatever tours are bookable in your system (e.g. "Golden China") should also be visible and consistent (same pricing, same departure dates) on the public website and in CTS's own back-office.
+- Agent module: this is a confirmed requirement, not optional. Agents need their own accounts, need to see available seats, and need to be able to create bookings themselves.
+
+**2. Front-end**
+
+- No changes are required to CTS's public website (ctstours.co.nz) to support a "select date → book → pay" consumer checkout flow, since travelers do not use your system directly — bookings are entered by CTS staff or agents on the traveler's behalf.
+- The one requirement on the public-website side is that displayed tours, pricing, and departure dates stay consistent with what's bookable in your system (see the sync point above).
+- Branding: please use CTS's existing brand colors and visual identity — do not create a new color palette. Primary red `#B61E2E`, secondary gold `#D6A756`, warm off-white background. We can provide the logo file and the full brand guideline document on request.
+- If you'd like a visual/UX reference, the current CTS website (www.ctstours.co.nz) is the best reference for tone — this is an internal/agent tool rather than a consumer e-commerce checkout, so a clean, efficient data-entry-style UI (similar to typical B2B travel-agent booking portals) is more appropriate than a retail storefront look.
+
+**3. Domain, hosting, email**
+
+- Domain: a subdomain of CTS's existing domain (e.g. `agent.ctstours.co.nz` or `booking.ctstours.co.nz`), with DNS control staying with CTS/Magic Engine.
+- Hosting: **we will provide the server.** Please just let us know your tech stack (language/framework, database requirements) so we can prepare the environment — you deploy your code to it, no need to arrange your own hosting.
+- Email: system-generated emails (account invitations, password resets, order notifications) should be sent from CTS's existing email domain (e.g. `no-reply@ctstours.co.nz`), not a separate third-party sending domain.
+
+Happy to answer any follow-up questions.
+
+Best regards,
+[CTS / Magic Engine]
