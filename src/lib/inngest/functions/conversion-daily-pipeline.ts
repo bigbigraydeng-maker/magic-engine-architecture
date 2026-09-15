@@ -22,17 +22,26 @@
  *    这里永远只有 NAL/CTS 两个写死的客户，四步顺序执行一个函数就够，没必要为"看起来
  *    更像标准范式"而引入用不上的复杂度。
  *
- * 🔴 **`retries: 0`**——③④两步会真的调用 AI + 真的发 Meta CAPI，函数内部的钱已经花出去
- *    了；整条函数重试 = 再判一次、可能再发一次（虽然 CAS 幂等能挡住真正的重复发送，
- *    但重跑一遍①②两步去重新扫全量数据、多打一轮 AI token，没必要——明天这个时间点
- *    自然会再跑一遍，等不及就手动调 `POST /api/admin/conversions/ai-auto-review-run`）。
+ * 🔴 **`retries: 0`**——只管 Inngest **自动**重试（函数抛出未捕获异常时不会被自动
+ *    重新调度）。管不住人在 Inngest 后台手动点 "Replay"：那会开一个全新的 run id，
+ *    step 记忆化按 run 走、不复用旧 run 的缓存，会从头把四步全部真跑一遍（包括
+ *    ③④真发送）。人工重放场景下真正兜底的是 `writeback-service.ts` 的 CAS 幂等，
+ *    不是这个 `retries` 配置——魏征最终复审要求把这两条路径分开说清楚，不能让人
+ *    以为 `retries:0` 能挡住人工重放。
+ *
+ * 🔴 **`concurrency: { limit: 1 }` 防的是"同一时刻两个实例同时跑"（竞态），不是
+ *    "重复处理"**——如果 Inngest 平台故障导致同一天被调度了两次（间隔几分钟到几
+ *    小时），这个并发闸挡不住先后两次都真的执行。真正防重复靠的是业务层三道闸：
+ *    `ai_review_attempts` 上限 + `ai_last_reviewed_at` 6 小时冷却窗口（`ai-auto-
+ *    review-run.ts` 的 `UNCERTAIN_RETRY_COOLDOWN_MS`）+ 批准/拒绝的 CAS 幂等——
+ *    这三层对"一天一次"的调度频率完全够用，但如果以后把调度频率改得比 6 小时还密，
+ *    要重新算这笔账，不能想当然沿用今天的结论。
  *
  * 🔴 **`ai_auto_review_enabled` 开关 + 异常刹车原样生效**——这个函数不判断"要不要跑
  *    AI 审核"，`runAiAutoReviewForClient()` 内部自己会先查开关、查熔断，关着的客户
  *    这里调了也是直接跳过，不需要在这一层重复判断。
  */
 
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { inngest, CLOUD_FN_PREFIX } from '../client'
 import { supabaseAdmin } from '@/lib/supabase'
 import { cronRunHandle, startCronRunId } from '@/lib/cron/run-logger'
@@ -69,7 +78,6 @@ async function guarded<T>(label: string, fn: () => Promise<T>): Promise<StepResu
  * 用真实类型反而会把"这个装配层不关心业务细节"这件事，跟"业务细节碰巧长这样"混为一谈。
  */
 export function createConversionDailyPipelineFunction(deps: {
-  supabase: SupabaseClient
   syncNal: () => Promise<unknown>
   syncCts: () => Promise<unknown>
   reviewClient: (clientId: string) => Promise<unknown>
@@ -119,7 +127,6 @@ export function createConversionDailyPipelineFunction(deps: {
 
 /** 生产实例。 */
 export const conversionDailyPipeline = createConversionDailyPipelineFunction({
-  supabase: supabaseAdmin,
   syncNal: () => runNalMessengerLeadSync(),
   syncCts: () => runCtsCrmSync(),
   reviewClient: (clientId) =>

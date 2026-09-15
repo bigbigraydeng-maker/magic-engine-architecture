@@ -4,11 +4,20 @@
  * 这里把 `ai-auto-review.ts`（判断）、`ai-auto-review-circuit-breaker.ts`（熔断）、
  * `writeback-service.ts`（发送，完全不改动它内部任何一道既有安全闸）三块粘起来。
  *
- * 🔴 这一版**只有手动触发路由**，没有接 Inngest 定时（子牙复审 BLOCKER：草稿原计划
+ * 🟢 **已作废（2026-09-15 更新）**：下面这段原本写的是"这一版只有手动触发路由，
+ * 没有接 Inngest 定时"——那是子牙复审当时的建议（先观察几天判断质量和熔断阈值再
+ * 决定）。PM 看到一次干净的手动试跑结果（NAL 15 条：14 条正确判过期、1 条 uncertain、
+ * 0 条误发）之后，在会话里明确拍板"做"，直接接了定时——见
+ * `src/lib/inngest/functions/conversion-daily-pipeline.ts`（每天 06:00 Pacific/Auckland
+ * 调这个文件的 `runAiAutoReviewForClient()`）。这个函数本身**没有变**，变的只是
+ * "谁在什么时候调用它"——手动触发路由 `ai-auto-review-run/route.ts` 依然存在，
+ * 两条调用路径并存，不是二选一。原段落保留在下面，只为留档"当初为什么先手动"：
+ *
+ * ~~这一版只有手动触发路由，没有接 Inngest 定时（子牙复审 BLOCKER：草稿原计划
  * 照抄的 `nal-messenger-sync`/`cts-crm-sync` 恰恰是"先纯手动观察"的先例，不是"双轨
  * 模式"，全自动+真发送的风险比那两个"只写 pending_review、人还要再点一次"的场景更高，
  * 更应该先观察几天再决定要不要接定时）。要不要接 Inngest 定时，等手动跑几天、判断质量
- * 和熔断阈值都校准过之后再评估——见 ROADMAP 里的记录。
+ * 和熔断阈值都校准过之后再评估——见 ROADMAP 里的记录。~~
  *
  * 🔴 每个客户开工前先查 `clients.ai_auto_review_enabled`——这是唯一独立于异常熔断的
  * 停止开关（魏征复审 BLOCKER：原方案只有"命中异常规则才会停"，PM 自己想随时喊停却

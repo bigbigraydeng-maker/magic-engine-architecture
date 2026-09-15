@@ -90,7 +90,6 @@ describe('四步执行顺序与单步失败隔离', () => {
   }) {
     const reviewCalls: string[] = []
     const fn = createConversionDailyPipelineFunction({
-      supabase: {} as never,
       syncNal: deps.syncNal ?? (async () => ({ ok: true })),
       syncCts: deps.syncCts ?? (async () => ({ ok: true })),
       reviewClient: deps.reviewClient
