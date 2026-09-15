@@ -8,6 +8,12 @@
 
 ---
 
+## 平台层级判定（Tier Classification，补记于 2026-09-15 复审）
+
+> [跟班 · Tier] 对方导出文件 + ME 用 AI 识别同步 → **L3 Connector**（外部系统只读导出接入，挂在既有"客户记录同步"能力下，不新增能力线）；CTS 字段如何映射进 ME 自己的记录系统 → **L4 Client Configuration**（CTS 专属，不通用，不下沉平台层）。
+> [跟班 · 判据] 换客户测试：如果把 CTS 换成 Oztop，"导出文件+AI识别"这个连接方式本身可以复用（L3），但具体导出哪些字段、怎么对应 CTS 的代理商/团期概念是 CTS 专属（L4）。
+> [跟班 · 继续吗？] 本判定不涉及新增 L1/L2，不用登记 candidates；补记目的是让这份文档满足 CLAUDE.md 的平台层级门要求，不影响已发给对方的需求内容。
+
 ## 关键事实（决定了这份需求的形状）
 
 - CTS 目前**没有真正的下单系统**：客人靠电话/邮件/网页表单询价，CTS 员工人工报价、人工收定金尾款，全程无库存/订单追踪。
@@ -34,14 +40,19 @@
 
 - 系统界面全部用**英文**，代理商用的部分也一样。
 - CTS员工和代理商都要能：创建订单、填客户信息、选择产品和出发团期。下单成功后，系统要**自动扣减该团期的剩余名额**。
+- **名额扣减必须是原子操作，不能超卖**：校验"还有没有剩余名额"和"扣减名额"必须在同一个原子操作里完成——哪怕两个代理商同时对最后一个名额下单，也只能有一个成功，已售出名额任何时候都不能超过团期总容量。同一笔订单如果因为网络重试/重复点击被提交了两次，要能用同一个订单标识识别出是重复提交，不能被扣减两次名额。
 - 不需要跟我们做实时的接口对接（不用API/webhook）。你们需要提供一个可靠的**导出功能**（导出成Excel/CSV这类常见表格格式就行），我们会定期拉取这份文件，用AI识别里面的内容来更新我们自己的记录。每次导出至少要包含：
   - 订单编号
   - 客户姓名和联系方式
   - 这单是CTS员工直接下的，还是某个代理商下的——如果是代理商，要注明是哪一个
   - 订的产品/线路和具体出发日期
   - 定金状态/金额和付款日期；全款状态/金额和付款日期
+  - **订单状态**（比如：待确认/已确认/已取消/已退款/已完成）
+  - **取消/退款时间**（如果订单被取消或退款过）
+  - **最后更新时间**（这条订单记录最近一次被修改是什么时候）
+- **请明确这份导出是全量快照还是增量**：是每次都包含全部历史订单（包括已取消的），还是只导出自上次以来有变化的订单？我们需要知道这一点，才能判断"记录里突然消失的订单"是被取消了，还是只是没被导出，否则我们这边会一直保留错误的客户阶段和预订记录。
 - **产品/团期信息要跟CTS官网、CTS后台保持一致。** 不需要做成实时自动同步，人工/半自动维护也可以，但只要是你们系统里能下单的团（比如"Golden China"），官网和CTS后台也要能看到同一批团、同样的价格和团期。
-- 代理商模块：这是确定要做的需求，不是可选项。代理商需要有自己的账号，能看到剩余名额，能自己下单。
+- 代理商模块：这是确定要做的需求，不是可选项。代理商需要有自己的账号，能看到剩余名额，能自己下单。**必须做到代理商之间数据隔离（验收条件）**：每个代理商只能查看和修改自己创建的客户和订单，看不到其他代理商的客户姓名、联系方式、付款状态等任何信息。CTS 员工能看到的范围（是否所有代理商的订单都能看）由 CTS 另行定义。
 
 **第二，前台**
 
@@ -78,14 +89,19 @@ Thanks for your questions. Magic Engine is CTS's technology partner responsible 
 
 - The system should be entirely in **English**, including the interface used by agents.
 - Both CTS staff and agents need to be able to: create an order, enter the customer's details, and select a tour + departure date. On successful order creation, the system should **automatically decrement the available seats** for that departure.
+- **The seat decrement must be atomic, and must never allow overselling**: checking "are seats still available" and decrementing the seat count must happen in a single atomic operation, so the number of seats sold can never exceed total capacity — even if two agents submit an order for the last remaining seat at the same time, only one can succeed. If the same order is submitted twice (e.g. a network retry or a double click), the system must recognize it as a duplicate using a consistent order identifier and must not decrement seats twice for it.
 - We do not need a real-time API/webhook connection between your system and ours. Instead, your system needs a reliable **export function** (CSV/Excel is fine) that we will periodically pull and parse (using an AI-based reader on our side) to keep our own records current. Please make sure each export includes, at minimum:
   - Order ID
   - Customer name and contact details
   - Who created the order: direct (CTS staff) vs. agent — and if agent, which agent
   - Tour/product and specific departure date
   - Deposit status/amount and paid date; full-payment status/amount and paid date
+  - **Order status** (e.g. pending/confirmed/cancelled/refunded/completed)
+  - **Cancellation/refund timestamp** (if the order was cancelled or refunded)
+  - **Last-updated timestamp** for the order record
+- **Please confirm whether each export is a full snapshot or incremental**: does it include every historical order (including cancelled ones) every time, or only orders that changed since the last export? We need to know this to tell whether an order that's missing from a later export was cancelled, or simply wasn't exported — otherwise we'll end up holding stale customer stages and booking records.
 - **Products/tours and departures should stay consistent with CTS's public website and back-office.** This does not need to be a live automatic sync — a manual/semi-automatic process is fine — but whatever tours are bookable in your system (e.g. "Golden China") should also be visible and consistent (same pricing, same departure dates) on the public website and in CTS's own back-office.
-- Agent module: this is a confirmed requirement, not optional. Agents need their own accounts, need to see available seats, and need to be able to create bookings themselves.
+- Agent module: this is a confirmed requirement, not optional. Agents need their own accounts, need to see available seats, and need to be able to create bookings themselves. **Agent-to-agent data isolation is a required acceptance criterion**: each agent must only be able to view and modify the customers and orders they created themselves, and must never be able to see another agent's customer names, contact details, or payment status. Whatever visibility CTS staff need across all agents' orders is CTS's to define separately.
 
 **2. Front-end**
 
@@ -109,8 +125,12 @@ Best regards,
 
 ## 后续进展（对方回复服务器/邮件要求后，2026-09-15）
 
-对方回复的服务器技术栈：**Linux + Nginx 1.24 + PHP 7.4 + MySQL 5.7**（PHP 7.4 已停止安全更新，是对方自己的技术选择，风险归对方系统一侧）。
+对方回复的服务器技术栈：**Linux + Nginx 1.24 + PHP 7.4 + MySQL 5.7**。PHP 7.4 已于 2022-11 停止官方安全更新，属于 EOL 运行时——**这个风险不能简单归为"对方系统一侧"**：因为服务器账号、root、网络和备份都由 ME 管理（见下文"服务器已上线"），一旦 PHP 运行时层面出漏洞导致主机或数据被攻破，CTS 和 ME 同样受影响（这套系统处理客户联系方式和付款状态）。
 对方还问了 SMTP 发信的服务器/邮箱/用户名/密码/端口/加密方式。
+
+**PHP 7.4 EOL 处理（待 PM 确认，未随"服务器已上线"一并拍板）**：已落地的补偿措施见下文"服务器已上线"——对方账号只给部署权限无 root、数据库不对外网开放、防火墙只开 22/80/443、每周自动备份。但这些是服务器层隔离，**不能替代 PHP 运行时本身的补丁**。两个选项二选一，需 PM 明确：
+1. 要求对方把运行时升级到仍在官方支持期内的 PHP 版本（如 8.1+），ME 服务器环境随之调整；或
+2. 如果短期内无法升级，PM 需明确批准"接受 EOL 运行时"并给出迁移期限，期间由 ME 在服务器层加一道 WAF／加强监控作为补偿，而不是默认接受无限期裸跑 EOL 版本。
 
 ### 服务器：推荐 DigitalOcean，等 PM 拍板开通
 ME 名下没有现成的裸 Linux 服务器账号（现有站点都在 Render，不支持这套老技术栈）。推荐 **DigitalOcean**，最基础规格（约每月 NZ$20），原因：定价透明、这类 LAMP 技术栈的搭建资料最全。**服务器本身的账号密码留在 ME 手上，只给对方开一个"仅能部署代码"的账号，不给 root 全权限。** 状态：等 PM 说"开"才会实际下单付费。
@@ -142,6 +162,7 @@ ME 名下没有现成的裸 Linux 服务器账号（现有站点都在 Render，
 ### 待办
 - [x] PM 拍板：服务器开通 DigitalOcean（2026-09-15 PM 已确认开通）
 - [ ] 等对方回复邮件权限问题，再最终确定：Resend 专用钥匙 vs 新开 M365 邮箱账号
+- [ ] PM 确认 PHP 7.4 EOL 处理方式：要求对方升级，还是接受风险 + 给迁移期限（见上文"PHP 7.4 EOL 处理"）
 
 ## 服务器已上线（2026-09-15）
 
