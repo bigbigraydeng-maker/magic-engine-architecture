@@ -62,12 +62,22 @@ import {
   type MiningBudget,
   type NewFactRow,
 } from './mining'
+import { detectSensitivity } from './sensitivity'
 
 export interface StylePatternCandidate {
   /** Short stable identifier, namespaced by category below into `style.*` / `response.*` before it becomes a `fact_key`. */
   patternKey: string
   category: 'tone' | 'standard_response'
   statement: string
+  /**
+   * 1-based indices into the sample (matching the `#N` labels in the
+   * prompt) the model says actually back this pattern. 🔴 魏征复审
+   * （2026-09-15）指出：原实现的 `evidence` 只有一个模板计数，FDE 复审时
+   * 没法对照原文核实这条候选是不是真的从样本里总结出来的，还是模型编的
+   * ——跟事实萃取"evidence 里能看到源模板"的标准比明显更弱。这个字段让
+   * `stylePatternsToFactRows` 能把具体支撑的模板摘要写进 evidence。
+   */
+  supportingIndices: number[]
 }
 
 /**
@@ -88,13 +98,16 @@ Extract up to two kinds of pattern, ONLY if it is visible across MULTIPLE templa
 
 If nothing in the sample is clearly a repeated pattern, return an empty array — do not invent a pattern to have something to report.
 
+For every pattern, list the 1-based "#N" sample numbers that actually show it — a human reviewer will look those exact templates up to check your claim, so this list must be real, not padded or guessed.
+
 Respond with ONLY a JSON object, no prose, shaped exactly like:
 {
   "patterns": [
     {
       "pattern_key": "short.stable.identifier",
       "category": "tone" | "standard_response",
-      "statement": "human-readable description, in the same language as the source templates"
+      "statement": "human-readable description, in the same language as the source templates",
+      "supporting_indices": [1, 4, 7]
     }
   ]
 }`
@@ -109,7 +122,10 @@ export function parseStyleExtractionResponse(raw: string): StylePatternCandidate
     const r = p as Record<string, unknown>
     if (typeof r.pattern_key !== 'string' || typeof r.statement !== 'string') continue
     if (r.category !== 'tone' && r.category !== 'standard_response') continue
-    result.push({ patternKey: r.pattern_key, category: r.category, statement: r.statement })
+    const supportingIndices = Array.isArray(r.supporting_indices)
+      ? r.supporting_indices.filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0)
+      : []
+    result.push({ patternKey: r.pattern_key, category: r.category, statement: r.statement, supportingIndices })
   }
   return result
 }
@@ -160,7 +176,7 @@ export interface StyleMiningReceipt {
 export function stylePatternsToFactRows(
   clientId: string,
   patterns: StylePatternCandidate[],
-  templatesConsidered: number,
+  sample: StylePatternSample[],
 ): NewFactRow[] {
   return patterns.map((p) => ({
     client_id: clientId,
@@ -172,15 +188,32 @@ export function stylePatternsToFactRows(
     structured_value: null,
     status: 'candidate',
     visibility: 'internal_only',
-    // Always 'general', never `detectSensitivity()` — a tone/standard-
-    // response observation is never a price/timeline/commitment/policy
-    // promise, so it should never trip the customer-confirmation dual-sign
-    // gate in read.ts (that gate exists for price/timeline/commitment/policy
-    // facts, not for "how this business usually talks").
-    sensitivity: 'general',
+    // 🔴 子牙复审（2026-09-15）指出的真实缺口，已修：'tone' 类观察（问候
+    // 习惯/语气/emoji 使用）从不携带事实内容，锁死 'general' 是安全的——
+    // 但 'standard_response' 类恰恰是"这个客户平时怎么回答某类问题"，issue
+    // #1760 自己举的例子就是"客户问退款政策时通常这样回答"，这句话表面是
+    // "风格观察"，内容却是在复述一条 policy/commitment。原实现对两个类别
+    // 都无差别锁 'general'，会让一条过时/作废的政策/价格承诺套着"标准应对
+    // 套路"的壳子跳过 read.ts 的客户二次确认双签闸——正是 sensitivity.ts
+    // 文件头点名要防的那类事故（CTS"AI 报停售团"）在这里重演的路径。现在
+    // 对 'standard_response' 真正跑一遍跟事实萃取同一个分类器，只有
+    // 'tone' 才保留硬编码。
+    sensitivity: p.category === 'tone' ? 'general' : detectSensitivity(p.statement),
     valid_until: new Date(Date.now() + DEFAULT_CANDIDATE_VALID_DAYS * 86_400_000).toISOString(),
     source_kind: 'conversation_mining_style',
-    evidence: { templates_considered: templatesConsidered, category: p.category },
+    // 🔴 魏征复审（2026-09-15）指出：只存一个模板计数，FDE 复审时没法对照
+    // 原文核实这条候选是不是真的从样本总结出来的，还是模型编的——现在把
+    // 模型自己指认的支撑样本摘要也存进 evidence，可核实性对齐事实萃取
+    // （mining.ts 的 evidence 也留了 first_seen_at/last_seen_at 这类可回查
+    // 字段，不只是一个次数）。
+    evidence: {
+      templates_considered: sample.length,
+      category: p.category,
+      supporting_samples: p.supportingIndices
+        .map((i) => sample[i - 1])
+        .filter((t): t is StylePatternSample => t !== undefined)
+        .map((t) => t.sampleBody),
+    },
     conflict_group_id: null,
     value_fingerprint: computeCandidateFingerprint(p.statement, null),
   }))
@@ -291,7 +324,7 @@ export async function runStylePatternMining(
 
   try {
     const { patterns, costUsd } = await extractStylePatterns(sample)
-    const rows = stylePatternsToFactRows(clientId, patterns, sample.length)
+    const rows = stylePatternsToFactRows(clientId, patterns, sample)
 
     let patternsWritten = 0
     if (rows.length > 0) {
