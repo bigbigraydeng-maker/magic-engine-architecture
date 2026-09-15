@@ -114,6 +114,8 @@ export type ManualItemKind =
   | EmailReplyItemKind
   /** 排期发的 Facebook 帖子发出去了，但一直拿不到帖子编号 —— 成绩收不回来 */
   | DailyPlanMeasurementItemKind
+  /** 私信客服健康心跳查出问题（issue #1587）：消息量骤降 / 验证器拦截率或出错率过高 / 退订登记写入失败 */
+  | 'conversation_health_alert'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -497,6 +499,12 @@ export async function loadManualItems(
 
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
   await pushAttributionItems(supabase, items, ids, nameOf, now)
+
+  // 私信客服健康心跳查出的异常（issue #1587）——拉模式，直接查
+  // conversation_health_alerts，事件送达失败也照样出得来
+  await pushConversationHealthAlertItems(supabase, items, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 私信客服健康告警读取失败（不阻塞其他待办）:', e),
+  )
 
   // GSC property per client —— 汇总后的「未收录页面」待办链到这里。谷歌自己的
   // 「索引 → 网页」报告才是权威的「哪些页面没被收录、为什么」清单；ME 后台没有
@@ -1736,6 +1744,93 @@ export async function pushMessengerStopItems(
        *    `?contact=` 那一页真的读，点进去自动展开到这个人，同 pushDncReviewItems。
        */
       href: `https://app.magicengine.com.au/dashboard/clients/${s.clientId}/crm/all?contact=${s.contactId}`,
+    })
+  }
+}
+
+/** 渠道代号 → 人话名字，不在 what 字段里出现 `messenger`/`whatsapp` 这种没解释过的裸词。 */
+function conversationChannelLabel(channel: string): string {
+  if (channel === 'messenger') return 'Facebook Messenger'
+  if (channel === 'whatsapp') return 'WhatsApp'
+  return channel
+}
+
+/** check_type 代号 → 人话问题描述（不把代号本身抛给 PM/FDE）。 */
+function conversationHealthProblemLabel(checkType: string): string {
+  switch (checkType) {
+    case 'webhook_silent':
+      return '收到的客户消息量突然明显变少，像是接收链路安静地断了'
+    case 'verifier_block_rate_high':
+      return 'AI 写的回复大多被系统自己拦下，没能发出去'
+    case 'verifier_error_rate_high':
+      return 'AI 起草回复这一步一直在报错'
+    case 'optout_write_failed':
+      return '客户说了「别再联系我」，但系统记这件事时失败了'
+    default:
+      return '心跳检查发现异常'
+  }
+}
+
+/** check_type 代号 → 该先查什么（跟 issue #1587 原文四类问题一一对应）。 */
+function conversationHealthHowLabel(checkType: string, channelLabel: string): string {
+  switch (checkType) {
+    case 'webhook_silent':
+      return `先看 ${channelLabel} 那边的官方后台连接状态是不是掉了；如果连接正常，也可能这段时间客户确实没人来问，看一眼对话记录再判断`
+    case 'verifier_block_rate_high':
+      return '打开对话看几条被拦下的草稿——多半是客户资料库里的信息（团期/价格）过期了，或者 AI 理解错了客户的问题'
+    case 'verifier_error_rate_high':
+      return 'AI 起草回复这一步在报错，这不是你能直接修的，回一句「AI 报错」我去查'
+    case 'optout_write_failed':
+      return '先打开对话确认这几位客户有没有在被继续联系；需要的话在他们的记录里手动写一句「客户说别再联系」，系统会立刻停掉所有渠道'
+    default:
+      return '打开对话看一下最近发生了什么'
+  }
+}
+
+interface ConversationHealthAlertRow {
+  client_id: string
+  channel: string
+  check_type: string
+  detail: string
+  first_detected_at: string
+}
+
+/**
+ * 私信客服健康心跳（issue #1587）查出的异常——拉模式，直接查
+ * `conversation_health_alerts`：这张表本身就是「现在正在报警的问题」，健康了
+ * 心跳函数自己会把行删掉，这里不需要再按时间过滤。
+ */
+async function pushConversationHealthAlertItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('conversation_health_alerts')
+    .select('client_id, channel, check_type, detail, first_detected_at')
+  if (error) throw new Error(error.message)
+
+  for (const row of (data ?? []) as ConversationHealthAlertRow[]) {
+    const channelLabel = conversationChannelLabel(row.channel)
+    const firstDetectedMs = Date.parse(row.first_detected_at)
+    const hoursOngoing = Number.isNaN(firstDetectedMs)
+      ? null
+      : Math.max(0, Math.floor((now.getTime() - firstDetectedMs) / 3_600_000))
+    const durationText =
+      hoursOngoing === null
+        ? ''
+        : hoursOngoing < 24
+          ? `，已经持续 ${hoursOngoing} 小时没恢复`
+          : `，已经持续 ${Math.floor(hoursOngoing / 24)} 天没恢复`
+
+    items.push({
+      kind: 'conversation_health_alert',
+      client_id: row.client_id,
+      client_name: nameOf(row.client_id),
+      what: `${channelLabel} 私信客服：${conversationHealthProblemLabel(row.check_type)}${durationText}（${row.detail}）`,
+      how: conversationHealthHowLabel(row.check_type, channelLabel),
+      href: `https://app.magicengine.com.au/dashboard/clients/${row.client_id}/messenger`,
     })
   }
 }

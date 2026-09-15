@@ -33,6 +33,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { buildIdentities, resolveContact } from '@/lib/crm/identity'
 import { isOptOutKeyword, recordOptOutKeywordTouch } from '@/lib/messenger-agent/optout'
+import { recordOptOutWriteFailure } from '@/lib/messenger-agent/optout-failures'
 import { inngest } from '@/lib/inngest/client'
 // 🔴 魏征复审（2026-09-15）实测发现：这里原来自己重新声明一份同名字符串常量，
 // 而不是 import 共享契约模块 `@/lib/conversations/events.ts` 的
@@ -430,10 +431,33 @@ async function storeMessage(
             `[webhooks/whatsapp] 写 conversations.optout_unlinked 失败（会话 ${conversationId}）:`,
             unlinkedErr.message,
           )
+          // 心跳检查（issue #1587）要能看到这次失败——否则会被误判成
+          // 「没人退订、一切正常」。
+          await recordOptOutWriteFailure(
+            {
+              clientId,
+              channel: 'whatsapp',
+              conversationId,
+              contactId: null,
+              errorMessage: unlinkedErr.message,
+            },
+            supabaseAdmin,
+          )
         }
       }
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       console.error(`[webhooks/whatsapp] 退订触点写入失败（消息已入库）:`, err)
+      await recordOptOutWriteFailure(
+        {
+          clientId,
+          channel: 'whatsapp',
+          conversationId,
+          contactId: contactId ?? null,
+          errorMessage: message,
+        },
+        supabaseAdmin,
+      )
     }
   }
 

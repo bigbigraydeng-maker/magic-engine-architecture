@@ -32,18 +32,23 @@ vi.mock('@/lib/messenger-agent/optout', async (orig) => {
   const actual = await orig<typeof import('@/lib/messenger-agent/optout')>()
   return { ...actual, recordOptOutKeywordTouch: vi.fn() }
 })
+// 心跳检查（issue #1587）读的是这条落库路径本身——只断言它「被调用」，不重新
+// 实现表结构；那张表的真实建模在 health-heartbeat.test.ts。
+vi.mock('@/lib/messenger-agent/optout-failures', () => ({ recordOptOutWriteFailure: vi.fn() }))
 vi.mock('@/lib/inngest/client', () => ({ inngest: { send: vi.fn() } }))
 
 import { GET, POST } from '../route'
 import { supabaseAdmin } from '@/lib/supabase'
 import { resolveContact } from '@/lib/crm/identity'
 import { recordOptOutKeywordTouch } from '@/lib/messenger-agent/optout'
+import { recordOptOutWriteFailure } from '@/lib/messenger-agent/optout-failures'
 import { inngest } from '@/lib/inngest/client'
 import { ConversationMessageReceivedSchema } from '@/lib/conversations/events'
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
 const mockResolveContact = vi.mocked(resolveContact)
 const mockRecordOptOutKeywordTouch = vi.mocked(recordOptOutKeywordTouch)
+const mockRecordOptOutWriteFailure = vi.mocked(recordOptOutWriteFailure)
 const mockInngestSend = vi.mocked(inngest.send)
 
 const SECRET = 'test-app-secret'
@@ -124,6 +129,7 @@ function stubDb(
     convoUpsertFails?: boolean
     msgUpsertFails?: boolean
     resolveContactThrows?: boolean
+    optoutUnlinkedUpdateFails?: boolean
   } = {},
 ): Captured {
   const captured: Captured = { convoUpserts: [], msgUpserts: [], touchUpserts: [], updates: [], filters: {} }
@@ -156,6 +162,9 @@ function stubDb(
       maybeSingle: async () => result,
       update: (payload: Record<string, unknown>) => {
         captured.updates.push({ table, payload })
+        if (table === 'conversations' && 'optout_unlinked' in payload && opts.optoutUnlinkedUpdateFails) {
+          result = { data: null, error: { message: 'optout_unlinked update failed' } }
+        }
         return chain
       },
       // 真 supabase 的 builder 是 thenable：`await from(x).upsert(y)` 直接拿到
@@ -445,11 +454,39 @@ describe('POST — opt-out 检测接入（issue #1582）', () => {
     })
   })
 
-  it('退订触点写入失败（抛错）不影响消息已经落库的结果（best-effort，跟 CRM 触点一致）', async () => {
+  it('退订触点写入失败（抛错）不影响消息已经落库的结果（best-effort，跟 CRM 触点一致），且心跳检查（#1587）能看到这次失败', async () => {
     mockRecordOptOutKeywordTouch.mockRejectedValue(new Error('db 抽风'))
     stubDb()
-    const res = await POST(makePost(messagePayload({ body: 'stop' })))
+    const res = await POST(makePost(messagePayload({ body: 'stop', msgId: 'wamid.OPTOUT3' })))
     expect(res.status).toBe(200)
+    expect(mockRecordOptOutWriteFailure).toHaveBeenCalledTimes(1)
+    expect(mockRecordOptOutWriteFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: CLIENT_ID,
+        channel: 'whatsapp',
+        conversationId: 'convo-id',
+        contactId: CONTACT_ID,
+        errorMessage: expect.stringContaining('db 抽风'),
+      }),
+      supabaseAdmin,
+    )
+  })
+
+  it('没有 contact_id 时，写 conversations.optout_unlinked 本身失败 → 仍回 200，但心跳检查（#1587）能看到这次失败', async () => {
+    stubDb({ resolveContactThrows: true, optoutUnlinkedUpdateFails: true })
+    const res = await POST(makePost(messagePayload({ body: '退订', msgId: 'wamid.OPTOUT4' })))
+
+    expect(res.status).toBe(200)
+    expect(mockRecordOptOutWriteFailure).toHaveBeenCalledTimes(1)
+    expect(mockRecordOptOutWriteFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: CLIENT_ID,
+        channel: 'whatsapp',
+        contactId: null,
+        errorMessage: expect.stringContaining('optout_unlinked update failed'),
+      }),
+      supabaseAdmin,
+    )
   })
 })
 
