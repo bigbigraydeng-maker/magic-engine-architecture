@@ -10,6 +10,7 @@ import { flywheelSeoWeeklyFanOut, flywheelSeoSnapshotOne } from './flywheel-seo-
 import { messengerBriefAfterSync } from './messenger-brief-after-sync'
 import { factoryCreatomateRender } from './factory-creatomate-render'
 import { knowledgeMiningRequested } from './knowledge-mining'
+import { conversationInboundAutoAck } from './conversation-inbound-autoack'
 import { conversionDailyPipeline } from './conversion-daily-pipeline'
 
 export const cloudFunctions = [
@@ -27,6 +28,7 @@ export const cloudFunctions = [
   messengerBriefAfterSync,
   factoryCreatomateRender,
   knowledgeMiningRequested,
+  conversationInboundAutoAck,
   conversionDailyPipeline,
 ]
 
