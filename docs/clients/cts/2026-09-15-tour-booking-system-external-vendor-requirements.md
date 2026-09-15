@@ -39,20 +39,24 @@
 **第一，后台（产品线路、订单、旅团、代理商）**
 
 - 系统界面全部用**英文**，代理商用的部分也一样。
-- CTS员工和代理商都要能：创建订单、填客户信息、选择产品和出发团期。下单成功后，系统要**自动扣减该团期的剩余名额**。
-- **名额扣减必须是原子操作，不能超卖**：校验"还有没有剩余名额"和"扣减名额"必须在同一个原子操作里完成——哪怕两个代理商同时对最后一个名额下单，也只能有一个成功，已售出名额任何时候都不能超过团期总容量。同一笔订单如果因为网络重试/重复点击被提交了两次，要能用同一个订单标识识别出是重复提交，不能被扣减两次名额。
-- **名额释放同样必须是原子且幂等的操作**：订单被取消、被退款、超过约定付款时限自动作废，或客户改期/改到另一个团期时，系统必须在同一个原子操作里把之前扣减的名额加回原团期的剩余名额池——"剩余名额"任何时候都必须等于"总容量 − 仍然有效占用的名额"，已取消/已退款/已作废/已迁出的订单不能继续占用名额。同一笔取消/作废/改期操作即使被重复触发（网络重试、重复点击、人工重复操作），也只能释放一次名额，不能多退。
+- CTS员工和代理商都要能：创建订单、填客户信息、选择产品和出发团期，并填写这笔订单实际报名的**旅客人数（占用名额数）**——一张订单可能是一位游客单独报名，也可能是全家或一个团体多人合并成一笔订单，必须如实记录实际人数，**不能默认按"一单固定扣一个名额"处理**。下单成功后，系统要**按这笔订单的实际占用名额数自动扣减该团期的剩余名额**。
+- **名额扣减必须是原子操作，不能超卖**：校验"剩余名额是否≥这笔订单要占用的名额数"和"按该数量扣减名额"必须在同一个原子操作里完成——哪怕两个代理商同时对最后几个名额下单，也必须保证已售出名额任何时候都不超过团期总容量。同一笔订单如果因为网络重试/重复点击被提交了两次，要能用同一个订单标识识别出是重复提交，不能被重复扣减名额。
+- **名额释放同样必须是原子且幂等的操作，释放数量要等于该订单占用的名额数**：订单被取消、被退款、超过约定付款时限自动作废，或客户改期/改到另一个团期时，系统必须在同一个原子操作里，把之前按该订单占用名额数扣减的名额**如数**加回原团期的剩余名额池——"剩余名额"任何时候都必须等于"总容量 − 仍然有效占用的名额"，已取消/已退款/已作废/已迁出的订单不能继续占用名额。同一笔取消/作废/改期操作即使被重复触发（网络重试、重复点击、人工重复操作），也只能释放一次（按该订单的占用数释放一次），不能多退。
+- **订单修改同行人数时，名额也要跟着原子调整**：如果客户下单后增加或减少同行旅客人数（比如从 2 人加到 4 人），系统必须原子地调整该团期的剩余名额——增加人数按上面同样的超卖校验规则扣减新增的名额，减少人数则把差额按上面同样的幂等规则加回名额池，不能只改订单上的人数字段而不联动库存。
 - 不需要跟我们做实时的接口对接（不用API/webhook）。你们需要提供一个可靠的**导出功能**（导出成Excel/CSV这类常见表格格式就行），我们会定期拉取这份文件，用AI识别里面的内容来更新我们自己的记录。每次导出至少要包含：
   - 订单编号
   - 客户姓名和联系方式
   - 这单是CTS员工直接下的，还是某个代理商下的——如果是代理商，要注明是哪一个
   - 订的产品/线路和具体出发日期
+  - **这笔订单实际占用的名额数（旅客人数）**——不能假设每笔订单固定占 1 个名额
   - 定金状态/金额和付款日期；全款状态/金额和付款日期
   - **订单状态**（比如：待确认/已确认/已取消/已退款/已完成）
   - **取消/退款时间**（如果订单被取消或退款过）
   - **最后更新时间**（这条订单记录最近一次被修改是什么时候）
 - **请明确这份导出是全量快照还是增量**：是每次都包含全部历史订单（包括已取消的），还是只导出自上次以来有变化的订单？我们需要知道这一点，才能判断"记录里突然消失的订单"是被取消了，还是只是没被导出，否则我们这边会一直保留错误的客户阶段和预订记录。
-- **产品/团期信息要跟CTS官网、CTS后台保持一致。** 不需要做成实时自动同步，人工/半自动维护也可以，但只要是你们系统里能下单的团（比如"Golden China"），官网和CTS后台也要能看到同一批团、同样的价格和团期。
+- **导出格式要是固定、有版本号的机器可读结构，不能是随意排版的 Excel**：列名和每列的数据类型要保持一致，日期时间统一用 ISO 8601 格式并注明时区（新西兰时间还是 UTC），金额要注明币种；以后只要改动列结构或列名，请同步给我们一个新的"导出格式版本号"。**代理商、产品/线路、团期都要有你们系统里稳定不变的 ID**（不能只给中文名字——代理商改名或线路改名后 ID 不能跟着变），我们靠这个 ID 做匹配，不是靠名字模糊匹配。
+- **AI 识别置信度不够、或者某一行数据不符合上面约定格式的，我们会转人工核对，不会直接更新到CRM**——所以格式一旦约定好请尽量保持稳定，减少不必要的人工核对量。
+- **产品/团期信息要跟CTS官网、CTS后台保持一致，并且要明确以哪边为准（system of record）**：以 CTS 官网 / CTS 后台的产品数据为准（目前产品数据维护在 `chinatravel` 仓的 `tours.ts` 里），你们系统里能下单的团（比如"Golden China"）的价格、团期信息应该是从那边同步过去的镜像，不是两边各自独立维护、出了问题再对齐。不需要做成实时自动同步，人工/半自动维护也可以，但**任何一边改了价格、容量或出发日期，负责改动的一方要在 1 个工作日内通知另一方同步**，不能让同一个团在两边显示不一样的价格或团期。一旦发现两边不一致，在确认哪边是最新值之前，你们系统里对应的团期要**暂停接受新下单（stop-sell）**，避免代理商按错误价格或日期成交。
 - 代理商模块：这是确定要做的需求，不是可选项。代理商需要有自己的账号，能看到剩余名额，能自己下单。**必须做到代理商之间数据隔离（验收条件）**：每个代理商只能查看和修改自己创建的客户和订单，看不到其他代理商的客户姓名、联系方式、付款状态等任何信息。CTS 员工能看到的范围（是否所有代理商的订单都能看）由 CTS 另行定义。
 
 **第二，前台**
@@ -89,20 +93,24 @@ Thanks for your questions. Magic Engine is CTS's technology partner responsible 
 **1. Back-office (products/tours, orders, tour departures, agents)**
 
 - The system should be entirely in **English**, including the interface used by agents.
-- Both CTS staff and agents need to be able to: create an order, enter the customer's details, and select a tour + departure date. On successful order creation, the system should **automatically decrement the available seats** for that departure.
-- **The seat decrement must be atomic, and must never allow overselling**: checking "are seats still available" and decrementing the seat count must happen in a single atomic operation, so the number of seats sold can never exceed total capacity — even if two agents submit an order for the last remaining seat at the same time, only one can succeed. If the same order is submitted twice (e.g. a network retry or a double click), the system must recognize it as a duplicate using a consistent order identifier and must not decrement seats twice for it.
-- **Seat release must be equally atomic and idempotent**: when an order is cancelled, refunded, auto-voided after a payment deadline, or rebooked onto a different departure, the system must, in a single atomic operation, add the previously-decremented seat(s) back to that departure's available pool — "available seats" must always equal "total capacity minus seats still validly held," and a cancelled/refunded/voided/moved-out order must never continue to hold a seat. If the same cancellation/void/rebooking action is triggered more than once (network retry, double click, duplicate manual action), it must only release the seat once, never more.
+- Both CTS staff and agents need to be able to: create an order, enter the customer's details, select a tour + departure date, and record the **number of travelers the order actually covers (seat count)** — a single order may be for one traveler, or for a whole family or group booked together, so the real headcount must be recorded and the system **must never assume every order occupies exactly 1 seat**. On successful order creation, the system should **automatically decrement the available seats for that departure by the order's actual seat count**.
+- **The seat decrement must be atomic, and must never allow overselling**: checking "are there at least as many seats available as this order's seat count" and "decrementing by that seat count" must happen in a single atomic operation, so the number of seats sold can never exceed total capacity — even if two agents submit orders for the last remaining seats at the same time. If the same order is submitted twice (e.g. a network retry or a double click), the system must recognize it as a duplicate using a consistent order identifier and must not decrement seats twice for it.
+- **Seat release must be equally atomic and idempotent, and must release exactly the order's seat count**: when an order is cancelled, refunded, auto-voided after a payment deadline, or rebooked onto a different departure, the system must, in a single atomic operation, add back the exact number of seats that order had decremented to that departure's available pool — "available seats" must always equal "total capacity minus seats still validly held," and a cancelled/refunded/voided/moved-out order must never continue to hold a seat. If the same cancellation/void/rebooking action is triggered more than once (network retry, double click, duplicate manual action), it must only release that order's seats once, never more.
+- **If an order's traveler count is edited after creation, the seat allocation must adjust atomically too**: if a customer adds or removes travelers on an existing order (e.g. going from 2 to 4 people), the system must atomically adjust that departure's available seats — increasing the count applies the same overselling check as a new booking, decreasing it releases the difference under the same idempotency rule — rather than just editing a headcount field on the order without touching inventory.
 - We do not need a real-time API/webhook connection between your system and ours. Instead, your system needs a reliable **export function** (CSV/Excel is fine) that we will periodically pull and parse (using an AI-based reader on our side) to keep our own records current. Please make sure each export includes, at minimum:
   - Order ID
   - Customer name and contact details
   - Who created the order: direct (CTS staff) vs. agent — and if agent, which agent
   - Tour/product and specific departure date
+  - **The number of seats this order actually occupies (traveler headcount)** — never assume 1 seat per order
   - Deposit status/amount and paid date; full-payment status/amount and paid date
   - **Order status** (e.g. pending/confirmed/cancelled/refunded/completed)
   - **Cancellation/refund timestamp** (if the order was cancelled or refunded)
   - **Last-updated timestamp** for the order record
 - **Please confirm whether each export is a full snapshot or incremental**: does it include every historical order (including cancelled ones) every time, or only orders that changed since the last export? We need to know this to tell whether an order that's missing from a later export was cancelled, or simply wasn't exported — otherwise we'll end up holding stale customer stages and booking records.
-- **Products/tours and departures should stay consistent with CTS's public website and back-office.** This does not need to be a live automatic sync — a manual/semi-automatic process is fine — but whatever tours are bookable in your system (e.g. "Golden China") should also be visible and consistent (same pricing, same departure dates) on the public website and in CTS's own back-office.
+- **The export must follow a fixed, versioned, machine-readable schema — not free-form spreadsheet formatting.** Column names and per-column data types must stay consistent; all dates/times must use ISO 8601 with an explicit timezone (NZ local time or UTC); monetary amounts must state the currency; any change to the column structure or naming must come with a bumped "export format version" you tell us about. **Agents, products/tours, and departures must each carry a stable ID from your system** (not just a display name) — we match records on that stable ID, not on fuzzy name matching, since display names can change (e.g. an agent renaming their agency, a tour being renamed).
+- **Rows that don't match the agreed schema, or where our AI-based reader has low confidence, will be routed to manual review on our side rather than auto-applied to the CRM** — so please keep the format stable once agreed, to keep the manual-review volume low.
+- **Products/tours and departures should stay consistent with CTS's public website and back-office, with one clear system of record.** CTS's public website/back-office product data is authoritative (currently maintained in `tours.ts` in the `chinatravel` repo); the products/departures bookable in your system should mirror that data, not be independently maintained and reconciled after the fact. This does not need to be a live automatic sync — a manual/semi-automatic process is fine — but **whichever side changes a price, capacity, or departure date is responsible for notifying the other side within 1 business day** so both stay in sync; the same tour must never show a different price or date in the two systems. If an inconsistency is ever found, your system must **stop-sell that departure** (pause new bookings for it) until it's confirmed which value is current, to prevent agents from selling at the wrong price or date.
 - Agent module: this is a confirmed requirement, not optional. Agents need their own accounts, need to see available seats, and need to be able to create bookings themselves. **Agent-to-agent data isolation is a required acceptance criterion**: each agent must only be able to view and modify the customers and orders they created themselves, and must never be able to see another agent's customer names, contact details, or payment status. Whatever visibility CTS staff need across all agents' orders is CTS's to define separately.
 
 **2. Front-end**
@@ -136,7 +144,7 @@ Best regards,
 
 **MySQL 5.7 EOL 处理（待 PM 确认，未随"服务器已上线"一并拍板）**：MySQL Community 5.7 已于 2023-10 停止更新，同样保存着客户联系方式和付款信息，风险归属和处理逻辑与 PHP 7.4 一致，两个选项二选一，需 PM 明确：
 1. 要求对方把数据库升级到仍在官方支持期内的版本——**MySQL 8.0（Oracle 延伸支持至 2029-04）或 8.4 LTS（支持窗口更长）**，ME 服务器环境随之调整；或
-2. 如果短期内无法升级，PM 需明确批准"接受 EOL 数据库"并给出迁移期限，期间由 ME 在服务器层记录清楚当前的隔离措施（仅绑定 `127.0.0.1`、防火墙限制、每周备份）作为临时补偿，而不是把"只绑定本机"当成风险已消除。
+2. 如果短期内无法升级，PM 需明确批准"接受 EOL 数据库"并给出迁移期限，期间由 ME 在服务器层记录清楚当前的隔离措施（仅绑定 `127.0.0.1`、防火墙限制）作为临时补偿，而不是把"只绑定本机"当成风险已消除；**每周主机快照不算数据库层的有效补偿**，交易数据的 RPO 缺口需要单独按下文"数据库备份 RPO 待补强"补上，不能用它顶替 EOL 风险的补偿措施。
 
 ### 服务器：推荐 DigitalOcean，等 PM 拍板开通
 ME 名下没有现成的裸 Linux 服务器账号（现有站点都在 Render，不支持这套老技术栈）。推荐 **DigitalOcean**，最基础规格（约每月 NZ$20），原因：定价透明、这类 LAMP 技术栈的搭建资料最全。**服务器本身的账号密码留在 ME 手上，只给对方开一个"仅能部署代码"的账号，不给 root 全权限。** 状态：等 PM 说"开"才会实际下单付费。
@@ -170,6 +178,7 @@ ME 名下没有现成的裸 Linux 服务器账号（现有站点都在 Render，
 - [ ] 等对方回复邮件权限问题，再最终确定：Resend 专用钥匙 vs 新开 M365 邮箱账号
 - [ ] PM 确认 PHP 7.4 EOL 处理方式：要求对方升级到 PHP 8.4+，还是接受风险 + 给迁移期限（见上文"PHP 7.4 EOL 处理"）
 - [ ] PM 确认 MySQL 5.7 EOL 处理方式：要求对方升级到 MySQL 8.0/8.4 LTS，还是接受风险 + 给迁移期限（见上文"MySQL 5.7 EOL 处理"）
+- [ ] PM 确认是否现在就上数据库级更短 RPO 备份（每日 mysqldump/binlog PITR + 异地存储）+ 定期恢复演练——每周主机快照 RPO 太长，见上文"数据库备份 RPO 待补强"
 
 ## 服务器已上线（2026-09-15）
 
@@ -181,14 +190,21 @@ ME 名下没有现成的裸 Linux 服务器账号（现有站点都在 Render，
 | 地区 | Singapore（离新西兰最近的 DigitalOcean 机房） |
 | 公网 IP | `206.189.152.68` |
 | 系统 | Ubuntu 22.04 LTS |
-| Nginx | **1.24.0**（对方要求的版本，已锁定不自动升级） |
+| Nginx | **1.24.0**（对方要求的版本；**不锁版本、不冻结安全更新**，见下文"Nginx 安全更新策略"） |
 | PHP | **7.4.33** + 常用扩展（mysqli/gd/mbstring/curl/xml/zip/bcmath/intl） |
 | MySQL | **5.7.44**（用 Docker 跑,只绑定服务器本机 `127.0.0.1:3306`,不对外网开放） |
 | 月费 | $14.40 美元（约 NZ$24：服务器 $12 + 每周自动备份 $2.40） |
 | 防火墙 | 只开 22(SSH)/80(HTTP)/443(HTTPS)，其余全部拒绝 |
-| 备份 | 每周自动备份已开启 |
+| 备份 | 每周自动备份已开启（主机级快照，RPO 待补强，见下文"数据库备份 RPO 待补强"） |
 
 **给对方的账号权限**：只开一个"部署专用"账号（`deploy`），SFTP 方式上传代码，**没有服务器的完整登录权限**，看不到、碰不到服务器上除了他们自己代码目录以外的任何东西。数据库账号也只给了这套系统自己能用的那一个（不是数据库的总管理员账号）。服务器的总控制权（root）留在 ME 手上。
+
+**Nginx 安全更新策略（2026-09-15 补记）**：Nginx 版本**不锁死、不冻结自动更新**——服务器已开启 Ubuntu `unattended-upgrades`，Ubuntu 安全仓库放出的 Nginx 安全补丁会在补丁发布后 24 小时内自动安装（同大版本内的安全修复，不含跨大版本的功能性升级）。此外每月人工核对一次是否存在需要跨大版本才能修复的 Nginx CVE；如有，2 周内在非生产环境验证与 CTS 系统的兼容性后再升级到生产。不存在"锁死版本、无限期不打补丁"的空窗期。
+
+**数据库备份 RPO 待补强（2026-09-15 补记）**：上表"每周自动备份"是 DigitalOcean 的主机级快照，RPO 接近 7 天——对订单、付款状态、名额这类交易数据来说不够：如果主机在两次快照之间损坏、被误删或被入侵，恢复后名额会跟着数据库一起回退到最多一周前的状态，可能导致已经卖出的名额被系统当成"还没卖"再次放出。需要在主机快照之上再加一层数据库级、更短 RPO 的保护：
+1. 每日（或更短周期）对 MySQL 做逻辑备份（如 `mysqldump`/`mydumper`），并开启 binlog 支持时间点恢复（PITR），备份产物存放到服务器以外的地方（如对象存储），不能只留在同一台主机上；
+2. 至少每季度做一次真实的恢复演练，验证备份确实可用、恢复流程确实走得通，而不是"开了自动备份就当风险已解决"。
+这项已记入上文"待办"，等 PM 确认后落地。
 
 **账号密码不写进这份文档**（安全规定：密码不进代码仓库），已经在对话里直接发给 PM，由 PM 转给对方。
 
