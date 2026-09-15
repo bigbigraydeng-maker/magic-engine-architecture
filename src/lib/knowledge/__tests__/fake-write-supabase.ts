@@ -259,7 +259,7 @@ class Builder implements KnowledgeSelectBuilder, KnowledgeUpdateBuilder, Knowled
     if (this.mode === 'insert') {
       const row: Row = {
         id: `${this.table}-${rows.length + 1}`,
-        created_at: (this.db.options.now?.() ?? new Date()).toISOString(),
+        created_at: this.db.stampCreatedAt(),
         ...(COLUMN_DEFAULTS[this.table] ?? {}),
         ...this.payload,
       }
@@ -294,6 +294,9 @@ class Builder implements KnowledgeSelectBuilder, KnowledgeUpdateBuilder, Knowled
 }
 
 export class FakeWriteSupabase implements KnowledgeWriteClient {
+  /** Ticks forward on every stamped row so insertion order always matches `created_at` order, even when `options.now` is frozen to a fixed instant across a whole test. */
+  private stampCounterMs = 0
+
   constructor(
     private readonly tables: Record<string, Row[]>,
     readonly options: FakeWriteOptions = {},
@@ -303,6 +306,19 @@ export class FakeWriteSupabase implements KnowledgeWriteClient {
     const rows = this.tables[table]
     if (!rows) throw new Error(`fake supabase: unmodelled table "${table}"`)
     return rows
+  }
+
+  /**
+   * `created_at` for a row inserted without one. Base clock is `options.now()` (or the
+   * real clock) evaluated fresh each call, plus a strictly-increasing offset — so two
+   * rows inserted back-to-back never tie even when `options.now` is a frozen constant,
+   * regardless of which insert path (`.insert()` vs an RPC) wrote them.
+   */
+  stampCreatedAt(): string {
+    const base = this.options.now?.() ?? new Date()
+    const stamped = new Date(base.getTime() + this.stampCounterMs)
+    this.stampCounterMs += 1
+    return stamped.toISOString()
   }
 
   /** Only the unique indexes that actually exist on these tables. */
@@ -456,7 +472,7 @@ export class FakeWriteSupabase implements KnowledgeWriteClient {
         confirmedAt: args.p_confirmed_at,
         requestId: request.id,
       },
-      created_at: new Date().toISOString(),
+      created_at: this.stampCreatedAt(),
     })
 
     return { data: [{ claimed: true, event_id: eventId, stale: false }], error: null }
