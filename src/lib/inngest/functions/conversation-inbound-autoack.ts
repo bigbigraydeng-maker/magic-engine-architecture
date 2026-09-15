@@ -61,6 +61,7 @@ import { isConversationOptedOut } from '@/lib/messenger-agent/optout'
 import {
   isChannelEnabled,
   CHANNEL_SEND,
+  getSentMessageId,
   type MessengerAgentChannel,
 } from '@/lib/messenger-agent/channel-dispatch'
 import {
@@ -145,15 +146,36 @@ export function resolvePostSaleClassificationPolicy(
   return null
 }
 
-/** 生产实现：查 `clients.industry`，查不到/报错都按「认不出行业」处理（不阻断发送）。 */
+/**
+ * 生产实现：查 `clients.industry`。
+ *
+ * 🔴 Codex 复审（2026-09-15，PR #1736）实测发现：这里原来把"查询真的报错"跟
+ * "这个客户合法地没填 industry"两种情况都折叠成同一个 `null`，下游把
+ * `null`一律当"没有对应 Playbook → 按 lead_intake 处理 → 照常发送"。
+ * 结果是一次数据库瞬时故障，会让一个正在问售后问题的旅游客户被误判成
+ * 新客户，收到一句不适用的"稍后回复您"——这条自动发送路径本该跟本文件
+ * 其它每一道闸（opt-out/kill-switch）一样是 fail-closed 方向,却在这一处
+ * 变成了"查不出来就当无害情况处理"。
+ *
+ * 改法：真的查询报错就 throw，让这一步的 `step.run` 把异常往上抛——整个
+ * 函数因此失败，Inngest 的 `retries: 1` 会重跑一次（多数瞬时 DB 抖动一次
+ * 重试就好了），而不是吞掉错误直接照常发送。"查到了，但这一列本来就是
+ * 空的"（`data` 存在但 `industry` 是 `null`）跟"没查到这一行"（`data` 是
+ * `null` 但没报错——真实场景几乎不会发生，`clientId` 是发消息时刚查出来
+ * 的，但仍按同一个 fail-closed 方向处理，不当成"可以安全发送")都不是报错，
+ * 返回 `null` 交给上层当"没有对应 Playbook"处理，这两种跟"查询本身失败"
+ * 是不同的两件事，不能混在一起。
+ */
 async function loadClientIndustry(clientId: string): Promise<string | null> {
   const { data, error } = await supabaseAdmin
     .from('clients')
     .select('industry')
     .eq('id', clientId)
     .maybeSingle()
-  if (error || !data) return null
-  return (data as { industry: string | null }).industry ?? null
+  if (error) {
+    throw new Error(`[conversation-inbound-autoack] 查客户行业失败 clientId=${clientId}: ${error.message}`)
+  }
+  return (data as { industry: string | null } | null)?.industry ?? null
 }
 
 type ChannelSendFn = (input: {
@@ -181,6 +203,16 @@ export function createConversationInboundAutoAckFunction(deps: ConversationInbou
       retries: 1,
       // v3 补丁#2：Meta 的 webhook 是至少一次投递，客人连发几条消息也会拆成
       // 几个独立事件——30 秒内合并成一次安抚，不是每条消息各回一遍。
+      //
+      // 🔴 已知、刻意的范围边界（Codex 复审 2026-09-15 提问，非 blocker）：
+      // 这个 30 秒 debounce 只合并"同一波连发"，不是"整段对话只回一次"——
+      // 客户隔几分钟又发一条（哪怕还在同一个 lead_intake 对话里）会再收到
+      // 一遍这句安抚。issue #1584 原文只要求"客户消息进来先发一条"，没有要求
+      // "整段对话生命周期只发一次"；对 WhatsApp 而言重复发反而有用（每次都
+      // 会重新打开/续上 72 小时免费窗口）。做成"整段对话只发一次"需要新增一
+      // 个持久化状态（比如查 `conversation_outbound_log` 有没有已经发过这条
+      // 模板，或者新增一列），是比这次范围更大的改动，留作后续单独评估，不
+      // 在这次范围内顺手做。
       debounce: { period: '30s', key: 'event.data.conversation_id' },
     },
     { event: CONVERSATION_MESSAGE_RECEIVED_EVENT },
@@ -263,6 +295,20 @@ export function createConversationInboundAutoAckFunction(deps: ConversationInbou
         }),
       )
       if (!sendResult.ok) {
+        // 🔴 Codex 复审（2026-09-15，PR #1736）实测发现：这里原来把发送失败
+        // 一律当成一个正常的函数返回值——但 `retries: 1` 只对"函数整体抛出异常"
+        // 生效,一个正常 return 不会触发重试。结果是 Meta 一次瞬时网络/5xx
+        // 故障（`status: 502` / `reason: 'graph_failed'`）会让这条安抚永久
+        // 丢失、没有任何重试、也没有任何人工接力,只留在这次运行的返回值里。
+        // 区分「重试可能有用」跟「重试没用」两种失败：502/graph_failed 是
+        // provider 侧的瞬时故障，throw 出去让 Inngest 的 retries 接住；其余
+        // （400/403/404/409/424，都是"这条消息/这个客户/这个渠道本身就不该
+        // 发"的确定性失败）重试不会变好，维持原来 return 的终态。
+        if (sendResult.status === 502) {
+          throw new Error(
+            `[conversation-inbound-autoack] 发送安抚话失败（provider 侧瞬时故障，等重试）：${sendResult.reason}`,
+          )
+        }
         return { ...base, outcome: 'send_failed', detail: sendResult.reason }
       }
 
@@ -276,10 +322,22 @@ export function createConversationInboundAutoAckFunction(deps: ConversationInbou
       // 执行和重试之间可能对不上，等于没有真的达到代码注释原来声称的"幂等"
       // 效果。改成跟仓库其它 Inngest 函数（`web-intelligence.ts` 等）一致的
       // 写法：`step.sendEvent` 直接顶层调用，不裹进 `step.run`。
+      // 🔴 Codex 复审（2026-09-15，PR #1736）实测发现：这里原来发出的完成事件
+      // 只有 client/conversation/channel，丢了 `CHANNEL_SEND` 结果里本来就有
+      // 的 provider message id（`getSentMessageId`）——同一个会话可能有多次
+      // 出站，下游没法把"完成"事件精确对应到这一次具体是哪条 provider 回执
+      // （甚至 provider 侧返回空 id 时，事件也照样说"发成功了"）。补上触发
+      // 消息 id + provider message id，让下游能真的按这个事件去核对回执。
       await step.sendEvent('autoack-sent', {
         id: `autoack:${conversation_id}:${event.id ?? randomUUID()}`,
         name: CONVERSATION_AUTOACK_SENT_EVENT,
-        data: { client_id, conversation_id, channel },
+        data: {
+          client_id,
+          conversation_id,
+          channel,
+          trigger_message_id: parsed.value.message_id,
+          provider_message_id: getSentMessageId(channel, sendResult),
+        },
       })
 
       return { ...base, outcome: 'sent', detail: null }

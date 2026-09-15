@@ -278,6 +278,15 @@ describe('关键路径', () => {
     expect(deps.classify).not.toHaveBeenCalled()
   })
 
+  it('🔴 Codex 复审：查行业真的报错（不是"合法地没填"）→ 必须抛错，绝不能悄悄当成"没有 Playbook"然后照常发送', async () => {
+    const deps = makeDeps({ loadIndustry: vi.fn(async () => { throw new Error('db 抽风') }) })
+    const fn = createConversationInboundAutoAckFunction(deps)
+    const step = fakeStep()
+    await expect(handlerOf(fn)({ event: { id: 'evt-1', data: messageReceived() }, step })).rejects.toThrow('db 抽风')
+    expect(deps.send.messenger).not.toHaveBeenCalled()
+    expect(step.sendEvent).not.toHaveBeenCalled()
+  })
+
   it('发送失败（ok:false）→ send_failed，不 emit 收尾事件', async () => {
     const deps = makeDeps({
       send: {
@@ -299,7 +308,7 @@ describe('关键路径', () => {
     expect(step.sendEvent).not.toHaveBeenCalled()
   })
 
-  it('发送成功 → emit conversation/autoack.sent，事件 id 幂等键带会话 id + event.id', async () => {
+  it('发送成功 → emit conversation/autoack.sent，事件 id 幂等键带会话 id + event.id，且带上触发消息 id + provider 回执 id（Codex 复审补）', async () => {
     const deps = makeDeps()
     const fn = createConversationInboundAutoAckFunction(deps)
     const step = fakeStep()
@@ -308,9 +317,35 @@ describe('关键路径', () => {
       {
         id: `autoack:${CONVERSATION_ID}:evt-42`,
         name: CONVERSATION_AUTOACK_SENT_EVENT,
-        data: { client_id: CLIENT_ID, conversation_id: CONVERSATION_ID, channel: 'messenger' },
+        data: {
+          client_id: CLIENT_ID,
+          conversation_id: CONVERSATION_ID,
+          channel: 'messenger',
+          trigger_message_id: MESSAGE_ID,
+          provider_message_id: 'mid.reply',
+        },
       },
     ])
+  })
+
+  it('🔴 Codex 复审：发送失败是 provider 侧瞬时故障（status 502）→ 必须抛错让 Inngest 重试，不是静默吞掉返回终态', async () => {
+    const deps = makeDeps({
+      send: {
+        messenger: vi.fn(
+          async (): Promise<SendReplyResult> => ({
+            ok: false,
+            status: 502,
+            error: 'Meta 拒绝了这条消息，请稍后重试',
+            reason: 'graph_failed',
+          }),
+        ),
+        whatsapp: vi.fn(async (): Promise<SendWhatsAppResult> => whatsappSendOk()),
+      },
+    })
+    const fn = createConversationInboundAutoAckFunction(deps)
+    const step = fakeStep()
+    await expect(handlerOf(fn)({ event: { id: 'evt-1', data: messageReceived() }, step })).rejects.toThrow()
+    expect(step.sendEvent).not.toHaveBeenCalled()
   })
 
   it('🔴 魏征复审：step.sendEvent 是顶层调用，绝不嵌套在 step.run 里面（真实 Inngest SDK 会对嵌套发 NESTING_STEPS 警告，且破坏幂等哈希）——退回嵌套写法这条测试必须挂', async () => {
