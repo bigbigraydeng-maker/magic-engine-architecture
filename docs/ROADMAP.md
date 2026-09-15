@@ -231,17 +231,19 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
 **已知但不阻塞的后续项**：
 - `optout.ts` 的撤销入口/分页/写路径归属校验三项小缺口，详见 issue #1290 评论
 
-- [ ] 剩余 issue（#1638/#1639 已合并，不再是剩余项，见上；Messenger/WhatsApp webhook**接收**
-      本身也已合并——#1637/#1640，不是剩余项；真正剩的是 Inngest 编排 4 函数消费**已接收的
-      Messenger 事件**的下游流程（范围已冻结只做 Messenger，WhatsApp 止于接收落库，不接入
-      AI 应答编排）、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个前置
-      依赖已经全部做完**（见下一节，6 步全部合并），这些是 CTS Messenger+WhatsApp v3 自己
-      剩下的、不属于客户知识库范围的收尾项
-  - [ ] F4 系统健康巡检（issue #1587）已实现（4类检查：消息量骤降/AI回复拦截率过高/AI起草
-        出错率过高/退订登记写入失败），但故意留了一个缺口——issue 原文还要求的"4小时批准
-        超时算事故"这一项**没做**，因为它依赖 F2 主函数（issue #1585，状态仍 OPEN）发出的
-        事件，F2 还没写，事件发不出来。等 #1585 上线后需要回来给 F4 补这一类检查（代码里
-        已有注释标记位置：`src/lib/messenger-agent/health-heartbeat.ts` 文件头）
+- [x] F1（issue #1584，安抚话术自动发出）/ F2（issue #1585，AI起草→7道核对→存草稿→等
+      人工批准→发送主链路）/ F3（issue #1586，人工审批结果回传）/ F4（issue #1587，系统
+      健康巡检）**四个 Inngest 编排函数已全部合并到 main**（2026-09-15，F2 最后合并，
+      merge commit `8bb140f1`）。**代码合并 ≠ 已上线接真实客户**——下面这几项仍是剩余项：
+  - [ ] 门户 UI（PM/FDE 看草稿、点批准/改后发送/拒绝）还没做，F2 存的草稿目前没有人能在
+        界面上批准，只能直接改数据库测试
+  - [ ] dry-run 验证：还没有拿 CTS 真实会话数据把 F1→F2→F3→F4 整条链路跑一遍确认真的通
+        （F2 本地只跑了单元测试，见 PR #1757）
+  - [ ] Delivery day 灰度切换：真正对 CTS 客户开放前的开关计划还没定
+  - [ ] F4 系统健康巡检故意留的缺口——issue 原文要求的"4小时批准超时算事故"这一项**仍未
+        做**。当时没做是因为依赖 F2 发出的 `conversation/reply.timeout` 事件，F2 那时还没
+        写；**现在 F2 已经合并，事件已经有了，需要回来给 F4 补这一类检查**（代码里已有
+        注释标记位置：`src/lib/messenger-agent/health-heartbeat.ts` 文件头）
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
 
 ## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步已全部完成（2026-09-15）
