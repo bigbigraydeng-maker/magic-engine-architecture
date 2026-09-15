@@ -5,6 +5,18 @@
 
 ---
 
+### 2026-09-15（tailor-made 行程单/画册补齐目的地图片：平遥、长江三峡）
+
+PR [#1758](https://github.com/bigbigraydeng-maker/magic-engine/pull/1758) 已合并并部署。CTS-2026-0030（China Grand Discovery）画册里"平遥"那天错配成了北京颐和园的图（`hero-rules.ts` 关键词清单没收"平遥"，退而用了当天正文提到的另一个地名顶替）；长江三峡三天则因图库只有一张三峡照片，三天全用同一张。补了 Pingyao 一张图，Yangtze 三峡再补一张（供正文点名 Qutang/Wu/Xiling 具体某段峡谷时用），并把原本偏低清的三峡老照片换成更清楚的一张，均为 Unsplash License 免费商用图，来源记在 `templates/tailor-made-itinerary/heroes/CREDITS.json`。
+
+顺带修了同一份文件上的一处货币错误：`pricing.optional` 里"维多利亚游轮强制小费"一行的币种存成了 USD，PM 确认应为 NZD，直接在生产库改了这一条记录（该草稿当时未发送，属未上线内容的数据订正，非事后改已发送文件）。
+
+**同一会话内还处理了 PM 提出的一条标准规则**（PR [#1762](https://github.com/bigbigraydeng-maker/magic-engine/pull/1762)，另计）：画册同一城市板块内不许出现重复图片，做成软提醒（不挡"标记已发送"）——见该 PR 说明；以及评估并暂缓了一项"AI 自动识图打标签"提案，评估结论登记进 [`docs/registry/platform-candidates.md`](../registry/platform-candidates.md)。
+
+**Reuse Statement**：延用既有的 `hero-rules.ts` 关键词→图片名机制（`hero.ts` 注释里写明的"加新城市：把图放进 heroes/<name>.jpg，在 RULES 里加一条即可"），未新建选图机制；三张新图属通用旅游地标图，不是 CTS 专属内容，符合"ME 旅游版"共享图库定位，未把客户事实写进共享代码。
+
+---
+
 ### 2026-09-15（F2 主链路合并：AI 起草客服回复→7 道核对→存草稿→等人工批准→发送）
 
 PR [#1757](https://github.com/bigbigraydeng-maker/magic-engine/pull/1757) 已合并（原先在 `claude/*` 分支的 [#1756](https://github.com/bigbigraydeng-maker/magic-engine/pull/1756) 撞到仓库"自动修爆炸半径"闸门 800 行上限，同一批 commit 换到 `feat/*` 分支重开）。实现 issue #1585——CTS 私信 Governed Reply Agent 的核心编排：客户消息进来 → AI 起草回复 → 过 7 道 Verifier 核对关卡 → 存草稿 → 等人工在门户批准（最多 4 小时）→ 批准后才真正发送。跟已合并的 F1（#1584 安抚话术）/F3（#1586 人工审批回传）/F4（#1587 系统健康巡检）拼成完整的 4 函数编排链路。
