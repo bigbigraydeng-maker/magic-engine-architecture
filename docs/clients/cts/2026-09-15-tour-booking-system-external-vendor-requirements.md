@@ -41,6 +41,7 @@
 - 系统界面全部用**英文**，代理商用的部分也一样。
 - CTS员工和代理商都要能：创建订单、填客户信息、选择产品和出发团期。下单成功后，系统要**自动扣减该团期的剩余名额**。
 - **名额扣减必须是原子操作，不能超卖**：校验"还有没有剩余名额"和"扣减名额"必须在同一个原子操作里完成——哪怕两个代理商同时对最后一个名额下单，也只能有一个成功，已售出名额任何时候都不能超过团期总容量。同一笔订单如果因为网络重试/重复点击被提交了两次，要能用同一个订单标识识别出是重复提交，不能被扣减两次名额。
+- **名额释放同样必须是原子且幂等的操作**：订单被取消、被退款、超过约定付款时限自动作废，或客户改期/改到另一个团期时，系统必须在同一个原子操作里把之前扣减的名额加回原团期的剩余名额池——"剩余名额"任何时候都必须等于"总容量 − 仍然有效占用的名额"，已取消/已退款/已作废/已迁出的订单不能继续占用名额。同一笔取消/作废/改期操作即使被重复触发（网络重试、重复点击、人工重复操作），也只能释放一次名额，不能多退。
 - 不需要跟我们做实时的接口对接（不用API/webhook）。你们需要提供一个可靠的**导出功能**（导出成Excel/CSV这类常见表格格式就行），我们会定期拉取这份文件，用AI识别里面的内容来更新我们自己的记录。每次导出至少要包含：
   - 订单编号
   - 客户姓名和联系方式
@@ -90,6 +91,7 @@ Thanks for your questions. Magic Engine is CTS's technology partner responsible 
 - The system should be entirely in **English**, including the interface used by agents.
 - Both CTS staff and agents need to be able to: create an order, enter the customer's details, and select a tour + departure date. On successful order creation, the system should **automatically decrement the available seats** for that departure.
 - **The seat decrement must be atomic, and must never allow overselling**: checking "are seats still available" and decrementing the seat count must happen in a single atomic operation, so the number of seats sold can never exceed total capacity — even if two agents submit an order for the last remaining seat at the same time, only one can succeed. If the same order is submitted twice (e.g. a network retry or a double click), the system must recognize it as a duplicate using a consistent order identifier and must not decrement seats twice for it.
+- **Seat release must be equally atomic and idempotent**: when an order is cancelled, refunded, auto-voided after a payment deadline, or rebooked onto a different departure, the system must, in a single atomic operation, add the previously-decremented seat(s) back to that departure's available pool — "available seats" must always equal "total capacity minus seats still validly held," and a cancelled/refunded/voided/moved-out order must never continue to hold a seat. If the same cancellation/void/rebooking action is triggered more than once (network retry, double click, duplicate manual action), it must only release the seat once, never more.
 - We do not need a real-time API/webhook connection between your system and ours. Instead, your system needs a reliable **export function** (CSV/Excel is fine) that we will periodically pull and parse (using an AI-based reader on our side) to keep our own records current. Please make sure each export includes, at minimum:
   - Order ID
   - Customer name and contact details
@@ -125,12 +127,16 @@ Best regards,
 
 ## 后续进展（对方回复服务器/邮件要求后，2026-09-15）
 
-对方回复的服务器技术栈：**Linux + Nginx 1.24 + PHP 7.4 + MySQL 5.7**。PHP 7.4 已于 2022-11 停止官方安全更新，属于 EOL 运行时——**这个风险不能简单归为"对方系统一侧"**：因为服务器账号、root、网络和备份都由 ME 管理（见下文"服务器已上线"），一旦 PHP 运行时层面出漏洞导致主机或数据被攻破，CTS 和 ME 同样受影响（这套系统处理客户联系方式和付款状态）。
+对方回复的服务器技术栈：**Linux + Nginx 1.24 + PHP 7.4 + MySQL 5.7**。PHP 7.4 已于 2022-11 停止官方安全更新，MySQL 5.7 也已于 2023-10 停止 Oracle 官方更新，两者都属于 EOL 运行时——**这个风险不能简单归为"对方系统一侧"**：因为服务器账号、root、网络和备份都由 ME 管理（见下文"服务器已上线"），一旦 PHP 或 MySQL 运行时层面出漏洞导致主机或数据被攻破，CTS 和 ME 同样受影响（这套系统处理客户联系方式和付款状态）。数据库容器只绑定服务器本机 `127.0.0.1:3306` 并不能消除这个风险：面向公网的 PHP 应用本身就是攻击入口，一旦被攻破，攻击者可以借着应用已有的数据库连接向 MySQL 发起攻击查询，"只绑定本机回环地址"挡不住这条路径。
 对方还问了 SMTP 发信的服务器/邮箱/用户名/密码/端口/加密方式。
 
 **PHP 7.4 EOL 处理（待 PM 确认，未随"服务器已上线"一并拍板）**：已落地的补偿措施见下文"服务器已上线"——对方账号只给部署权限无 root、数据库不对外网开放、防火墙只开 22/80/443、每周自动备份。但这些是服务器层隔离，**不能替代 PHP 运行时本身的补丁**。两个选项二选一，需 PM 明确：
-1. 要求对方把运行时升级到仍在官方支持期内的 PHP 版本（如 8.1+），ME 服务器环境随之调整；或
+1. 要求对方把运行时升级到**当时仍在官方安全支持期内、且留有足够迁移窗口**的 PHP 版本。按 PHP 官方支持时间表核对到 2026-09-15 这个时间点：PHP 8.1（安全支持已于 2025-11-25 到期）、8.2（安全支持已于 2025-12-08 到期）都已经是 EOL，不能作为升级目标；8.3 虽未到期但安全支持只剩到 2026-11-23，等于给不出迁移窗口。应要求对方以 **PHP 8.4（安全支持至 2027-11-21）或更新版本**为最低目标，ME 服务器环境随之调整；并约定持续升级策略——当前使用版本进入官方"仅安全支持"倒数一年内，双方就要启动下一次升级，不允许一直裸跑到 EOL 才处理。
 2. 如果短期内无法升级，PM 需明确批准"接受 EOL 运行时"并给出迁移期限，期间由 ME 在服务器层加一道 WAF／加强监控作为补偿，而不是默认接受无限期裸跑 EOL 版本。
+
+**MySQL 5.7 EOL 处理（待 PM 确认，未随"服务器已上线"一并拍板）**：MySQL Community 5.7 已于 2023-10 停止更新，同样保存着客户联系方式和付款信息，风险归属和处理逻辑与 PHP 7.4 一致，两个选项二选一，需 PM 明确：
+1. 要求对方把数据库升级到仍在官方支持期内的版本——**MySQL 8.0（Oracle 延伸支持至 2029-04）或 8.4 LTS（支持窗口更长）**，ME 服务器环境随之调整；或
+2. 如果短期内无法升级，PM 需明确批准"接受 EOL 数据库"并给出迁移期限，期间由 ME 在服务器层记录清楚当前的隔离措施（仅绑定 `127.0.0.1`、防火墙限制、每周备份）作为临时补偿，而不是把"只绑定本机"当成风险已消除。
 
 ### 服务器：推荐 DigitalOcean，等 PM 拍板开通
 ME 名下没有现成的裸 Linux 服务器账号（现有站点都在 Render，不支持这套老技术栈）。推荐 **DigitalOcean**，最基础规格（约每月 NZ$20），原因：定价透明、这类 LAMP 技术栈的搭建资料最全。**服务器本身的账号密码留在 ME 手上，只给对方开一个"仅能部署代码"的账号，不给 root 全权限。** 状态：等 PM 说"开"才会实际下单付费。
@@ -162,7 +168,8 @@ ME 名下没有现成的裸 Linux 服务器账号（现有站点都在 Render，
 ### 待办
 - [x] PM 拍板：服务器开通 DigitalOcean（2026-09-15 PM 已确认开通）
 - [ ] 等对方回复邮件权限问题，再最终确定：Resend 专用钥匙 vs 新开 M365 邮箱账号
-- [ ] PM 确认 PHP 7.4 EOL 处理方式：要求对方升级，还是接受风险 + 给迁移期限（见上文"PHP 7.4 EOL 处理"）
+- [ ] PM 确认 PHP 7.4 EOL 处理方式：要求对方升级到 PHP 8.4+，还是接受风险 + 给迁移期限（见上文"PHP 7.4 EOL 处理"）
+- [ ] PM 确认 MySQL 5.7 EOL 处理方式：要求对方升级到 MySQL 8.0/8.4 LTS，还是接受风险 + 给迁移期限（见上文"MySQL 5.7 EOL 处理"）
 
 ## 服务器已上线（2026-09-15）
 
