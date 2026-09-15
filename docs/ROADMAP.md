@@ -237,6 +237,11 @@ Agent 的事实层，替代 offerings.yaml 路线"）矛盾。PM 拍板"一步�
       AI 应答编排）、门户 UI、dry-run 验证、Delivery day 灰度切换）——**客户知识库这个前置
       依赖已经全部做完**（见下一节，6 步全部合并），这些是 CTS Messenger+WhatsApp v3 自己
       剩下的、不属于客户知识库范围的收尾项
+  - [ ] F4 系统健康巡检（issue #1587）已实现（4类检查：消息量骤降/AI回复拦截率过高/AI起草
+        出错率过高/退订登记写入失败），但故意留了一个缺口——issue 原文还要求的"4小时批准
+        超时算事故"这一项**没做**，因为它依赖 F2 主函数（issue #1585，状态仍 OPEN）发出的
+        事件，F2 还没写，事件发不出来。等 #1585 上线后需要回来给 F4 补这一类检查（代码里
+        已有注释标记位置：`src/lib/messenger-agent/health-heartbeat.ts` 文件头）
 - [ ] Meta 企业验证仍未通过（issue [#1299](https://github.com/bigbigraydeng-maker/magic-engine/issues/1299)，需要 PM 本人上传公司文件）——不卡继续开发，但卡 Messenger/WhatsApp webhook 真正上线那天
 
 ## 客户知识库（Client Knowledge Base）—— L1 平台能力，6 步已全部完成（2026-09-15）
@@ -761,7 +766,7 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **TD.16** 未做月报端到端测试（CTS Tours 实际客户）
 - [ ] **TD.17** 聚合器架构文档缺失
 - [ ] **TD.18** 缺少聚合器性能 / 错误监控仪表板
-- [ ] **TD.19**【前置条件未满足，见下】私信 AI 摘要的 `trip`（旅游行程专属字段）在 schema 层被建成"通用必填对象"——`src/lib/messenger/brief-schema.ts` 的 `TripDetailsSchema` 永远存在、永远带默认值，`MessengerBriefSchema.trip` 没有"这个客户要不要这个字段"的开关。**这条记录描述的是止血 PR [#1629](https://github.com/bigbigraydeng-maker/magic-engine/pull/1629)（分支 `feat/messenger-brief-declients-fix-agent`）落地后的目标状态；截至 2026-09-13，#1629 仍是 OPEN、未合并**——当前 main 上 `generateBrief`（`src/lib/messenger/brief.ts`）既不读取 `clients.industry`，也没有 `hasIndustryFeature` 或 `NULL_TRIP` 硬闸，系统提示仍会把非旅游客户的私信摘要当成 CTS 处理，私信 AI 摘要冒充 CTS 身份的事故在 main 上**仍然现行存在**，不只是下面这条 schema 技术债。#1629 提出的止血方案：`generateBrief` 按 `clients.industry` 是否命中旅游关键词（复用 `hasIndustryFeature`）决定 `trip` 能不能非空，命中不了的客户一律强制清空成 `NULL_TRIP`，不管模型实际返回了什么。这只是挡住"身份冒用 + 编造旅游需求"的最小止血，不是"行业专属字段该怎么建模"的长期方案——下一个需要专属结构化字段的行业（例如地产的"看房意向"）会重复同一种补丁思路。长期应随「客户知识库」项目（PM 已拍板，见 [docs/DECISIONS.md「2026-09-13 · 客户知识库作为 Governed Lead-Reply Agent 的事实层」](./DECISIONS.md)）把 `trip` 重新建模成客户可配置的行业专属结构化字段，而不是永远把旅游一个特例硬编码进通用 schema。#1629 范围内未动 schema：止血 PR 的任务范围是修复身份冒用 bug，重新设计 schema 牵连 `brief-cycle.ts` 调用链、数据库列形状和历史数据兼容，超出一次 A 级止血 PR 该做的事，子牙架构复审在设计阶段已指出这一点（见 #1629 PR 描述里的复审记录）。发现：Claude Code 会话，2026-09-13。
+- [ ] **TD.19** 私信 AI 摘要的 `trip`（旅游行程专属字段）在 schema 层被建成"通用必填对象"——`src/lib/messenger/brief-schema.ts` 的 `TripDetailsSchema` 永远存在、永远带默认值，`MessengerBriefSchema.trip` 没有"这个客户要不要这个字段"的开关。**更新（2026-09-15）：[#1629](https://github.com/bigbigraydeng-maker/magic-engine/pull/1629) 已于 2026-09-13T15:00:42 合并（merge commit `593d8138`），私信 AI 摘要冒充 CTS 身份的事故已修复——`generateBrief`（`src/lib/messenger/brief.ts`）现在按 `clients.industry` 是否命中旅游关键词（复用 `hasIndustryFeature`）决定 `trip` 能不能非空，命中不了的客户一律强制清空成 `NULL_TRIP`；`brief-cycle.ts` 调用时也已传入 `clientId`。身份冒用问题在 main 上不再现行存在**，本条以下只描述剩下的 schema 技术债。这只是挡住"身份冒用 + 编造旅游需求"的最小止血，不是"行业专属字段该怎么建模"的长期方案——下一个需要专属结构化字段的行业（例如地产的"看房意向"）会重复同一种补丁思路。长期应随「客户知识库」项目（PM 已拍板，见 [docs/DECISIONS.md「2026-09-13 · 客户知识库作为 Governed Lead-Reply Agent 的事实层」](./DECISIONS.md)）把 `trip` 重新建模成客户可配置的行业专属结构化字段，而不是永远把旅游一个特例硬编码进通用 schema。#1629 范围内未动 schema：止血 PR 的任务范围是修复身份冒用 bug，重新设计 schema 牵连 `brief-cycle.ts` 调用链、数据库列形状和历史数据兼容，超出一次 A 级止血 PR 该做的事，子牙架构复审在设计阶段已指出这一点（见 #1629 PR 描述里的复审记录）。发现：Claude Code 会话，2026-09-13；2026-09-15 更新状态。
 
 ## Phase 11 — Creative Intelligence Engine（未来重点开发方向）
 

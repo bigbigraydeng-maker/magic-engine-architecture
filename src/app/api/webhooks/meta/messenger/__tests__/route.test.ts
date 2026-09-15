@@ -22,11 +22,27 @@ vi.mock('@/lib/workflows/inngest-event', () => ({
   sendInngestEvent: (e: unknown) => sendInngestEvent(e),
 }))
 
+// isOptOutKeyword 保持真实实现（不重测 #1575 已经测过的关键词判定本身）；
+// recordOptOutKeywordTouch 是唯一要断言调用参数的部分——跟
+// whatsapp/__tests__/route.test.ts 同一个边界划分。
+vi.mock('@/lib/messenger-agent/optout', async (orig) => {
+  const actual = await orig<typeof import('@/lib/messenger-agent/optout')>()
+  return { ...actual, recordOptOutKeywordTouch: vi.fn() }
+})
+
+// 心跳检查（issue #1587）读的是这条落库路径本身——只断言它「被调用」，不重新
+// 实现表结构；那张表的真实建模在 health-heartbeat.test.ts。
+vi.mock('@/lib/messenger-agent/optout-failures', () => ({ recordOptOutWriteFailure: vi.fn() }))
+
 import { GET, POST } from '../route'
 import { supabaseAdmin } from '@/lib/supabase'
 import { CONVERSATION_MESSAGE_RECEIVED_EVENT } from '@/lib/conversations/events'
+import { recordOptOutKeywordTouch } from '@/lib/messenger-agent/optout'
+import { recordOptOutWriteFailure } from '@/lib/messenger-agent/optout-failures'
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
+const mockRecordOptOutKeywordTouch = vi.mocked(recordOptOutKeywordTouch)
+const mockRecordOptOutWriteFailure = vi.mocked(recordOptOutWriteFailure)
 
 const SECRET = 'test-app-secret'
 const VERIFY_TOKEN = 'test-verify-token'
@@ -99,6 +115,7 @@ function stubDb(
     existingConversation?: { id: string; conversation_id: string; contact_id: string | null } | null
     convoUpsertFails?: boolean
     msgUpsertFails?: boolean
+    optoutUnlinkedUpdateFails?: boolean
   } = {},
 ): Captured {
   const captured: Captured = { convoSelects: [], convoUpserts: [], msgUpserts: [], updates: [], filters: {} }
@@ -121,6 +138,9 @@ function stubDb(
       },
       update: (payload: Record<string, unknown>) => {
         captured.updates.push({ table, payload })
+        if (table === 'conversations' && 'optout_unlinked' in payload && opts.optoutUnlinkedUpdateFails) {
+          result = { data: null, error: { message: 'optout_unlinked update failed' } }
+        }
         return chain
       },
       single: async () => result,
@@ -165,6 +185,7 @@ beforeEach(() => {
   process.env.META_APP_SECRET = SECRET
   process.env.META_VERIFY_TOKEN = VERIFY_TOKEN
   sendInngestEvent.mockResolvedValue({ event_ids: ['evt_1'] })
+  mockRecordOptOutKeywordTouch.mockResolvedValue({ touchpointId: 'tp-1' })
 })
 
 describe('GET — 订阅握手', () => {
@@ -360,6 +381,96 @@ describe('POST — 落库成功后 emit conversation/message.received', () => {
     sendInngestEvent.mockRejectedValue(new Error('INNGEST_EVENT_SEND_FAILED:401'))
     const res = await POST(makePost(webhookPayload([messagingEvent()])))
     expect(res.status).toBe(200)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 🔴 Codex 复审（2026-09-15，PR #1736）实测发现：这条渠道原来完全没有做
+// opt-out 检测——只有 WhatsApp 那边的 webhook（issue #1582）会查
+// isOptOutKeyword/recordOptOutKeywordTouch，Messenger 这边只落库 + emit。
+// 后果：客户第一句话就说"别再联系我"，F1（issue #1584）的 opt-out 检查只会
+// 查"已经记录过的"状态——这条消息本身还没被记录，检查会放行，照常自动回一
+// 句安抚，直接违反客户刚说的话。补齐跟 WhatsApp 完全对称的检测+写入路径。
+// 不重测 optout.ts / isOptOutKeyword 内部逻辑（#1575 的范围），只断言这里
+// 传的参数对不对、走对了哪条分叉——跟 whatsapp/__tests__/route.test.ts 的
+// 边界划分一致。
+// ---------------------------------------------------------------------------
+describe('POST — opt-out 检测接入（Codex 复审补，跟 WhatsApp 对称）', () => {
+  it('命中退订关键词 + 有 contact_id → 调用 recordOptOutKeywordTouch，参数带真实消息时间', async () => {
+    stubDb({
+      existingConversation: { id: 'convo-row-id', conversation_id: 't_100', contact_id: 'contact-uuid' },
+    })
+    const sentAt = new Date(1788336000000).toISOString()
+    await POST(makePost(webhookPayload([messagingEvent({ text: 'STOP', mid: 'mid.OPTOUT' })])))
+
+    expect(mockRecordOptOutKeywordTouch).toHaveBeenCalledTimes(1)
+    expect(mockRecordOptOutKeywordTouch).toHaveBeenCalledWith(
+      {
+        clientId: CLIENT_ID,
+        contactId: 'contact-uuid',
+        channel: 'messenger',
+        conversationId: 'convo-row-id',
+        messageId: 'mid.OPTOUT',
+        occurredAt: sentAt,
+      },
+      supabaseAdmin,
+    )
+  })
+
+  it('命中退订关键词 + 没有 contact_id → 退回会话级 optout_unlinked 兜底列，不经过 optout.ts', async () => {
+    const captured = stubDb() // 默认没有 existingConversation → contactId 为 null
+    await POST(makePost(webhookPayload([messagingEvent({ text: '退订', mid: 'mid.OPTOUT2' })])))
+
+    expect(mockRecordOptOutKeywordTouch).not.toHaveBeenCalled()
+    const unlinkedUpdate = captured.updates.find((u) => 'optout_unlinked' in u.payload)
+    expect(unlinkedUpdate).toMatchObject({ table: 'conversations', payload: { optout_unlinked: true } })
+  })
+
+  it('没命中退订关键词 → 完全不调 recordOptOutKeywordTouch，正常 emit', async () => {
+    stubDb({
+      existingConversation: { id: 'convo-row-id', conversation_id: 't_100', contact_id: 'contact-uuid' },
+    })
+    await POST(makePost(webhookPayload([messagingEvent({ text: '请问明天有团吗？' })])))
+
+    expect(mockRecordOptOutKeywordTouch).not.toHaveBeenCalled()
+    expect(sendInngestEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('退订触点写入失败（抛错）不影响消息已经落库的结果（best-effort，跟 CRM 触点一致），且心跳检查（#1587）能看到这次失败', async () => {
+    mockRecordOptOutKeywordTouch.mockRejectedValue(new Error('db 抽风'))
+    stubDb({
+      existingConversation: { id: 'convo-row-id', conversation_id: 't_100', contact_id: 'contact-uuid' },
+    })
+    const res = await POST(makePost(webhookPayload([messagingEvent({ text: 'stop', mid: 'mid.OPTOUT3' })])))
+    expect(res.status).toBe(200)
+    expect(mockRecordOptOutWriteFailure).toHaveBeenCalledTimes(1)
+    expect(mockRecordOptOutWriteFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: CLIENT_ID,
+        channel: 'messenger',
+        conversationId: 'convo-row-id',
+        contactId: 'contact-uuid',
+        errorMessage: expect.stringContaining('db 抽风'),
+      }),
+      supabaseAdmin,
+    )
+  })
+
+  it('没有 contact_id 时，写 conversations.optout_unlinked 本身失败 → 仍回 200，但心跳检查（#1587）能看到这次失败', async () => {
+    stubDb({ optoutUnlinkedUpdateFails: true }) // 默认没有 existingConversation → contactId 为 null
+    const res = await POST(makePost(webhookPayload([messagingEvent({ text: '退订', mid: 'mid.OPTOUT4' })])))
+
+    expect(res.status).toBe(200)
+    expect(mockRecordOptOutWriteFailure).toHaveBeenCalledTimes(1)
+    expect(mockRecordOptOutWriteFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: CLIENT_ID,
+        channel: 'messenger',
+        contactId: null,
+        errorMessage: expect.stringContaining('optout_unlinked update failed'),
+      }),
+      supabaseAdmin,
+    )
   })
 })
 
