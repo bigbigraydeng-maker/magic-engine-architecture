@@ -5,6 +5,16 @@
 
 ---
 
+### 2026-09-15（PM 每日待办新增 AI 客服 4 栏提醒 + 门户「紧急全渠道停/重新打开」开关）
+
+PR [#1747](https://github.com/bigbigraydeng-maker/magic-engine/pull/1747) 已合并（原先在 `claude/*` 分支的 [#1740](https://github.com/bigbigraydeng-maker/magic-engine/pull/1740) 撞到仓库的"自动修爆炸半径"闸门 800 行上限，同一批 commit 换到 `feat/*` 分支重开）。实现 issue #1589：PM 每日待办新增 4 栏（AI 客服待批准草稿 / 已批但发送失败 / 超时未批升级 / 客户资料库信息快到期），以及门户客户设置页新增「紧急全渠道停」双向开关——一次点击把某个客户的 Messenger + WhatsApp AI 客服自动回复全部关掉/重新打开，谁点的、什么时候点的都写进审计记录。
+
+紧急停开关不重新发明逻辑，直接复用已上线的 `stopAiRepliesForClient()`（客户自助确认页在用的同一套开关+审计表），新增对称的 `resumeAiRepliesForClient()` 补上"重新打开"——最初的设计只做了停用，Codex 复审指出面板文案承诺"回这里手动开"但代码里没有任何路径能把开关写回去，误触发之后只能改数据库，属于半成品，随即补齐。另外两处待办生成器的 href 最初分别指向"客户消息"页和"客户知识库"页，但那两个页面实际上分别读的是另一张更早的表、以及只处理候选/未确认事实——FDE 点进去根本看不到待办里说的内容，同样是 Codex 复审抓到后改成了如实说明"AI 那份还看不到，先直接手动回复"/"找 Ray 在数据库里改"，不承诺一个不存在的按钮。
+
+**Reuse Statement**：复用 `stopAiRepliesForClient()`/`requireDashboardClientAccess()`/`fetchAll()` 分页工具/`pm-todo/manual-items.ts` 的 what-how-href 模式；新增均为 client-agnostic 共享代码，无客户专属逻辑。跟 #1588（待批准草稿 UI）同批门户改动但功能独立，本次未包含逐条审核草稿的界面。
+
+---
+
 ### 2026-09-15（管理员批准链接加"复制发给别人"，不用只能自己点）
 
 PR [#1742](https://github.com/bigbigraydeng-maker/magic-engine/pull/1742) 已合并。跟进 #1723 邮箱连接界面重设计——PM 实测带 NAL 走一遍这个流程时发现："管理员批准"这个链接之前只能自己点，但这一步按设计本来就经常是别人（公司的 IT/微软365 管理员）要做的，之前唯一的转发方式是右键复制链接地址，对非技术背景的人不直观。
