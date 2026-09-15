@@ -12,6 +12,7 @@ import { factoryCreatomateRender } from './factory-creatomate-render'
 import { knowledgeMiningRequested } from './knowledge-mining'
 import { conversationInboundAutoAck } from './conversation-inbound-autoack'
 import { conversionDailyPipeline } from './conversion-daily-pipeline'
+import { conversationInboundDraft } from './conversation-inbound-draft'
 import { conversationHealthHeartbeat } from './conversation-health-heartbeat'
 
 export const cloudFunctions = [
@@ -31,6 +32,7 @@ export const cloudFunctions = [
   knowledgeMiningRequested,
   conversationInboundAutoAck,
   conversionDailyPipeline,
+  conversationInboundDraft,
   conversationHealthHeartbeat,
 ]
 
