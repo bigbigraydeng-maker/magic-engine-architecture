@@ -11,8 +11,14 @@
  * Also covers the draft-decision branch (Issue #1586, F3
  * `conversation.approval.emit`): approve / edit_and_approve / reject state
  * transitions on `conversation_reply_drafts`, the IDOR guard (draft_id alone
- * must not be trusted across client/conversation), and the fail-closed
- * rollback when notifying F2 fails after the DB already says "approved".
+ * must not be trusted across client/conversation), the atomic
+ * `WHERE verifier_status='pending'` condition on the UPDATE itself (魏征
+ * complex 2026-09-15: a plain "SELECT then trust it, then UPDATE
+ * unconditionally" is racy — two concurrent decisions on the same draft can
+ * both pass the earlier SELECT-based check), and the fail-closed rollback
+ * when notifying F2 fails after the DB already says "approved" (including
+ * the rollback write itself failing, which the original implementation
+ * silently ignored).
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -21,7 +27,7 @@ import { NextRequest } from 'next/server'
 vi.mock('@/lib/auth/client-access', () => ({ requirePaidClientAccess: vi.fn() }))
 vi.mock('@/lib/messenger/send', () => ({ sendReply: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
-vi.mock('@/lib/inngest/functions/conversation-approval-emit', () => ({
+vi.mock('@/lib/messenger-agent/conversation-approval-emit', () => ({
   emitConversationApprovalEvent: vi.fn(),
 }))
 
@@ -29,7 +35,7 @@ import { POST } from '../route'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { sendReply } from '@/lib/messenger/send'
 import { supabaseAdmin } from '@/lib/supabase'
-import { emitConversationApprovalEvent } from '@/lib/inngest/functions/conversation-approval-emit'
+import { emitConversationApprovalEvent } from '@/lib/messenger-agent/conversation-approval-emit'
 
 const mockAccess = vi.mocked(requirePaidClientAccess)
 const mockSend = vi.mocked(sendReply)
@@ -39,7 +45,7 @@ const mockEmit = vi.mocked(emitConversationApprovalEvent)
 const CTS = 'c0000000-0000-0000-0000-000000000000'
 const OZTOP = 'd5c98811-1c1d-4ded-bdf0-4cefec6afb84'
 const CONVO = 'convo-uuid'
-const DRAFT_ID = 'draft-uuid'
+const DRAFT_ID = 'a1111111-1111-4111-8111-111111111111'
 
 function request(body: unknown): NextRequest {
   return new NextRequest(`http://localhost:3001/api/clients/${CTS}/messenger/x/reply`, {
@@ -78,9 +84,29 @@ function makeSelectBuilder(result: { data: unknown; error: unknown }) {
   return builder
 }
 
-function makeUpdateBuilder(result: { error: unknown }) {
-  const builder: Record<string, unknown> = { update: vi.fn(() => builder) }
-  builder.eq = vi.fn(() => Promise.resolve(result))
+/**
+ * Two call shapes hit this same builder in `route.ts`:
+ *   - the atomic conditional updates: `.update(patch).eq('id', ...)
+ *     .eq('verifier_status', 'pending').select('id')` — resolves via `.select()`
+ *   - the rollback-on-emit-failure update: `.update(patch).eq('id', ...)` —
+ *     awaited directly with no trailing `.select()`
+ * so the builder itself must be a thenable (like
+ * src/lib/messenger-agent/__tests__/tools.test.ts's makeQueryBuilder) as well
+ * as exposing a real `.select()` — whichever one the code under test actually
+ * calls resolves to the same `result`.
+ *
+ * `data` is the array of rows an atomic conditional update actually touched.
+ * `data: []` (or `null`) models "0 rows matched because verifier_status was
+ * no longer 'pending' by the time this UPDATE's WHERE clause was evaluated" —
+ * i.e. lost a race, or the draft was never eligible in the first place.
+ */
+function makeUpdateBuilder(result: { data: unknown; error: unknown }) {
+  const builder: Record<string, unknown> = {}
+  builder.update = vi.fn(() => builder)
+  builder.eq = vi.fn(() => builder)
+  builder.select = vi.fn(() => Promise.resolve(result))
+  builder.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+    Promise.resolve(result).then(resolve, reject)
   return builder
 }
 
@@ -89,7 +115,6 @@ function draftRow(overrides: Record<string, unknown> = {}) {
     id: DRAFT_ID,
     client_id: CTS,
     conversation_id: CONVO,
-    verifier_status: 'pending',
     ...overrides,
   }
 }
@@ -214,6 +239,13 @@ describe('POST reply — draft decision (Issue #1586, F3)', () => {
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
+  it('rejects a draft_id that is not a valid UUID before touching the database', async () => {
+    allow()
+    const res = await POST(request({ draft_id: 'not-a-uuid', action: 'approve' }), params())
+    expect(res.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
   it('rejects an unknown action', async () => {
     allow()
     const res = await POST(request({ draft_id: DRAFT_ID, action: 'do_something_else' }), params())
@@ -231,6 +263,16 @@ describe('POST reply — draft decision (Issue #1586, F3)', () => {
       params(),
     )
     expect(res2.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  it('rejects edit_and_approve when edited_body exceeds the 1800-char hard cap', async () => {
+    allow()
+    const res = await POST(
+      request({ draft_id: DRAFT_ID, action: 'edit_and_approve', edited_body: 'a'.repeat(1801) }),
+      params(),
+    )
+    expect(res.status).toBe(400)
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
@@ -253,33 +295,44 @@ describe('POST reply — draft decision (Issue #1586, F3)', () => {
     },
   )
 
-  it('refuses to decide on a draft that is not in "pending" state (already approved)', async () => {
-    allow()
-    const selectBuilder = makeSelectBuilder({ data: draftRow({ verifier_status: 'approved' }), error: null })
-    mockFrom.mockReturnValue(selectBuilder as never)
+  it(
+    '🔴 并发穿透守卫：approve 的原子条件更新影响 0 行(状态已经不是 pending)时返回 409，' +
+    '不信任早前 SELECT 读到的状态',
+    async () => {
+      allow()
+      const selectBuilder = makeSelectBuilder({ data: draftRow(), error: null })
+      // 0 行受影响 = 这次 UPDATE 的 WHERE verifier_status='pending' 没有命中——
+      // 无论是已经被并发请求决定过，还是从一开始就是 blocked，行为都一样。
+      const updateBuilder = makeUpdateBuilder({ data: [], error: null })
+      mockFrom.mockReturnValueOnce(selectBuilder as never).mockReturnValueOnce(updateBuilder as never)
 
-    const res = await POST(request({ draft_id: DRAFT_ID, action: 'approve' }), params())
+      const res = await POST(request({ draft_id: DRAFT_ID, action: 'approve' }), params())
+
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ reason: 'not_pending' })
+      // 🔴 变异守卫：这次 UPDATE 必须真的带上 verifier_status='pending' 这个条件，
+      // 不能只在应用代码里判断一次就无条件写库。
+      expect(updateBuilder.eq).toHaveBeenCalledWith('verifier_status', 'pending')
+      expect(mockEmit).not.toHaveBeenCalled()
+    },
+  )
+
+  it('同样的并发穿透守卫也适用于 reject（0 行受影响 → 409，不是 500 或误报成功）', async () => {
+    allow()
+    const selectBuilder = makeSelectBuilder({ data: draftRow(), error: null })
+    const updateBuilder = makeUpdateBuilder({ data: null, error: null })
+    mockFrom.mockReturnValueOnce(selectBuilder as never).mockReturnValueOnce(updateBuilder as never)
+
+    const res = await POST(request({ draft_id: DRAFT_ID, action: 'reject' }), params())
 
     expect(res.status).toBe(409)
-    expect(await res.json()).toMatchObject({ reason: 'not_pending' })
-    expect(mockEmit).not.toHaveBeenCalled()
-  })
-
-  it('refuses to approve a draft the Verifier already blocked', async () => {
-    allow()
-    const selectBuilder = makeSelectBuilder({ data: draftRow({ verifier_status: 'blocked' }), error: null })
-    mockFrom.mockReturnValue(selectBuilder as never)
-
-    const res = await POST(request({ draft_id: DRAFT_ID, action: 'approve' }), params())
-
-    expect(res.status).toBe(409)
-    expect(mockEmit).not.toHaveBeenCalled()
+    expect(updateBuilder.eq).toHaveBeenCalledWith('verifier_status', 'pending')
   })
 
   it('approve: marks the draft approved, records who decided, and emits the F2 wakeup event', async () => {
     allow('fde@ctstours.co.nz')
     const selectBuilder = makeSelectBuilder({ data: draftRow(), error: null })
-    const updateBuilder = makeUpdateBuilder({ error: null })
+    const updateBuilder = makeUpdateBuilder({ data: [{ id: DRAFT_ID }], error: null })
     mockFrom.mockReturnValueOnce(selectBuilder as never).mockReturnValueOnce(updateBuilder as never)
     mockEmit.mockResolvedValue(undefined)
 
@@ -290,6 +343,9 @@ describe('POST reply — draft decision (Issue #1586, F3)', () => {
     expect(updateBuilder.update).toHaveBeenCalledWith(
       expect.objectContaining({ verifier_status: 'approved', decided_by_email: 'fde@ctstours.co.nz' }),
     )
+    // 原子条件——不是只在应用代码里判断一次就无条件写库。
+    expect(updateBuilder.eq).toHaveBeenCalledWith('id', DRAFT_ID)
+    expect(updateBuilder.eq).toHaveBeenCalledWith('verifier_status', 'pending')
     // approve 本身不改草稿正文
     expect(updateBuilder.update).not.toHaveBeenCalledWith(expect.objectContaining({ draft_body: expect.anything() }))
     expect(mockEmit).toHaveBeenCalledWith({
@@ -303,7 +359,7 @@ describe('POST reply — draft decision (Issue #1586, F3)', () => {
   it('edit_and_approve: overwrites draft_body with the edited text before marking approved', async () => {
     allow()
     const selectBuilder = makeSelectBuilder({ data: draftRow(), error: null })
-    const updateBuilder = makeUpdateBuilder({ error: null })
+    const updateBuilder = makeUpdateBuilder({ data: [{ id: DRAFT_ID }], error: null })
     mockFrom.mockReturnValueOnce(selectBuilder as never).mockReturnValueOnce(updateBuilder as never)
     mockEmit.mockResolvedValue(undefined)
 
@@ -322,7 +378,7 @@ describe('POST reply — draft decision (Issue #1586, F3)', () => {
   it('reject: marks the draft rejected and does NOT notify F2 (human takes over manually)', async () => {
     allow('fde@ctstours.co.nz')
     const selectBuilder = makeSelectBuilder({ data: draftRow(), error: null })
-    const updateBuilder = makeUpdateBuilder({ error: null })
+    const updateBuilder = makeUpdateBuilder({ data: [{ id: DRAFT_ID }], error: null })
     mockFrom.mockReturnValueOnce(selectBuilder as never).mockReturnValueOnce(updateBuilder as never)
 
     const res = await POST(request({ draft_id: DRAFT_ID, action: 'reject' }), params())
@@ -341,8 +397,8 @@ describe('POST reply — draft decision (Issue #1586, F3)', () => {
     async () => {
       allow()
       const selectBuilder = makeSelectBuilder({ data: draftRow(), error: null })
-      const approveBuilder = makeUpdateBuilder({ error: null })
-      const rollbackBuilder = makeUpdateBuilder({ error: null })
+      const approveBuilder = makeUpdateBuilder({ data: [{ id: DRAFT_ID }], error: null })
+      const rollbackBuilder = makeUpdateBuilder({ data: [{ id: DRAFT_ID }], error: null })
       mockFrom
         .mockReturnValueOnce(selectBuilder as never)
         .mockReturnValueOnce(approveBuilder as never)
@@ -352,9 +408,33 @@ describe('POST reply — draft decision (Issue #1586, F3)', () => {
       const res = await POST(request({ draft_id: DRAFT_ID, action: 'approve' }), params())
 
       expect(res.status).toBe(502)
+      expect(await res.json()).toMatchObject({ error: expect.stringContaining('已回退为待批准状态') })
       expect(rollbackBuilder.update).toHaveBeenCalledWith(
         expect.objectContaining({ verifier_status: 'pending' }),
       )
+    },
+  )
+
+  it(
+    '🔴 子牙+魏征复审 blocker: if the ROLLBACK write itself also fails, the response must not claim ' +
+    '"rolled back to pending" — it must say the draft is in an inconsistent state needing a human',
+    async () => {
+      allow()
+      const selectBuilder = makeSelectBuilder({ data: draftRow(), error: null })
+      const approveBuilder = makeUpdateBuilder({ data: [{ id: DRAFT_ID }], error: null })
+      const rollbackBuilder = makeUpdateBuilder({ data: null, error: { message: 'connection reset' } })
+      mockFrom
+        .mockReturnValueOnce(selectBuilder as never)
+        .mockReturnValueOnce(approveBuilder as never)
+        .mockReturnValueOnce(rollbackBuilder as never)
+      mockEmit.mockRejectedValue(new Error('INNGEST_EVENT_SEND_FAILED:500'))
+
+      const res = await POST(request({ draft_id: DRAFT_ID, action: 'approve' }), params())
+
+      expect(res.status).toBe(502)
+      const body = await res.json()
+      expect(body.error).not.toContain('已回退为待批准状态，请重试')
+      expect(body.error).toContain('不一致')
     },
   )
 
