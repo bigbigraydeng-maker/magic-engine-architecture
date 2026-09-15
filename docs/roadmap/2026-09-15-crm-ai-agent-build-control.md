@@ -49,24 +49,30 @@ Adapter。构建控制/任何窗口看到"要不要现在做 WhatsApp AI 客服"
 | 对话分类逻辑 | ✅ 已合并 | issue #1621 |
 | CAPI 支持 Facebook 私信身份（PSID）第三种匹配键 | ✅ 已合并（NAL 客户） | PR #1684 |
 | NAL 私信 → CAPI 有效咨询同步（dry_run） | ✅ 已合并，未切真发送 | PR #1675/#1689，等 PM/FDE 决定要不要审这批 `pending_review` |
+| Verifier 框架 + CTS 七道闸（AI 说的话过最后一道数字核实） | ✅ 已合并（2026-09-15，merge commit `65efbfa0`） | issue #1579，PR #1638 —— 改接新 `getClientKnowledge` 完成，子牙 CONDITIONAL PASS（[#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726) 跟踪，P3 不阻塞）+ 魏征 ✅ 通过，PM 拍板后合并 |
+| Messenger AI 客服核心（prompt.ts + 3 只读工具） | ✅ 已合并（2026-09-15，merge commit `2c05d77f`） | issue #1580，PR #1639 —— 同上改接完成，子牙 ✅ 通过，PM 拍板后合并 |
 
-### 卡着、依赖已经解除、但没人在动
+### 依赖已经解除，逐条 `gh issue view` + `gh pr list --search` 核实过（2026-09-15）
+
+> ⚠️ 上面两行刚合并的，代码只是"判断该不该说 / AI 能查什么"这两层静态逻辑，**还没能让 CTS
+> 私信客服真正跑起来**——下面这批 Inngest 编排/UI/dry-run 才是让它真正上线要做的事。已逐条核实，不是抄旧文档。
 
 | 能力 | issue | PR | 现状 |
 |---|---|---|---|
-| Verifier 框架 + CTS 七道闸（AI 说的话过最后一道数字核实） | #1579 | #1638（open） | 依赖客户知识库，**依赖已就位**，需要改接新的 `getClientKnowledge`/rollout 闸模型 |
-| Messenger AI 客服核心（prompt.ts + 4 只读工具） | #1580 | #1639（open） | 同上，需要改接 purpose+visibility 模型 |
-| Inngest 编排 F1 自动应答 | #1584 | 未知，需核实 | |
-| Inngest 编排 F2 生成草稿（主函数） | #1585 | 未知，需核实 | |
-| Inngest 编排 F3 审批端点 | #1586 | 未知，需核实 | |
-| Inngest 编排 F4 健康心跳 | #1587 | 未知，需核实 | |
-| PM daily-todo UI + 紧急停按钮 | #1589 | 未知，需核实 | |
-| 待批准草稿 UI（三按钮） | #1588 | 未知，需核实 | |
-| T-14d 端到端 dry-run | #1591 | 未知，需核实 | |
-| 回滚 SOP 演练 | #1590 | 未知，需核实 | |
-| Delivery day 灰度切换 | #1592 | 未知，需核实 | |
+| Inngest 编排 F1 自动应答 | #1584 | [#1736](https://github.com/bigbigraydeng-maker/magic-engine/pull/1736)（open，`Closes #1584`） | 🔧 **已有窗口在做**，别重开 |
+| Inngest 编排 F2 生成草稿（主函数） | #1585 | 无 | 没人在动 |
+| Inngest 编排 F3 审批端点 | #1586 | 无 | 没人在动 |
+| Inngest 编排 F4 健康心跳 | #1587 | 无 | 没人在动 |
+| PM daily-todo UI + 紧急停按钮 | #1589 | 无 | 没人在动 |
+| 待批准草稿 UI（三按钮） | #1588 | 无 | 没人在动 |
+| T-14d 端到端 dry-run | #1591 | 无 | 没人在动 |
+| 回滚 SOP 演练 | #1590 | 无 | 没人在动 |
+| Delivery day 灰度切换 | #1592 | 无 | 没人在动 |
 
-> ⚠️ "未知，需核实"是诚实标注——这份文档第一版没有逐个去查 F1-F4/UI/dry-run 那几个 issue 的 PR 链接，**下一个进这条线的窗口第一件事就是把这几行补全**，不要假设它们没人做。
+> ⚠️ 核实方法：`gh issue view <号>` 确认 9 个都还是 `OPEN`；`gh pr list --search "<号>"` 逐个查有没有已开的 PR。
+> 只有 #1584 命中——PR #1736 是当场在做，进这条线前先去 #1736 看进度，不要重开。其余 8 个搜索无匹配 PR，
+> 状态是真的"没人在动"，不是"没查"。**这份核实是这次改动时的快照，会过期**——下一个进这条线的窗口领活前
+> 仍要自己重跑一遍上面两条命令，不能直接信这张表。
 
 ### 已知的真实冲突/重复劳动（本 session 已实测抓到，别再踩一次）
 

@@ -39,6 +39,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { resolveContact } from '@/lib/crm/identity'
 import { recordOptOutKeywordTouch } from '@/lib/messenger-agent/optout'
 import { inngest } from '@/lib/inngest/client'
+import { ConversationMessageReceivedSchema } from '@/lib/conversations/events'
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
 const mockResolveContact = vi.mocked(resolveContact)
@@ -469,6 +470,18 @@ describe('POST — 渠道无关事件 emit（issue #1582）', () => {
         }),
       }),
     )
+  })
+
+  it('🔴 魏征复审（2026-09-15）：emit 出去的 data 必须真的能通过共享契约的 ConversationMessageReceivedSchema —— 之前这里发的是 body/occurred_at，字段名跟契约要求的 sent_at 完全对不上，`objectContaining` 断言从来没查过这件事，导致每一条 WhatsApp 消息在下游（F1 等）都被判定成 payload 不合法、静默丢弹，这条测试用真实 zod 契约重放一遍才抓到', async () => {
+    stubDb()
+    await POST(makePost(messagePayload({ body: '你好', msgId: 'wamid.SCHEMA' })))
+
+    const call = mockInngestSend.mock.calls.find(
+      ([event]) => (event as { data?: { message_id?: string } }).data?.message_id === 'wamid.SCHEMA',
+    )
+    expect(call).toBeDefined()
+    const parsed = ConversationMessageReceivedSchema.safeParse((call![0] as { data: unknown }).data)
+    expect(parsed.success).toBe(true)
   })
 
   it('emit 失败不影响消息已经落库的结果（best-effort）', async () => {
