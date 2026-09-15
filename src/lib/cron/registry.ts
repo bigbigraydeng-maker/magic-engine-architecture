@@ -208,6 +208,10 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   //    FLYWHEEL_SEO_WEEKLY_CRON，同目录的测试会断言两边一致。抄错的后果是健康检查
   //    按错的周期算逾期 —— 算错的告警和没有告警一样没用。
   { service: 'inngest:cloud-flywheel-seo-weekly-fanout', jobName: 'flywheel-seo-weekly', schedule: '15 5 * * 1', logsRuns: true, scheduler: 'inngest', addedAt: '2026-09-07' },
+  // 🔴 schedule 这一列不许手抄：唯一定义在
+  //    src/lib/inngest/functions/conversion-daily-pipeline.ts 的
+  //    CONVERSION_DAILY_PIPELINE_CRON，抄错的后果同上一条 flywheel 注释。
+  { service: 'inngest:cloud-conversion-daily-pipeline', jobName: 'conversion-daily-pipeline', schedule: '0 6 * * *', logsRuns: true, scheduler: 'inngest', addedAt: '2026-09-15' },
 ] as const
 
 /**
