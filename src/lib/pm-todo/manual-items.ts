@@ -22,10 +22,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { pushConversionReviewItems } from './conversion-review-items'
+import { pushAiAutoReviewCircuitBreakerItems } from './ai-auto-review-circuit-breaker-items'
+import { pushMessengerDraftItems } from './messenger-draft-items'
+import { pushKnowledgeFactExpiringItems } from './knowledge-fact-expiring-items'
+import { pushDailyPlanMeasurementItems, type DailyPlanMeasurementItemKind } from './daily-plan-measurement-items'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { classifyNotIndexed, THIN_WORD_COUNT_THRESHOLD } from '@/lib/seo/index-status'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
 import { pushEmailReplyItems, type EmailReplyItemKind } from './email-reply-items'
+import { pushBindingRequestItems, type BindingRequestItemKind } from './binding-request-items'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
 import { LINKEDIN_PROGRESS_CLIENT_ID, LINKEDIN_PROGRESS_SOURCE } from '@/lib/linkedin-progress/constants'
@@ -53,6 +58,10 @@ export type ManualItemKind =
   | 'meta_stuck'
   | 'crawl_stale'
   | 'video_credits_out'
+  /** Creatomate 渲染失败或超时未完成（额度用完 / 渲染卡死超过 15+20 分钟兜底轮询）—— 见
+   *  docs/specs/2026-09-09-creatomate-connector-spec-v1.md §4.4，旧管线的 reapStale() 已死，
+   *  这条是它的替代 */
+  | 'creatomate_render_failed'
   | 'dataforseo_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
@@ -88,12 +97,28 @@ export type ManualItemKind =
   | 'conversion_needs_review'
   /** 发给广告平台时断线了，不知道对方收没收 —— 程序绝不自己重发，等人核对 */
   | 'conversion_send_in_doubt'
+  /** AI 全自动审核发现异常，已经自动暂停发送（PM 拍板 2026-09-15："要有异常刹车"） */
+  | 'ai_auto_review_circuit_breaker'
+  /** AI 客服回复草稿写好了，等人批准发送（issue #1589） */
+  | 'messenger_draft_pending_approval'
+  /** AI 客服回复已批准但发送失败，客户没收到（issue #1589 · P0 · H16） */
+  | 'messenger_draft_send_failed'
+  /** AI 客服回复草稿超过 4 小时没人批准，next-day escalation（issue #1589） */
+  | 'messenger_draft_escalation'
+  /** 客户资料库里的信息（团期/价格等）快到期了，过期后 AI 客服不能再用（issue #1589） */
+  | 'knowledge_fact_expiring_soon'
   | AttributionItemKind
   | ClientRosterItemKind
   | 'linkedin_progress_needs_review'
   | 'linkedin_progress_needs_setup'
   | 'linkedin_progress_failed'
   | EmailReplyItemKind
+  /** 客户在自助向导里交了广告账户号，只有内部员工能核实后接上（AD-SEC-3）*/
+  | BindingRequestItemKind
+  /** 排期发的 Facebook 帖子发出去了，但一直拿不到帖子编号 —— 成绩收不回来 */
+  | DailyPlanMeasurementItemKind
+  /** 私信客服健康心跳查出问题（issue #1587）：消息量骤降 / 验证器拦截率或出错率过高 / 退订登记写入失败 */
+  | 'conversation_health_alert'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -148,7 +173,7 @@ import { checkCronHealth } from '@/lib/cron/health'
 import { CRON_REGISTRY } from '@/lib/cron/registry'
 import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
-import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
+import { judgeWorkerPresence, judgeQueueByClient } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
@@ -157,6 +182,7 @@ import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
+import { dropAlreadyPaidTagged } from '@/lib/mailchimp/paid-review-filter'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import {
@@ -359,11 +385,32 @@ export async function loadManualItems(
   await pushConversionReviewItems(supabase, items, clients, now).catch((e) =>
     console.warn('[manual-items] 成交待核对读取失败（不阻塞其他待办）:', e),
   )
+  // AI 全自动审核被异常刹车暂停了 —— 拉模式，事件送达失败也照样出得来
+  await pushAiAutoReviewCircuitBreakerItems(supabase, items).catch((e) =>
+    console.warn('[manual-items] AI 自动审核熔断状态读取失败（不阻塞其他待办）:', e),
+  )
+  // AI 客服回复：待批准 / 已批但发送失败 / 超时升级三档（#1589）——拉模式，
+  // 不依赖 Inngest 事件送达
+  await pushMessengerDraftItems(supabase, items, clients, now).catch((e) =>
+    console.warn('[manual-items] AI 客服草稿待办读取失败（不阻塞其他待办）:', e),
+  )
+  // 客户资料库信息快到期了，过期后 AI 客服不能再用这条信息回复客户（#1589）
+  await pushKnowledgeFactExpiringItems(supabase, items, clients, now).catch((e) =>
+    console.warn('[manual-items] 客户资料库到期检查失败（不阻塞其他待办）:', e),
+  )
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
-  await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
+  await pushFactoryWorkerItems(supabase, items, now, clients).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
+  )
+  // Creatomate 渲染失败/超时 —— 旧路径的卡死回收已死透，这是它的替代（spec §4.4 B4）
+  await pushCreatomateRenderItems(supabase, items, now, clients).catch((e) =>
+    console.warn('[manual-items] Creatomate 渲染检查失败（不阻塞其他待办）:', e),
+  )
+  // 排期帖发出去了但拿不到帖子编号 —— 成绩收不回来，只写运行记录等于没人知道
+  await pushDailyPlanMeasurementItems(supabase, items, now, clients).catch((e) =>
+    console.warn('[manual-items] 帖子成绩回收失败检查读取失败（不阻塞其他待办）:', e),
   )
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
   await pushAdReadbackItems(supabase, items, now).catch((e) =>
@@ -453,8 +500,19 @@ export async function loadManualItems(
     console.warn('[manual-items] 客人来信没回待办生成失败（不阻塞其他待办）:', e),
   )
 
+  // 客户交了广告账户号等核实 —— 客户以为交上去了，不下发就没人知道（AD-SEC-3）
+  await pushBindingRequestItems(supabase, items, ids, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 广告账户号待核实读取失败（不阻塞其他待办）:', e),
+  )
+
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
   await pushAttributionItems(supabase, items, ids, nameOf, now)
+
+  // 私信客服健康心跳查出的异常（issue #1587）——拉模式，直接查
+  // conversation_health_alerts，事件送达失败也照样出得来
+  await pushConversationHealthAlertItems(supabase, items, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 私信客服健康告警读取失败（不阻塞其他待办）:', e),
+  )
 
   // GSC property per client —— 汇总后的「未收录页面」待办链到这里。谷歌自己的
   // 「索引 → 网页」报告才是权威的「哪些页面没被收录、为什么」清单；ME 后台没有
@@ -638,6 +696,49 @@ async function pushVideoCreditsItem(
   })
 }
 
+/**
+ * Creatomate 渲染失败 / 超时 —— 旧 ffmpeg 路径的 reapStale() 随 2026-09-02 退役一起死了
+ * （见 docs/specs/2026-09-09-creatomate-connector-spec-v1.md §4.4 B4），这条是它的替代：
+ * 卡死的任务不会自己被谁看见，必须扫一遍 failed 行主动下发。
+ *
+ * 判据：`render_engine='creatomate' AND status='failed'`，近 3 天（避免翻出陈年旧账）。
+ * `error` 文案区分"额度用完"（402，见 spec §6.2）和其他失败（超时/参数错误等），
+ * 前者的 how 指向充值，后者指向去 Creatomate 后台查那条具体的 render。
+ */
+export async function pushCreatomateRenderItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  clientNames: Map<string, { name: string }>,
+): Promise<void> {
+  const since = new Date(now.getTime() - 3 * 86_400_000).toISOString()
+  const { data } = await supabase
+    .from('content_factory_render_jobs')
+    .select('id, client_id, error, creatomate_render_id')
+    .eq('render_engine', 'creatomate')
+    .eq('status', 'failed')
+    .gte('updated_at', since)
+    .limit(50)
+
+  const rows = (data ?? []) as Array<{ id: string; client_id: string; error: string | null; creatomate_render_id: string | null }>
+  for (const row of rows) {
+    const clientName = clientNames.get(row.client_id)?.name ?? '未知客户'
+    const creditsOut = /402|insufficient|credit/i.test(row.error ?? '')
+    items.push({
+      kind: 'creatomate_render_failed',
+      client_id: row.client_id,
+      client_name: clientName,
+      what: creditsOut
+        ? `${clientName} 有一条视频没做完 —— Creatomate 出片额度可能用完了，只有人能充值`
+        : `${clientName} 有一条视频做片失败：${row.error ?? '原因未知'}`,
+      how: creditsOut
+        ? '登录 Creatomate 后台确认额度并充值，充完回我一句，我把这条重新提交'
+        : `登录 Creatomate 后台查这条 render（id: ${row.creatomate_render_id ?? '未知，看工单详情'}）到底卡在哪，或者直接找我重跑`,
+      href: `https://app.magicengine.com.au/dashboard/clients/${row.client_id}/content-factory`,
+    })
+  }
+}
+
 /** Mailchimp 后台的联系人页 —— 登录后一定打得开的稳定入口。 */
 const MAILCHIMP_AUDIENCE_URL = 'https://admin.mailchimp.com/audience/contacts/'
 
@@ -695,13 +796,54 @@ export async function pushPaidSignalReviewItems(
     const list = Array.isArray(run.summary?.needsReview) ? run.summary.needsReview : []
     for (const item of list) {
       const email = typeof (item as { email?: unknown })?.email === 'string' ? (item as { email: string }).email : ''
-      if (!email || seen.has(email.toLowerCase())) continue
-      seen.add(email.toLowerCase())
+      const clientId = typeof (item as { clientId?: unknown })?.clientId === 'string'
+        ? (item as { clientId: string }).clientId : ''
+      const key = `${clientId}::${email.trim().toLowerCase()}`
+      if (!email.trim() || seen.has(key)) continue
+      seen.add(key)
       rows.push(item)
     }
   }
 
-  for (const raw of rows.slice(0, 20)) {
+  /**
+   * 🔴 按 Mailchimp **当前**标签再过滤一次（Codex P1 复审 PR #1484）。
+   *
+   * 上面那 7 天窗口是有原因的（见本函数头注的三个漏法），不能砍。但它带来一个
+   * 后果：PM 今天处理完，今天的 summary 里确实没他了，**昨天的 summary 里还在**，
+   * 于是同一条待办天天重新冒出来，直到旧日志滚出窗口 —— 写入侧那道过滤
+   * （`runPaidTagging`）管不到已经落库的历史摘要。
+   *
+   * 所以在生成待办的这一刻，按真实标签状态再判一次。查不到 / 出错一律保留
+   * （fail-open）—— 漏掉一条真待处理的付款确认，客人会继续收到营销邮件。
+   */
+  // 🔴 必须先过滤再截取 20 条（Codex P1 复审 PR #1484）。
+  // 之前是先 slice(0, 20) 再过滤已处理：如果最近 7 天去重后超过 20 个候选人，
+  // 且排在前 20 个的历史候选恰好已经被 PM 打过标签，这里会把它们连着这次机会
+  // 一起删掉，却从不去看第 21 条之后仍未处理的人 —— 那些人就再也不会被下发。
+  const allCandidates = rows.map((raw) => {
+    const r = raw as { email?: unknown; clientId?: unknown }
+    return {
+      email: typeof r.email === 'string' ? r.email : '',
+      clientId: typeof r.clientId === 'string' ? r.clientId : '',
+      raw,
+    }
+  })
+  const keepable = await dropAlreadyPaidTagged(
+    supabase,
+    allCandidates.filter((c) => c.email && c.clientId),
+  ).catch((e) => {
+    console.warn('[manual-items] 付款待确认的已处理过滤失败（保留全部，不静默丢）:', e)
+    return allCandidates.filter((c) => c.email && c.clientId).map((c) => ({ ...c, paidTag: undefined }))
+  })
+  const keepKeys = new Map(keepable.map((c) => [
+    `${c.clientId}::${c.email.trim().toLowerCase()}`, c,
+  ]))
+  // 没有 clientId 的记录过滤不了（判不出用哪个 audience）—— 一律保留
+  const toEmit = allCandidates
+    .filter((c) => !c.clientId || !c.email || keepKeys.has(`${c.clientId}::${c.email.trim().toLowerCase()}`))
+    .slice(0, 20)
+
+  for (const { raw } of toEmit) {
     const r = raw as {
       email?: unknown
       name?: unknown
@@ -717,13 +859,16 @@ export async function pushPaidSignalReviewItems(
     const days = daysAgo(typeof r.receivedAt === 'string' ? r.receivedAt : null, now)
     const when = days === null ? '' : days === 0 ? '今天' : `${days} 天前`
 
+    const paidTag = keepKeys.get(`${typeof r.clientId === 'string' ? r.clientId : ''}::${email.trim().toLowerCase()}`)?.paidTag
+    const tagInstruction = paidTag ? `${paidTag} 标签` : '该客户配置的已付款标签（先在客户设置核对标签名）'
+
     items.push({
       kind: 'paid_signal_needs_review',
       client_id: typeof r.clientId === 'string' ? r.clientId : 'infra',
       client_name: typeof r.clientName === 'string' ? r.clientName : 'Magic Engine 后台',
       // 原话逐字带上 —— 人一眼就知道该不该信，不用回邮箱翻
       what: `${who}${when ? `（${when}）` : ''}像是说他付款了${quote ? `：「${quote}」` : ''} —— 但这是他自己说的，不是我们确认到账，所以系统没敢自动标成已付款客户。不标的话，他还会继续收到招揽邮件`,
-      how: '去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 paid_customer 标签（加完他就自动退出群发名单了）；没到就不用管',
+      how: `去银行流水核一眼钱到了没有。到了就在 Mailchimp 搜这个邮箱，给他加上 ${tagInstruction}（加完他就自动退出群发名单了）；没到就不用管`,
       href: MAILCHIMP_AUDIENCE_URL,
     })
   }
@@ -1033,7 +1178,7 @@ export async function pushMailchimpExportItems(
  *
  * 不落新状态、不加新表：判定条件跟闸本身同源，改好文案或确认好素材，这条自己就消失。
  */
-async function pushPriceGateItems(
+export async function pushPriceGateItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   nameOf: (id: string) => string,
@@ -1074,6 +1219,19 @@ async function pushPriceGateItems(
     })
     if (!verdict.blocked) continue
 
+    // href 要指到「这张图真的能改」的地方——素材库页面只操作 client_assets，
+    // 不是这条闸真正查的表。图必须在素材库里才有「改来源」这个动作可点；
+    // 不在库里（比如纯 AI 生成、从没进过素材库）就没有素材库能改，那条选项对
+    // PM 来说是死链接，只剩「把价格去掉」这一条路是真能做的。
+    const { data: libraryRow } = await supabase
+      .from('client_assets')
+      .select('id')
+      .eq('client_id', post.client_id)
+      .eq('storage_url', storageUrl)
+      .limit(1)
+      .maybeSingle()
+    const libraryAssetId = (libraryRow as { id: string } | null)?.id
+
     items.push({
       kind: 'price_claim_unbacked',
       client_id: post.client_id,
@@ -1082,10 +1240,14 @@ async function pushPriceGateItems(
         `帖子「${post.title ?? post.id}」已审批但发不出去 —— 文案里写了价格，` +
         `配图来源是「${SOURCE_LABELS[verdict.source]}」。真实价格只能配真实画面，` +
         '客人按图下单拿到的东西对不上，投诉算客户的。',
-      how:
-        '两条路选一条：① 最快 —— 把价格从文案里去掉；' +
-        '② 如果那张图确实是客户实拍，去素材库点开它，把来源改成「客户实拍（已确认）」，再回来重发。',
-      href: `https://app.magicengine.com.au/dashboard/clients/${post.client_id}/assets`,
+      how: libraryAssetId
+        ? '两条路选一条：① 最快 —— 把价格从文案里去掉；' +
+          '② 如果那张图确实是客户实拍，点这个链接会直接跳到那张图，把来源改成「客户实拍（已确认）」，再回来重发。'
+        : '这张图不在素材库里（不是客户实拍上传的，多半是系统自动生成的），没法回去"确认成客户实拍"——' +
+          '唯一能做的是把价格从文案里去掉，再重发。',
+      href: libraryAssetId
+        ? `https://app.magicengine.com.au/dashboard/clients/${post.client_id}/assets?highlight=${libraryAssetId}`
+        : `https://app.magicengine.com.au/dashboard/clients/${post.client_id}/execution`,
     })
   }
 }
@@ -1594,6 +1756,93 @@ export async function pushMessengerStopItems(
   }
 }
 
+/** 渠道代号 → 人话名字，不在 what 字段里出现 `messenger`/`whatsapp` 这种没解释过的裸词。 */
+function conversationChannelLabel(channel: string): string {
+  if (channel === 'messenger') return 'Facebook Messenger'
+  if (channel === 'whatsapp') return 'WhatsApp'
+  return channel
+}
+
+/** check_type 代号 → 人话问题描述（不把代号本身抛给 PM/FDE）。 */
+function conversationHealthProblemLabel(checkType: string): string {
+  switch (checkType) {
+    case 'webhook_silent':
+      return '收到的客户消息量突然明显变少，像是接收链路安静地断了'
+    case 'verifier_block_rate_high':
+      return 'AI 写的回复大多被系统自己拦下，没能发出去'
+    case 'verifier_error_rate_high':
+      return 'AI 起草回复这一步一直在报错'
+    case 'optout_write_failed':
+      return '客户说了「别再联系我」，但系统记这件事时失败了'
+    default:
+      return '心跳检查发现异常'
+  }
+}
+
+/** check_type 代号 → 该先查什么（跟 issue #1587 原文四类问题一一对应）。 */
+function conversationHealthHowLabel(checkType: string, channelLabel: string): string {
+  switch (checkType) {
+    case 'webhook_silent':
+      return `先看 ${channelLabel} 那边的官方后台连接状态是不是掉了；如果连接正常，也可能这段时间客户确实没人来问，看一眼对话记录再判断`
+    case 'verifier_block_rate_high':
+      return '打开对话看几条被拦下的草稿——多半是客户资料库里的信息（团期/价格）过期了，或者 AI 理解错了客户的问题'
+    case 'verifier_error_rate_high':
+      return 'AI 起草回复这一步在报错，这不是你能直接修的，回一句「AI 报错」我去查'
+    case 'optout_write_failed':
+      return '先打开对话确认这几位客户有没有在被继续联系；需要的话在他们的记录里手动写一句「客户说别再联系」，系统会立刻停掉所有渠道'
+    default:
+      return '打开对话看一下最近发生了什么'
+  }
+}
+
+interface ConversationHealthAlertRow {
+  client_id: string
+  channel: string
+  check_type: string
+  detail: string
+  first_detected_at: string
+}
+
+/**
+ * 私信客服健康心跳（issue #1587）查出的异常——拉模式，直接查
+ * `conversation_health_alerts`：这张表本身就是「现在正在报警的问题」，健康了
+ * 心跳函数自己会把行删掉，这里不需要再按时间过滤。
+ */
+async function pushConversationHealthAlertItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('conversation_health_alerts')
+    .select('client_id, channel, check_type, detail, first_detected_at')
+  if (error) throw new Error(error.message)
+
+  for (const row of (data ?? []) as ConversationHealthAlertRow[]) {
+    const channelLabel = conversationChannelLabel(row.channel)
+    const firstDetectedMs = Date.parse(row.first_detected_at)
+    const hoursOngoing = Number.isNaN(firstDetectedMs)
+      ? null
+      : Math.max(0, Math.floor((now.getTime() - firstDetectedMs) / 3_600_000))
+    const durationText =
+      hoursOngoing === null
+        ? ''
+        : hoursOngoing < 24
+          ? `，已经持续 ${hoursOngoing} 小时没恢复`
+          : `，已经持续 ${Math.floor(hoursOngoing / 24)} 天没恢复`
+
+    items.push({
+      kind: 'conversation_health_alert',
+      client_id: row.client_id,
+      client_name: nameOf(row.client_id),
+      what: `${channelLabel} 私信客服：${conversationHealthProblemLabel(row.check_type)}${durationText}（${row.detail}）`,
+      how: conversationHealthHowLabel(row.check_type, channelLabel),
+      href: `https://app.magicengine.com.au/dashboard/clients/${row.client_id}/messenger`,
+    })
+  }
+}
+
 async function pushCrossClientItems(supabase: SupabaseClient, items: ManualItem[]): Promise<void> {
   const findings = await auditCrossClientLeaks(supabase)
   for (const f of findings) {
@@ -1773,42 +2022,105 @@ async function pushLeadsSanityItems(
  * 队列里有活、看板上没动静，而「这周怎么没出片」要等人想起来问才发现。
  * 只在**真的有活在等**时才报（没活时工人没开机完全正常，报了就是噪音）。
  */
-async function pushFactoryWorkerItems(
+export async function pushFactoryWorkerItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   now: Date,
+  /** 客户名查表 —— 待办要说清是哪个客户的活卡了，显示 uuid 等于没显示。 */
+  clientNames: Map<string, { name: string }>,
 ): Promise<void> {
-  // 真实列名（已核实）：status / created_at / heartbeat_at
+  // 真实列名（已核实）：status / created_at / heartbeat_at / reject_reason
+  // 🔴 `reject_reason` 必须一起读：余额不足时 worker 把工单退回 queued 而不是
+  //    标 failed，只数「队列里有几个」会把「失败后卡住的僵尸工单」误当成「等人干的新活」。
   const { data: queuedRows } = await supabase
     .from('content_work_orders')
-    .select('id, created_at')
+    .select('id, client_id, created_at, reject_reason')
     .eq('status', 'queued')
     .order('created_at', { ascending: true })
-  const queued = (queuedRows ?? []) as Array<{ id: string; created_at: string }>
+  const queued = (queuedRows ?? []) as Array<{
+    id: string
+    client_id: string
+    created_at: string
+    reject_reason: string | null
+  }>
   if (queued.length === 0) return
 
-  const { data: hbRows } = await supabase
-    .from('content_work_orders')
-    .select('heartbeat_at')
-    .not('heartbeat_at', 'is', null)
-    .order('heartbeat_at', { ascending: false })
-    .limit(1)
-  const lastHb = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+  // 心跳按客户查 —— 判定层解释了为什么不能用全局最新的（judgeQueueByClient 头注）。
+  const clientIds = Array.from(new Set(queued.map((q) => q.client_id)))
+  const latestHbByClient = new Map<string, string>()
+  for (const clientId of clientIds) {
+    // A busy client's history must not crowd another client's latest heartbeat out of a global limit.
+    const { data: hbRows, error: hbError } = await supabase
+      .from('content_work_orders')
+      .select('heartbeat_at')
+      .eq('client_id', clientId)
+      .not('heartbeat_at', 'is', null)
+      .order('heartbeat_at', { ascending: false })
+      .limit(1)
+    if (hbError) throw new Error(`factory heartbeat query failed: ${hbError.message}`)
+    const latest = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+    if (latest) latestHbByClient.set(clientId, latest.heartbeat_at)
+  }
 
-  const hours = (iso: string) => (now.getTime() - Date.parse(iso)) / 3_600_000
-  const verdict = judgeWorkerPresence({
-    queued: queued.length,
-    oldestQueuedHours: hours(queued[0].created_at),
-    lastHeartbeatHours: lastHb ? hours(lastHb.heartbeat_at) : null,
-  })
-  if (verdict.idle) return
+  // 一个客户一条：不同客户的 worker 在线状态是独立的，合成一条会把两种
+  // 完全不同的处置（这家去开机 / 那家去查报错）搅在一起。
+  for (const { clientId, verdict } of judgeQueueByClient(queued, latestHbByClient, now)) {
+    pushOneFactoryWorkerItem(items, verdict, clientNames.get(clientId)?.name ?? '未知客户')
+  }
+}
 
+/** 把一条工人待办写出来。两种病因两套话术，别混。 */
+function pushOneFactoryWorkerItem(
+  items: ManualItem[],
+  verdict: Exclude<ReturnType<typeof judgeWorkerPresence>, { idle: true }>,
+  clientName: string,
+): void {
+  const who = `【${clientName}】`
+
+  // 两种病因，两套话术。判定层已经保证：`stuck_on_failure` 只在工人**在线**时
+  // 产生（离线一律先报 worker_offline，因为开机是那种情况下无条件正确的第一步）。
+  if (verdict.kind === 'stuck_on_failure') {
+    items.push({
+      kind: 'factory_worker_idle',
+      client_id: 'infra',
+      client_name: 'Magic Engine 后台',
+      what:
+        `${who}${verdict.humanReason}` +
+        (verdict.sampleReason ? `。系统报的原因：「${verdict.sampleReason}」` : ''),
+      // 🔴 这里**不能**写成「先观察下一次重试」（Codex P2 复审）。
+      //    `factory/worker/[id]/fail` 把可重试失败直接退回 `queued`，**没有任何
+      //    退避字段**（`next_retry_at` 只存在于 publish-worker，那是另一条线），
+      //    所以失败工单立刻就能被重新领走。工人在线还卡了 6 小时以上，重试早
+      //    该发生了 —— 「在等重试」不是这里的合理解释，确实需要人看一眼。
+      //    话术必须给真动作，否则这条进了「需要你动手」栏却让人干等，等于
+      //    制造一条假待办。
+      how:
+        '工人在线、活却过不去，重试早该发生了（失败退回队列是立刻可重领的，没有等待期）—— ' +
+        '先看上面那句报错：写着余额不足（credit / balance）就去充值，充完它会自己被重新领走；' +
+        '写的是别的原因，回我一句「出片工单卡住了」，我去查',
+      href: 'https://app.magicengine.com.au/dashboard/factory',
+    })
+    return
+  }
+
+  // worker_offline：开机是第一步。这些活如果失败过，把原因一并带上 ——
+  // 开机后还是过不去时，那就是下一步该看的东西（但绝不因此劝阻开机：
+  // 带 reject_reason 的 queued 工单通常还有重试机会，重试恰恰要靠工人上线）。
   items.push({
     kind: 'factory_worker_idle',
     client_id: 'infra',
     client_name: 'Magic Engine 后台',
-    what: `${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做`,
-    how: '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
+    what:
+      `${who}${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做` +
+      (verdict.sampleReason
+        ? `。另外这些工单上次失败过，系统报的原因是：「${verdict.sampleReason}」`
+        : ''),
+    how:
+      '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。' +
+      (verdict.sampleReason
+        ? '开机之后如果这些工单还是过不去，就是上面那条原因（写着余额不足就去充值），回我一句我来查。'
+        : '') +
+      '如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
     href: 'https://app.magicengine.com.au/dashboard/factory',
   })
 }

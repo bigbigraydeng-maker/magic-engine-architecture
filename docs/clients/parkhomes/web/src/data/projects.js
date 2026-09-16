@@ -182,7 +182,15 @@ export const projects = [
     ],
     footerAddress: 'Forrest Hill · 129 Forrest Hill Rd',
     group: 'coming',
-    images: [],
+    // Client-supplied renders (2026-09-12, via email).
+    hero: '/img/forrest-hill/fh-render-1.webp',
+    card: '/img/forrest-hill/fh-render-1.webp',
+    images: [
+      { src: '/img/forrest-hill/fh-render-1.webp', alt: 'Forrest Hill — artist’s impression', wide: true },
+      { src: '/img/forrest-hill/fh-render-2.webp', alt: 'Forrest Hill — artist’s impression' },
+      { src: '/img/forrest-hill/fh-render-3.webp', alt: 'Forrest Hill — artist’s impression' },
+      { src: '/img/forrest-hill/fh-render-4.webp', alt: 'Forrest Hill — artist’s impression' },
+    ],
   },
   {
     slug: 'greenview',

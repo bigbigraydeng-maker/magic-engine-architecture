@@ -13,13 +13,35 @@ function makeMockResponse(items: unknown[]) {
     ok: true,
     json: () =>
       Promise.resolve({
-        tasks: [{ result: [{ items }] }],
+        tasks: [{ status_code: 20000, result: [{ items }] }],
       }),
   } as Response)
 }
 
 describe('getSerpPage', () => {
   beforeEach(() => mockFetch.mockReset())
+
+  it('sends the ISO 639-1 Chinese language code', async () => {
+    mockFetch.mockReturnValue(makeMockResponse([]))
+
+    await getSerpPage('奥克兰旅行社', 'nz', { language: 'zh' })
+
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit
+    const payload = JSON.parse(String(request.body)) as Array<{ language_code?: string }>
+    expect(payload[0]?.language_code).toBe('zh')
+  })
+
+  it('throws when DataForSEO returns an HTTP-200 task error', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        tasks: [{ status_code: 40501, status_message: 'Invalid Field.' }],
+      }),
+    } as Response)
+
+    await expect(getSerpPage('奥克兰旅行社', 'nz', { language: 'zh' }))
+      .rejects.toThrow('DataForSEO SERP task 40501: Invalid Field.')
+  })
 
   it('extracts local_pack listings (max 3)', async () => {
     mockFetch.mockReturnValue(

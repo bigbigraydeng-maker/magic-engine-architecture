@@ -67,7 +67,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | **Outbound Prospecting** (P35) | 🔄 建设中 | `lib/prospecting` · `api/admin/prospecting` · `api/prospect` | `outbound_prospects` `discovery_leads` |
 | **Voice Agent** (P36) | 🔄 建设中 | `lib/voice` · `api/voice` · `scripts/voice/` | 见 `docs/voice-agent/` |
 | **ME2 GEO 测量线**（WP02→WP04A） | ✅ **在生产，已真实跑过一次** | `lib/geo-measurement`（契约）· `lib/geo-measurement-store`（不可变存储）· `lib/geo-measurement-runtime`（执行 + 预算闸）· `lib/geo-baseline`（真 provider / parser / store 接线） | `geo_query_sets` `geo_queries` `geo_batches` `geo_observations` `geo_evidence` —— **2026-08-12 实查存在**，装着 3 批次 / 25 观测 / 12 证据（含 Roman Baseline v1，批次 `688bd8ae`） |
-| **ME2 执行内核** | ⚠️ **代码在 main，生产未启用** | `lib/kernel`（授权 / 网关 / lineage）· `lib/action-bridge`（K-WP02 的 `MAPPING_TABLE`，**当前是空数组**） | `action_runs` `action_run_steps` `authorization_decisions` `client_automation_policies` —— **2026-08-12 实查：四张表与全部 `kernel_*` RPC 一个都不存在**（与 WP00 2026-08-10 preflight 结论一致）。启用前仍按对象存在性重查 |
+| **ME2 执行内核** | ⚠️ **代码在 main，生产有表、只手动试跑过 2 次，无自动触发** | `lib/kernel`（授权 / 网关 / lineage）· `lib/action-bridge`（K-WP02 的 `MAPPING_TABLE`，**当前是空数组**） | **2026-09-14 实查四张表都在生产**：`action_runs` 2 行、`authorization_decisions` 4 行、`client_automation_policies` 2 行、`action_run_steps`（经 `kernel_action_lineage` 视图可见 8 步）。2 种动作各成功 1 次，都是 2026-08-21（UTC）手动触发、人点同意后开待审草稿：`page.apply_optimization_request` v1（magicengine.com.au/geo，#1130）；`page.apply_cts_github_metadata_request` v2（CTS /china-tours → chinatravel#136 草稿）。**后者来自未合并分支** `codex/cts-gsc-page-query-capability`（PR #1133 已关），主线注册表故意不认它，是遗留历史行（见 `lib/kernel/types.ts` ActionKey 注释）。**还没有任何广告动作注册进内核**。（原「2026-08-12 实查四张表不存在」已过时） |
 | **ME2 共享 Page 能力**（WP06） | ⚠️ **代码在 main，零调用方** | `lib/page-optimization`（resolve / draft / diff / validate）· `lib/capabilities/page-optimization/snapshot.ts` | 无（WP06 冻结决定：不加表、不加 migration、不持久化）。⚠️ 交付的是被缩小的范围 —— 无成本闸门是照实施指令做的，详见 [ROADMAP](./ROADMAP.md) 的 WP06 条目 |
 | **ME2 Growth 契约** | ⚠️ **代码在 main，无人调用** | `lib/growth`（纯类型 + 纯校验器） | 无 |
 
@@ -81,7 +81,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | | 执行内核 | Growth 契约 |
 |---|---|---|
 | 合入 | PR #863 | PR [#890](https://github.com/bigbigraydeng-maker/magic-engine/pull/890)（合并提交 `700f57e`） |
-| 为什么不活动 | 生产 migration `20260808000003_me2_execution_kernel_v1.sql` **未 apply**，且**没有任何提交 / 执行调用方**（没有代码提交 `action_run`，也没有人跑它）。⚠️ **这是 2026-08-10 的快照，不是实时状态** —— 出处是 [WP00 §9.1](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md) 当天的对象存在性 preflight（四张表 + lineage 视图全不存在、`kernel_*` RPC 一个都没有）。**启用前必须重查，不许拿这一行当现况。**<br><br>🔴 **但它不是完全没接线** —— 有一条**只读**路径已经在生产跑：`pm-daily-todo` cron → `loadManualItems()` → `pushKernelItems()`（`lib/pm-todo/manual-items.ts`）→ `fetchKernelHandoffTodos()`（`lib/kernel/handoff.ts`）→ `listDeadLetterRuns()` → 查 `action_runs`。migration 未 apply 时这个查询会报错，被调用点的 `.catch` 收成一条警告，**不阻塞其它待办**。改内核之前先把这条路径算进去。 | 全仓**没有任何代码 import 它**（`grep -rn "lib/growth" src/ --exclude-dir=growth` 零结果）。无表、无 migration、无 provider 调用、无 cron、无 API、无 UI |
+| 为什么不活动 | ⚠️ **2026-09-14 更正**：表已在生产（见上方模块表「ME2 执行内核」行的实查数字），只是**没有定时任务或业务代码自动提交 `action_run`**——两次运行都是 2026-08-21 手动触发的试跑。下面是 2026-08-10 的旧快照，仅留作出处：当时生产 migration `20260808000003_me2_execution_kernel_v1.sql` 未 apply（[WP00 §9.1](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md) preflight：四张表 + lineage 视图全不存在）。<br><br>🔴 **它不是完全没接线** —— 有一条**只读**路径已经在生产跑：`pm-daily-todo` cron → `loadManualItems()` → `pushKernelItems()`（`lib/pm-todo/manual-items.ts`）→ `fetchKernelHandoffTodos()`（`lib/kernel/handoff.ts`）→ `listDeadLetterRuns()` → 查 `action_runs`。改内核之前先把这条路径算进去。 | 全仓**没有任何代码 import 它**（`grep -rn "lib/growth" src/ --exclude-dir=growth` 零结果）。无表、无 migration、无 provider 调用、无 cron、无 API、无 UI |
 | 启用需要什么 | apply 是**单独授权的运维动作**，必须 PM 显式 `go`，**绝不夹带进任何 PR** | 等 **WP05（GEO Module v1，#879）** 来 import —— 它是**唯一明确的首个 Domain Module 消费方**。其余 WP 会不会 import 由各自设计时决定，此处不预设 |
 
 🔴 **判定 migration 有没有 apply 只认对象存在性**，不认文件名或版本号 —— 仓库账本会在 apply 时重编号（实测：文件 `20260808000001_*` 在生产账本里记成 `20260809020105`）。
@@ -106,7 +106,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | social-comment-autoreply | `*/30 * * * *` | `/api/cron/social-comment-autoreply` |
 | messenger-hourly | `10 * * * *` | `/api/cron/messenger-sync-hourly` |
 | meta-leads-hourly | `25 * * * *` | `/api/cron/meta-leads-sync` |
-| ~~mailbox-sync-hourly~~ | — | **已从 `render.yaml` 移除**，路由 `/api/cron/mailbox-sync` 保留只为手动触发（见 `render.yaml` 注释）。邮箱同步现在不自动跑 |
+| ~~mailbox-sync-hourly~~ | 跟 `messenger-hourly` 一起，`10 * * * *` | **不再是独立服务**，2026-08-03 并入 `messenger-hourly`：每小时第 10 分钟跑完私信同步后，同一次请求里接着把已连的公司邮箱也同步一遍（见 `/api/cron/messenger-sync-hourly` 路由文件头注释、`render.yaml` 同位置注释）。邮箱同步是活的，不是没人跑；独立路由 `/api/cron/mailbox-sync` 保留只作手动补触发用。目前接了这条邮箱管道的只有 CTS Tours NZ 一个客户（`platform_oauth_connections` 表 `provider='microsoft_mail'`，2026-08-02 上线） |
 | viral-discovery-weekly | `0 0 * * *` | `/api/cron/viral-discovery-weekly` |
 | site-audit-cron | `0 2 * * *` | `/api/cron/site-audit-jobs` |
 | industry-ai-visibility-daily | `30 2 * * *` | `/api/cron/ai-visibility-weekly` |

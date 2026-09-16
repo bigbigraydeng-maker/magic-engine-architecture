@@ -67,26 +67,41 @@ export function pageIdToEnvVar(pageId: string): string {
  * Returns null when nothing is configured (caller decides how to fail).
  */
 export async function getMetaTokenForClient(clientId: string): Promise<string | null> {
+  return (await resolveMetaTokenForClient(clientId))?.token ?? null
+}
+
+/**
+ * Which lookup step produced the token. `shared_fallback` can see several
+ * clients' ad accounts, so "this token can read account X" proves nothing about
+ * X belonging to the client — callers that audit a binding record this.
+ */
+export type MetaTokenSource = 'client_domain' | 'client_page' | 'shared_fallback'
+
+/** Same lookup as getMetaTokenForClient, plus where the token came from. */
+export async function resolveMetaTokenForClient(
+  clientId: string,
+): Promise<{ token: string; source: MetaTokenSource } | null> {
   const { data, error } = await supabaseAdmin
     .from('clients')
     .select('domain, facebook_page_id')
     .eq('id', clientId)
     .maybeSingle()
 
-  const fallback = process.env.META_SYSTEM_USER_TOKEN ?? null
+  const fallbackToken = process.env.META_SYSTEM_USER_TOKEN
+  const fallback = fallbackToken ? { token: fallbackToken, source: 'shared_fallback' as const } : null
   if (error || !data) return fallback
 
   // 1. Per-client by domain — the original, most specific key.
   if (data.domain) {
     const scoped = process.env[`META_SYSTEM_USER_TOKEN_${domainToEnvKey(data.domain)}`]
-    if (scoped) return scoped
+    if (scoped) return { token: scoped, source: 'client_domain' }
   }
 
   // 2. Per-client by Page — for clients with no domain, or whose Page needs a
   //    token with different scopes than the domain-level one.
   if (data.facebook_page_id) {
     const byPage = process.env[pageIdToEnvVar(data.facebook_page_id)]
-    if (byPage) return byPage
+    if (byPage) return { token: byPage, source: 'client_page' }
   }
 
   // 3. Shared fallback.
