@@ -221,6 +221,62 @@ describe('rankAssetsByPrompt — requireConfidentMatch 挡住文不对题的选�
     })
     expect(picks).toEqual([])
   })
+
+  it('句号也要结束否定范围——"No product or logo. Palace courtyard at dusk." 里的 palace 仍算正向命中', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // planScenes 没规定 imagePrompt 一定是逗号分句,完全可能是这种多句英文。上一版
+    // parsePromptWords 只按逗号/分号分段,句号不会重置否定状态，"palace"/"courtyard"
+    // 会被错误并入 negated,合法的宫殿素材因此被误判成"带着被禁内容"、不必要地
+    // 走 AI 现画兜底——这条用例复现该场景，断言修复后 palace 仍能正常匹配上。
+    const assets = [asset('palace', { vision_metadata: { objects: ['palace', 'courtyard'], quality_score: 8 } })]
+    const picks = await rankAssetsByPrompt('No product or logo. Palace courtyard at dusk.', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks.map((p) => p.id)).toEqual(['palace'])
+  })
+
+  it('句号分段不影响否定分句本身仍然生效——句号前的 "no logo" 依然挡住带 logo 的素材', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    const assets = [asset('has-logo', { vision_metadata: { objects: ['palace', 'logo'], quality_score: 8 } })]
+    const picks = await rankAssetsByPrompt('No product or logo. Palace courtyard at dusk.', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks).toEqual([])
+  })
+
+  it('brand_elements 用自然描述标记 logo("Nike swoosh")而不是字面词"logo"时,仍要被挡住', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // Codex 复审(P1)指出:vision-analyzer.ts 只要求列出可见品牌元素,不要求逐字复述
+    // "logo"/"product" 这两个词——上一版 containsNegatedContent 纯字面词匹配,找不到
+    // "Nike swoosh" 里的否定词,会让真的带 logo 的素材凭一个不相关的正向词(palace)
+    // 混过置信度门。这里断言:只要 brand_elements 非空、且 prompt 要求 no logo/product,
+    // 不管措辞是不是字面命中,一律挡住。
+    const assets = [
+      asset('palace-with-swoosh', {
+        vision_metadata: { objects: ['palace'], brand_elements: ['Nike swoosh'], quality_score: 8 },
+      }),
+    ]
+    const picks = await rankAssetsByPrompt('palace courtyard, no product/logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks).toEqual([])
+  })
+
+  it('brand_elements 语义类别兜底不会误伤没有品牌元素的正常素材', async () => {
+    const { rankAssetsByPrompt } = await import('./rank-assets-by-prompt')
+    // brand_elements 为空数组(vision-analyzer 确实没看到任何品牌元素)时,不该仅仅因为
+    // prompt 要求 no product/logo 就被一律挡住——语义类别兜底只在 brand_elements
+    // 真的非空时触发。
+    const assets = [
+      asset('palace-clean', {
+        vision_metadata: { objects: ['palace'], brand_elements: [], quality_score: 8 },
+      }),
+    ]
+    const picks = await rankAssetsByPrompt('palace courtyard, no product/logo', assets, 1, {
+      requireConfidentMatch: true,
+    })
+    expect(picks.map((p) => p.id)).toEqual(['palace-clean'])
+  })
 })
 
 describe('rankAssetsByPrompt — objects 里混进非字符串元素不炸', () => {

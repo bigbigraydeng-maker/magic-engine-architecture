@@ -108,16 +108,20 @@ export async function rankAssetsByPrompt(
  *  表述(2026-09-14 复审第三次指出:只查段首否定词的上一版会漏掉这种写法)。 */
 const NEGATION_WORDS = new Set(['no', 'not', 'without', 'excluding', 'never'])
 
-/** 按逗号/分号分段,每段内逐词扫描——遇到否定词之前的词进 `positive`,遇到之后
+/** 按逗号/分号/句号分段,每段内逐词扫描——遇到否定词之前的词进 `positive`,遇到之后
  *  (包括同一段里否定词右边的所有词,直到这一段结束)全部转入 `negated`,不再要求
  *  否定词必须是段首("no product/logo" 和 "...with no product or logo" 都要能
- *  识别)。只按 ASCII 字母数字切词,CTS 现有 imagePrompt 全英文,够用。哪天有客户的
- *  imagePrompt/objects 混进中文,纯中文段会被当分隔符整段吃掉,判成零重叠,
- *  `requireConfidentMatch` 会把这类 prompt 的匹配全部清空,不是漏改,是已知边界。 */
+ *  识别)。句号必须跟逗号/分号一样切段——Codex 复审指出:`planScenes` 可能返回
+ *  "No product or logo. Palace courtyard at dusk." 这种多句 prompt,上一版只按
+ *  逗号/分号分段,句号不会重置否定状态,"Palace"/"courtyard" 会被错误并入 negated,
+ *  合法的宫殿素材因此被误判成"带着被禁内容"、不必要地走 AI 现画兜底。只按 ASCII
+ *  字母数字切词,CTS 现有 imagePrompt 全英文,够用。哪天有客户的 imagePrompt/objects
+ *  混进中文,纯中文段会被当分隔符整段吃掉,判成零重叠,`requireConfidentMatch`
+ *  会把这类 prompt 的匹配全部清空,不是漏改,是已知边界。 */
 function parsePromptWords(prompt: string): { positive: Set<string>; negated: Set<string> } {
   const positive = new Set<string>()
   const negated = new Set<string>()
-  for (const segment of prompt.split(/[,;]/)) {
+  for (const segment of prompt.split(/[,;.]/)) {
     const rawWords = segment.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
     let inNegatedScope = false
     for (const w of rawWords) {
@@ -211,6 +215,14 @@ function subjectOverlap(promptWords: Set<string>, objects: string[]): number {
   }, 0)
 }
 
+/** prompt 明确要求"no product/logo"时,`vision-analyzer.ts` 只要列出了任何
+ *  `brand_elements`(哪怕是"Nike swoosh"这种自然描述,没有字面出现"logo"/"product"
+ *  这两个词),就该当成"带着被禁内容"——Codex 复审(P1)指出:下面 `containsNegatedContent`
+ *  的字面词匹配找不到这种自然描述,会让真的带 logo 的素材凭一个不相关的正向词
+ *  (比如 palace)混过置信度门。`brand_elements` 这个字段本身的存在就是
+ *  "vision-analyzer 确实看到了可识别品牌元素"的信号,不需要它复述否定词原文。 */
+const PRODUCT_OR_LOGO_WORDS = new Set(['logo', 'logos', 'product', 'products', 'brand', 'branding', 'branded'])
+
 /** 素材的 objects/scene/brand_elements 里只要出现一个否定分句的词,直接判"带着
  *  被禁内容",不管别处有没有正向命中——2026-09-14 复审第二次指出:上一轮只堵了
  *  "否定词自己贡献正向重叠",没堵"素材本身确实带着被禁内容,却靠另一个正向词
@@ -219,11 +231,17 @@ function subjectOverlap(promptWords: Set<string>, objects: string[]): number {
 function containsNegatedContent(negated: Set<string>, pick: AssetPick): boolean {
   if (negated.size === 0) return false
   const meta = pick.metadata
+  const brandElements = asObjectList(meta?.brand_elements)
+  // 语义类别兜底(见 PRODUCT_OR_LOGO_WORDS 注释):prompt 要求不出现产品/logo/品牌，
+  // 只要这条素材本身被标了任何品牌元素，不管措辞是不是字面命中，一律当作带着被禁内容。
+  if (brandElements.length > 0 && [...negated].some((w) => PRODUCT_OR_LOGO_WORDS.has(w))) {
+    return true
+  }
   // objects/brand_elements 理论上是 string[],但跟 asObjectList 同样的理由(见其注释):
   // 老数据/坏数据可能把整个字段存成非数组,直接展开(...)会在 typeof 防护跑到之前就抛出
   // TypeError,把整条自动选图链路炸掉——必须先用 asObjectList 归一化,不能只信类型声明
   // (2026-09-14 复审第三次指出:这里新写的展开路径漏了这道已有的防护)。
-  const fields = [...asObjectList(meta?.objects), meta?.scene, ...asObjectList(meta?.brand_elements)]
+  const fields = [...asObjectList(meta?.objects), meta?.scene, ...brandElements]
   return fields.some((f) => {
     if (typeof f !== 'string') return false
     return f
