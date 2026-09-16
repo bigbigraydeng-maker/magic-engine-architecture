@@ -2,9 +2,12 @@
  * POST /api/admin/conversions/ai-auto-review-run —— 手动触发一轮 AI 全自动审核
  * （PM 拍板 2026-09-15："成交审核换成 AI 直接判断，不要人再点一下"）。
  *
- * 只有手动触发，没有接 Inngest 定时——见 `ai-auto-review-run.ts` 文件头说明：
- * 这次风险比"只写 pending_review、人还要再点一次"的现有先例（NAL 私信同步/CTS 表格
- * 同步）更高，先跑几天观察判断质量和熔断阈值，再评估要不要接定时。
+ * 🟢 **这条路由依然是手动入口，但现在不是唯一入口了（2026-09-15 更新）**：
+ * `src/lib/inngest/functions/conversion-daily-pipeline.ts` 每天 06:00 Pacific/Auckland
+ * 也会调同一个 `runAiAutoReviewForClient()`——PM 看到一次干净的手动试跑结果后拍板
+ * 接了定时，详见 `ai-auto-review-run.ts` 文件头。这条手动路由继续留着，用于需要
+ * 立刻手动补跑（不想等到明天 06:00）的场景，两条路径并存、互不冲突（都走同一套
+ * 开关 + 熔断 + CAS 幂等）。
  *
  * 🔴 鉴权分两种情况，不能都用 `guardAdmin`（魏征最终复审 BLOCKER：这一步会真实
  * 触发对外发送，权限级别必须跟"审核/发送成交记录"那几个既有接口对齐，不能各自
