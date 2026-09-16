@@ -782,5 +782,51 @@ describe(
       expect(result).toHaveLength(chronological.length)
       expect(result.map((m) => m.sentAt)).toEqual(chronological.map((m) => m.sent_at))
     })
+
+    it(
+      '🔴 子牙复审 BLOCKER: each chunk still honours maxMessages as an early-stop, not just a final ' +
+      'slice — a chunk with far more messages than maxMessages must NOT be paginated to exhaustion ' +
+      '(a client whose history vastly exceeds maxMessages must not be read in full)',
+      async () => {
+        // A single chunk (well under CHUNK_SIZE conversationIds) but with far
+        // more than one page's worth of messages in it, and far more than
+        // maxMessages — if the early-stop were silently dropped (as it was
+        // before this fix), this chunk alone would need MULTIPLE .range()
+        // calls to page through everything before the final slice trims it.
+        const PAGE_SIZE = 1000
+        const conversationIds = ['conv-a', 'conv-b']
+        const hugeChunkMessages = Array.from({ length: PAGE_SIZE + 500 }, (_, i) => ({
+          conversation_id: i % 2 === 0 ? 'conv-a' : 'conv-b',
+          direction: 'inbound',
+          body: `msg-${i}`,
+          sent_at: `2026-01-01T00:00:${String(i % 60).padStart(2, '0')}.${String(Math.floor(i / 60)).padStart(3, '0')}Z`,
+        }))
+
+        let rangeCallCount = 0
+        vi.mocked(supabaseAdmin.from).mockImplementation((table: string) => {
+          if (table !== 'conversation_messages') throw new Error(`unexpected table ${table}`)
+          const sorted = [...hugeChunkMessages].sort((a, b) => a.sent_at.localeCompare(b.sent_at))
+          const chain: Record<string, unknown> = {
+            select: () => chain,
+            in: () => chain,
+            order: () => chain,
+            range: (from: number, to: number) => {
+              rangeCallCount += 1
+              return { then: (resolve: (v: { data: unknown; error: null }) => unknown) => Promise.resolve({ data: sorted.slice(from, to + 1), error: null }).then(resolve) }
+            },
+          }
+          return chain as never
+        })
+
+        const maxMessages = 50
+        const result = await fetchMessagesSince(conversationIds, null, maxMessages)
+
+        // Only ONE page should ever have been requested for this chunk — the
+        // first page alone (1000 rows) already exceeds maxMessages (50), so
+        // the inner loop must stop before requesting a second page.
+        expect(rangeCallCount).toBe(1)
+        expect(result).toHaveLength(maxMessages)
+      },
+    )
   },
 )

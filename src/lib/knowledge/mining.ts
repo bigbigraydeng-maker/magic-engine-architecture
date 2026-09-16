@@ -661,6 +661,9 @@ export async function fetchConversationIds(clientId: string): Promise<string[]> 
 // #1645 的事实萃取，已上线）用的是同一个函数，同样会在 CTS 这个规模上炸。
 // 按 conversationId 分批查询修复，两个调用方都受益，不是本次顺手夹带的额外
 // 范围。
+//
+// 200 是经验安全值（UUID 36 字符 + 逗号分隔，200 个约 7.4KB），不是从
+// PostgREST/反代实际请求体积上限精确算出来的——留了余量，不是精确边界。
 const CONVERSATION_ID_CHUNK_SIZE = 200
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
@@ -679,7 +682,23 @@ export async function fetchMessagesSince(
   const collected: RawMessage[] = []
   const pageSize = 1000
   for (const idChunk of chunkArray(conversationIds, CONVERSATION_ID_CHUNK_SIZE)) {
-    for (let offset = 0; ; offset += pageSize) {
+    // 🔴 子牙复审 BLOCKER（2026-09-15）：分块之前，外层 `for` 循环本身就是
+    // "collected.length < maxMessages 才继续翻页"——一读够就整体停手。分块
+    // 拆开之后如果把这道提前止损也一起丢了，变成"每个分块都无条件读到底"，
+    // 一个历史消息量远超 maxMessages 的大客户（这次 CTS 722 段/3600 条还看
+    // 不出来，但这个函数是已上线的 runKnowledgeMining 共用的核心读取路径，
+    // 客户体量会持续涨）会被打成读全量——不是等价重构，是真实的性能/成本
+    // 倒退。每个分块各自也遵守同一个 maxMessages 上限，把止损条件下推进
+    // 分块内层循环，而不是彻底删掉。
+    //
+    // 这不是精确的"全局最早 N 条"——分块之间按 conversationId 分组，彼此没有
+    // 时间序关系，最坏情况下总读取量是 `分块数 × maxMessages`，不是精确的
+    // `maxMessages`。跟"读全部历史"比仍然是数量级的改善，跟真正的跨分块
+    // 归并排序比是复杂度换正确性精度的权衡——对 CTS 这次 4 个分块的规模，
+    // 最坏也只是读 4 倍上限，可接受；如果客户体量涨到分块数很多的地步，这个
+    // 权衡需要重新评估（做成真正的多路归并），不是这次的范围。
+    let chunkCollected = 0
+    for (let offset = 0; chunkCollected < maxMessages; offset += pageSize) {
       let query = supabaseAdmin
         .from('conversation_messages')
         .select('conversation_id, direction, body, sent_at')
@@ -698,6 +717,7 @@ export async function fetchMessagesSince(
           direction: row.direction,
           conversationId: row.conversation_id,
         })
+        chunkCollected += 1
       }
       if (rows.length < pageSize) break
     }
