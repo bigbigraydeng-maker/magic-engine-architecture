@@ -43,10 +43,28 @@ function engineGraph(){
  link('gateway','act','已授权动作调用平台能力',true,'vertical');
  }
  }
- const arrows=edges.map((e,i)=>'<g class="graph-edge '+(e.gap?'uncertain':'')+'" data-graph-edge="'+i+'"><path class="edge-hit" data-edge="'+i+'" role="button" tabindex="0" aria-label="'+esc(nodes[e.from].title+'到'+nodes[e.to].title)+'" d="'+graphPath(e)+'"/><path class="wire" d="'+graphPath(e)+'" marker-end="url(#arrow)"/><path class="signal" d="'+graphPath(e)+'"/></g>').join('');
+ graphWidth=1610;
+ lanes+='<text x="1250" y="'+(graphHeight-48)+'" fill="#77bdf0" font-size="13">蓝线 → 读取 / 响应 / 业务回传</text><text x="1250" y="'+(graphHeight-28)+'" fill="#ebcb8b" font-size="13">金线 → 发布 / 状态 / 预算动作</text>';
+ lanes+='<rect class="platform-zone" x="1220" y="20" width="365" height="'+(graphHeight-45)+'" rx="20"/><text class="platform-title" x="1250" y="54">外部平台与业务系统</text><text class="platform-subtitle" x="1250" y="78">ME 之外 · 信息来源 / 执行目的地</text>';
+ const platformLink=(from,to,desc,kind,gap=true)=>{link(from,to,desc,gap,kind==='read'?'platform-read':'platform-write');edges[edges.length-1].kind=kind;};
+ if(state.action){
+ const provider=state.action==='google'?'platform_google':'platform_meta';
+ place(provider,1400,240,290,100);
+ const sender=state.mode==='target'?'adapter':state.action==='google'?'googlewrite':state.action==='publish'?'paused':'write';
+ const receiver=state.mode==='target'?'verified':state.action==='publish'?'launchcheck':state.action==='google'?'googleaudit':'readback';
+ platformLink(sender,provider,'提交平台动作：'+nodes[sender].output.join('；'),'write',state.mode==='target');
+ platformLink(provider,receiver,'平台响应 / 回读：'+nodes[provider].output.join('；'),'read',true);
+ }else{
+ ['platform_meta','platform_google','platform_tiktok','platform_web','platform_crm'].forEach((id,i)=>{
+ place(id,1400,158+i*153,290,94);
+ platformLink(id,id==='platform_crm'?'results':'sources',id==='platform_crm'?'目标回传：线索质量、成交和收入':'读取数据：'+nodes[id].output.join('；'),'read',true);
+ if(i<3&&(!state.domain||state.domain==='ads'))platformLink('act',id,'广告动作：'+nodes[id].input.join('；'),'write',true);
+ });
+ }
+ const arrows=edges.map((e,i)=>'<g class="graph-edge '+(e.kind||'')+' '+(e.gap?'uncertain':'')+'" data-graph-edge="'+i+'"><path class="edge-hit" data-edge="'+i+'" role="button" tabindex="0" aria-label="'+esc(nodes[e.from].title+'到'+nodes[e.to].title)+'" d="'+graphPath(e)+'"/><path class="wire" d="'+graphPath(e)+'" marker-end="url(#arrow)"/><path class="signal" d="'+graphPath(e)+'"/></g>').join('');
  const nodeMarkup=Object.entries(graphLayout).map(([id,p])=>{
  const n=nodes[id],short=n.status==='existing'?'代码已有':n.status==='planned'?'目标设计':'局部实现 / 待核验';
- const title=n.title.length>13?[n.title.slice(0,13),n.title.slice(13)]:[n.title];
+ const title=p.w>=260?[n.title]:n.title.length>13?[n.title.slice(0,13),n.title.slice(13)]:[n.title];
  return '<g class="graph-node '+n.status+'" data-graph-node="'+id+'" role="button" tabindex="0" aria-label="'+esc(n.title)+'，点击查看，双击进入" transform="translate('+(p.x-p.w/2)+','+(p.y-p.h/2)+')"><rect class="node-glow" x="-4" y="-4" width="'+(p.w+8)+'" height="'+(p.h+8)+'" rx="17"/><rect class="node-body" width="'+p.w+'" height="'+p.h+'" rx="12"/><circle class="port in" cx="0" cy="'+p.h/2+'" r="4"/><circle class="port" cx="'+p.w+'" cy="'+p.h/2+'" r="4"/><circle class="state-dot" cx="14" cy="16" r="3"/><text class="node-status" x="24" y="20">'+short+'</text>'+title.map((t,i)=>'<text class="node-name" x="14" y="'+(44+i*20)+'">'+esc(t)+'</text>').join('')+(stages.some(s=>s[0]===id)?'<text class="node-sub" x="14" y="'+(p.h-12)+'">'+stages.find(s=>s[0]===id)[2].toUpperCase()+'</text>':'')+(domains.some(d=>d[0]===id)||id==='act'?'<text class="drill-icon" x="'+(p.w-22)+'" y="'+(p.h-15)+'">↗</text>':'')+'</g>';
  }).join('');
  const actions=state.action?'<div class="actions">'+Object.entries(paths).map(([id,p])=>'<button data-action="'+id+'" class="'+(state.action===id?'selected':'')+'">'+p.title+'</button>').join('')+'<button data-stage="act">← 返回 IMPACT</button></div>':'';
@@ -55,6 +73,12 @@ function engineGraph(){
 function graphPath(e){
  const a=graphLayout[e.from],b=graphLayout[e.to];
  if(!a||!b)return '';
+ if(e.route==='platform-write'){const x1=a.x+a.w/2,x2=b.x-b.w/2;return 'M'+x1+' '+a.y+' C'+(x1+90)+' '+a.y+',1190 '+b.y+','+x2+' '+b.y}
+ if(e.route==='platform-read'){
+ const x1=a.x-a.w/2,x2=b.x+b.w/2;
+ if(e.to==='sources')return 'M'+x1+' '+(a.y-18)+' C1200 '+(a.y-18)+',1200 6,1150 6 L'+b.x+' 6 Q'+b.x+' 18,'+b.x+' '+(b.y-b.h/2);
+ return 'M'+x1+' '+(a.y+18)+' C1195 '+(a.y+18)+','+(x2+90)+' '+b.y+','+x2+' '+b.y;
+ }
  if(e.route==='horizontal'){const sign=b.x>a.x?1:-1,x1=a.x+sign*a.w/2,x2=b.x-sign*b.w/2;return 'M'+x1+' '+a.y+' C'+(x1+sign*45)+' '+a.y+','+(x2-sign*45)+' '+b.y+','+x2+' '+b.y}
  if(e.route==='overhead'){const y=48;return 'M'+a.x+' '+(a.y-a.h/2)+' C'+a.x+' '+y+','+b.x+' '+y+','+b.x+' '+(b.y-b.h/2)}
  if(e.route==='outer'){return 'M'+(a.x+a.w/2)+' '+a.y+' C1180 '+a.y+',1180 '+b.y+','+(b.x+b.w/2)+' '+b.y}

@@ -111,4 +111,9 @@ function home(){Object.assign(state,{domain:null,stage:null,action:null,selected
  $('closeDetail').onclick=()=>document.querySelector('.inspector').classList.remove('open');
  document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelector('.inspector').classList.remove('open')});
  $('full').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch{$('full').textContent='请用浏览器全屏'}};
+add('platform_meta','Meta · Facebook / IG','partial','外部广告与社交平台：ME 读取数据，并通过已有客户端提交广告动作。',['广告创建、暂停 / 恢复、预算请求'],['广告对象、状态、花费与效果数据'],['ME 广告执行能力'],['信息汇总、Measure、Check'],'Marketing API 代码已有；此节点不表示 Muse 或 Meta MCP 已接入 ME。',[['src/lib/meta/client.ts · src/lib/meta/ad-publisher.ts','广告数据读取、创建暂停广告、修改状态及预算。']]);
+add('platform_google','Google Ads','partial','外部付费搜索广告平台：提供广告指标，承接状态、预算与否定关键词动作。',['Campaign 状态、预算、否定关键词'],['广告指标、平台响应'],['Google 执行接口'],['信息汇总、测量与验证'],'广告账户归属与统一执行治理仍需补齐。',[['src/app/api/clients/[id]/google-ads/execute/route.ts','setCampaignStatus / setCampaignBudget / addCampaignNegativeKeyword']]);
+add('platform_tiktok','TikTok Ads','partial','外部广告平台：现有客户端和执行入口支持部分 Campaign 操作。',['暂停、恢复、日预算请求'],['Campaign 状态与 API 响应'],['TikTok 执行接口'],['信息汇总、检查'],'账户归属验证和完整数据回流需核验；不能视为完整自动投放接入。',[['src/lib/tiktok-ads/client.ts · src/app/api/clients/[id]/tiktok-ads/execute/route.ts','Campaign 读取、状态及预算操作。']]);
+add('platform_web','网站 · 搜索 / 分析','partial','企业自有网站与搜索分析工具的位置：连接内容承载、发现与转化信号。',['页面与内容变更（取决于对应连接器）'],['页面、搜索表现、访问与转化数据'],['内容 / SEO 能力、访问者'],['信息汇总、SEO、AI 可见度、测量'],'GSC / GA4 与网站连接器的逐客户配置、事件质量需分别核验。',[['docs/STATE.md §3','lib/{gsc,ga4,cms} 等模块映射；不是生产接线证明。']]);
+add('platform_crm','CRM · 销售系统','planned','业务结果来源：将线索质量、成交与收入回传给 ME，用于结果复盘。',['平台线索、客户跟进信息'],['合格线索、成交、收入与业务结果'],['获客渠道、销售团队'],['Check、结果复盘、学习'],'此处表示目标系统位置，不声明统一 CRM 同步或收入归因已实现。',[product]);
  render();
