@@ -8,7 +8,7 @@
 
 ## 0. 一句话结论
 
-**不建议现在给 `ad_entity_snapshots` 加字段。建议另建一张小的、独立的、明确标注"过渡态"的决策日志表，只做人工决策留痕，不冒充内核授权；等阶段 2 内核给广告动作接上人审批后，这类记录改由内核 `action_runs.rationale` / `authorization_decisions.reason` 天然承载，过渡表逐步停止新增。优先级 P2（按 §11 三维打分：频率中 + IMPACT 中 + 收入低 = 中中低），排在已定的阶段 0/1（P0）之后，不需要插队。**
+**不建议现在给 `ad_entity_snapshots` 加字段，也不建议新建一张独立表。建议扩展仓库里已经存在的 `client_decision_history`（诸葛亮决策历史表），给它补几个广告场景需要的列（`affected_entities` / 快照关联 / `source` / `flywheel_action_id`），只做人工决策留痕，不冒充内核授权。等阶段 2 内核给广告动作接上人审批后：(1) 记录职责天然转移给内核 `action_runs.rationale` / `authorization_decisions.reason`；(2) 交互式顾问对话**必须硬性停止直接改 Meta 配置**，改为提交同一套内核动作——不是"旁路慢慢变少"，是切换那一刻起旁路写入被禁止。优先级 P2（按 §11 三维打分：频率中 + IMPACT 中 + 收入低 = 中中低），排在已定的阶段 0/1（P0）之后，不需要插队。**
 
 ---
 
@@ -37,38 +37,62 @@
 
 ---
 
+## 2.1 建新表之前先查过：仓库已经有 `client_decision_history`，能不能直接扩它
+
+初稿写完选项 B 之后复查发现遗漏——仓库里**已经有一张语义几乎重合的表**，不是从零开始的空白地带：
+
+- `supabase/migrations/20260610000001_phase23_memory_tables.sql:114-147` 的 `client_decision_history`：`client_id`、`decision_context`（决策背景简述）、`chosen_action`（最终选择）、`alternatives_rejected`（被排除的候选）、`reasoning`（为什么，NOT NULL）、`outcome_verdict` / `outcome_notes`（结果回填）、`zhuge_session_id`（可选溯源）。
+- `src/lib/memory/service.ts:289-310` 的 `loadRecentDecisions` **只**从 `client_decision_history` 按 `client_id` 查最近 N 条，供 `memory/format.ts` 拼进「Recent Decisions」段，喂给鲁班（`luban/project-prompts.ts`）和华佗（长模式）的 prompt——这是当前系统里**唯一**一条"decision → 注入 agent 记忆"的读取路径。
+- 如果广告决策理由写进选项 B 草案里另开的 `ad_decision_log`，这条读取路径**看不到它**：鲁班/华佗生成下一轮建议时，完全不知道"CTS 上周刚决定过不投华人市场"，同一客户的决策事实被拆成两张互不相通的表，`client_decision_history` 里关于该客户的决策历史反而是不完整的——这正是 §0 平台化铁律要求先查的"已有封装"，之前的草案没查到，是本稿的疏漏。
+
+**结论：不新建 `ad_decision_log`，改为扩展 `client_decision_history`。** 理由：
+1. 字段语义对得上——`decision_summary`≈`chosen_action`（"中文广告下架、预算收紧"本身就是"选择的行动"）、`reasoning`≈`reasoning`（已经 NOT NULL）、`decided_by`/`affected_entities`/快照关联/`source` 是广告场景需要新增的列，`ALTER TABLE ADD COLUMN`（均可空或带默认值）即可，不破坏现有诸葛亮写入路径。
+2. 写入权限不冲突——现有写入方是 `src/lib/zhuge/action-persister.ts`（诸葛亮 AI 决策），新增的是"交互式顾问人工决策"，两者都是"client_id 下的一条决策记录"，用 `source` 列区分来源（`ai_generated` vs `interactive_advisor_session`）即可，不需要拆两张表来隔离写入方。
+3. 读取路径零改动——`loadRecentDecisions` 是 `select('*')`，新增列自动被查出来；只要 `format.ts` 拼装文案时对 `source = interactive_advisor_session` 的行做人类可读的展示（而不是当成 AI 决策展示），鲁班/华佗立刻就能看到广告顾问的决策历史，不需要新写一条读取/迁移路径。
+
+---
+
+## 2.2 结果关联：不能只挂设置快照，要挂到可归因的 Outcome
+
+`before_snapshot_ids` / `after_snapshot_ids` 只能证明"决策前后 Meta 设置分别是什么"，回答不了"这个决策对不对"——设置变了不代表效果变了。§0 提到本表未来两个用途（验证决策对不对、训练决策 agent）都需要能追溯到**表现指标**，不是设置差异。
+
+仓库里已经有这条链路，不需要新造：`flywheel_actions`（`supabase/migrations/20260517000001_flywheel_data_skeleton.sql:18-43`，含 `flywheel`/`action_type`/`expected_metric`/`expected_delta`）→ 由 P12.A.8 attribution job 写入 `flywheel_outcomes`（同文件 :76-101，含 `baseline`/`after_value`/`delta`/`confidence`/`verdict`/`window_days`）。这套"动作 → 归因结果"的表结构和计算任务已经在生产跑，只是广告顾问的交互式决策目前从不写 `flywheel_actions` 行，所以挂不上去。
+
+**因此草案新增 `flywheel_action_id`（见 §3 选项 B）**：交互式顾问对话做出一次广告决策时，如果这次改动预期影响某个可衡量指标（如 `ads.roas` / `ads.cpl`），**必须同时补写一行 `flywheel_actions`**（`flywheel = 'ads'`、`action_type` 用人类可读字符串如 `'ads.interactive_budget_move'`、`expected_metric`/`expected_delta` 按决策时的预期填），再把新生成的 `flywheel_actions.id` 回填进 `client_decision_history.flywheel_action_id`。这样 P12.A.8 现有的 attribution job 会自动产出 `flywheel_outcomes` 行，决策记录就有了**稳定关联的、可验证的 Outcome**，而不是像现在的 `client_decision_history`（见 `src/lib/memory/extractor.ts:254-272`，2026-09-06 已因"没有指向 action 的外键、只能按客户时间窗多数票"而**永久停用自动回填**）一样，重蹈同一个坑。**如果这次改动没有明确的预期指标（例如纯合规性下架），允许 `flywheel_action_id` 留空**，不强求每条决策都编一个假的预期指标。
+
+---
+
 ## 3. 该往哪走：三个选项逐一判断
 
 ### 选项 A——现在就给 `ad_entity_snapshots` 加 `decision_reason` 字段
 **不建议。** 理由见上 §1 末尾（撞上"禁止预留兼容 key 以后迁内核"的冻结约束）与 §2（字段语义、多对一关系都不匹配）。
 
-### 选项 B——建独立的"决策日志"表，现在就做
-**建议，但要明确这是过渡态，不是终态。**
+### 选项 B——扩展 `client_decision_history`，不建新表
+**建议，但要明确这是过渡态，不是终态。**（本稿复查后已从"另建 `ad_decision_log`"改为"扩展现有表"，见 §2.1。）
 
-设计草案（仅供工程窗口参考，非最终 schema）：
+设计草案（仅供工程窗口参考，非最终 schema；均为对 `client_decision_history` 的 `ALTER TABLE ADD COLUMN IF NOT EXISTS`，不改动现有列语义）：
 
 ```
-ad_decision_log
-  id                 uuid PK
-  client_id          uuid NOT NULL REFERENCES clients(id)
-  decided_at         timestamptz NOT NULL
-  decided_by         text NOT NULL          -- PM/FDE 姓名或标识，不是"系统"
-  decision_summary   text NOT NULL          -- 人话一句话："CTS 中文广告下架，两账户预算收紧到合计$150/天"
-  reasoning          text NOT NULL          -- 为什么："客户明确表态不推广华人市场" + "砍认知类广告保已验证出结果的"
-  affected_entities  jsonb NOT NULL         -- [{ad_account_id, level, entity_id, entity_name}]
-  before_snapshot_ids uuid[]                -- 可选，关联 ad_entity_snapshots.id（决策前状态）
-  after_snapshot_ids  uuid[]                -- 可选，关联决策后下一次抓到的快照
-  source             text NOT NULL DEFAULT 'interactive_advisor_session'
-                       CHECK (source IN ('interactive_advisor_session', 'kernel_migrated'))
-  session_ref        text                   -- 顾问窗口/会话标识，便于回溯对话
-  created_at         timestamptz NOT NULL DEFAULT now()
+client_decision_history  -- 已存在，新增以下列
+  decided_by          text                   -- 新增，可空。PM/FDE 姓名或标识；AI 决策（现状）留空
+  affected_entities   jsonb                  -- 新增，可空。[{ad_account_id, level, entity_id, entity_name}]
+  before_snapshot_ids uuid[]                 -- 新增，可空。关联 ad_entity_snapshots.id（决策前状态）
+  after_snapshot_ids  uuid[]                 -- 新增，可空。关联决策后下一次抓到的快照
+  flywheel_action_id  uuid REFERENCES flywheel_actions(id) ON DELETE SET NULL  -- 新增，可空，见 §2.2
+  source              text NOT NULL DEFAULT 'ai_generated'
+                        CHECK (source IN ('ai_generated', 'interactive_advisor_session', 'kernel_migrated'))
+  session_ref         text                   -- 新增，可空。顾问窗口/会话标识（非诸葛亮 session 时用，`zhuge_session_id` 继续给诸葛亮用）
 ```
 
-**为什么这样设计能避开"预留兼容 key"的红线**：这张表**不**声明 `verdict`、`policy_id`、`idempotency_key` 这类内核授权语义的字段，不冒充是内核的一部分，也不参与任何执行/授权判断——它只是一本没有执行力的人工日志本，跟内核平行存在，不是内核的影子。`source` 字段从一开始就写明"这是交互式旁路留下的记录"，不是"内核动作的记录"，避免未来把它误认成内核数据的一部分。
+**为什么这样设计能避开"预留兼容 key"的红线**：新增列**不**声明 `verdict`、`policy_id`、`idempotency_key` 这类内核授权语义的字段，不冒充是内核的一部分，也不参与任何执行/授权判断——它只是给已有的人工/AI 决策日志本补几列，跟内核平行存在，不是内核的影子。`source` 字段从一开始就写明"这是交互式旁路留下的记录"，不是"内核动作的记录"，避免未来把它误认成内核数据的一部分。
 
-**上线路径**：等阶段 2 `ads.*` 动作注册进内核、K2（一律人审批）落地后，凡是走内核的广告变更，理由自然由 `authorization_decisions.reason` / `action_runs.rationale` 承载，不再需要写这张表；这张表届时只服务"仍然存在的交互式旁路操作"（预计会越来越少，但短期内不会归零——顾问窗口跟 PM 实时对话调整广告，本身是当前唯一的工作方式）。**不建议现在做数据搬迁或字段映射设计**，避免过度设计一个明知会萎缩的过渡态。
+**上线路径（阶段 2 后旁路必须硬性关闭，不是自然萎缩）**：等阶段 2 `ads.*` 动作注册进内核、K2（一律人审批）落地后：
+1. 广告变更理由自然由 `authorization_decisions.reason` / `action_runs.rationale` 承载，`client_decision_history` 的 `source = interactive_advisor_session` 分支停止新增；
+2. **交互式顾问对话必须被明确禁止继续直接改 Meta 配置**——阶段 2 上线的同时，顾问窗口的输出改为提交同一套内核 `ads.*` 动作（人审批 → 内核授权 → Connector 执行 → 回执），不再允许对话本身直接调用 Meta API 写配置。这不是"可选的收紧建议"：阶段 2 上线后如果仍放行这条旁路，就等于生产环境里始终留着一条不经过授权、成本检查、执行回执的真实预算/定向写入路径，事后补一行决策日志无法补回这些安全保证。阶段 2 的实施 PR 必须包含"移除/下线交互式顾问直写 Meta 的代码路径"这一项，不能只上线内核、放着旧路径继续能跑。
 
-**前置条件（停写过渡表的硬门槛，不是可选优化）**：这条"理由自然由内核字段承载"的判断，只有在广告动作的提交/批准契约把业务理由设为**必填**之后才成立。现有的通用审批服务（`src/lib/kernel-approval/service.ts` 的 `readReason`）只在拒绝时强制填理由，批准时 `reason` 可选、留空也能过——`ActionRun.rationale` 本身的类型也是 `string | null`。如果广告动作原样套用这套通用契约，阶段 2 上线后审批人不填备注，`authorization_decisions.reason` 只会是"某人点了同意"这类通用审计文字，说明不了业务理由，本文要解决的数据缺口会原样重现。因此：**停止往 `ad_decision_log` 写新记录，必须以"广告动作的提交或批准入口已把业务理由改成必填"为前提条件**，不能只等内核接入广告动作这一件事就直接停写。
+**不建议现在做数据搬迁或字段映射设计**，避免过度设计一个明知会在阶段 2 上线当天清零的过渡态。
+
+**前置条件（停写过渡列的硬门槛，不是可选优化）**：这条"理由自然由内核字段承载"的判断，只有在广告动作的提交/批准契约把业务理由设为**必填**之后才成立。现有的通用审批服务（`src/lib/kernel-approval/service.ts` 的 `readReason`）只在拒绝时强制填理由，批准时 `reason` 可选、留空也能过——`ActionRun.rationale` 本身的类型也是 `string | null`。如果广告动作原样套用这套通用契约，阶段 2 上线后审批人不填备注，`authorization_decisions.reason` 只会是"某人点了同意"这类通用审计文字，说明不了业务理由，本文要解决的数据缺口会原样重现。因此：**停止往 `client_decision_history` 写 `source = interactive_advisor_session` 的新记录，必须以"广告动作的提交或批准入口已把业务理由改成必填"且"交互式旁路代码路径已下线"两个条件同时满足为前提**，不能只等内核接入广告动作这一件事就直接停写。
 
 ### 选项 C——什么都不做，等阶段 2 内核上线再说
 **不建议现在就是唯一路径**，但值得指出：阶段 2（内核 + 执行）在设计文档 §9 里已经被判定为 **P2**，排在阶段 0/1（P0，还在等 PM go apply migration）之后，短期内不会上线。如果什么都不做，接下来每一次顾问窗口的交互式决策都会重复今天这次"临时找个字段塞"的权宜操作，PM 要的"验证决策对不对"和"训练决策 agent"这两个目标会持续拿不到干净数据——**这是选 C 的真实代价**，需要 PM 知情。
@@ -81,21 +105,21 @@ ad_decision_log
 
 - 今天的操作（PM 在顾问窗口跟 agent 对话，agent 直接对 Meta 做真实修改）**完全不在设计文档 §4 的执行链路里**——它既没有走 `budget_move_plan` 这类内核动作（还没建），也没有走现有的 `stop-loss.ts` / `draft-and-gate` 审批链（那是为止损和加广告组设计的，不是为"跟 PM 聊完直接调预算"设计的）。
 - 换句话说，这不是"决策原因没地方存"这一个孤立缺口，而是**"交互式广告顾问"这整个工作模式，从一开始就没有被设计文档承认为一种正式的 Act 执行路径**。它是当前唯一能干活的方式（阶段 2 没上线），但从治理角度看，它绕开了 CLAUDE.md 铁律 3 对 Inngest 的硬约束（"凡是代码设计涉及跨步骤异步接力或外部副作用，必须把 Inngest 作为默认工作流层接入"）——今天这次预算调整是对 Meta 的真实外部副作用，却没有走 Inngest、没有机器可读回执，只有事后手工写的这几行快照。
-- **这个问题不建议现在单独立项解决**（会话结束前不做无边界的新设计），但建议 PM 知情：**在阶段 2 内核上线之前，"交互式顾问对话改真实广告配置"这个模式本身就是一个已知的治理空白，选项 B 的过渡表只是给它补一个日志，不是给它补治理**。真正的治理只有阶段 2 上线才会到位。
+- **这个问题不建议现在单独立项解决**（会话结束前不做无边界的新设计），但建议 PM 知情：**在阶段 2 内核上线之前，"交互式顾问对话改真实广告配置"这个模式本身就是一个已知的治理空白，选项 B 的表扩展只是给它补一个日志，不是给它补治理**。真正的治理只有阶段 2 上线才会到位——且见 §3 选项 B 的"上线路径"：阶段 2 上线必须**同一 PR 内**下线交互式顾问直写 Meta 的代码路径，不能让这条旁路在内核上线后继续存在。
 
 ---
 
 ## 5. 平台层级门判定（Full Report · 按 `me-platform-tier-gate` skill）
 
-**被判定对象**：广告决策原因/决策日志能力（选项 B 的 `ad_decision_log` 表 + 记录约定）
+**被判定对象**：广告决策原因/决策日志能力（选项 B：扩展既有 `client_decision_history` 表 + 记录约定，见 §2.1/§3）
 
 **建议层级**：**L1 Capability（既有能力线内部扩展，非新支柱、非新能力线）**
 
 **归属**：
-- [x] 平台基础设施：Kernel / Governance（Attribution/Verification 相邻）——本质是内核 `AuthorizationDecision.reason` / `ActionRun.rationale` 这套"决策留痕"机制，在内核还没接管广告动作前的一个过渡态延伸，不是广告支柱独有的能力
+- [x] 平台基础设施：Kernel / Governance（Attribution/Verification 相邻）——本质是内核 `AuthorizationDecision.reason` / `ActionRun.rationale` 这套"决策留痕"机制，在内核还没接管广告动作前的一个过渡态延伸，不是广告支柱独有的能力；同时复用 `client_decision_history`（既有 memory 平台能力）与 `flywheel_actions`/`flywheel_outcomes`（既有 Attribution 平台能力），不新增独立数据面
 
 **换客户测试**：✓
-- CTS（旅游）：今天的真实触发场景——中文广告下架 + 预算收紧，决策理由是客户市场定位判断，字段设计（`decision_summary` / `reasoning` / `affected_entities`）不含任何 CTS 专属结构。
+- CTS（旅游）：今天的真实触发场景——中文广告下架 + 预算收紧，决策理由是客户市场定位判断，新增列设计（`affected_entities` / 快照关联 / `flywheel_action_id`）不含任何 CTS 专属结构。
 - NAL（物流）/ Oztop（建材）：同样会有"为什么调预算""为什么关某个受众"的交互式决策，表结构原样适用，无需改字段。
 
 **换行业测试**：✓
@@ -134,23 +158,23 @@ ad_decision_log
 
 ## 7. Reuse Statement
 
-- **复用了什么已有平台能力？** 内核的"决策留痕"设计理念（`AuthorizationDecision.reason` / `ActionRun.rationale`）——过渡表的字段命名与语义有意向内核靠拢，方便未来对照，但不复用内核的表本身（内核尚未接管广告动作，参照 §1.4 冻结约束不允许预先接线）。
-- **新增内容哪些是真正 platform-shared？** 若选项 B 落地，`ad_decision_log` 表结构本身对所有广告客户通用，属广告支柱 L1 内部的共享数据模型扩展。
+- **复用了什么已有平台能力？** 三处，均为已在生产跑的既有能力，不新建数据面：(1) `client_decision_history`（`src/lib/memory/service.ts` 的 `loadRecentDecisions` 读取路径）——直接扩列，而不是像初稿那样另开 `ad_decision_log`，理由见 §2.1；(2) `flywheel_actions` / `flywheel_outcomes`（P12.A.8 attribution job）——用 `flywheel_action_id` 挂接，让决策记录拿到可归因的 Outcome，而不是自己发明一套验证窗口字段，见 §2.2；(3) 内核的"决策留痕"设计理念（`AuthorizationDecision.reason` / `ActionRun.rationale`）——新增列命名与语义有意向内核靠拢，方便未来对照，但不复用内核的表本身（内核尚未接管广告动作，参照 §1.4 冻结约束不允许预先接线）。
+- **新增内容哪些是真正 platform-shared？** 若选项 B 落地，`client_decision_history` 新增的列（`affected_entities`/快照关联/`source`/`flywheel_action_id`/`session_ref`）对所有广告客户通用，属广告支柱 L1 内部的共享数据模型扩展；`source` 枚举扩展本身也是通用的（区分 AI 决策 vs 交互式人工决策）。
 - **哪些是 industry-specific？** 无——`reasoning` 是自由文本，不预置任何行业词汇或权重。
 - **哪些是 client-specific？** 每一行的具体决策内容（"CTS 不投华人市场"这类事实）天然是 client-specific 数据，正常存在 `client_id` 限定的行里，不进 shared runtime 的判断逻辑。
 - **有没有把客户名、客户 ID、行业判断或客户私有事实写进 shared runtime？** 没有；`client_id` 是数据行的外键，不是代码里的硬编码判断。
-- **哪些学习仍只在 client-private memory，哪些有证据升级到 industry/global memory？** 本设计判断本身不产生新的 memory 升级；过渡表的数据未来若被用于训练"广告决策 agent"，那是另一个需要单独评估的话题（本次不展开）。
+- **哪些学习仍只在 client-private memory，哪些有证据升级到 industry/global memory？** 本设计判断本身不产生新的 memory 升级；但因为改成扩展 `client_decision_history` 而不是另开孤立表，广告顾问的交互式决策**从写入的那一刻起就进入既有的鲁班/华佗 memory 注入路径**（`loadRecentDecisions` → `memory/format.ts`），不需要额外一次迁移就能被下一轮 agent 生成看到——这是相对初稿"另建表"方案多出的一项复用收益。是否进一步升级到 industry/global memory 仍是另一个需要单独评估的话题（本次不展开）。
 
 ---
 
 ## 8. 给 PM 的三句话总结
 
-**第一件事：加字段不对，要另开一张小表存"为什么"，但现在先别急着建。**
-今天临时塞进快照表 note 里的做法用错了地方——那张表是给机器自动记"Meta 现在设置是什么样"用的，不是给人记"为什么改"用的。正确做法是单独开一张"决策日志"表，但这不是当务之急（下面第三件事说明为什么），先记进待办即可。
+**第一件事：加字段不对，但也不用另开新表——仓库里已经有一张能扩的表。**
+今天临时塞进快照表 note 里的做法用错了地方——那张表是给机器自动记"Meta 现在设置是什么样"用的，不是给人记"为什么改"用的。复查后发现更省事的做法：仓库里已经有一张"诸葛亮决策历史表"记录 AI 每次决策的理由，结构跟广告决策要存的东西很像，给它加几列（谁改的、影响哪些广告、决策前后对比）就够用，不用另起炉灶，也不会让同一个客户的决策记录分裂成两处。不是当务之急（下面第三件事说明为什么），先记进待办即可。
 
 **第二件事：这件事本来就在原计划里，只是排在后面（阶段 2），不是被漏掉了。**
 原设计里"人为什么批准这次改动"这件事，本来就打算靠"内核"（一套管审批和执行的底层机制）自动记录，只是内核目前只接管了极少数动作，广告类的改动还没接进去。今天发生的，是内核还没接的那部分先被人工绕过去改了——这是流程还没补齐的正常过渡期现象，不是设计漏项。
-**但有一个前置条件**：现在内核里"批准时填理由"这一步是可以留空的（只有"拒绝"才强制要求写理由）。阶段 2 把广告动作接进内核时，必须顺手把"批准也要填理由"这条改成强制，不然内核接进来了、批准人还是不填备注，"为什么调预算"这件事一样记不下来——那到时候还是得靠这张过渡表兜底，不能想当然认为内核一接入问题就自动解决。
+**但有两个前置条件**：(1) 现在内核里"批准时填理由"这一步是可以留空的（只有"拒绝"才强制要求写理由）。阶段 2 把广告动作接进内核时，必须顺手把"批准也要填理由"这条改成强制，不然内核接进来了、批准人还是不填备注，"为什么调预算"这件事一样记不下来。(2) **阶段 2 上线的同一次改动里，必须把"跟我这样聊完直接改 Meta"这条路彻底堵死**——不是慢慢淘汰，是切换那天起，广告顾问的建议一律先走内核审批，不能再由对话直接下手改真实广告账户。这两个条件不满足之前，还是得靠这张过渡记录兜底，不能想当然认为内核一接入问题就自动解决。
 
 **第三件事：按频率/关键度/收入三项打分，这件事排 P2（不着急），先干阶段 0/1 那些已经定好、在等你批准上线的事。**
-这件事频率中等、不影响当前广告在跑的判断、也不直接关系客户投诉/续费，所以不需要插队。已经写进 [ROADMAP](../ROADMAP.md) 待办，交给负责广告引擎的窗口在阶段 0/1 忙完之后接手；需要我现在就开一张"决策日志"过渡表的话，回 `开始` 我就去做（大约要过一次架构复审再实施，不是当场改库）。
+这件事频率中等、不影响当前广告在跑的判断、也不直接关系客户投诉/续费，所以不需要插队。已经写进 [ROADMAP](../ROADMAP.md) 待办，交给负责广告引擎的窗口在阶段 0/1 忙完之后接手；需要我现在就去扩那张决策历史表的话，回 `开始` 我就去做（大约要过一次架构复审再实施，不是当场改库）。
