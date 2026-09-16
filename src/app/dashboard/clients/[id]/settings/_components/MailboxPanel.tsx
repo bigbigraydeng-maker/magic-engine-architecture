@@ -18,6 +18,70 @@ import { useSearchParams } from 'next/navigation'
 import type { PlatformConnectionSummary } from '@/lib/platform-oauth/vocabulary'
 
 /**
+ * 「复制这条链接发给别人」——不是每个按钮都该自己点。
+ *
+ * 2026-09-15 PM 反馈：管理员批准这一步经常不是当前看着屏幕的这个人要做的
+ * （见上面 ConnectWizard 的说明——它跟收邮件那个人可以是两位）。之前只给
+ * 一个可以点的链接，等于假设了「点这个链接的人就是要批准的人」——但实际上
+ * 大概率是这个人要把链接转给同事，链接本身要能被复制、能带上一句现成的话，
+ * 而不是让他自己去猜「怎么把这个按钮的地址弄给别人」（右键复制链接地址
+ * 这种操作对非技术背景的人不是显然的）。
+ *
+ * 用绝对地址（`window.location.origin` 拼出来）——相对路径复制出去粘贴到
+ * 微信里点开会打不开或者打到错的域名。
+ */
+function CopyLinkRow({ href, label }: { href: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  const [origin, setOrigin] = useState('')
+
+  useEffect(() => {
+    setOrigin(window.location.origin)
+  }, [])
+
+  const fullUrl = origin ? `${origin}${href}` : href
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(fullUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // 剪贴板权限被浏览器拦了——链接本来就摆在输入框里，人自己框选复制。
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <input
+        readOnly
+        value={fullUrl}
+        onFocus={(e) => e.currentTarget.select()}
+        className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-600"
+      />
+      <div className="mt-1.5 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void copy()}
+          className={
+            copied
+              ? 'rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-bold text-white'
+              : 'rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-bold text-white hover:bg-slate-700'
+          }
+        >
+          {copied ? '✓ 已复制' : `复制链接${label ? `，发给${label}` : ''}`}
+        </button>
+        <a
+          href={href}
+          className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50"
+        >
+          我自己点
+        </a>
+      </div>
+    </div>
+  )
+}
+
+/**
  * 撞上「需要管理员批准」怎么办。
  *
  * **两种状态下都要显示**，这一点是踩出来的：2026-08-02 CTS 那次，管理员先连上了
@@ -28,17 +92,17 @@ import type { PlatformConnectionSummary } from '@/lib/platform-oauth/vocabulary'
  */
 function AdminConsentHint({ clientId }: { clientId: string }) {
   return (
-    <p className="mt-3 text-xs text-slate-500">
-      登录后看到<strong>「需要管理员批准」</strong>？
-      那是这家公司不让员工自己给外部软件授权。请公司里管 Microsoft 365 的那位同事点一次
-      <a
+    <div className="mt-3">
+      <p className="text-xs text-slate-500">
+        登录后看到<strong>「需要管理员批准」</strong>？
+        那是这家公司不让员工自己给外部软件授权。这一步该找公司里管 Microsoft 365 的那位同事做——
+        把下面这条链接复制给他，不用自己点：
+      </p>
+      <CopyLinkRow
         href={`/api/auth/microsoft/mail/start?clientId=${clientId}&admin=1`}
-        className="mx-1 font-bold text-slate-700 underline"
-      >
-        这个链接
-      </a>
-      替全公司批准，然后再回来连一次。
-    </p>
+        label="你们的 IT 同事"
+      />
+    </div>
   )
 }
 
@@ -194,12 +258,13 @@ function ConnectWizard({
                   这一步<strong>不会连上任何邮箱</strong>，只是替全公司开一次门——点完请回到上面，
                   用收邮件的那个账号重新连一次。
                 </p>
-                <a
+                <p className="mt-2 text-xs font-bold text-slate-700">
+                  这一步该找 IT 同事做的话，把下面这条链接复制给他，不用自己点：
+                </p>
+                <CopyLinkRow
                   href={`/api/auth/microsoft/mail/start?clientId=${clientId}&admin=1`}
-                  className="mt-2 inline-block rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50"
-                >
-                  管理员批准
-                </a>
+                  label="你们的 IT 同事"
+                />
               </>
             )}
           </div>

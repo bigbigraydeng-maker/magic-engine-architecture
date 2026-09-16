@@ -58,18 +58,43 @@ describe('还没连任何邮箱 —— 主操作是直接连，不是先看两�
     mockFetch([])
     await renderPanel()
 
-    expect(screen.queryByRole('link', { name: '管理员批准' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /复制链接/ })).not.toBeInTheDocument()
     expect(screen.getByText(/卡住了/)).toBeInTheDocument()
   })
 
-  it('点开「卡住了」才看到管理员批准的入口，并说清楚这一步该找谁', async () => {
+  it('点开「卡住了」才看到复制链接的入口，并说清楚这一步该找谁', async () => {
     mockFetch([])
     await renderPanel()
 
     await userEvent.click(screen.getByText(/卡住了/))
 
-    expect(screen.getByRole('link', { name: '管理员批准' })).toBeInTheDocument()
-    expect(screen.getByText(/IT 同事/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /复制链接/ })).toBeInTheDocument()
+    expect(screen.getByText(/贵公司管 Microsoft 365 的 IT 同事/)).toBeInTheDocument()
+  })
+
+  it('复制链接这一步同时留一个「我自己点」的路——这次批准的人可能就是当前这位', async () => {
+    mockFetch([])
+    await renderPanel()
+
+    await userEvent.click(screen.getByText(/卡住了/))
+
+    const selfClickLink = screen.getByRole('link', { name: '我自己点' })
+    expect(selfClickLink).toHaveAttribute('href', expect.stringContaining('admin=1'))
+  })
+
+  it('点「复制链接」把完整地址（带域名）写进剪贴板，不是相对路径——相对路径发去微信打不开', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    mockFetch([])
+    await renderPanel()
+
+    await userEvent.click(screen.getByText(/卡住了/))
+    await userEvent.click(screen.getByRole('button', { name: /复制链接/ }))
+
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringMatching(/^https?:\/\/.*\/api\/auth\/microsoft\/mail\/start\?clientId=client-a&admin=1$/),
+    )
+    expect(await screen.findByRole('button', { name: '✓ 已复制' })).toBeInTheDocument()
   })
 
   it('地址没填时连接按钮不能点', async () => {
@@ -101,8 +126,8 @@ describe('管理员刚批准完回来 —— 不用再找一次收起的入口',
     await renderPanel({ mail: 'admin_ok' })
 
     expect(screen.getByText(/管理员已经批准过了/)).toBeInTheDocument()
-    // 已经批准过了，不该再看到「管理员批准」这个按钮。
-    expect(screen.queryByRole('link', { name: '管理员批准' })).not.toBeInTheDocument()
+    // 已经批准过了，不该再看到复制链接这个入口——门已经开了，用不上了。
+    expect(screen.queryByRole('button', { name: /复制链接/ })).not.toBeInTheDocument()
   })
 
   it('顶部不再重复一条「管理员批准了」的横幅 —— 同一件事只说一遍', async () => {
