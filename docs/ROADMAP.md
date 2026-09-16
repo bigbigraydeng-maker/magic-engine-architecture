@@ -41,6 +41,64 @@
 
 ---
 
+## 广告执行层（Ads Act Layer）— IMPACT 闭环补全 [P-ADS-ACT]
+
+> **背景**：2026-09-15 NAL 广告优化全程靠 Claude Code 手动调 Meta Graph API 完成（版面排除、Advantage+ 关闭、相似受众创建）。ME 现在有 Inspect / Measure / Prescribe，唯独缺 **Act**。这个功能要把今天手动做的所有动作全部搬进 ME，由 **Inngest** 负责异步执行。
+>
+> **设计原则**：PM 明确拍板前不许动广告账户（fail-closed）。执行完自动写 `client_decision_history` + 建日历提醒，让 Check 阶段机器可追溯。
+>
+> **Reuse 边界**：Act 是平台级能力（IMPACT 第四段），不是 NAL 专属。Meta Graph API 调用统一收口到 `src/lib/meta-ads/`，不可散落在 cron 或页面路由里。
+
+### 设计结构
+
+```
+ad_health_narratives（每日自动出处方）
+        ↓  Inngest event: ads/prescription.ready
+ads-act-executor（Inngest function）
+        ↓  ① 读取处方里的 executable actions
+        ↓  ② 生成「审批卡」推送 PM（Portal UI 或 Telegram）
+        ↓  ③ PM 点「批准执行」→ Inngest step.run()
+        ↓  ④ 调 src/lib/meta-ads/execute.ts（已验 API 调用）
+        ↓  ⑤ 写 client_decision_history（含 reasoning JSON）
+        ↓  ⑥ 建 Google Calendar 提醒（review_at 日期）
+```
+
+### 已验证可直接移植的 Meta API 操作（2026-09-15 NAL 实测）
+
+| 操作 | API 调用 | 验证状态 |
+|---|---|---|
+| 排除受众网络版位 | `POST /{adset_id}` 改 `publisher_platforms` | ✅ 已验证 |
+| 关闭 Advantage+ 受众 | `POST /{adset_id}` 设 `targeting_automation.advantage_audience=0` | ✅ 已验证 |
+| 排除 IG 动态/FB 快拍 | `POST /{adset_id}` 改 `instagram_positions`/`facebook_positions` | ✅ 已验证 |
+| 创建相似受众 | `POST /act_{ad_account_id}/customaudiences` `subtype=LOOKALIKE` | ✅ 已验证 |
+| 添加相似受众到广告组 | `POST /{adset_id}` 改 `targeting.flexible_spec` | ✅ 已验证 |
+
+### 待做清单
+
+- [ ] **`src/lib/meta/targeting-mutations.ts`**（路径经 Codex 复审纠正，原写 `meta-ads/` 是错的）：把上表五种操作从一次性脚本搬成有类型约束的模块函数；函数签名带 `adAccountId`/`adsetId`/`token` 参数（不硬编码客户）。⚠️ **Codex P0 硬要求**：每个写函数第一行必须先 `GET /{adset_id}?fields=targeting` 拿完整定向设置，在内存里合并修改后再整体 POST 回去——禁止局部传值，Meta 会把未传的字段全部清空（真实事故记录：`feedback-meta-targeting-update-not-safe-merge.md`）。
+- [ ] **Inngest function `ads/act-executor`**：监听 `ads/prescription.ready` 事件；解析处方里的 `executable_actions` 字段；每个动作单独 `step.run()`，失败不级联。
+- [ ] **PM 审批门**：执行前发「审批卡」（Portal 通知 或 Telegram bot）；有 PM 显式 `approved_at` 时间戳才进行 API 调用——没有审批 = 不执行，不报错、不静默跳过，记录「待审批」状态。
+- [ ] **执行后自动写 `client_decision_history`**：格式与 2026-09-15 手写的三条记录一致（`decision_context` / `chosen_action` / `reasoning` JSON 含 `confidence_pct`/`hypothesis`/`watch_metrics`/`review_at`）。
+- [ ] **执行后自动建 Google Calendar 事件**：`review_at` 字段驱动，标题写人话动作（如「查 NAL 排除受众网络版位效果」），描述写「查什么 / 怎么算成 / 不成怎么办」。
+- [ ] **`ad_health_narratives` 新增 `executable_actions` 字段**：结构化表达哪些处方是机器可执行的（带动作类型、adset_id、参数）——目前处方是自然语言，Act 层需要机器可读的格式。
+- [ ] **Codex 代码审核**（开工前必做）：子牙审架构、魏征挑刺。特别检查：① 令牌泄露风险（`META_SYSTEM_USER_TOKEN` 不得进日志）；② 客户隔离（不同客户的 ad_account_id 不许混用）；③ 审批门是否真的 fail-closed 而非 fail-open。
+- [ ] **`outcome_verdict` 回填机制**（⚠️ Codex P0 复审结论）：`memory-extractor` 负责回填的那段代码已在 2026-09-06 退役（代码注释明文标注）。正确做法：执行完立刻在同一个 Inngest step 写「待验证(`pending_review`)」状态；`review_at` 到期后触发一个独立的 Inngest 函数（`ads/outcome-checker`）去 Meta Insights API 拉指标，与 `watch_metrics` 基线比对后写回 `success`/`failure`/`inconclusive`。不依赖已退役的老任务。
+
+### 硬约束
+
+1. **Inngest 是唯一执行层**：不许在 API 路由里直接调 Meta API 改广告设置，必须走 Inngest event → function → step.run()，保留完整执行日志。
+2. **PM 审批不可绕过**：即使是脚本调试环境，也必须有 `force_approve: true` 的显式 flag，不能默认 bypass。
+3. **令牌不写进代码**：从 `META_SYSTEM_USER_TOKEN` 环境变量取，不从函数参数传入字符串字面量。
+4. **一次执行一个动作**：不做批量「一键优化所有广告组」，每个 adset 的每个操作独立审批、独立执行、独立记录——这是刻意设计，防止一个错误决定大规模扩散。
+
+### 开工前置条件（PM 2026-09-15 拍板）
+
+- `ad_health_narratives.executable_actions` 字段结构需要先定稿（影响 Inngest 触发条件）
+- PM 审批门的 UI 形式需 PM 确认（Portal 弹框 vs Telegram bot 回复）
+- 子牙 + 魏征复审设计后才能动手写代码
+
+---
+
 ## Creatomate Connector 落地后续
 
 > 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2）。2026-09-13 端到端真实验证已跑通（PR #1570/#1594/#1604，见 memory `project-cts-video-factory-decision-ledger` 完整记录），下面只留还没做完的。
