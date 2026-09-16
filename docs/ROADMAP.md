@@ -42,6 +42,70 @@
 
 ---
 
+## 广告执行层（Ads Act Layer）— IMPACT 闭环补全 [P-ADS-ACT]
+
+> **背景**：2026-09-15 NAL 广告优化全程靠 Claude Code 手动调 Meta Graph API 完成（版面排除、Advantage+ 关闭、相似受众创建）。ME 现在有 Inspect / Measure / Prescribe，唯独缺 **Act**。这个功能要把今天手动做的所有动作全部搬进 ME，由 **Inngest** 负责异步编排。
+>
+> **设计原则**：PM 明确拍板前不许动广告账户（fail-closed）。执行必须经过现有 Execution Kernel（生成 `action_runs`、append-only `authorization_decisions`、输入哈希、幂等、回滚、lineage），不能绕开 Kernel 单独发明一套 `approved_at` 审批闸；Check 阶段的可追溯性由 Kernel 记录提供，不是单独写 `client_decision_history`。
+>
+> **Reuse 边界**：Act 是平台级能力（IMPACT 第四段），不是 NAL 专属。生产已有 Execution Kernel（见 `docs/STATE.md`），当前缺的是「广告动作注册」，不是另建一套执行通道——Inngest 只负责编排，实际写操作必须经 Kernel gateway/action bridge 调用已有 Meta Connector（`src/lib/meta/`），不可散落在 cron 或页面路由里，也不能新建第二条 provider 写路径（如 `src/lib/meta-ads/`）。
+
+### 设计结构
+
+```
+ad_health_narratives（每日自动出处方）
+        ↓  Inngest event: ads/prescription.ready
+ads-act-executor（Inngest function）
+        ↓  ① 读取处方里的 executable actions
+        ↓  ② 生成「审批卡」推送 PM（Portal UI 或 Telegram）
+        ↓  ③ PM 点「批准执行」→ Kernel 写入 append-only authorization_decisions
+        ↓  ④ Inngest step.run() 经 Kernel gateway/action bridge 调 src/lib/meta/targeting-mutations.ts（已验 API 调用）——动手前必须先用 `findSharedAdAccounts`（`src/lib/meta/client-ad-accounts.ts`）核对目标账户，命中共用账户一律 fail-closed 拒绝（见硬约束 5）；四个改 targeting 的动作在真正 POST 前把当前完整 `targeting` 存一份快照供回滚，「创建相似受众」记录新建的 `custom_audience_id` 供清理
+        ↓  ⑤ Kernel 写 action_runs（含输入哈希/幂等/回滚/lineage）；同一 Inngest step 内以 `action_run_id` 为幂等键 upsert 一行 flywheel_actions（`expected_metric` 取处方监控的指标；`expected_delta` 是带符号的**预期变化方向**——成本类指标预期下降必须写负数，不能照抄 `watch_metrics` 的基线数值，基线由评估流程自己测量）；此时不产生任何 outcome 记录——待 outcome-checker 回填
+        ↓  ⑥ 建 Google Calendar 提醒（review_at 日期）
+```
+
+### 已验证可直接移植的 Meta API 操作（2026-09-15 NAL 实测）
+
+| 操作 | API 调用 | 作用范围 | 验证状态 |
+|---|---|---|---|
+| 排除受众网络版位 | `POST /{adset_id}` 改 `publisher_platforms` | adset 级 | ✅ 已验证 |
+| 关闭 Advantage+ 受众 | `POST /{adset_id}` 设 `targeting_automation.advantage_audience=0` | adset 级 | ✅ 已验证 |
+| 排除 IG 动态/FB 快拍 | `POST /{adset_id}` 改 `instagram_positions`/`facebook_positions` | adset 级 | ✅ 已验证 |
+| 创建相似受众 | `POST /act_{ad_account_id}/customaudiences` `subtype=LOOKALIKE` | **账户级**——无 `adset_id`，不改任何 adset 的 `targeting` | ✅ 已验证 |
+| 添加相似受众到广告组 | `POST /{adset_id}` 改 `targeting.flexible_spec` | adset 级 | ✅ 已验证 |
+
+⚠️ **Codex P2 复审结论**：「创建相似受众」是账户级操作（`POST /act_{ad_account_id}/customaudiences`），不带 `adsetId`，也不读写任何 adset 的 `targeting`；不能套用下面「五个函数都先 GET adset targeting 再合并回写」的规则，否则会在真正创建受众前就因缺 adset 参数而失败，还会把无关的 targeting 回写混进这个动作。它必须建成独立的账户级 Kernel action（独立 `action_key`，参数只有 `adAccountId`/`token`，产出 `custom_audience_id`），GET-merge-POST 的安全回写规则只适用于其余四个真正修改 adset targeting 的操作。
+
+### 待做清单
+
+- [ ] **`src/lib/meta/targeting-mutations.ts`**（路径经 Codex 复审纠正，原写 `meta-ads/` 是错的）：把上表五种操作从一次性脚本搬成有类型约束的模块函数，其中四个改 adset targeting 的函数签名带 `adAccountId`/`adsetId`/`token` 参数（不硬编码客户）。⚠️ **Codex P0 硬要求**：这四个写函数第一行必须先 `GET /{adset_id}?fields=targeting` 拿完整定向设置，在内存里合并修改后再整体 POST 回去——禁止局部传值，Meta 会把未传的字段全部清空（真实事故记录：`feedback-meta-targeting-update-not-safe-merge.md`）。这次 GET 到的原始 `targeting` 同时就是回滚快照，必须原样存进 `action_runs` 的可回滚载荷，不能只 GET 用完即丢。「创建相似受众」是账户级操作，函数签名只带 `adAccountId`/`token`（无 `adsetId`），不读取也不回写任何 adset 的 `targeting`，直接 `POST /act_{ad_account_id}/customaudiences`——见上表后的 Codex P2 复审结论，不适用 GET-merge-POST 规则；它的回滚不是恢复 targeting，而是要能删除这次新建的 `custom_audience_id`。
+- [ ] **执行前对目标账户跑 `findSharedAdAccounts` 核对，命中共用账户一律 fail-closed**（⚠️ Codex P1 复审结论）：生产已知 Roman HU 与 30 Kiteroa 共用 `act_1260456876069575`（`src/lib/meta/client-ad-accounts.ts:75-103`），而 `campaign-ownership.ts:14-18` 的归属校验明确说明只能挡「`campaign_id`/`ad_account_id` 完全不在客户注册账户里」这种跨账户误操作，挡不住同一账户内的跨客户资产——处方如果因为归因串线指向了同账户里另一个客户的 adset，四个改 targeting 的动作会直接改错客户的广告；账户级的「创建相似受众」风险更高，新建的受众直接挂在整个共用账户下，不区分客户。在账户级归属表落地前，Kernel 动作在生成 action_run 之前必须先查 `findSharedAdAccounts`，命中即拒绝执行、转人工，不生成任何 action_run（详见硬约束 5）。
+- [ ] **五个动作各自挂真实 rollback handler，不能只挂声明**（⚠️ Codex P1 复审结论）：`src/lib/kernel/gateway.ts:238-257` 的 `assertRollbackHandlerAssembled` 只保证「`outward` + `provider_native` 的 capability 必须声明 rollback handler」，挡的是「忘记声明」，挡不住「声明了 `snapshot_restore` 但没真的实现恢复步骤」——那样失败后外部状态依然撤不回来。四个改 targeting 的动作，rollback handler 要把 GET 阶段存下的原始 `targeting` 快照原样 POST 回去；「创建相似受众」的 rollback handler 要能删除这次新建的 `custom_audience_id`。五个动作在 Kernel action 注册表里必须各自挂对应 handler，不能共用一个占位实现敷衍过关。
+- [ ] **Inngest function `ads/act-executor`**：监听 `ads/prescription.ready` 事件；解析处方里的 `executable_actions` 字段；每个动作单独 `step.run()` 经 Kernel gateway/action bridge 注册与执行，失败不级联。
+- [ ] **PM 审批门**：执行前发「审批卡」（Portal 通知 或 Telegram bot）；批准后由 Kernel 写入 append-only `authorization_decisions` 记录（含真实 PM 身份与时间戳），Inngest 拿到该 Kernel 授权记录才能触发执行——没有 Kernel 授权记录 = 不执行，不报错、不静默跳过，记录「待审批」状态。
+- [ ] **执行结果写 Kernel action/outcome 记录，不写 `client_decision_history`**（⚠️ Codex P2 复审结论）：`client_decision_history` 是单写者表，只有诸葛亮 conductor 在选择动作时写入（`docs/agents/CODEX.md:84-87`，唯一调用方 `src/lib/zhuge/action-persister.ts`）；执行完成的 receipt 是「做了什么、结果如何」，不是「为什么选这个动作」的决策记忆，写进去会污染后续策略上下文。`ads-act-executor` 执行后应把结果（含 `confidence_pct`/`hypothesis`/`watch_metrics`/`review_at`）落到 Kernel 的 `action_runs` + `flywheel_actions`（`action_run_id` 关联）里，决策历史仍由诸葛亮在选择动作时产生；最终成败判定见下一条 `outcome-checker` 写 `flywheel_outcomes` 的机制。
+- [ ] **执行后自动建 Google Calendar 事件**：`review_at` 字段驱动，标题写人话动作（如「查 NAL 排除受众网络版位效果」），描述写「查什么 / 怎么算成 / 不成怎么办」。
+- [ ] **`ad_health_narratives` 新增 `executable_actions` 字段**：结构化表达哪些处方是机器可执行的（带动作类型、adset_id、参数）——目前处方是自然语言，Act 层需要机器可读的格式。
+- [ ] **Codex 代码审核**（开工前必做）：子牙审架构、魏征挑刺。特别检查：① 令牌泄露风险（`META_SYSTEM_USER_TOKEN` 不得进日志）；② 共用账户隔离——不只是「不同客户的 ad_account_id 不许混用」这种字面校验，必须实测「命中 `findSharedAdAccounts` 返回的共用账户时是否真的 fail-closed 拒绝执行」；③ 审批门是否真的 fail-closed 而非 fail-open；④ 写操作是否真的经 Kernel gateway/action bridge，而不是绕开 Kernel 直调 Meta Connector；⑤ 五个动作的 rollback handler 是否真的实现了恢复/清理，而不是只挂了声明。
+- [ ] **outcome 回填机制复用现有 `flywheel_metrics` evaluator，不能让 `ads/outcome-checker` 自己另插一次 `flywheel_outcomes`**（⚠️ Codex P1 复审结论，2026-09-16 三轮修正）：`memory-extractor` 负责回填的那段代码已在 2026-09-06 退役（代码注释明文标注），回填目标是已作废的 `client_decision_history.outcome_verdict`，不适用——真正该写的表确实是 `flywheel_outcomes`。但 `flywheel_outcomes` 的自然键固定为 `(action_id, metric_key, window_days)`，且 `flywheel_outcomes_evaluator_owns_metric` 约束（`supabase/migrations/20260808000001_flywheel_outcomes_identity_expand.sql:174-207`）把除 `seo.gsc.*` 外的所有指标都判给唯一 evaluator `flywheel_metrics`——也就是既有归因管道 `src/lib/flywheel/attribution/job.ts`。Meta 广告指标不是 GSC 指标，天然落在这唯一 evaluator 名下：`ads/outcome-checker` 如果自己算 verdict 直接插 `flywheel_outcomes`，带别的 evaluator_key 会被数据库约束拒绝，省略 evaluator_key 又会被 `job.ts` 的 `claimOwnUnsignedRows`（`job.ts:457-465`）认领，随后在同一 action 的下一轮 reconciliation（`retireExtraWindows`）里被覆盖或撤下，等于白算一次。正确做法：`ads/outcome-checker` 只负责去 Meta Insights API 拉指标，把结果写进 `flywheel_metrics` 原始指标表（`client_id` + 处方里的 `expected_metric` 命名对齐 `job.ts` 的 `latestMetricValue` 读取口径），本身**不产生** `flywheel_outcomes` 行；baseline/after/verdict 的计算继续交给既有 `flywheel_metrics` evaluator 的定时任务读取新写入的指标后自动完成。`expected_delta` 必须是处方给出的带符号预期变化方向（成本类指标预期下降写负数，见步骤⑤），不能拿 `watch_metrics` 的基线数值顶替——那样会让指标下降（对成本类指标是好事）被 `computeVerdict`（`job.ts:546-558`）判成方向相反的 `reversed`。关联链路：`action_runs.id` ← `flywheel_actions.action_run_id`（步骤⑤已写入）← `flywheel_outcomes.action_id`（`kernel_action_lineage` 视图已拼好，见 `supabase/migrations/20260808000003_me2_execution_kernel_v1.sql:1594-1602`）。「待验证」状态就是「`flywheel_actions` 行存在但还没有对应的 `flywheel_outcomes` 行」，不需要新增字段。
+- [ ] **`flywheel_actions` 的 `action_run_id` 关联写入必须幂等**（⚠️ Codex P2 复审结论）：`flywheel_actions.action_run_id` 目前只有普通索引，没有唯一约束（`supabase/migrations/20260808000003_me2_execution_kernel_v1.sql:1547-1551`）——Inngest 在 `flywheel_actions` 插入已提交、但本 step 结果还没落盘时崩溃重试，会从 Kernel 拿到同一个幂等命中的 `action_run`，对 `flywheel_actions` 再多插一行，导致同一次真实执行被学习/报告重复计数。开工前需要给 `action_run_id` 加唯一约束并用 `upsert (on conflict action_run_id)` 写这一步，明确「一次 action_run 只对应一条 flywheel action」的契约。
+
+### 硬约束
+
+1. **Inngest 负责编排，写操作必须经 Kernel**：不许在 API 路由或 Inngest step 里直接调 Meta API 改广告设置；必须走 Kernel gateway/action bridge 注册广告动作（生成 `action_runs`、append-only `authorization_decisions`、输入哈希、幂等、回滚、lineage），再由 Kernel 触发 `src/lib/meta/targeting-mutations.ts`。缺的是「广告动作在 Kernel 里注册」，不是另建一套审批/执行通道。
+2. **PM 审批不可绕过**：审批只能来自真实 PM 身份产生的 Kernel `authorization_decisions` 记录，不允许任何运行时输入（脚本参数、事件 payload、调用方字段）携带可自行声明的绕过开关（如 `force_approve: true`）；调试只能用测试环境专用、不进正式契约的假执行器（fake executor）。
+3. **令牌不写进代码**：从 `META_SYSTEM_USER_TOKEN` 环境变量取，不从函数参数传入字符串字面量。
+4. **一次执行一个动作**：不做批量「一键优化所有广告组」，每个 adset 的每个操作、以及账户级的「创建相似受众」，都要独立审批、独立执行、独立记录——这是刻意设计，防止一个错误决定大规模扩散。
+5. **命中共用广告账户 fail-closed**：生产已知同一 Meta 账户被多个客户登记（Roman HU / 30 Kiteroa 共用 `act_1260456876069575`，`src/lib/meta/client-ad-accounts.ts:75-103`），现有的 campaign 归属校验（`campaign-ownership.ts:14-18`）只挡得住「资产完全不在客户注册账户里」的跨账户误操作，挡不住同账户内的跨客户资产。在系列/adset 级归属表落地前，Kernel 动作生成 action_run 之前必须先跑 `findSharedAdAccounts`，命中共用账户一律拒绝执行、转人工处理，不生成 action_run，不允许「先执行再补隔离」。
+
+### 开工前置条件（PM 2026-09-15 拍板）
+
+- `ad_health_narratives.executable_actions` 字段结构需要先定稿（影响 Inngest 触发条件）
+- PM 审批门的 UI 形式需 PM 确认（Portal 弹框 vs Telegram bot 回复）
+- 子牙 + 魏征复审设计后才能动手写代码
+
+---
+
 ## Creatomate Connector 落地后续
 
 > 代码见 [docs/specs/2026-09-09-creatomate-connector-spec-v1.md](./specs/2026-09-09-creatomate-connector-spec-v1.md)（spec v2）。2026-09-13 端到端真实验证已跑通（PR #1570/#1594/#1604，见 memory `project-cts-video-factory-decision-ledger` 完整记录），下面只留还没做完的。
