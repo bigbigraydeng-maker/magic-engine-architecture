@@ -140,11 +140,18 @@ export async function judgeOutcome(input: AiReviewInput): Promise<AiReviewResult
   let text: string
   let stopReason: string | null | undefined
   try {
+    // 🔴 2026-09-17 生产事故：默认路径没有超时上限（SDK 默认重试 + 网关卡住时会掉进
+    // callClaudeChat 内部那个完全没设超时的 fetch 兜底），导致每天定时任务的这一步真的
+    // 卡死了一整天，`retries: 0` 又不会自动救回来——整条 Inngest 调用停在这里，四步管道
+    // 里排在后面的步骤全部没机会跑。`singleAttempt: true` 给这次调用一个硬性 60 秒上限
+    // （超时会抛错，被下面的 catch 接住兜底成 uncertain，不会再无限挂着），且失败直接
+    // 抛错、不会掉进那个没有超时的 fetch 兜底路径。
     const result = await callClaudeChat({
       systemPrompt: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: buildUserMessage(input, inputSnapshot) }],
       model: MODEL_SONNET,
       maxOutputTokens: 300,
+      singleAttempt: true,
     })
     text = result.text
     stopReason = result.stop_reason
