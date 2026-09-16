@@ -168,7 +168,6 @@ export async function loadRankableClientAssets(
     .eq('status', 'analyzed')
     .is('archived_at', null)
     .not('storage_url', 'is', null)
-    .not('vision_metadata->>kind', 'eq', 'video')
 
   const orFilter = projectOrFilter(projectId)
   q = orFilter ? q.or(orFilter) : q.is('project_id', null)
@@ -179,5 +178,15 @@ export async function loadRankableClientAssets(
 
   const { data, error } = await q.limit(MAX_ASSETS * 3)
   if (error || !data) return []
-  return data as RankableAssetRow[]
+  // 🔴 2026-09-13 生产实测发现：`.not('vision_metadata->>kind', 'eq', 'video')` 曾直接写在
+  //    上面的查询里——但绝大多数照片行的 vision_metadata 根本没有 `kind` 这个键（只有视频行
+  //    才写 kind='video'），PostgREST 的 not-eq 在这种「键不存在」情况下走 SQL 三值逻辑
+  //    （NOT(NULL = 'video') 是 NULL，WHERE 照样排除该行），把 CTS 47 张已核实真实照片里的
+  //    46 张（缺 kind 键的那些）一起过滤掉了，只剩 1 张——真实照片选图功能因此实质性失效，
+  //    每条新脚本几乎必然掉进 AI 现画兜底路径。改成跟 `selectAssetUrls`（同文件 86 行）
+  //    一致的 JS 侧判断：只有明确写了 kind==='video' 才排除，键不存在按"不是视频"处理，
+  //    避免同一个排除意图在两处用不同真值语义各写一份、其中一份还悄悄错了。
+  return (data as RankableAssetRow[]).filter(
+    (r) => (r.vision_metadata as Record<string, unknown> | null)?.kind !== 'video',
+  )
 }

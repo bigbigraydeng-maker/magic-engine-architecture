@@ -44,6 +44,8 @@ vi.mock('@/lib/flywheel/adapters/MetaAdsAdapter', () => ({
 vi.mock('@/lib/ads-strategy/daily-insights', () => ({
   syncAdDailyInsights:       vi.fn().mockResolvedValue({ success: true, rows_written: 0 }),
   syncCampaignDailyInsights: vi.fn().mockResolvedValue({ success: true, rows_written: 0 }),
+  syncAdsetDailyInsights:    vi.fn().mockResolvedValue({ success: true, rows_written: 0 }),
+  hasVideoColumns:           vi.fn().mockResolvedValue(false),
 }))
 vi.mock('@/lib/ads-strategy/evaluate', () => ({ evaluateClientAdHealth: vi.fn() }))
 vi.mock('@/lib/ads-strategy/digest', () => ({ sendAdHealthDigest: vi.fn() }))

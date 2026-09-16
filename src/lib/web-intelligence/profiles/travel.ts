@@ -73,6 +73,12 @@ export function travelMarketsIn(text: string): string[] {
   return TRAVEL_MARKETS.filter(market => market.aliases.some(alias => containsAlias(destinationText, alias))).map(market => market.id)
 }
 
+/** Return conservative search terms for the markets already in a client's scope. */
+export function travelMarketTerms(marketIds: string[]): string[] {
+  const allowed = new Set(marketIds)
+  return [...new Set(TRAVEL_MARKETS.filter(market => allowed.has(market.id)).flatMap(market => market.aliases))]
+}
+
 function scopeKeywordText(text: string): string {
   return TRAVEL_MARKETS.flatMap(market => [...market.aliases])
     .sort((a, b) => b.length - a.length)

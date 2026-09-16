@@ -100,6 +100,21 @@ describe('POST /api/clients/[id]/asset-library/search', () => {
     })
   })
 
+  it('🔴 2026-09-13 事故回归：查询结果里没有 kind 键的照片行必须保留，只排除 kind==="video" 的行（曾用 DB 级 not-eq 写，PostgREST 对着「键不存在」的行整行排除，把几乎所有照片一起筛掉）', async () => {
+    const rows = [
+      { id: 'photo-no-kind', storage_url: 'https://x/a.jpg', original_filename: 'a.jpg', vision_metadata: { scene: 'wall' }, source: 'client_verified' },
+      { id: 'photo-null-metadata', storage_url: 'https://x/b.jpg', original_filename: 'b.jpg', vision_metadata: null, source: 'client_verified' },
+      { id: 'video-row', storage_url: 'https://x/c.mp4', original_filename: 'c.mp4', vision_metadata: { kind: 'video' }, source: 'client_verified' },
+    ]
+    mocks.from.mockReturnValue(chainableQuery({ data: rows, error: null }))
+    mocks.rankAssetsByPrompt.mockResolvedValue([])
+
+    await POST(makeRequest({ image_prompt: 'great wall' }), routeContext())
+
+    const passedAssets = mocks.rankAssetsByPrompt.mock.calls[0][1] as Array<{ id: string }>
+    expect(passedAssets.map((a) => a.id).sort()).toEqual(['photo-no-kind', 'photo-null-metadata'])
+  })
+
   it('limit 夹在 1-20 区间', async () => {
     mocks.from.mockReturnValue(chainableQuery({ data: [], error: null }))
     mocks.rankAssetsByPrompt.mockResolvedValue([])

@@ -9,6 +9,8 @@ import {
   parseSheet1Row,
   parseCrmManagementRow,
   parseNzDdMmYyyy,
+  parseSheetsSerialDate,
+  parseSheetDateCell,
   type CrmManagementRow,
   type Sheet1LeadRow,
 } from '../cts-crm-sheet-sync'
@@ -106,6 +108,16 @@ describe('classifyCtsCrmPerson — lead path', () => {
     }
   })
 
+  it('still classifies as a qualified lead when entryDate is a Sheets native-date serial number (2026-09 regression)', () => {
+    // 实测：2026-09-12 起新增的行，entryDate 读出来是 '46277' 而不是 'DD/MM/YYYY' 文本。
+    // 这条曾经会落进下面的"两边都没有可用日期"分支，把当天最新的咨询错判成 excluded。
+    const result = classifyCtsCrmPerson(crmRow({ entryDate: '46277' }), null)
+    expect(result.kind).toBe('qualified_lead')
+    if (result.kind === 'qualified_lead') {
+      expect(result.occurredAt.startsWith('2026-09-12')).toBe(true)
+    }
+  })
+
   it('excludes on notes read from Sheet1 (the live source), not the stale CRM管理 copy', () => {
     // CRM管理!N 拷贝里还是干净的备注（滞后），但 Sheet1!R 已经被标了 wrong number。
     const result = classifyCtsCrmPerson(
@@ -159,6 +171,17 @@ describe('classifyCtsCrmPerson — purchase path', () => {
     }
   })
 
+  it('resolves occurredAt when stageUpdatedDate is a Sheets native-date serial number (2026-09 regression)', () => {
+    const result = classifyCtsCrmPerson(
+      crmRow({ stage: '4-已订金', stageUpdatedDate: '46277' }),
+      sheet1Row(),
+    )
+    expect(result.kind).toBe('purchase_candidate')
+    if (result.kind === 'purchase_candidate') {
+      expect(result.occurredAt.startsWith('2026-09-12')).toBe(true)
+    }
+  })
+
   it('holds for manual review when stageUpdatedDate is unparseable garbage', () => {
     const result = classifyCtsCrmPerson(
       crmRow({ stage: '4-已订金', stageUpdatedDate: 'sometime in July' }),
@@ -184,6 +207,38 @@ describe('parseNzDdMmYyyy', () => {
     expect(parseNzDdMmYyyy('sometime in July')).toBeNull()
     expect(parseNzDdMmYyyy('32/01/2026')).toBeNull()
     expect(parseNzDdMmYyyy('01/13/2026')).toBeNull()
+  })
+})
+
+describe('parseSheetsSerialDate — Google Sheets native date cells', () => {
+  it('converts a real serial value found in production (2026-09-12/13 rows) correctly', () => {
+    // 实测：CRM管理 表 2026-09-12 新增的行，"进线日期" UNFORMATTED_VALUE 读出来是这个数字。
+    const d = parseSheetsSerialDate('46277')
+    expect(d?.toISOString().slice(0, 10)).toBe('2026-09-12')
+  })
+
+  it('rejects non-numeric strings (falls through to the DD/MM/YYYY parser instead)', () => {
+    expect(parseSheetsSerialDate('14/06/2026')).toBeNull()
+    expect(parseSheetsSerialDate('sometime in July')).toBeNull()
+  })
+
+  it('rejects zero and negative values', () => {
+    expect(parseSheetsSerialDate('0')).toBeNull()
+    expect(parseSheetsSerialDate('-5')).toBeNull()
+  })
+})
+
+describe('parseSheetDateCell — accepts either format the sheet actually uses', () => {
+  it('parses old text-format rows', () => {
+    expect(parseSheetDateCell('14/06/2026')?.toISOString().slice(0, 10)).toBe('2026-06-14')
+  })
+
+  it('parses new native-date rows (the 2026-09 regression this was written to catch)', () => {
+    expect(parseSheetDateCell('46277')?.toISOString().slice(0, 10)).toBe('2026-09-12')
+  })
+
+  it('returns null for neither format', () => {
+    expect(parseSheetDateCell('sometime in July')).toBeNull()
   })
 })
 
