@@ -141,7 +141,7 @@ services:
   - type: cron
     name: prospecting-sweep
     env: node
-    schedule: "*/30 * * * *"
+    schedule: "0 * * * *"
     buildCommand: ""
     startCommand: |
       curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" \
@@ -810,7 +810,7 @@ services:
   - type: cron
     name: social-comment-autoreply
     env: node
-    schedule: "*/30 * * * *"
+    schedule: "0 * * * *"
     buildCommand: ""
     startCommand: |
       curl -fsS --max-time 900 -H "Authorization: Bearer $CRON_SECRET" \
@@ -976,7 +976,7 @@ services:
   - type: cron
     name: meta-leads-hourly
     env: node
-    schedule: "25 * * * *"
+    schedule: "25 */2 * * *"
     buildCommand: ""
     startCommand: |
       curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
@@ -1017,7 +1017,7 @@ services:
   - type: cron
     name: ad-entity-snapshot
     env: node
-    schedule: "30 */3 * * *"
+    schedule: "30 */6 * * *"
     buildCommand: ""
     startCommand: |
       curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
