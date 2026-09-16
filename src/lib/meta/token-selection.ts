@@ -165,6 +165,20 @@ export async function resolveMetaToken(
   clientId: string,
   env: Record<string, string | undefined>,
 ): Promise<{ token: string; source: MetaTokenSource } | null> {
+  const res = await resolveMetaTokenDetailed(supabase, clientId, env)
+  return res === 'ownership_unknown' ? null : res
+}
+
+/**
+ * Same as resolveMetaToken, but says when there is no token because the key's
+ * ownership could not be read — gates treat that as a failed check, not as
+ * "this client has no token".
+ */
+export async function resolveMetaTokenDetailed(
+  supabase: SupabaseClient,
+  clientId: string,
+  env: Record<string, string | undefined>,
+): Promise<{ token: string; source: MetaTokenSource } | null | 'ownership_unknown'> {
   const { data, error } = await supabase
     .from('clients')
     .select('id, domain, facebook_page_id, created_at, source')
@@ -181,7 +195,7 @@ export async function resolveMetaToken(
     const peers = await loadTokenOwnerPeers(supabase)
     // Cannot tell who owns the key → no token at all. Falling back to the shared
     // token here would silently swap a client onto a token that sees MORE clients.
-    if (peers === null) return null
+    if (peers === null) return 'ownership_unknown'
     const scoped = pickScopedMetaToken(row, peers, env)
     if (scoped) return scoped
   }

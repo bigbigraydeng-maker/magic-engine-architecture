@@ -120,6 +120,23 @@ describe('AD-SEC-4 — a copied domain does not hand over the owner\'s token', (
     expect(await getMetaTokenForClient('cts')).toBe('by-domain')
   })
 
+  it('the older owner sits past the first 1000 rows → still found (ownership scan reads every page)', async () => {
+    const filler = Array.from({ length: 1200 }, (_, i) => ({
+      id: `a${String(i).padStart(5, '0')}`, domain: `filler${i}.example.com`, facebook_page_id: null,
+      created_at: '2026-05-01T00:00:00Z', source: 'fde',
+    }))
+    state.db.clients = [
+      ...filler,
+      { id: 'b-copy', domain: 'ctstours.co.nz', facebook_page_id: null, created_at: '2026-09-01T00:00:00Z', source: 'fde' },
+      { id: 'z-owner', domain: 'ctstours.co.nz', facebook_page_id: null, created_at: '2025-01-01T00:00:00Z', source: 'fde' },
+    ]
+    process.env[DOMAIN_VAR] = 'by-domain'
+    process.env.META_SYSTEM_USER_TOKEN = 'shared'
+
+    expect(await getMetaTokenForClient('b-copy')).toBe('shared')
+    expect(await getMetaTokenForClient('z-owner')).toBe('by-domain')
+  })
+
   it('cannot tell who owns the key (ownership read fails) → no token at all, never the wider shared one', async () => {
     const { resolveMetaTokenForClient } = await import('../token-manager')
     client({ domain: 'ctstours.co.nz' })

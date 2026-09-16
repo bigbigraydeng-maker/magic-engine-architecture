@@ -112,6 +112,17 @@ async function computeReachable(
   return false
 }
 
+/**
+ * Will the syncs run for this Page? `null` when there is no Meta token at all —
+ * that is not a binding problem and `reachable` already says so. The refusal
+ * reason can name another client's binding, so only staff get it.
+ */
+async function verificationFor(clientId: string, pageId: string, isStaff: boolean) {
+  const assessment = await assessPageBinding(supabaseAdmin, clientId, pageId, process.env)
+  if (!assessment.verified && assessment.reason === 'no_meta_token') return null
+  return isStaff ? assessment : { verified: assessment.verified }
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } },
@@ -151,9 +162,7 @@ export async function GET(
   const { pages, pages_error } = await readPages(clientId)
   const reachable = await computeReachable(clientId, page_id, pages)
 
-  const assessment = page_id ? await assessPageBinding(supabaseAdmin, clientId, page_id, process.env) : null
-  // The reason can name another client's binding — staff only.
-  const verification = assessment === null ? null : isStaff ? assessment : { verified: assessment.verified }
+  const verification = page_id ? await verificationFor(clientId, page_id, isStaff) : null
 
   return NextResponse.json({
     page_id,
@@ -190,6 +199,11 @@ export async function PATCH(
     return NextResponse.json({ error: '请求格式错误' }, { status: 400 })
   }
 
+  // An absent page_id must not silently mean "clear the binding".
+  if (!body || typeof body !== 'object' || !('page_id' in body)) {
+    return NextResponse.json({ error: '缺少 page_id（要清空绑定请明确传 null）' }, { status: 400 })
+  }
+
   let next: string | null
   try {
     next = normalisePageId(body.page_id)
@@ -217,7 +231,7 @@ export async function PATCH(
   // watch, and whether the syncs will run for it.
   const { pages, pages_error } = await readPages(clientId)
   const reachable = await computeReachable(clientId, next, pages)
-  const verification = next ? await assessPageBinding(supabaseAdmin, clientId, next, process.env) : null
+  const verification = next ? await verificationFor(clientId, next, true) : null
 
   return NextResponse.json({ ...result.body, reachable, pages, pages_error, verification })
 }

@@ -1,14 +1,14 @@
 /**
  * AD-SEC-4 — comment auto-reply reads, replies to, hides and DMs on the Page in
- * social_comment_config, which client members can edit. It must only act on the
- * client's staff-bound Page, and only when that binding passes the sync gate.
+ * social_comment_config, which client members can edit. It must only act when the
+ * ownership gate (authorizeConfiguredPage — rules tested against the fake DB in
+ * lib/meta/__tests__/page-sync-authorization.test.ts) lets that Page through.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { fromMock } = vi.hoisted(() => ({ fromMock: vi.fn() }))
-vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: fromMock } }))
-vi.mock('@/lib/meta/page-sync-authorization', () => ({ authorizePageSync: vi.fn() }))
+vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
+vi.mock('@/lib/meta/page-sync-authorization', () => ({ authorizeConfiguredPage: vi.fn() }))
 vi.mock('@/lib/meta/token-manager', () => ({ getMetaTokenForClient: vi.fn() }))
 vi.mock('@/lib/meta/page-posts', () => ({ fetchPagePosts: vi.fn(), fetchPageReels: vi.fn() }))
 vi.mock('@/lib/meta/ads-posts', () => ({ fetchAdStoryIds: vi.fn() }))
@@ -17,11 +17,11 @@ vi.mock('@/lib/meta/comments', () => ({
 }))
 
 import { processClientComments, type CommentConfig } from '../comment-autoreply-engine'
-import { authorizePageSync } from '@/lib/meta/page-sync-authorization'
+import { authorizeConfiguredPage } from '@/lib/meta/page-sync-authorization'
 import { fetchPagePosts, fetchPageReels } from '@/lib/meta/page-posts'
 import { replyToComment, sendPrivateReply, hideComment } from '@/lib/meta/comments'
 
-const mockAuth = vi.mocked(authorizePageSync)
+const mockAuth = vi.mocked(authorizeConfiguredPage)
 const OWN_PAGE = '1616575215312482'
 const OTHER_PAGE = '227633594573276'
 
@@ -29,13 +29,6 @@ const config = (fb_page_id: string): CommentConfig => ({
   client_id: 'client-a', fb_page_id, auto_reply_praise: true, auto_reply_question: true,
   auto_reply_complaint: true, auto_hide_spam: true, private_reply_enabled: true, lookback_days: 3, max_replies_per_run: 10,
 })
-
-function boundPage(pageId: string | null) {
-  fromMock.mockImplementation(() => {
-    const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { facebook_page_id: pageId }, error: null }) }
-    return chain
-  })
-}
 
 const nothingTouched = () => {
   expect(fetchPagePosts).not.toHaveBeenCalled()
@@ -52,28 +45,25 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks())
 
 describe('comment auto-reply page gate', () => {
-  it('config points at a Page that is not the client\'s bound Page → refused, nothing read or sent', async () => {
-    boundPage(OWN_PAGE)
+  it('gate refuses the configured Page (not the client\'s) → refused, nothing read, replied, hidden or DMed', async () => {
+    mockAuth.mockResolvedValue({ ok: false, skipped: 'page_not_verified', reason: 'not_bound_page' })
     const res = await processClientComments(config(OTHER_PAGE))
-    expect(res).toMatchObject({ ok: false })
-    expect(res.error).toContain('page_not_verified')
-    expect(mockAuth).not.toHaveBeenCalled()
+    expect(mockAuth).toHaveBeenCalledWith(expect.anything(), 'client-a', OTHER_PAGE, expect.anything())
+    expect(res).toMatchObject({ ok: false, error: 'page_not_verified: not_bound_page' })
     nothingTouched()
   })
 
-  it('client has no bound Page → refused', async () => {
-    boundPage(null)
-    const res = await processClientComments(config(OWN_PAGE))
-    expect(res.ok).toBe(false)
-    nothingTouched()
-  })
-
-  it('bound Page not verified as the client\'s → refused', async () => {
-    boundPage(OWN_PAGE)
+  it('bound Page not verified → refused', async () => {
     mockAuth.mockResolvedValue({ ok: false, skipped: 'page_not_verified', reason: 'unverified_shared_token' })
     const res = await processClientComments(config(OWN_PAGE))
     expect(res.error).toBe('page_not_verified: unverified_shared_token')
-    expect(mockAuth).toHaveBeenCalledWith(expect.anything(), 'client-a', OWN_PAGE, expect.anything())
+    nothingTouched()
+  })
+
+  it('no token → refused with the old message, nothing touched', async () => {
+    mockAuth.mockResolvedValue({ ok: false, skipped: 'no_meta_token' })
+    const res = await processClientComments(config(OWN_PAGE))
+    expect(res).toMatchObject({ ok: false, error: 'no Meta token configured' })
     nothingTouched()
   })
 })

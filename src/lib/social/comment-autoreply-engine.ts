@@ -20,7 +20,7 @@
 import { supabaseAdmin } from '@/lib/supabase'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { fetchPagePosts, fetchPageReels } from '@/lib/meta/page-posts'
-import { authorizePageSync } from '@/lib/meta/page-sync-authorization'
+import { authorizeConfiguredPage } from '@/lib/meta/page-sync-authorization'
 import { fetchAdStoryIds } from '@/lib/meta/ads-posts'
 import { fetchPostCommentsResult, replyToComment, sendPrivateReply, hideComment, PageComment } from '@/lib/meta/comments'
 import {
@@ -91,18 +91,7 @@ async function pageGate(
   clientId: string,
   configuredPageId: string,
 ): Promise<{ ok: true; pageToken: string } | { ok: false; error: string }> {
-  const { data, error } = await supabaseAdmin
-    .from('clients')
-    .select('facebook_page_id')
-    .eq('id', clientId)
-    .maybeSingle()
-  if (error) return { ok: false, error: `could not read the client's bound Page: ${error.message}` }
-  const bound = (data as { facebook_page_id?: string | null } | null)?.facebook_page_id ?? null
-  if (!bound || bound !== configuredPageId) {
-    return { ok: false, error: 'page_not_verified: auto-reply Page is not the client\'s bound Facebook Page' }
-  }
-
-  const auth = await authorizePageSync(supabaseAdmin, clientId, bound, process.env)
+  const auth = await authorizeConfiguredPage(supabaseAdmin, clientId, configuredPageId, process.env)
   if (auth.ok) return { ok: true, pageToken: auth.pageToken }
   if (auth.skipped === 'page_not_verified') return { ok: false, error: `page_not_verified: ${auth.reason}` }
   if (auth.skipped === 'no_meta_token') return { ok: false, error: 'no Meta token configured' }
@@ -116,10 +105,10 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
     if (isKilled()) return { client_id: clientId, ok: true, error: 'killed' }
 
     // AD-SEC-4: this run reads, replies to, hides and DMs on the configured Page,
-    // and the config is editable by client members. Only act when it is the
-    // client's staff-bound Page AND that binding passes the sync gate — otherwise
-    // a client could point it at another client's Page and act there with a
-    // token that can see both.
+    // and the config is editable by client members. Only act on a Page that is the
+    // client's verified bound Page (or one it consented to via OAuth) — otherwise a
+    // client could point it at another client's Page and act there with a token
+    // that can see both.
     const gate = await pageGate(clientId, config.fb_page_id)
     if (!gate.ok) return { client_id: clientId, ok: false, error: gate.error }
     const pageToken = gate.pageToken

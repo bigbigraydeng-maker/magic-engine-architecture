@@ -69,6 +69,30 @@ describe('pushPageBindingItems', () => {
     expect(await run({ META_SYSTEM_USER_TOKEN: 'shared' })).toEqual([])
   })
 
+  it('column carries stray spaces the audit does not → the sync refuses, so the todo must too', async () => {
+    db.clients.push(client('a', { facebook_page_id: ` ${PAGE} ` }))
+    db.client_binding_audit.push({ client_id: 'a', binding_kind: 'facebook_page', action: 'bind', outcome: 'applied', requested_value: PAGE, created_at: '2026-09-17T00:00:00Z' })
+    const items = await run({ META_SYSTEM_USER_TOKEN: 'shared' })
+    expect(items).toHaveLength(1)
+    expect(items[0].what).toContain('已暂停')
+  })
+
+  it('comment auto-reply configured on a Page that is not the client\'s → "auto-reply stopped" item; configured on the bound Page → no duplicate', async () => {
+    db.clients.push(client('a'), client('b', { facebook_page_id: '2222222222222' }))
+    db.client_binding_audit.push(
+      { client_id: 'a', binding_kind: 'facebook_page', action: 'bind', outcome: 'applied', requested_value: PAGE, created_at: '2026-09-17T00:00:00Z' },
+      { client_id: 'b', binding_kind: 'facebook_page', action: 'bind', outcome: 'applied', requested_value: '2222222222222', created_at: '2026-09-17T00:00:00Z' },
+    )
+    db.social_comment_config = [
+      { client_id: 'a', enabled: true, fb_page_id: '9999999999999' },
+      { client_id: 'b', enabled: true, fb_page_id: ' 2222222222222' },
+    ]
+    const items = await run({ META_SYSTEM_USER_TOKEN: 'shared' })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ client_id: 'a' })
+    expect(items[0].what).toContain('评论自动回复已停')
+  })
+
   it('cannot read the client list → one item saying the check did not run (not just a log line)', async () => {
     failures = { select: new Set(['clients']) }
     const items = await run({ META_SYSTEM_USER_TOKEN: 'shared' })

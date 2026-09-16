@@ -27,12 +27,14 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getPageAccessToken } from './page-posts'
-import { resolveMetaToken, loadStoredPageToken, type MetaTokenSource } from './token-selection'
-import { findOtherClientsBoundToPage } from './page-binding'
+import { resolveMetaTokenDetailed, loadStoredPageToken, type MetaTokenSource } from './token-selection'
+import { findOtherClientsBoundToPage, pageIdMatches } from './page-binding'
 import { isKernelNotProvisioned } from '@/lib/kernel-approval/errors'
 
 export type PageSyncRefusal =
   | 'bound_to_other_client'
+  /** 配置里填的主页（评论自动回复 / 主页数据）不是这个客户绑定的主页，也没有它的 OAuth 授权。 */
+  | 'not_bound_page'
   | 'audit_mismatch'
   | 'unverified_shared_token'
   | 'no_meta_token'
@@ -99,7 +101,8 @@ async function evaluate(supabase: SupabaseClient, clientId: string, pageId: stri
     return refuse('audit_mismatch', `latest applied ${audit.action} ${audit.requested_value ?? '(none)'}`)
   }
 
-  const userToken = await resolveMetaToken(supabase, clientId, env)
+  const userToken = await resolveMetaTokenDetailed(supabase, clientId, env)
+  if (userToken === 'ownership_unknown') return refuse('check_failed', 'could not read who owns the scoped token key')
   if (!userToken) return refuse('no_meta_token')
   if (staffVerified) return { verdict: { verified: true, via: 'staff_verified' }, storedPageToken: null, userToken }
   if (userToken.source === 'shared_fallback') return refuse('unverified_shared_token')
@@ -145,4 +148,69 @@ export async function authorizePageSync(
     pageToken = null
   }
   return pageToken ? { ok: true, pageToken, via: verdict.via } : { ok: false, skipped: 'no_page_token' }
+}
+
+/**
+ * 别处配置的主页号（social_comment_config.fb_page_id、factory_config.publish_target）
+ * 客户成员能改，不能直接拿去读 / 回复 / 隐藏 / 发私信。放行条件：
+ *   · 就是这个客户绑定的主页 → 走 authorizePageSync 同一道闸；
+ *   · 不是 → 只认这个客户对该主页的「连接 Meta」授权（发布主页的重新授权就会存这个），
+ *     且主页没绑在别的客户名下；只用那把存下的主页令牌。
+ * 其余一律 page_not_verified / not_bound_page。
+ */
+type ConfiguredPage =
+  | { kind: 'bound'; bound: string }
+  | { kind: 'oauth'; pageId: string; token: string }
+  | { kind: 'refused'; reason: PageSyncRefusal; detail?: string }
+
+async function resolveConfiguredPage(
+  supabase: SupabaseClient,
+  clientId: string,
+  configuredPageId: string,
+): Promise<ConfiguredPage> {
+  const configured = configuredPageId.trim()
+  const { data, error } = await supabase
+    .from('clients')
+    .select('facebook_page_id')
+    .eq('id', clientId)
+    .maybeSingle()
+  if (error) return { kind: 'refused', reason: 'check_failed', detail: error.message }
+  const bound = ((data as { facebook_page_id?: string | null } | null)?.facebook_page_id ?? '').trim()
+
+  if (bound && configured && pageIdMatches(bound, configured)) return { kind: 'bound', bound }
+  if (!/^\d+$/.test(configured)) return { kind: 'refused', reason: 'not_bound_page' }
+
+  try {
+    const others = await findOtherClientsBoundToPage(supabase, clientId, configured)
+    if (others.length > 0) return { kind: 'refused', reason: 'bound_to_other_client' }
+  } catch (err) {
+    return { kind: 'refused', reason: 'check_failed', detail: err instanceof Error ? err.message : String(err) }
+  }
+  const token = await loadStoredPageToken(supabase, clientId, configured)
+  return token ? { kind: 'oauth', pageId: configured, token } : { kind: 'refused', reason: 'not_bound_page' }
+}
+
+export async function authorizeConfiguredPage(
+  supabase: SupabaseClient,
+  clientId: string,
+  configuredPageId: string,
+  env: Env,
+): Promise<PageSyncAuthorization> {
+  const page = await resolveConfiguredPage(supabase, clientId, configuredPageId)
+  if (page.kind === 'bound') return authorizePageSync(supabase, clientId, page.bound, env)
+  if (page.kind === 'oauth') return { ok: true, pageToken: page.token, via: 'client_oauth' }
+  return { ok: false, skipped: 'page_not_verified', reason: page.reason, ...(page.detail ? { detail: page.detail } : {}) }
+}
+
+/** 同 authorizeConfiguredPage 的判定，不碰 Meta —— 每日待办用。 */
+export async function assessConfiguredPage(
+  supabase: SupabaseClient,
+  clientId: string,
+  configuredPageId: string,
+  env: Env,
+): Promise<PageBindingAssessment> {
+  const page = await resolveConfiguredPage(supabase, clientId, configuredPageId)
+  if (page.kind === 'bound') return assessPageBinding(supabase, clientId, page.bound, env)
+  if (page.kind === 'oauth') return { verified: true, via: 'client_oauth' }
+  return { verified: false, reason: page.reason, ...(page.detail ? { detail: page.detail } : {}) }
 }

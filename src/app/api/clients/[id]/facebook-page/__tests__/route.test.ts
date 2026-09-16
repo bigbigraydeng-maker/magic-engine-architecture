@@ -351,6 +351,23 @@ describe('facebook-page — authorisation', () => {
     expect(JSON.stringify(json)).not.toContain(OZTOP)
   })
 
+  it('员工请求体里不带 page_id → 400，不当成「清空绑定」', async () => {
+    allow()
+    const res = await PATCH(patchRequest({}), params())
+    expect(res.status).toBe(400)
+    expect(mockClear).not.toHaveBeenCalled()
+    expect(mockBind).not.toHaveBeenCalled()
+  })
+
+  it('没有任何 Meta 令牌不算「绑定没核实」—— verification 为 null，界面不标红', async () => {
+    allow()
+    stubClients(CTS_PAGE)
+    mockToken.mockResolvedValue(null)
+    mockAssess.mockResolvedValue({ verified: false, reason: 'no_meta_token' })
+    const json = await (await GET(getRequest(), params())).json()
+    expect(json.verification).toBeNull()
+  })
+
   it('内部员工 GET 能看到主页列表和暂停原因', async () => {
     allow()
     stubClients(CTS_PAGE)

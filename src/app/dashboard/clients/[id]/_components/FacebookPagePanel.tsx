@@ -60,7 +60,7 @@ function needsReverify(v: Verification | null): boolean {
 
 const REFUSAL_TEXT: Record<string, string> = {
   bound_to_other_client: '同一个主页还绑在别的客户名下',
-  audit_mismatch: '现在绑的主页跟最后一次核实保存的对不上',
+  audit_mismatch: '现在绑的主页跟最后一次核实保存的对不上（或上次保存没写完）',
   unverified_shared_token: '这个绑定是早先手动设的、没有核实记录，只能用公用令牌读',
   check_failed: '核实时读数据库失败',
 }

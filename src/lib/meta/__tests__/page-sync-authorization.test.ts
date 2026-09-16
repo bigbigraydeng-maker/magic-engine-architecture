@@ -21,7 +21,7 @@ vi.mock('@/lib/platform-oauth/vocabulary', () => ({
 }))
 
 import { getPageAccessToken } from '../page-posts'
-import { authorizePageSync, assessPageBinding } from '../page-sync-authorization'
+import { authorizePageSync, assessPageBinding, authorizeConfiguredPage } from '../page-sync-authorization'
 
 const mockPageToken = vi.mocked(getPageAccessToken)
 
@@ -182,5 +182,67 @@ describe('no token paths', () => {
     mockPageToken.mockResolvedValue(null)
     const res = await authorizePageSync(supa(), A, PAGE, A_DOMAIN_ENV)
     expect(res).toEqual({ ok: false, skipped: 'no_page_token' })
+  })
+})
+
+describe('stuck audit and unknown ownership (魏征 / 狄仁杰 implementation review)', () => {
+  it('rebind wrote "authorized" for a NEW Page, the column write and the finish both failed → the old Page is refused, not silently kept', async () => {
+    db.client_binding_audit.push(audit({ created_at: '2026-09-17T00:00:00Z' }))
+    db.client_binding_audit.push(audit({ outcome: 'authorized', requested_value: '999999999999', created_at: '2026-09-18T00:00:00Z' }))
+    const res = await authorizePageSync(supa(), A, PAGE, SHARED_ONLY)
+    expect(res).toMatchObject({ ok: false, reason: 'audit_mismatch' })
+  })
+
+  it('who owns the scoped token key cannot be read → check_failed (reported), not "no token"', async () => {
+    const fake = makeBindingFakeDb(db, failures)
+    let clientReads = 0
+    const flaky = {
+      from: (t: string) => {
+        // 1st clients read = duplicate scan, 2nd = the client row, 3rd = ownership scan → fail it
+        if (t === 'clients' && ++clientReads === 3) return makeBindingFakeDb(db, { select: new Set(['clients']) }).from(t)
+        return fake.from(t)
+      },
+    } as unknown as SupabaseClient
+    const res = await authorizePageSync(flaky, A, PAGE, A_DOMAIN_ENV)
+    expect(res).toMatchObject({ ok: false, skipped: 'page_not_verified', reason: 'check_failed' })
+    expect(mockPageToken).not.toHaveBeenCalled()
+  })
+})
+
+describe('authorizeConfiguredPage — client-editable Page ids (comment auto-reply, page metrics)', () => {
+  it('configured Page = bound Page (even with stray spaces) → same gate as the sync', async () => {
+    db.client_binding_audit.push(audit({}))
+    const res = await authorizeConfiguredPage(supa(), A, `  ${PAGE} `, SHARED_ONLY)
+    expect(res).toEqual({ ok: true, pageToken: 'derived-page-token', via: 'staff_verified' })
+  })
+
+  it('configured Page = bound Page but binding unverified → refused', async () => {
+    const res = await authorizeConfiguredPage(supa(), A, PAGE, SHARED_ONLY)
+    expect(res).toMatchObject({ ok: false, reason: 'unverified_shared_token' })
+  })
+
+  it('another client\'s Page typed into the config → refused, Meta never asked', async () => {
+    db.clients.push(client(B, { facebook_page_id: '227633594573276' }))
+    const res = await authorizeConfiguredPage(supa(), A, '227633594573276', A_DOMAIN_ENV)
+    expect(res).toMatchObject({ ok: false, reason: 'bound_to_other_client' })
+    expect(mockPageToken).not.toHaveBeenCalled()
+  })
+
+  it('an unbound Page with no OAuth consent from this client → refused', async () => {
+    const res = await authorizeConfiguredPage(supa(), A, '333333333333', A_DOMAIN_ENV)
+    expect(res).toMatchObject({ ok: false, reason: 'not_bound_page' })
+    expect(mockPageToken).not.toHaveBeenCalled()
+  })
+
+  it('a different Page this client consented to via OAuth (e.g. its publishing Page) → only that stored token', async () => {
+    db.platform_oauth_connections.push({ client_id: A, provider: 'meta', account_id: '333333333333', status: 'active', access_token_enc: 'enc:publish-page' })
+    const res = await authorizeConfiguredPage(supa(), A, '333333333333', SHARED_ONLY)
+    expect(res).toEqual({ ok: true, pageToken: 'publish-page', via: 'client_oauth' })
+    expect(mockPageToken).not.toHaveBeenCalled()
+  })
+
+  it('non-numeric junk in the config → refused', async () => {
+    const res = await authorizeConfiguredPage(supa(), A, 'facebook.com/whatever', A_DOMAIN_ENV)
+    expect(res).toMatchObject({ ok: false, reason: 'not_bound_page' })
   })
 })
