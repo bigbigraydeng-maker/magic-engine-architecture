@@ -127,7 +127,8 @@ function summarizeFact(entry: KnowledgeEntry) {
 }
 
 /** `sensitivity` 分类见 `src/lib/knowledge/sensitivity.ts`:客户确认过的商业事实(价格/时效/承诺/政策)。 */
-const CUSTOMER_FACING_SENSITIVITIES = new Set(['price', 'timeline', 'commitment', 'policy'])
+/** F2（issue #1585）的 `runDraftAgent` 复用这份筛选条件，避免第二处硬编码同一组字符串。 */
+export const CUSTOMER_FACING_SENSITIVITIES = new Set(['price', 'timeline', 'commitment', 'policy'])
 
 // ─── 工具 1 — query_customer_facing_facts(取代 v2 的 query_active_tours)───────
 

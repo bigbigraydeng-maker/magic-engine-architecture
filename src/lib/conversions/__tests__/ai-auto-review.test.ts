@@ -62,6 +62,18 @@ describe('sanitizeCustomerName', () => {
 })
 
 describe('judgeOutcome', () => {
+  it('🔴 2026-09-17 生产事故回归测试：调用必须带 singleAttempt:true，否则会掉进没有超时上限的路径卡死整条每日管道', async () => {
+    vi.mocked(callClaudeChat).mockResolvedValue({
+      text: '{"verdict":"approve","reason":"数据完整合理"}',
+      input_tokens: 10,
+      output_tokens: 10,
+      cost_usd: 0.001,
+      stop_reason: 'end_turn',
+    })
+    await judgeOutcome(baseInput)
+    expect(callClaudeChat).toHaveBeenCalledWith(expect.objectContaining({ singleAttempt: true }))
+  })
+
   it('模型正常返回 approve', async () => {
     vi.mocked(callClaudeChat).mockResolvedValue({
       text: '{"verdict":"approve","reason":"数据完整合理"}',
