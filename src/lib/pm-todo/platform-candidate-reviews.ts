@@ -100,11 +100,6 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
   },
   {
     // 与 docs/registry/platform-candidates.md 候选名逐字一致
-    name: '分档 AI 视频配额闸（每档每月 i2v 条数硬顶 · 满额后优雅退化到静图版 · 超额走 Add-on 加购）',
-    reviewDate: '2026-10-04',
-  },
-  {
-    // 与 docs/registry/platform-candidates.md 候选名逐字一致
     name: 'Meta 广告受众管理与类似人群能力（建/改自定义受众 + 建 Lookalike 类似人群 + audience-ladder 接线到触发点）',
     reviewDate: '2026-10-06',
   },
@@ -137,27 +132,5 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     // 与 docs/registry/platform-candidates.md 候选名逐字一致
     name: 'ME 策略层（`goals`/`initiatives`/`marketing_plans`/`execution_items`）正式接入邮件 / newsletter 渠道——AI 读历史打开率/点击率 + 客户业务事实，自动推荐"下一封发什么主题、什么时候发"，人只需一句话确认',
     reviewDate: '2026-10-08',
-    name: '广告效果按天诊断引擎（拉 campaign/adset/ad 级每日 Insights → 算成本效率（CPM/CTR/单次线索成本/单次私信开聊成本）→ 查再营销受众是否为空 → 输出预算调整建议 + 原因）',
-    reviewDate: '2026-10-13',
-  },
-  {
-    // 与 docs/registry/platform-candidates.md 候选名逐字一致
-    name: '行程转路线地图生成器（按 Tour 结构化行程数据——城市顺序 + 交通方式 + 停留天数——自动画出风格化路线图，供社媒/广告/落地页使用）',
-    reviewDate: '2026-10-13',
-  },
-  {
-    // 与 docs/registry/platform-candidates.md 候选名逐字一致
-    name: '私信/WhatsApp 对话内容判断有效咨询/成交 → 回传 Meta CAPI',
-    reviewDate: '2026-10-13',
-  },
-  {
-    // 与 docs/registry/platform-candidates.md 候选名逐字一致
-    name: 'AI 辅助图片识别打标签（看图识地名，用来补 hero-rules.ts 关键词清单收不到的生僻地方）',
-    reviewDate: '2026-10-15',
-  },
-  {
-    // 与 docs/registry/platform-candidates.md 候选名逐字一致
-    name: '从客户历史对话（Messenger/WhatsApp）批量提炼接待风格/标准应对+还没入库的事实，喂给客户知识库',
-    reviewDate: '2026-10-15',
   },
 ]
