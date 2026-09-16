@@ -121,3 +121,27 @@ describe('never throws', () => {
     expect(await getMetaTokenForClient('any')).toBeNull()
   })
 })
+
+describe('resolveMetaTokenForClient — reports where the token came from', () => {
+  it('labels each lookup step', async () => {
+    const { resolveMetaTokenForClient } = await import('../token-manager')
+    process.env.META_SYSTEM_USER_TOKEN = 'shared'
+
+    client({ domain: 'ctstours.co.nz', facebook_page_id: '227633594573276' })
+    process.env[DOMAIN_VAR] = 'by-domain'
+    expect(await resolveMetaTokenForClient('any')).toEqual({ token: 'by-domain', source: 'client_domain' })
+
+    delete process.env[DOMAIN_VAR]
+    process.env[PAGE_VAR] = 'by-page'
+    expect(await resolveMetaTokenForClient('any')).toEqual({ token: 'by-page', source: 'client_page' })
+
+    delete process.env[PAGE_VAR]
+    expect(await resolveMetaTokenForClient('any')).toEqual({ token: 'shared', source: 'shared_fallback' })
+  })
+
+  it('nothing configured → null', async () => {
+    const { resolveMetaTokenForClient } = await import('../token-manager')
+    client({ domain: null, facebook_page_id: null })
+    expect(await resolveMetaTokenForClient('any')).toBeNull()
+  })
+})
