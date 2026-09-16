@@ -37,6 +37,7 @@
 - [ ] **内部日报先影子跑几天、人工核对**：回放验收造不出「开着但不花钱」「白天被暂停」两种情况，不能证明生产不误报。
 - [ ] **诊断后续**：D7 补令牌有效期、主页令牌权限、像素触发、自动化身份任务四项体检；诊断结果从体检记录迁到诊断自己的表；D2（按角色的疲劳模型，学习期排除）、D6（行业先验，需 ≥2 客户证据）；Meta 实验排除扩展到止损与素材同步（§14 M7，写路径，阶段 2 收口）；诊断事件链接 Inngest（§4.4）。
 - [ ] **阶段 2（内核 + 执行）/ 阶段 3（客户版 + 剧本 + 调优）**：按设计 §4.1 硬前置与 §14 K1–K14、C1–C9 推进。
+- [ ] **广告决策原因留痕（P2）**：2026-09-16 CTS 顾问窗口交互式调整预算/定向后，把"为什么"临时塞进 `ad_entity_snapshots.targeting_summary` 的 note 键——用错了字段（该表是机器设置快照，非人工决策日志）。设计判断见 [2026-09-16-ad-decision-log-review.md](./specs/2026-09-16-ad-decision-log-review.md)（已按 Codex 复审三轮修订，以文档最新版为准）：不建议给快照表加字段，也不建议另建独立表，建议扩展仓库已有的 `client_decision_history`（诸葛亮决策历史表）补几列（`affected_entities`/快照关联/`source`/`flywheel_action_id`）；阶段 2 内核接管广告动作、把批准理由改成必填后，必须在**同一 PR 内硬性关闭**交互式顾问直写 Meta 的旁路（不是渐进式停用）。**排期实施前仍有三处未决口子需先解决**（详见文档 §2.1/§2.2/§2.3）：①`client_decision_history` 现在的写入权限矩阵（`docs/agents/CODEX.md`/`00-architecture.md`）明确限定只有诸葛亮能写，新增"交互式顾问"写入方前必须先修订写入所有权并走架构复审；②`outcome_verdict` 自动回填已于 2026-09-06 永久停用，新增的 `flywheel_action_id` 只是给 attribution job 一个可写的外键，不会让既有的 `loadRecentDecisions`/`formatMemoryForPrompt` 读取路径自动看到 Outcome，需要另设按动作 join 的读取链路；③一次决策可能跨多个广告账户，需要给动作和指标定义一致的账户/实体作用域，否则 attribution job 会把无关账户的变化误归因给这次决策。按 §11 三维打分：频率中 + IMPACT 中 + 收入低 = 中中低 → P2，排在阶段 0/1 之后；实施前需大任务 2 审（触碰 schema）。判定为既有广告支柱 L1 能力线内部扩展，不占用 `platform-candidates.md` 候选名额。
 - [ ] **P0 遗留**：CTS 网站仓库草稿 chinatravel#136 关或合、CTS 自动化策略 `5d66c469` 没有结束日期（P0-3）；Oztop 2026-08-16 那行 `level='adset'` 孤行来自旧电脑手写 SQL 的 `oztop-meta-daily-monitor` 定时任务，确认该任务已停（P0-6）。
 
 ---
