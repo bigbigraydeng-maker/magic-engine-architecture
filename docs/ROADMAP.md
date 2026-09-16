@@ -786,6 +786,7 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **TD.12** `SeoContentAdapter.pullMetrics` 入库失败只 `console.error` 不抛 —— 回执会报「写了 4 行」而库里 0 行。2026-09-07 每周 SEO 快照上线时发现，属适配器旧账，未在那条链路的 PR 范围内修（[#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440) 复审记录）
 - [ ] **TD.13** `getDomainMetrics` 两层 `Promise.allSettled` 把 provider 故障写成 0 值 —— DataForSEO 故障那一周，全体客户的 SEO 指标会被记成 0 并写进 `flywheel_metrics`，Check / Tune 读到的是假数据。同 [#1440](https://github.com/bigbigraydeng-maker/magic-engine/pull/1440)，链路开跑后它从「潜在」变成「每周可能发生」
 - [ ] **TD.14** 「谁买了 SEO」这个商业事实被编码成「填没填网址」这个技术字段 —— `flywheel-seo-weekly` / `keyword-snapshots-weekly` 等 5 条链路共用 `client_status='active' AND domain IS NOT NULL` 判据，随手给不买 SEO 的客户填个占位网址就会把他拉进每周付费扫描（PITFALLS 已记）。服务范围应由 client-level 配置决定，不由字段有没有值决定
+- [ ] **TD.19** `src/lib/messenger/brief-client-facts.ts` 是临时止血文件，禁止扩张 —— 2026-09-13 修复"私信 AI 摘要把所有客户都当成 CTS"事故（分支 `feat/messenger-brief-declients-fix-agent`，commit `0c26bda9`）时，把 `brief.ts` 里写死给全体客户共用的 CTS 专属商业事实（25 年历史、免签政策、支持电话）搬进了这个单独文件，现状只有 CTS 一行。子牙两轮设计复审要求：新增第二个客户前必须先跑 `.claude/skills/me-platform-tier-gate/` 判层级，通过才能加——否则这张表会被后来者当成"正式客户配置层"越攒越大。长期方向是「客户知识库」项目上线后整体替换掉这个文件（决策见 [DECISIONS.md 2026-09-13](./DECISIONS.md#2026-09-13--客户知识库作为-governed-lead-reply-agent-的事实层替代-offeringsyaml-路线)）
 - [ ] **TD.10** Git 本地分支堆积（20+ 个 `claude/*` 和 `feat/*` 废弃分支）
 - [ ] **TD.11** `agitated-mahavira-be6d17` 等 worktree 物理目录占用磁盘空间
 - [ ] **TD.7** 收集器模块（6 个）缺少错误重试机制
