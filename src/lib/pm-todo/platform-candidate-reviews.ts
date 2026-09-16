@@ -138,4 +138,24 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '广告效果按天诊断引擎（拉 campaign/adset/ad 级每日 Insights → 算成本效率（CPM/CTR/单次线索成本/单次私信开聊成本）→ 查再营销受众是否为空 → 输出预算调整建议 + 原因）',
     reviewDate: '2026-10-13',
   },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '行程转路线地图生成器（按 Tour 结构化行程数据——城市顺序 + 交通方式 + 停留天数——自动画出风格化路线图，供社媒/广告/落地页使用）',
+    reviewDate: '2026-10-13',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '私信/WhatsApp 对话内容判断有效咨询/成交 → 回传 Meta CAPI',
+    reviewDate: '2026-10-13',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: 'AI 辅助图片识别打标签（看图识地名，用来补 hero-rules.ts 关键词清单收不到的生僻地方）',
+    reviewDate: '2026-10-15',
+  },
+  {
+    // 与 docs/registry/platform-candidates.md 候选名逐字一致
+    name: '从客户历史对话（Messenger/WhatsApp）批量提炼接待风格/标准应对+还没入库的事实，喂给客户知识库',
+    reviewDate: '2026-10-15',
+  },
 ]

@@ -205,6 +205,29 @@ PM 反馈「太平静」「一堆照片的串联」「这不是爆款短视频�
 
 ---
 
+### D7 · 给客户开一个新功能的授权开关，必须同时确认它依赖的所有其它开关也已到位
+
+**背景（issue #1648，客户知识库上线阶段闸）**：`getClientKnowledge()` 对 `customer_reply` 有两道独立的闸——① 有没有被授权用这个功能（`client_automation_policies` 一行）② 这个客户是否已经走完双签流程正式"上线"（`client_knowledge_events` 的 rollout stage）。**两道闸都要过，缺一道，结果是静默返回空**（`{entries: [], forbiddenFactKeys: []}`），跟"这个客户真的没有知识库事实"完全无法区分——不报错、不告警，只是 AI 什么都不说。
+
+**怎么防**：以后任何 FDE/PM 要给一个客户打开 `client_knowledge.read` 这类授权开关之前，先确认这个功能所有配套的前置状态（这里是 rollout stage 必须到 2）都已经就位，或者干脆走同一个流程一次性办完，不要把"给权限"和"走完上线手续"当成两件可以分开、可以先后顺序随意的事——前者一旦单独打开，后者没跟上，问题不会报错提醒你，只会在客户那边表现成"AI 什么都不知道"，排查起来毫无线索。
+
+**这不是留白，是故意设计的默认最不放行**：换个角度看，这套机制的存在就是为了让"AI 对客户说什么"这件事永远需要经过明确批准，宁可暂时什么都不说，也不要在没人真正确认过的情况下开口。
+
+---
+
+### D8 · 只靠 fact_key 命名约定传递"这条事实是什么类型"，写入侧没有任何强制，等于没有契约
+
+**背景（issue #1579/#1580，CTS Verifier v3 改接客户知识库，子牙+魏征复审 2026-09-15 共同指出）**：`client_knowledge_facts.visibility='forbidden'` 的事实，`getClientKnowledge()` 在任何用途下都不返回正文（`statement`/`structured_value`），只把 `fact_key` 报给调用方——这是刻意设计（防止连 Verifier 的调试日志/人工复核界面都意外泄露"这个下架产品叫什么、为什么下架"）。`src/lib/messenger-agent/verifier/policies/cts.ts` 因此把"能不能识别这个 fact_key 对应哪个产品"的全部信息编码进 `fact_key` 命名约定本身（`tour.active.<code>` / `tour.retired.<code>[.alias.<slug>]`）。
+
+**问题**：这套命名约定**只存在于 `cts.ts` 的注释里**，负责写入知识库的两条路径都不知道、也不检查它——萃取工作流（issue #1645）的抽取 prompt 是刻意行业中立的通用 prompt（不该、也不会知道"CTS 团要叫 `tour.retired.xxx`"这种客户专属规则）；FDE 审核页（issue #1646）只是"批准/改后批准/驳回"已经产出的候选，UI 上没有任何地方提示格式要求。这意味着如果录入时 `fact_key` 拼错前缀（比如打成 `tours.retired.xxx` 或 `tour.retire.xxx`），这条记录会在 Verifier 的所有闸门里**静默隐形**——不报错、不告警，只是从此在 gate 2/3/5/7 里都"不存在"，跟这个功能要解决的原始事故（下架团被当成在售报给客户）是同一种失败模式，只是换了个失效点。
+
+**怎么防（当下已做的最小止血 + 真正要做的）**：
+1. 已做：`parseActiveProductFact`/`extractForbiddenProductSlugs` 对"看起来想写 `tour.*` 但拼错前缀"的情况打 `console.warn`（只能覆盖"还是 `tour.` 开头但后半段拼错"这类典型笔误，不是穷尽校验）。
+2. **未做、已开 issue 跟进**（[#1726](https://github.com/bigbigraydeng-maker/magic-engine/issues/1726)，P3）：任何"某个模块靠 `fact_key`/字符串命名约定传递业务语义"的设计，如果写入这张表的路径不止一个、且其中至少一个路径是通用/跨客户的（本例是行业中立的 LLM 抽取 prompt），就不能只在读取侧的注释里定契约——要么在 FDE 审核页加格式校验/提示，要么在心跳监控里加"有多少条记录的 fact_key 不匹配任何已知命名约定"这类可观测统计，把"静默不生效"变成"看得见的数据质量问题"。
+3. 上线前的 T-14d dry-run（design doc `~/.claude/plans/cts-tours-messenger-dynamic-pearl.md` 的验证计划）必须包含至少一条走完整"萃取 → 审核批准 → Verifier 核验"链路的真实数据用例，而不是只用手写的、已经跟约定对齐好的测试 fixture 自证闭环。
+
+---
+
 ## E. 匹配 / 算法逻辑
 
 ### E1 · token equality 漏掉 80% 的多词品牌
@@ -223,6 +246,14 @@ SOP：`docs/sops/brand-aliases-setup-for-gsc.md`。
 
 **怎么防**：`isBusinessRelevantKeyword` 加 `excludedTopics`，**排除检查必须在 business-relevance 之前跑**。
 数据源是 `master_briefs.excluded_topics`，配套 `ExcludedTopicsPanel` UI（符合 D4）。
+
+### E3 · 把整段文本压成一整条 slug 再做子串匹配，句子边界和产品名前缀关系都会制造假阳性
+
+**事故（子牙+魏征复审 2026-09-15 各自独立用真实数据复现，CTS Verifier gate 2 上线前拦下）**：`src/lib/messenger-agent/verifier/policies/cts.ts` 的"下架产品提及"闸门最初把整段回复文本一次性 `slugify` 成一条 kebab-case 字符串，再用 `.includes(禁止slug)` 判断。两个独立复审各自手算出一个会误伤合法回复的真实案例：
+1. **跨句拼接**：句号/换行被当成普通分隔符压扁——"…a full day in Shanghai. Surroundings like Zhouzhuang…" 会拼成 `…shanghai-surroundings-like…`，精确命中一个真实存在的下架团 slug `shanghai-surroundings`，但这两个词分属两句话、语义完全无关。
+2. **产品名前缀关系**：CTS 真实产品线里 `china-icons-collection` 恰好是 `china-icons-collection-christchurch` 的 slug 前缀——如果前者下架、后者仍在售，任何合法提到 Christchurch 那个团的回复都会被子串匹配误判成提到了下架团。
+
+**怎么防**：不要把"一大段自由文本"整体压成一条字符串再做子串匹配——① 先按句子边界切分，只在同一句话内部匹配，避免相邻句子的词被拼在一起；② 用词序列（token 数组）比较而不是字符子串比较，命中后额外检查这次匹配是否其实是某个更长的、合法存在的同类实体（这里是仍在售的产品）名字的前缀延伸，如果是就不算命中。这两条对任何"把一批禁止关键词/黑名单跟一段自由文本做匹配"的场景都适用，不只是这一个 gate。
 
 ---
 
@@ -363,3 +394,5 @@ Meta 400 —— `(#10) 缺 pages_read_user_content`、`(#100/33) 帖子不存在
 ### G4 · 一个分支同一时间只允许一个窗口开
 
 并行任务用 `git worktree` 物理隔离。接力同一大任务用同一分支，全新任务基于最新 main 开新分支。
+
+**实测撞过一次（2026-09-15，PR #1693 `feat/knowledge-rollout-stage-gate`）**：一个窗口在修这条分支跟主线的冲突，两轮复审跑到一半，分支远端又被另一个没有登记窗口契约的会话推了新提交上去（新增两个路由 + 一处竞态修复），复审中途拉代码发现分支比开审时又长了一截。这次运气好——两边改动没有互相覆盖，最终复审重新跑通过了；但这属于事后才发现，本该在动手前查一次分支是否已有人在改（`git log origin/<branch> --oneline` 对一下时间线），而不是审完才意外碰上。

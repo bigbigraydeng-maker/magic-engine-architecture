@@ -44,7 +44,7 @@ export type OwnershipCheckResult =
  * 这个客户登记过的全部广告账户 id。查询本身出错时返回 `error`，调用方必须
  * fail closed，不能把"查不出来"当成"查到了 0 个"。
  */
-async function getRegisteredAccountIds(
+export async function getRegisteredAccountIds(
   clientId: string,
 ): Promise<{ ids: string[]; error?: string }> {
   const { data, error } = await supabaseAdmin
